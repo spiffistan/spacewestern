@@ -1,0 +1,696 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, rgba8) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform PushConstants {
+    float time;
+    uint width;
+    uint height;
+    float zoom;
+    float camera_x;
+    float camera_z;
+    int visible_layer;  // -1 = show all, 0+ = show only up to this layer
+    float _padding;
+} pc;
+
+// ============================================================================
+// VOXEL WORLD CONFIGURATION - Flat 100x100x20 world
+// ============================================================================
+
+const int WORLD_SIZE_X = 1000;
+const int WORLD_SIZE_Y = 20;   // Depth (vertical)
+const int WORLD_SIZE_Z = 1000;
+
+const float VOXEL_SIZE = 1.0;
+const float DETAIL_SIZE = 0.1;  // 1/10 size voxels on surface
+const int DETAIL_SUBDIVISIONS = 10;
+
+// World bounds (centered at origin, Y starts at 0)
+const vec3 WORLD_MIN = vec3(-float(WORLD_SIZE_X) / 2.0, 0.0, -float(WORLD_SIZE_Z) / 2.0);
+const vec3 WORLD_MAX = vec3(float(WORLD_SIZE_X) / 2.0, float(WORLD_SIZE_Y), float(WORLD_SIZE_Z) / 2.0);
+
+// ============================================================================
+// TERRAIN GENERATION
+// ============================================================================
+
+// Hash functions for procedural generation
+float hash(vec2 p) {
+    p = fract(p * vec2(0.3183099, 0.3678794));
+    p += dot(p, p + 17.0);
+    return fract(p.x * p.y);
+}
+
+float hash3(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+// Smooth noise
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Get terrain height at world position (returns height in voxels)
+// Rimworld-style: mostly flat with occasional hills and rare lakes
+float getTerrainHeight(vec2 worldXZ) {
+    // Base flat ground level
+    float height = 1.0;
+
+    // Scattered hills - use cellular/voronoi-like pattern for distinct hills
+    // Hill seeds based on grid cells
+    vec2 cell = floor(worldXZ / 80.0);  // 80-unit grid cells
+
+    // Check nearby cells for hills
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dz = -1; dz <= 1; dz++) {
+            vec2 neighborCell = cell + vec2(float(dx), float(dz));
+
+            // Deterministic random for this cell - is there a hill here?
+            float cellHash = hash(neighborCell * 127.1 + vec2(31.7, 89.3));
+
+            if (cellHash > 0.7) {  // 30% of cells have hills
+                // Hill center within the cell
+                vec2 hillCenter = (neighborCell + 0.5) * 80.0;
+                hillCenter += (vec2(hash(neighborCell * 17.3), hash(neighborCell * 23.7)) - 0.5) * 40.0;
+
+                float distToHill = length(worldXZ - hillCenter);
+                float hillRadius = 25.0 + hash(neighborCell * 41.9) * 30.0;  // 25-55 radius
+                float hillHeight = 2.0 + hash(neighborCell * 53.1) * 4.0;    // 2-6 levels tall
+
+                // Smooth hill shape
+                float hillFactor = 1.0 - smoothstep(0.0, hillRadius, distToHill);
+                height += hillFactor * hillHeight;
+            }
+        }
+    }
+
+    // Very rare lakes - only a few across the whole map
+    vec2 lakeCell = floor(worldXZ / 300.0);  // Large 300-unit cells for lakes
+    float lakeHash = hash(lakeCell * 173.7 + vec2(57.3, 113.9));
+
+    if (lakeHash > 0.92) {  // Only ~8% of large cells have lakes
+        vec2 lakeCenter = (lakeCell + 0.5) * 300.0;
+        lakeCenter += (vec2(hash(lakeCell * 29.1), hash(lakeCell * 37.3)) - 0.5) * 100.0;
+
+        float distToLake = length(worldXZ - lakeCenter);
+        float lakeRadius = 40.0 + hash(lakeCell * 61.7) * 40.0;  // 40-80 radius
+
+        // Depression for lake
+        if (distToLake < lakeRadius) {
+            float lakeFactor = 1.0 - (distToLake / lakeRadius);
+            lakeFactor = lakeFactor * lakeFactor;  // Steeper edges
+            height -= lakeFactor * 3.0;  // Up to 3 units deep
+        }
+    }
+
+    // Tiny terrain roughness
+    height += noise(worldXZ * 0.1) * 0.2;
+
+    return height;
+}
+
+// Calculate smooth terrain normal from heightmap gradient
+vec3 getTerrainNormal(vec2 worldXZ) {
+    float eps = 0.5;  // Sample distance for gradient
+
+    float hL = getTerrainHeight(worldXZ + vec2(-eps, 0.0));
+    float hR = getTerrainHeight(worldXZ + vec2(eps, 0.0));
+    float hD = getTerrainHeight(worldXZ + vec2(0.0, -eps));
+    float hU = getTerrainHeight(worldXZ + vec2(0.0, eps));
+
+    // Calculate gradient
+    vec3 normal = normalize(vec3(
+        (hL - hR) / (2.0 * eps),
+        1.0,
+        (hD - hU) / (2.0 * eps)
+    ));
+
+    return normal;
+}
+
+// Water level constant - for lakes (depressions go below this)
+const float WATER_LEVEL = 0.5;
+
+// Get terrain height with detail (for 1/10 size surface voxels)
+float getTerrainHeightDetail(vec2 worldXZ) {
+    float baseHeight = getTerrainHeight(worldXZ);
+
+    // Add fine detail for surface
+    float detail = noise(worldXZ * 0.5) * 0.3;
+    detail += noise(worldXZ * 1.0) * 0.15;
+
+    return baseHeight + detail;
+}
+
+// Voxel types: 0=air, 1=grass, 2=dirt, 3=stone, 4=sand, 5=gravel, 6=water
+int getVoxelType(ivec3 pos, float terrainHeight, vec2 worldXZ) {
+    float y = float(pos.y);
+
+    // Visible layer culling - if visible_layer >= 0, hide terrain above that level
+    if (pc.visible_layer >= 0 && y > float(pc.visible_layer)) {
+        return 0;  // Air - hidden
+    }
+
+    // Water in lake areas (where terrain goes below water level)
+    if (y <= WATER_LEVEL && y > terrainHeight && terrainHeight < WATER_LEVEL) {
+        return 6;  // Water
+    }
+
+    if (y > terrainHeight) {
+        return 0;  // Air
+    }
+
+    // Near water (lake edge) - sand/gravel beach
+    bool nearWater = (terrainHeight < WATER_LEVEL + 0.5) && (y > terrainHeight - 2.0);
+    if (nearWater && y > terrainHeight - 1.0) {
+        return 4;  // Sand at shoreline
+    }
+    if (nearWater) {
+        return 5;  // Gravel under sand
+    }
+
+    // Normal terrain layers
+    if (y > terrainHeight - 1.0) {
+        return 1;  // Grass (top layer)
+    } else if (y > terrainHeight - 4.0) {
+        return 2;  // Dirt
+    } else {
+        return 3;  // Stone
+    }
+}
+
+// Get voxel at integer grid coordinates
+int getVoxel(ivec3 pos) {
+    // Bounds check
+    if (pos.x < 0 || pos.x >= WORLD_SIZE_X ||
+        pos.y < 0 || pos.y >= WORLD_SIZE_Y ||
+        pos.z < 0 || pos.z >= WORLD_SIZE_Z) {
+        return 0;
+    }
+
+    // Convert to world coordinates (centered)
+    vec2 worldXZ = vec2(pos.x, pos.z) - vec2(WORLD_SIZE_X, WORLD_SIZE_Z) / 2.0;
+
+    float terrainHeight = getTerrainHeight(worldXZ);
+
+    return getVoxelType(pos, terrainHeight, worldXZ);
+}
+
+// Check detail voxel (1/10 size) - used for surface refinement
+int getDetailVoxel(vec3 worldPos) {
+    // Convert to grid space
+    vec3 gridPos = worldPos - vec3(WORLD_MIN.x, 0.0, WORLD_MIN.z);
+
+    // Get parent voxel position
+    ivec3 parentPos = ivec3(floor(gridPos));
+
+    // Check if parent is at surface level
+    vec2 worldXZ = vec2(parentPos.x, parentPos.z) - vec2(WORLD_SIZE_X, WORLD_SIZE_Z) / 2.0;
+    float terrainHeight = getTerrainHeight(worldXZ);
+    int parentVoxel = getVoxelType(parentPos, terrainHeight, worldXZ);
+
+    // Only apply detail at surface (grass blocks)
+    if (parentVoxel != 1) {
+        return parentVoxel;
+    }
+
+    // Get detail position within parent voxel
+    vec3 localPos = fract(gridPos);
+    vec2 detailXZ = worldXZ + localPos.xz;
+
+    // Get detailed height
+    float detailHeight = getTerrainHeightDetail(detailXZ);
+    float detailY = float(parentPos.y) + localPos.y;
+
+    if (detailY > detailHeight) {
+        return 0;  // Air in detail
+    } else if (detailY > detailHeight - 0.2) {
+        return 1;  // Grass detail
+    } else {
+        return 2;  // Dirt detail
+    }
+}
+
+// Get voxel color based on type and height
+vec3 getVoxelColor(int voxelType, vec3 normal, vec3 worldPos) {
+    vec3 baseColor;
+
+    // Small random variation per block for texture
+    float blockX = floor(worldPos.x);
+    float blockZ = floor(worldPos.z);
+    float variation = hash(vec2(blockX, blockZ)) * 0.1;
+    float blockShade = 0.95 + hash(vec2(blockX + 100.0, blockZ + 100.0)) * 0.1;
+
+    // Get terrain height at block center for consistent color
+    float height = getTerrainHeight(vec2(blockX + 0.5, blockZ + 0.5));
+
+    // Get integer heights for edge detection
+    int thisHeightInt = int(floor(height));
+
+    // Check neighboring block heights for contour detection
+    int heightNX = int(floor(getTerrainHeight(vec2(blockX - 0.5, blockZ + 0.5))));
+    int heightPX = int(floor(getTerrainHeight(vec2(blockX + 1.5, blockZ + 0.5))));
+    int heightNZ = int(floor(getTerrainHeight(vec2(blockX + 0.5, blockZ - 0.5))));
+    int heightPZ = int(floor(getTerrainHeight(vec2(blockX + 0.5, blockZ + 1.5))));
+
+    // Check if we're at an edge (neighbor is lower) - contour line detection
+    vec3 inBlock = fract(worldPos + vec3(0.001));
+    float edgeWidth = 0.12;  // Width of edge highlight
+
+    // Only apply edge effects to natural terrain surface (not hidden underground layers)
+    int blockY = int(floor(worldPos.y - 0.01));
+    bool isNaturalSurface = (blockY == thisHeightInt);
+
+    bool atEdgeNX = isNaturalSurface && (heightNX < thisHeightInt) && (inBlock.x < edgeWidth);
+    bool atEdgePX = isNaturalSurface && (heightPX < thisHeightInt) && (inBlock.x > 1.0 - edgeWidth);
+    bool atEdgeNZ = isNaturalSurface && (heightNZ < thisHeightInt) && (inBlock.z < edgeWidth);
+    bool atEdgePZ = isNaturalSurface && (heightPZ < thisHeightInt) && (inBlock.z > 1.0 - edgeWidth);
+
+    float edgeDarken = (atEdgeNX || atEdgePX || atEdgeNZ || atEdgePZ) ? 0.15 : 0.0;
+
+    // Edge highlight - brighten edges where we're higher than neighbors
+    float edgeHighlight = 0.0;
+    if (isNaturalSurface) {
+        // Calculate how much higher we are than our lowest neighbor
+        int minNeighborHeight = min(min(heightNX, heightPX), min(heightNZ, heightPZ));
+        int heightDiff = thisHeightInt - minNeighborHeight;
+        if (heightDiff > 0 && (atEdgeNX || atEdgePX || atEdgeNZ || atEdgePZ)) {
+            edgeHighlight = min(float(heightDiff) * 0.08, 0.2);
+        }
+    }
+
+    switch (voxelType) {
+        case 1:  // Grass - ground color transitioning to mountain color
+            {
+                // Ground color: RGB(83, 90, 44) = vec3(0.325, 0.353, 0.173)
+                vec3 groundColor = vec3(0.325, 0.353, 0.173);
+                // Mountain color: RGB(52, 49, 59) = vec3(0.204, 0.192, 0.231)
+                vec3 mountainColor = vec3(0.204, 0.192, 0.231);
+
+                // Blend based on terrain height
+                float mountainBlend = smoothstep(2.0, 6.0, height);
+                baseColor = mix(groundColor, mountainColor, mountainBlend);
+
+                // Add slight variation
+                baseColor *= blockShade;
+                baseColor += vec3(variation * 0.08, variation * 0.06, variation * 0.04);
+            }
+            break;
+        case 2:  // Dirt - darker shade of ground
+            {
+                vec3 groundColor = vec3(0.325, 0.353, 0.173);
+                baseColor = groundColor * 0.85 + vec3(variation * 0.06);
+            }
+            break;
+        case 3:  // Stone - mountain color
+            {
+                // Mountain color: RGB(52, 49, 59)
+                vec3 mountainColor = vec3(0.204, 0.192, 0.231);
+                baseColor = mountainColor + vec3(variation * 0.05, variation * 0.04, variation * 0.06);
+            }
+            break;
+        case 4:  // Sand - Rimworld warm beige
+            baseColor = vec3(0.72 + variation, 0.65 + variation * 0.8, 0.48);
+            break;
+        case 5:  // Gravel - Rimworld grey-brown
+            baseColor = vec3(0.50 + variation, 0.48 + variation, 0.44);
+            break;
+        case 6:  // Water - Rimworld style with strong animation
+            {
+                vec2 worldXZ = worldPos.xz;
+                float terrainBelow = getTerrainHeight(worldXZ);
+                float waterDepth = WATER_LEVEL - terrainBelow;
+
+                // Animated time
+                float t = pc.time;
+
+                // Create moving wave bands - higher resolution with more detail
+                float wavePhase1 = sin(worldXZ.x * 0.5 + worldXZ.y * 0.35 + t * 1.5);
+                float wavePhase2 = sin(worldXZ.x * 0.4 - worldXZ.y * 0.5 + t * 1.2);
+                float wavePhase3 = sin((worldXZ.x - worldXZ.y) * 0.3 + t * 0.8);
+                float wavePhase4 = sin((worldXZ.x + worldXZ.y) * 0.7 + t * 2.0) * 0.4;
+                float wavePhase5 = sin(worldXZ.x * 0.9 - worldXZ.y * 0.2 + t * 1.8) * 0.3;
+
+                // Combine into detailed wave pattern
+                float waveBand = (wavePhase1 + wavePhase2 * 0.7 + wavePhase3 * 0.5 + wavePhase4 + wavePhase5) / 2.9;
+                waveBand = waveBand * 0.5 + 0.5;  // 0 to 1
+
+                // Two-tone water colors with strong contrast
+                vec3 waterLight = vec3(0.35, 0.50, 0.40);  // Lighter green-teal
+                vec3 waterDark = vec3(0.259, 0.357, 0.255);   // RGB(66, 91, 65) deep water
+
+                // Blend based on depth + wave pattern
+                float depthFactor = clamp(waterDepth / 2.5, 0.0, 1.0);
+                vec3 baseWater = mix(waterLight, waterDark, depthFactor);
+
+                // Apply strong wave banding
+                float bandStrength = 0.2 + depthFactor * 0.1;
+                baseColor = mix(baseWater - vec3(bandStrength * 0.5),
+                               baseWater + vec3(bandStrength * 0.3),
+                               waveBand);
+
+                // Shore highlight - animated foam line
+                if (waterDepth < 2.0) {
+                    float shoreT = 1.0 - (waterDepth / 2.0);
+                    float foamWave = sin(length(worldXZ) * 0.3 - t * 2.0) * 0.5 + 0.5;
+                    float foam = shoreT * foamWave;
+                    baseColor = mix(baseColor, vec3(0.6, 0.68, 0.65), foam * 0.5);
+                }
+
+                // Bright specular-like highlights on wave peaks
+                float highlight = smoothstep(0.75, 0.95, waveBand);
+                baseColor += vec3(0.12, 0.15, 0.14) * highlight;
+            }
+            break;
+        default:
+            baseColor = vec3(1.0, 0.0, 1.0);  // Magenta for debug
+    }
+
+    // Apply soft edge effects (gradient-based, not hard contours)
+    baseColor = baseColor * (1.0 - edgeDarken);
+    baseColor = mix(baseColor, vec3(1.0), edgeHighlight);
+
+    return baseColor;
+}
+
+// ============================================================================
+// RAY STRUCTURES
+// ============================================================================
+
+struct Ray {
+    vec3 origin;
+    vec3 direction;
+};
+
+struct HitInfo {
+    bool hit;
+    float t;
+    vec3 position;
+    vec3 normal;
+    vec3 color;
+    int voxelType;
+    bool isDetail;  // True if hit a detail (1/10 size) voxel
+};
+
+// ============================================================================
+// RAY-AABB INTERSECTION
+// ============================================================================
+
+bool intersectWorldBounds(Ray ray, out float tEnter, out float tExit) {
+    vec3 invDir = 1.0 / ray.direction;
+
+    vec3 t0 = (WORLD_MIN - ray.origin) * invDir;
+    vec3 t1 = (WORLD_MAX - ray.origin) * invDir;
+
+    vec3 tmin = min(t0, t1);
+    vec3 tmax = max(t0, t1);
+
+    tEnter = max(max(tmin.x, tmin.y), tmin.z);
+    tExit = min(min(tmax.x, tmax.y), tmax.z);
+
+    tEnter = max(tEnter, 0.001);
+
+    return tEnter < tExit;
+}
+
+// ============================================================================
+// DDA RAY MARCHING with Surface Detail
+// ============================================================================
+
+HitInfo traceVoxels(Ray ray, float maxDist) {
+    HitInfo info;
+    info.hit = false;
+    info.t = maxDist;
+    info.isDetail = false;
+
+    // Check world bounds
+    float tEnter, tExit;
+    if (!intersectWorldBounds(ray, tEnter, tExit)) {
+        return info;
+    }
+
+    // Start at entry point
+    vec3 entryPoint = ray.origin + ray.direction * tEnter;
+
+    // Transform to grid space
+    vec3 gridOffset = vec3(WORLD_MIN.x, 0.0, WORLD_MIN.z);
+    vec3 rayPos = entryPoint - gridOffset;
+    vec3 rayDir = ray.direction;
+
+    // Check if entry point is actually within valid grid range (with small margin)
+    if (rayPos.x < -0.5 || rayPos.x > float(WORLD_SIZE_X) + 0.5 ||
+        rayPos.z < -0.5 || rayPos.z > float(WORLD_SIZE_Z) + 0.5) {
+        return info;  // Ray misses the world entirely
+    }
+
+    // Clamp Y only (vertical), allow X/Z to be slightly outside for edge detection
+    rayPos.y = clamp(rayPos.y, 0.001, float(WORLD_SIZE_Y) - 0.001);
+
+    ivec3 mapPos = ivec3(floor(rayPos));
+    ivec3 rayStep = ivec3(sign(rayDir));
+
+    if (rayDir.x == 0.0) rayStep.x = 0;
+    if (rayDir.y == 0.0) rayStep.y = 0;
+    if (rayDir.z == 0.0) rayStep.z = 0;
+
+    vec3 deltaDist = abs(1.0 / rayDir);
+    if (rayDir.x == 0.0) deltaDist.x = 1e30;
+    if (rayDir.y == 0.0) deltaDist.y = 1e30;
+    if (rayDir.z == 0.0) deltaDist.z = 1e30;
+
+    vec3 sideDist;
+    if (rayDir.x < 0.0) {
+        sideDist.x = (rayPos.x - float(mapPos.x)) * deltaDist.x;
+    } else {
+        sideDist.x = (float(mapPos.x) + 1.0 - rayPos.x) * deltaDist.x;
+    }
+    if (rayDir.y < 0.0) {
+        sideDist.y = (rayPos.y - float(mapPos.y)) * deltaDist.y;
+    } else {
+        sideDist.y = (float(mapPos.y) + 1.0 - rayPos.y) * deltaDist.y;
+    }
+    if (rayDir.z < 0.0) {
+        sideDist.z = (rayPos.z - float(mapPos.z)) * deltaDist.z;
+    } else {
+        sideDist.z = (float(mapPos.z) + 1.0 - rayPos.z) * deltaDist.z;
+    }
+
+    ivec3 mask = ivec3(0);
+    float travelDist = 0.0;
+
+    const int MAX_STEPS = 256;  // More steps for larger world
+
+    for (int i = 0; i < MAX_STEPS; i++) {
+        // Bounds check
+        if (mapPos.x < 0 || mapPos.x >= WORLD_SIZE_X ||
+            mapPos.y < 0 || mapPos.y >= WORLD_SIZE_Y ||
+            mapPos.z < 0 || mapPos.z >= WORLD_SIZE_Z) {
+            break;
+        }
+
+        int voxel = getVoxel(mapPos);
+
+        if (voxel > 0) {
+            // Hit a solid voxel - check for surface detail if it's grass
+            info.t = tEnter + travelDist * VOXEL_SIZE;
+            info.position = ray.origin + ray.direction * info.t;
+            info.normal = -vec3(mask) * vec3(rayStep);
+
+            if (mask == ivec3(0)) {
+                vec3 hitLocal = rayPos - vec3(mapPos) - vec3(0.5);
+                vec3 absHit = abs(hitLocal);
+                if (absHit.x > absHit.y && absHit.x > absHit.z) {
+                    info.normal = vec3(-sign(rayDir.x), 0.0, 0.0);
+                } else if (absHit.y > absHit.z) {
+                    info.normal = vec3(0.0, -sign(rayDir.y), 0.0);
+                } else {
+                    info.normal = vec3(0.0, 0.0, -sign(rayDir.z));
+                }
+            }
+
+            // Set voxel type
+            info.voxelType = voxel;
+
+            info.hit = true;
+            info.color = getVoxelColor(info.voxelType, info.normal, info.position);
+            return info;
+        }
+
+        // DDA step
+        if (sideDist.x < sideDist.y) {
+            if (sideDist.x < sideDist.z) {
+                travelDist = sideDist.x;
+                sideDist.x += deltaDist.x;
+                mapPos.x += rayStep.x;
+                mask = ivec3(1, 0, 0);
+            } else {
+                travelDist = sideDist.z;
+                sideDist.z += deltaDist.z;
+                mapPos.z += rayStep.z;
+                mask = ivec3(0, 0, 1);
+            }
+        } else {
+            if (sideDist.y < sideDist.z) {
+                travelDist = sideDist.y;
+                sideDist.y += deltaDist.y;
+                mapPos.y += rayStep.y;
+                mask = ivec3(0, 1, 0);
+            } else {
+                travelDist = sideDist.z;
+                sideDist.z += deltaDist.z;
+                mapPos.z += rayStep.z;
+                mask = ivec3(0, 0, 1);
+            }
+        }
+    }
+
+    return info;
+}
+
+// ============================================================================
+// LIGHTING - Daytime sun
+// ============================================================================
+
+vec3 shade(HitInfo hit, Ray ray) {
+    // Sun direction and color
+    vec3 sunDir = normalize(vec3(0.5, 0.8, 0.3));
+    vec3 sunColor = vec3(1.0, 0.95, 0.9);
+    float ambient = 0.25;
+
+    // Blend between sharp normal and smooth terrain normal for grass
+    vec3 shadingNormal = hit.normal;
+    if (hit.voxelType == 1 && hit.normal.y > 0.5) {
+        // Get world XZ position
+        vec2 worldXZ = hit.position.xz;
+        // Blend 70% smooth normal for natural look
+        vec3 smoothNormal = getTerrainNormal(worldXZ);
+        shadingNormal = normalize(mix(hit.normal, smoothNormal, 0.7));
+    }
+
+    // Diffuse lighting using smooth normal
+    float diffuse = max(dot(shadingNormal, sunDir), 0.0);
+
+    // Fill light from opposite side to catch dark edges
+    vec3 fillDir = normalize(vec3(-0.4, 0.6, -0.2));
+    float fill = max(dot(shadingNormal, fillDir), 0.0) * 0.25;
+
+    // Shadow ray
+    float shadow = 1.0;
+    if (!hit.isDetail) {
+        Ray shadowRay;
+        shadowRay.origin = hit.position + hit.normal * 0.02;
+        shadowRay.direction = sunDir;
+        HitInfo shadowHit = traceVoxels(shadowRay, 60.0);
+        shadow = shadowHit.hit ? 0.5 : 1.0;
+    }
+
+    // Subtle edge highlight for vertical faces
+    float isVerticalFace = 1.0 - abs(hit.normal.y);
+    float edgeBoost = isVerticalFace * 0.15;
+
+    // Combine lighting
+    vec3 color = hit.color * (ambient + edgeBoost + fill + diffuse * shadow * 0.6) * sunColor;
+
+    return color;
+}
+
+// ============================================================================
+// SKY - Daytime sky
+// ============================================================================
+
+vec3 getSkyColor(vec3 dir) {
+    vec3 sunDir = normalize(vec3(0.5, 0.8, 0.3));
+
+    // Sky gradient
+    float t = 0.5 * (dir.y + 1.0);
+    vec3 skyBottom = vec3(0.6, 0.75, 0.95);
+    vec3 skyTop = vec3(0.35, 0.55, 0.9);
+    vec3 sky = mix(skyBottom, skyTop, t);
+
+    // Sun
+    float sunDot = max(dot(dir, sunDir), 0.0);
+    sky += vec3(1.0, 0.95, 0.8) * pow(sunDot, 256.0) * 2.0;
+    sky += vec3(1.0, 0.9, 0.7) * pow(sunDot, 32.0) * 0.3;
+
+    return sky;
+}
+
+// ============================================================================
+// MAIN
+// ============================================================================
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (pixelCoord.x >= int(pc.width) || pixelCoord.y >= int(pc.height)) {
+        return;
+    }
+
+    // Normalized coordinates (-1 to 1)
+    vec2 uv = (vec2(pixelCoord) + 0.5) / vec2(pc.width, pc.height);
+    uv = uv * 2.0 - 1.0;
+    uv.x *= float(pc.width) / float(pc.height);
+
+        // Rimworld-style top-down camera with slight tilt
+        // View size based on zoom (how many world units visible)
+        float viewRadius = 60.0 * pc.zoom;
+
+        // World position this pixel represents (orthographic - no perspective)
+        vec2 worldOffset = uv * viewRadius;
+
+        // Nearly top-down with slight forward tilt for depth
+        // Rimworld is mostly top-down, just enough angle to see block sides
+        float tiltAngle = 0.25;  // Slight tilt (0 = straight down)
+
+        // Camera looks almost straight down with tiny forward lean
+        vec3 camForward = normalize(vec3(0.0, -1.0, tiltAngle));
+        vec3 camRight = vec3(1.0, 0.0, 0.0);
+        vec3 camUp = normalize(cross(camRight, camForward));
+
+        // Camera height and position
+        float camHeight = 80.0 * pc.zoom;
+        vec3 cameraPos = vec3(pc.camera_x, camHeight, pc.camera_z);
+
+        // Orthographic ray origin - offset in camera plane
+        vec3 rayOrigin = cameraPos + camRight * worldOffset.x + camUp * worldOffset.y;
+
+        // All rays point the same direction (orthographic)
+        vec3 rayDir = camForward;
+
+        Ray ray;
+        ray.origin = rayOrigin;
+        ray.direction = rayDir;
+
+    // Trace voxels
+    HitInfo hit = traceVoxels(ray, 200.0);
+
+    vec3 color;
+    if (hit.hit) {
+        color = shade(hit, ray);
+    } else {
+        color = getSkyColor(rayDir);
+    }
+
+    // Slight vignette effect
+    float r = length(uv);
+    float vignette = 1.0 - r * 0.2;
+    color *= vignette;
+
+    // Gamma correction
+    color = pow(color, vec3(1.0 / 2.2));
+
+    // Swap R and B for BGRA swapchain format
+    imageStore(outputImage, pixelCoord, vec4(color.bgr, 1.0));
+}

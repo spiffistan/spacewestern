@@ -1,0 +1,13 @@
+[package]
+name = "rayworld"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ash = "0.38"
+winit = "0.29"
+anyhow = "1.0"
+ash-window = "0.13"
+bytemuck = { version = "1.14", features = ["derive"] }
