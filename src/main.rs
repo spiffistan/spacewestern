@@ -15,6 +15,7 @@ use winit::{
 };
 
 use input::InputState;
+use terrain::{TerrainConfig, TerrainGenerator};
 
 use vulkan::{
     check_ray_tracing_support, create_command_pool, create_fence, create_instance,
@@ -182,6 +183,54 @@ fn main() -> Result<()> {
     let mut input = InputState::new();
     let mut last_frame_time = Instant::now();
 
+    // Terrain generator for CPU-side raycasting
+    let terrain = TerrainGenerator::new(TerrainConfig::default());
+
+    // Track window size for ray calculations
+    let mut window_width = extent.width as f32;
+    let mut window_height = extent.height as f32;
+
+    // Helper closure to create a ray from screen coordinates
+    let create_ray_from_screen = |mouse_x: f32, mouse_y: f32, width: f32, height: f32, zoom: f32, camera_x: f32, camera_z: f32| -> ([f32; 3], [f32; 3]) {
+        // Normalized coordinates (-1 to 1)
+        let mut uv_x = (mouse_x + 0.5) / width * 2.0 - 1.0;
+        let uv_y = (mouse_y + 0.5) / height * 2.0 - 1.0;
+        uv_x *= width / height; // Aspect ratio correction
+
+        // View size based on zoom
+        let view_radius = 60.0 * zoom;
+        let world_offset_x = uv_x * view_radius;
+        let world_offset_y = uv_y * view_radius;
+
+        // Camera setup (matching shader)
+        let tilt_angle = 0.25_f32;
+        let cam_forward = {
+            let len = (1.0_f32 + tilt_angle * tilt_angle).sqrt();
+            [0.0, -1.0 / len, tilt_angle / len]
+        };
+        let cam_right = [1.0_f32, 0.0, 0.0];
+        // camUp = cross(camRight, camForward)
+        let cam_up = [
+            cam_right[1] * cam_forward[2] - cam_right[2] * cam_forward[1],
+            cam_right[2] * cam_forward[0] - cam_right[0] * cam_forward[2],
+            cam_right[0] * cam_forward[1] - cam_right[1] * cam_forward[0],
+        ];
+        // Normalize camUp
+        let cam_up_len = (cam_up[0] * cam_up[0] + cam_up[1] * cam_up[1] + cam_up[2] * cam_up[2]).sqrt();
+        let cam_up = [cam_up[0] / cam_up_len, cam_up[1] / cam_up_len, cam_up[2] / cam_up_len];
+
+        let cam_height = 80.0 * zoom;
+
+        // Orthographic ray origin
+        let ray_origin = [
+            camera_x + cam_right[0] * world_offset_x + cam_up[0] * world_offset_y,
+            cam_height + cam_right[1] * world_offset_x + cam_up[1] * world_offset_y,
+            camera_z + cam_right[2] * world_offset_x + cam_up[2] * world_offset_y,
+        ];
+
+        (ray_origin, cam_forward)
+    };
+
     event_loop
         .run(move |event, elwt| {
             match event {
@@ -245,19 +294,92 @@ fn main() -> Result<()> {
                             input.scroll(scroll_delta);
                         }
                         WindowEvent::MouseInput { state, button, .. } => {
-                            let _button_id = match button {
+                            let button_id = match button {
                                 winit::event::MouseButton::Left => 0,
                                 winit::event::MouseButton::Right => 1,
                                 winit::event::MouseButton::Middle => 2,
                                 _ => 3,
                             };
                             match state {
-                                ElementState::Pressed => input.mouse_pressed(),
-                                ElementState::Released => input.mouse_released(),
+                                ElementState::Pressed => {
+                                    input.mouse_pressed(button_id);
+
+                                    // Left click - start voxel drag
+                                    if button_id == 0 {
+                                        let (ray_origin, ray_dir) = create_ray_from_screen(
+                                            input.mouse_x,
+                                            input.mouse_y,
+                                            window_width,
+                                            window_height,
+                                            input.zoom,
+                                            input.camera_x,
+                                            input.camera_z,
+                                        );
+
+                                        if let Some((x, y, z, voxel_type)) = terrain.raycast(
+                                            ray_origin,
+                                            ray_dir,
+                                            200.0,
+                                            &input.removed_voxels,
+                                            &input.placed_voxels,
+                                        ) {
+                                            println!("CLICK: Hit voxel at ({}, {}, {}), type={}", x, y, z, voxel_type);
+                                            input.start_voxel_drag(x, y, z);
+                                        } else {
+                                            println!("CLICK: No voxel hit");
+                                        }
+                                    }
+                                }
+                                ElementState::Released => {
+                                    // Left click release - complete voxel drag
+                                    if button_id == 0 && input.dragged_voxel.active {
+                                        let (ray_origin, ray_dir) = create_ray_from_screen(
+                                            input.mouse_x,
+                                            input.mouse_y,
+                                            window_width,
+                                            window_height,
+                                            input.zoom,
+                                            input.camera_x,
+                                            input.camera_z,
+                                        );
+
+                                        // Find drop target (the voxel we're hovering over)
+                                        if let Some((hit_x, _hit_y, hit_z, _)) = terrain.raycast(
+                                            ray_origin,
+                                            ray_dir,
+                                            200.0,
+                                            &input.removed_voxels,
+                                            &input.placed_voxels,
+                                        ) {
+                                            // Get the source voxel type
+                                            let source_pos = (
+                                                input.dragged_voxel.source_x,
+                                                input.dragged_voxel.source_y,
+                                                input.dragged_voxel.source_z,
+                                            );
+                                            let source_type = if let Some(&vt) = input.placed_voxels.get(&source_pos) {
+                                                vt
+                                            } else {
+                                                terrain.get_voxel(source_pos.0, source_pos.1, source_pos.2) as u8
+                                            };
+
+                                            // Place on the ground at target X,Z position
+                                            let ground_y = terrain.get_height(hit_x as f32, hit_z as f32).ceil() as i32;
+                                            input.complete_voxel_drag(hit_x, ground_y, hit_z, source_type);
+                                        } else {
+                                            input.cancel_voxel_drag();
+                                        }
+                                    }
+                                    input.mouse_released(button_id);
+                                }
                             }
                         }
                         WindowEvent::CursorMoved { position, .. } => {
                             input.mouse_moved(position.x as f32, position.y as f32);
+                        }
+                        WindowEvent::Resized(size) => {
+                            window_width = size.width as f32;
+                            window_height = size.height as f32;
                         }
                         _ => {}
                     }
@@ -296,6 +418,21 @@ fn main() -> Result<()> {
                         vk::ImageLayout::GENERAL,
                     );
 
+                    // Build removed and placed voxel arrays (up to 8 each)
+                    let mut removed: [[i32; 4]; 8] = [[0; 4]; 8];
+                    let mut num_removed = 0u32;
+                    for (i, &(x, y, z)) in input.removed_voxels.iter().take(8).enumerate() {
+                        removed[i] = [x, y, z, 0];
+                        num_removed = (i + 1) as u32;
+                    }
+
+                    let mut placed: [[i32; 4]; 8] = [[0; 4]; 8];
+                    let mut num_placed = 0u32;
+                    for (i, (&(x, y, z), &vt)) in input.placed_voxels.iter().take(8).enumerate() {
+                        placed[i] = [x, y, z, vt as i32];
+                        num_placed = (i + 1) as u32;
+                    }
+
                     let push_constants = PushConstants {
                         time: start_time.elapsed().as_secs_f32(),
                         width: extent.width,
@@ -304,8 +441,30 @@ fn main() -> Result<()> {
                         camera_x: input.camera_x,
                         camera_z: input.camera_z,
                         visible_layer: input.visible_layer,
-                        _padding: 0.0,
+                        mouse_x: input.mouse_x,
+                        mouse_y: input.mouse_y,
+                        is_dragging: if input.dragged_voxel.active { 1 } else { 0 },
+                        drag_source_x: input.dragged_voxel.source_x,
+                        drag_source_y: input.dragged_voxel.source_y,
+                        drag_source_z: input.dragged_voxel.source_z,
+                        num_removed,
+                        num_placed,
+                        _padding: 0,
+                        removed,
+                        placed,
                     };
+
+                    // Debug: print when dragging or when there are modifications
+                    static mut FRAME_COUNT: u64 = 0;
+                    FRAME_COUNT += 1;
+                    if push_constants.is_dragging == 1 || num_removed > 0 || num_placed > 0 {
+                        if FRAME_COUNT % 60 == 0 {
+                            println!("FRAME {}: is_dragging={}, drag_source=({},{},{}), num_removed={}, num_placed={}",
+                                FRAME_COUNT, push_constants.is_dragging,
+                                push_constants.drag_source_x, push_constants.drag_source_y, push_constants.drag_source_z,
+                                num_removed, num_placed);
+                        }
+                    }
 
                     // Dispatch based on renderer type
                     match &renderer {

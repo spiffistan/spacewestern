@@ -137,5 +137,19 @@ pub struct PushConstants {
     pub camera_x: f32,
     pub camera_z: f32,
     pub visible_layer: i32,  // -1 = show all, 0+ = show only up to this layer
-    pub _padding: f32,
+    pub mouse_x: f32,        // Mouse X position in pixels
+    pub mouse_y: f32,        // Mouse Y position in pixels
+    pub is_dragging: u32,    // 1 if currently dragging a voxel
+    pub drag_source_x: i32,  // Source voxel X (grid coords)
+    pub drag_source_y: i32,  // Source voxel Y (grid coords)
+    pub drag_source_z: i32,  // Source voxel Z (grid coords)
+    // Number of active modifications
+    pub num_removed: u32,
+    pub num_placed: u32,
+    // Padding to align ivec4 array to 16 bytes (offset 60 -> 64)
+    pub _padding: u32,
+    // Up to 8 removed voxels (x, y, z each)
+    pub removed: [[i32; 4]; 8],  // [x, y, z, _padding] * 8
+    // Up to 8 placed voxels (x, y, z, type each)
+    pub placed: [[i32; 4]; 8],   // [x, y, z, type] * 8
 }

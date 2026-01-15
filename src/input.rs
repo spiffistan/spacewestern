@@ -16,6 +16,15 @@ const ZOOM_LEVELS: [f32; 11] = [
     30.0,  // Full map
 ];
 
+/// Voxel being dragged (world grid coordinates)
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DraggedVoxel {
+    pub active: bool,
+    pub source_x: i32,
+    pub source_y: i32,
+    pub source_z: i32,
+}
+
 /// Camera and input state
 pub struct InputState {
     pub camera_x: f32,
@@ -26,10 +35,21 @@ pub struct InputState {
     zoom_level_index: usize,
     zoom_key_released: bool, // Prevents repeated zoom on key hold
     keys_pressed: HashSet<KeyCode>,
-    // Mouse drag state
-    mouse_dragging: bool,
+    // Mouse camera drag state (right mouse button)
+    camera_dragging: bool,
     last_mouse_x: f32,
     last_mouse_y: f32,
+    // Current mouse position (for voxel picking)
+    pub mouse_x: f32,
+    pub mouse_y: f32,
+    // Voxel drag state (left mouse button)
+    pub voxel_dragging: bool,
+    pub dragged_voxel: DraggedVoxel,
+    // Placed voxels (moved from original position)
+    // Key: (x, y, z) destination, Value: voxel type
+    pub placed_voxels: std::collections::HashMap<(i32, i32, i32), u8>,
+    // Removed voxel positions (source positions of dragged voxels)
+    pub removed_voxels: std::collections::HashSet<(i32, i32, i32)>,
 }
 
 impl InputState {
@@ -44,9 +64,15 @@ impl InputState {
             zoom_level_index: default_zoom_index,
             zoom_key_released: true,
             keys_pressed: HashSet::new(),
-            mouse_dragging: false,
+            camera_dragging: false,
             last_mouse_x: 0.0,
             last_mouse_y: 0.0,
+            mouse_x: 0.0,
+            mouse_y: 0.0,
+            voxel_dragging: false,
+            dragged_voxel: DraggedVoxel::default(),
+            placed_voxels: std::collections::HashMap::new(),
+            removed_voxels: std::collections::HashSet::new(),
         }
     }
 
@@ -78,21 +104,87 @@ impl InputState {
         }
     }
 
-    /// Handle mouse button press (for drag panning)
-    pub fn mouse_pressed(&mut self) {
-        // Any mouse button for panning
-        self.mouse_dragging = true;
-        // Position is already tracked by mouse_moved
+    /// Handle mouse button press
+    pub fn mouse_pressed(&mut self, button: u8) {
+        match button {
+            0 => {
+                // Left mouse button - start voxel drag
+                self.voxel_dragging = true;
+                // The actual voxel picking will be done by the shader/CPU raycast
+            }
+            1 | 2 => {
+                // Right or middle mouse button - camera panning
+                self.camera_dragging = true;
+            }
+            _ => {}
+        }
     }
 
     /// Handle mouse button release
-    pub fn mouse_released(&mut self) {
-        self.mouse_dragging = false;
+    pub fn mouse_released(&mut self, button: u8) {
+        match button {
+            0 => {
+                // Left mouse button released - complete voxel drag
+                if self.voxel_dragging && self.dragged_voxel.active {
+                    // The drop will be handled externally when we know the target position
+                }
+                self.voxel_dragging = false;
+            }
+            1 | 2 => {
+                self.camera_dragging = false;
+            }
+            _ => {}
+        }
     }
 
-    /// Handle mouse movement (for drag panning)
+    /// Start dragging a voxel from the given world position
+    pub fn start_voxel_drag(&mut self, x: i32, y: i32, z: i32) {
+        self.dragged_voxel = DraggedVoxel {
+            active: true,
+            source_x: x,
+            source_y: y,
+            source_z: z,
+        };
+    }
+
+    /// Complete the voxel drag - move voxel from source to destination
+    pub fn complete_voxel_drag(&mut self, dest_x: i32, dest_y: i32, dest_z: i32, voxel_type: u8) {
+        if self.dragged_voxel.active {
+            let source = (
+                self.dragged_voxel.source_x,
+                self.dragged_voxel.source_y,
+                self.dragged_voxel.source_z,
+            );
+            let dest = (dest_x, dest_y, dest_z);
+
+            // Don't do anything if dropping on same position
+            if source != dest {
+                // Mark source as removed
+                self.removed_voxels.insert(source);
+                // Remove from placed if it was there
+                self.placed_voxels.remove(&source);
+
+                // Place at destination
+                self.placed_voxels.insert(dest, voxel_type);
+                // Remove from removed if it was there
+                self.removed_voxels.remove(&dest);
+            }
+        }
+        self.dragged_voxel = DraggedVoxel::default();
+    }
+
+    /// Cancel the current voxel drag
+    pub fn cancel_voxel_drag(&mut self) {
+        self.dragged_voxel = DraggedVoxel::default();
+    }
+
+    /// Handle mouse movement (for drag panning and voxel picking)
     pub fn mouse_moved(&mut self, x: f32, y: f32) {
-        if self.mouse_dragging {
+        // Always track current mouse position for voxel picking
+        self.mouse_x = x;
+        self.mouse_y = y;
+
+        if self.camera_dragging {
             let dx = x - self.last_mouse_x;
             let dy = y - self.last_mouse_y;
 
@@ -100,14 +192,11 @@ impl InputState {
             let pan_speed = self.zoom * 0.5;
             self.camera_x -= dx * pan_speed;
             self.camera_z += dy * pan_speed;  // Y mouse = Z world (forward/back)
-
-            self.last_mouse_x = x;
-            self.last_mouse_y = y;
-        } else {
-            // Track position even when not dragging for smooth start
-            self.last_mouse_x = x;
-            self.last_mouse_y = y;
         }
+
+        // Always update last position for smooth camera drag start
+        self.last_mouse_x = x;
+        self.last_mouse_y = y;
     }
     /// Update state based on held keys (call once per frame)
     pub fn update(&mut self, delta_time: f32) {

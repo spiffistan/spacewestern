@@ -12,7 +12,21 @@ layout(push_constant) uniform PushConstants {
     float camera_x;
     float camera_z;
     int visible_layer;  // -1 = show all, 0+ = show only up to this layer
-    float _padding;
+    float mouse_x;      // Mouse X position in pixels
+    float mouse_y;      // Mouse Y position in pixels
+    uint is_dragging;   // 1 if currently dragging a voxel
+    int drag_source_x;  // Source voxel X (grid coords)
+    int drag_source_y;  // Source voxel Y (grid coords)
+    int drag_source_z;  // Source voxel Z (grid coords)
+    // Number of active modifications
+    uint num_removed;
+    uint num_placed;
+    // Padding to align ivec4 array to 16 bytes
+    uint _padding;
+    // Up to 8 removed voxels (x, y, z, _padding each)
+    ivec4 removed[8];
+    // Up to 8 placed voxels (x, y, z, type each)
+    ivec4 placed[8];
 } pc;
 
 // ============================================================================
@@ -198,6 +212,28 @@ int getVoxel(ivec3 pos) {
         pos.y < 0 || pos.y >= WORLD_SIZE_Y ||
         pos.z < 0 || pos.z >= WORLD_SIZE_Z) {
         return 0;
+    }
+
+    // Check if this voxel has been removed (dragged away)
+    for (uint i = 0; i < pc.num_removed; i++) {
+        ivec3 removedPos = pc.removed[i].xyz;
+        if (pos == removedPos) {
+            return 0;  // This voxel was removed
+        }
+    }
+
+    // Check if this voxel is being actively dragged (hide source during drag)
+    if (pc.is_dragging == 1 &&
+        pos.x == pc.drag_source_x && pos.y == pc.drag_source_y && pos.z == pc.drag_source_z) {
+        return 0;  // Hide the source voxel during drag
+    }
+
+    // Check if a voxel was placed here
+    for (uint i = 0; i < pc.num_placed; i++) {
+        ivec4 placedData = pc.placed[i];
+        if (pos.x == placedData.x && pos.y == placedData.y && pos.z == placedData.z) {
+            return placedData.w;  // Return the placed voxel type
+        }
     }
 
     // Convert to world coordinates (centered)
@@ -402,6 +438,7 @@ struct HitInfo {
     vec3 color;
     int voxelType;
     bool isDetail;  // True if hit a detail (1/10 size) voxel
+    ivec3 gridPos;  // Grid coordinates of the hit voxel
 };
 
 // ============================================================================
@@ -502,11 +539,20 @@ HitInfo traceVoxels(Ray ray, float maxDist) {
 
         int voxel = getVoxel(mapPos);
 
+        // Skip the dragged voxel's source position (make it appear removed)
+        if (pc.is_dragging == 1 &&
+            mapPos.x == pc.drag_source_x &&
+            mapPos.y == pc.drag_source_y &&
+            mapPos.z == pc.drag_source_z) {
+            voxel = 0;  // Treat as air
+        }
+
         if (voxel > 0) {
             // Hit a solid voxel - check for surface detail if it's grass
             info.t = tEnter + travelDist * VOXEL_SIZE;
             info.position = ray.origin + ray.direction * info.t;
             info.normal = -vec3(mask) * vec3(rayStep);
+            info.gridPos = mapPos;  // Store grid position
 
             if (mask == ivec3(0)) {
                 vec3 hitLocal = rayPos - vec3(mapPos) - vec3(0.5);
@@ -563,9 +609,13 @@ HitInfo traceVoxels(Ray ray, float maxDist) {
 // LIGHTING - Daytime sun
 // ============================================================================
 
+vec3 getSunDirection() {
+    return normalize(vec3(0.5, 0.8, 0.3));
+}
+
 vec3 shade(HitInfo hit, Ray ray) {
     // Sun direction and color
-    vec3 sunDir = normalize(vec3(0.5, 0.8, 0.3));
+    vec3 sunDir = getSunDirection();
     vec3 sunColor = vec3(1.0, 0.95, 0.9);
     float ambient = 0.25;
 
@@ -583,14 +633,16 @@ vec3 shade(HitInfo hit, Ray ray) {
     float diffuse = max(dot(shadingNormal, sunDir), 0.0);
 
     // Fill light from opposite side to catch dark edges
-    vec3 fillDir = normalize(vec3(-0.4, 0.6, -0.2));
+    vec3 fillDir = normalize(vec3(-sunDir.x, 0.6, -sunDir.z));
     float fill = max(dot(shadingNormal, fillDir), 0.0) * 0.25;
 
-    // Shadow ray
+    // Shadow ray - offset from surface to avoid self-intersection
     float shadow = 1.0;
     if (!hit.isDetail) {
         Ray shadowRay;
-        shadowRay.origin = hit.position + hit.normal * 0.02;
+        // Use grid position center + normal offset for consistent shadow origin
+        vec3 voxelCenter = vec3(hit.gridPos) + vec3(0.5);
+        shadowRay.origin = voxelCenter + hit.normal * 0.6;
         shadowRay.direction = sunDir;
         HitInfo shadowHit = traceVoxels(shadowRay, 60.0);
         shadow = shadowHit.hit ? 0.5 : 1.0;
@@ -611,7 +663,7 @@ vec3 shade(HitInfo hit, Ray ray) {
 // ============================================================================
 
 vec3 getSkyColor(vec3 dir) {
-    vec3 sunDir = normalize(vec3(0.5, 0.8, 0.3));
+    vec3 sunDir = getSunDirection();
 
     // Sky gradient
     float t = 0.5 * (dir.y + 1.0);
@@ -630,6 +682,32 @@ vec3 getSkyColor(vec3 dir) {
 // ============================================================================
 // MAIN
 // ============================================================================
+
+// Helper function to create a ray from screen coordinates
+Ray createRayFromScreen(vec2 screenPos, vec2 screenSize) {
+    // Normalized coordinates (-1 to 1)
+    vec2 uv = (screenPos + 0.5) / screenSize;
+    uv = uv * 2.0 - 1.0;
+    uv.x *= screenSize.x / screenSize.y;
+
+    // View size based on zoom
+    float viewRadius = 60.0 * pc.zoom;
+    vec2 worldOffset = uv * viewRadius;
+
+    // Camera setup
+    float tiltAngle = 0.25;
+    vec3 camForward = normalize(vec3(0.0, -1.0, tiltAngle));
+    vec3 camRight = vec3(1.0, 0.0, 0.0);
+    vec3 camUp = normalize(cross(camRight, camForward));
+
+    float camHeight = 80.0 * pc.zoom;
+    vec3 cameraPos = vec3(pc.camera_x, camHeight, pc.camera_z);
+
+    Ray ray;
+    ray.origin = cameraPos + camRight * worldOffset.x + camUp * worldOffset.y;
+    ray.direction = camForward;
+    return ray;
+}
 
 void main() {
     ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
@@ -676,9 +754,35 @@ void main() {
     // Trace voxels
     HitInfo hit = traceVoxels(ray, 200.0);
 
+    // Also trace from mouse position to find hovered voxel
+    vec2 screenSize = vec2(pc.width, pc.height);
+    Ray mouseRay = createRayFromScreen(vec2(pc.mouse_x, pc.mouse_y), screenSize);
+    HitInfo mouseHit = traceVoxels(mouseRay, 200.0);
+
     vec3 color;
     if (hit.hit) {
         color = shade(hit, ray);
+
+        // Highlight if this voxel is the one under the mouse cursor
+        if (mouseHit.hit && hit.gridPos == mouseHit.gridPos) {
+            // Bright highlight for the voxel under the cursor
+            float pulse = sin(pc.time * 4.0) * 0.1 + 0.9;
+
+            if (pc.is_dragging == 1) {
+                // Drop target highlight - green tint
+                color = mix(color, vec3(0.3, 1.0, 0.3), 0.3 * pulse);
+            } else {
+                // Hover highlight - white outline effect
+                color = mix(color, vec3(1.0, 1.0, 1.0), 0.25 * pulse);
+            }
+
+            // Edge outline effect
+            vec3 inBlock = fract(hit.position + vec3(0.001));
+            float edgeDist = min(min(inBlock.x, 1.0 - inBlock.x), min(inBlock.z, 1.0 - inBlock.z));
+            if (edgeDist < 0.08) {
+                color = mix(color, vec3(1.0, 1.0, 1.0), 0.5);
+            }
+        }
     } else {
         color = getSkyColor(rayDir);
     }
@@ -687,6 +791,21 @@ void main() {
     float r = length(uv);
     float vignette = 1.0 - r * 0.2;
     color *= vignette;
+
+    // Debug: show red corner when dragging is active
+    if (pc.is_dragging == 1 && pixelCoord.x < 50 && pixelCoord.y < 50) {
+        color = vec3(1.0, 0.0, 0.0);  // Red corner indicator
+    }
+
+    // Debug: show green corner when there are removed voxels
+    if (pc.num_removed > 0u && pixelCoord.x < 50 && pixelCoord.y >= 50 && pixelCoord.y < 100) {
+        color = vec3(0.0, 1.0, 0.0);  // Green indicator for removed voxels
+    }
+
+    // Debug: show blue corner when there are placed voxels
+    if (pc.num_placed > 0u && pixelCoord.x < 50 && pixelCoord.y >= 100 && pixelCoord.y < 150) {
+        color = vec3(0.0, 0.0, 1.0);  // Blue indicator for placed voxels
+    }
 
     // Gamma correction
     color = pow(color, vec3(1.0 / 2.2));
