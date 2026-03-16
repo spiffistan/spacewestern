@@ -355,8 +355,10 @@ impl App {
 
         self.camera.screen_w = width as f32;
         self.camera.screen_h = height as f32;
-        // Fit the map to the window height
-        self.camera.zoom = height as f32 / GRID_H as f32;
+        // Fit the entire map in the viewport
+        let zoom_x = width as f32 / GRID_W as f32;
+        let zoom_y = height as f32 / GRID_H as f32;
+        self.camera.zoom = zoom_x.min(zoom_y);
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
@@ -948,7 +950,7 @@ impl ApplicationHandler for App {
         }
 
         let attrs = Window::default_attributes()
-            .with_title("Rayworld")
+            .with_title("Spacewestern")
             .with_inner_size(PhysicalSize::new(2560u32, 1600u32));
 
         #[cfg(target_arch = "wasm32")]
