@@ -345,8 +345,9 @@ impl App {
 
         self.camera.screen_w = width as f32;
         self.camera.screen_h = height as f32;
-        // Lock zoom: map fills the square canvas exactly
+        // Fit map to canvas: zoom = pixels per world unit
         self.camera.zoom = height as f32 / GRID_H as f32;
+        log::info!("init_gfx: {}x{} (physical), zoom={}", width, height, self.camera.zoom);
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
@@ -787,6 +788,8 @@ impl App {
         let mut time_val = self.time_of_day;
         let mut paused = self.time_paused;
         let mut speed = self.time_speed;
+        let mut zoom = self.camera.zoom;
+        let base_zoom = self.camera.screen_h / GRID_H as f32;
         egui::Window::new("Time Control")
             .default_pos([10.0, 10.0])
             .default_width(300.0)
@@ -822,10 +825,23 @@ impl App {
                         .text("Speed")
                         .logarithmic(true));
                 });
+
+                ui.separator();
+
+                let zoom_pct = zoom / base_zoom * 100.0;
+                ui.label(format!("Zoom: {:.0}%", zoom_pct));
+                ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.5..=base_zoom * 4.0)
+                    .text("Zoom")
+                    .show_value(false)
+                    .logarithmic(true));
+                if ui.button("Reset zoom").clicked() {
+                    zoom = base_zoom;
+                }
             });
         self.time_of_day = time_val;
         self.time_paused = paused;
         self.time_speed = speed;
+        self.camera.zoom = zoom;
 
         let egui_output = egui_state.ctx.end_pass();
         egui_state.winit_state.handle_platform_output(window, egui_output.platform_output.clone());
@@ -1018,6 +1034,20 @@ impl ApplicationHandler for App {
                         _ => {}
                     }
                 }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let scroll = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 50.0,
+                };
+                let base_zoom = self.camera.screen_h / GRID_H as f32;
+                if scroll > 0.0 {
+                    self.camera.zoom *= 1.1;
+                } else if scroll < 0.0 {
+                    self.camera.zoom /= 1.1;
+                }
+                self.camera.zoom = self.camera.zoom.clamp(base_zoom * 0.5, base_zoom * 4.0);
+                self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == winit::event::MouseButton::Left {
