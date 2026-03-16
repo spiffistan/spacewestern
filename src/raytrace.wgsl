@@ -23,7 +23,7 @@ struct Camera {
 @group(0) @binding(2) var<storage, read> grid: array<u32>;
 
 // --- Block unpacking ---
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
@@ -69,7 +69,8 @@ fn get_roof_height(bx: i32, by: i32) -> f32 {
 
     // If the block is a wall/glass/door with height, check if any neighbor is roofed
     // (meaning this block is part of a roofed building's envelope)
-    if block_height(block) > 0u {
+    // Exception: open doors are openings, not part of the roof envelope
+    if block_height(block) > 0u && !(is_door(block) && is_open(block)) {
         let bh = f32(block_height(block));
         for (var dy: i32 = -1; dy <= 1; dy++) {
             for (var dx: i32 = -1; dx <= 1; dx++) {
@@ -202,8 +203,8 @@ fn trace_interior_sun_ray(wx: f32, wy: f32, sun_dir: vec2<f32>) -> vec4<f32> {
             continue;
         }
 
-        // Fireplace: low interior block, ray passes over it
-        if bt == 6u {
+        // Fireplace or electric light: low interior block, ray passes over it
+        if bt == 6u || bt == 7u {
             continue;
         }
 
@@ -266,7 +267,13 @@ fn compute_window_ambient(wx: f32, wy: f32) -> f32 {
                 let fdy = wy - (f32(ny) + 0.5);
                 let dist = sqrt(fdx * fdx + fdy * fdy);
                 let falloff = max(0.0, 1.0 - dist / WINDOW_LIGHT_RANGE);
-                let mult = select(0.6, 1.0, block_type(nb) == 5u);
+                // Open doors are full openings (mult=1.5), glass=1.0, closed doors=0.4
+                var mult = 0.4;
+                if block_type(nb) == 5u {
+                    mult = 1.0;
+                } else if is_open(nb) {
+                    mult = 1.5;
+                }
                 best = max(best, falloff * falloff * mult);
             }
         }
@@ -276,12 +283,20 @@ fn compute_window_ambient(wx: f32, wy: f32) -> f32 {
 }
 
 // Full interior lighting: combines ambient base, window ambient fill, and direct sunbeams.
-// --- Fireplace lighting ---
+// --- Interior light sources ---
 const FIRE_COLOR: vec3<f32> = vec3<f32>(1.0, 0.55, 0.15);       // warm orange
 const FIRE_COLOR_HOT: vec3<f32> = vec3<f32>(1.0, 0.85, 0.4);    // bright yellow-white core
 const FIRE_LIGHT_RADIUS: f32 = 10.0;  // how far firelight reaches (blocks)
 const FIRE_BASE_INTENSITY: f32 = 0.65; // base brightness of fire
 const FIRE_FLICKER_AMP: f32 = 0.20;    // flicker variation (+/-)
+
+// Electric light: cool-white ceiling light, steady, no flicker
+const ELIGHT_COLOR: vec3<f32> = vec3<f32>(0.95, 0.92, 0.85);    // warm white (~4000K)
+const ELIGHT_RADIUS: f32 = 8.0;   // how far electric light reaches (blocks)
+const ELIGHT_INTENSITY: f32 = 0.80; // steady brightness
+
+// How far light bleeds outside through openings
+const LIGHT_BLEED_SEARCH: f32 = 6.0;  // how far outside to search for nearby windows
 
 // Simple pseudo-random hash for fire flicker
 fn fire_hash(p: vec2<f32>) -> f32 {
@@ -302,78 +317,10 @@ fn fire_flicker(time: f32) -> f32 {
     return clamp(0.5 + f1 + f2 + f3 + f4 - gutter_pulse, 0.0, 1.0);
 }
 
-// Compute fireplace point light contribution at a world position.
-// Scans nearby blocks for fireplaces and accumulates warm flickering light.
-// Returns vec4(fire_tint_rgb, fire_light_intensity)
-// If `check_los` is true, traces a ray from the pixel to each fire source
-// and only counts light that passes through openings (glass/open doors).
-fn compute_fire_light(wx: f32, wy: f32, time: f32) -> vec4<f32> {
-    return compute_fire_light_ex(wx, wy, time, false);
-}
-
-// Trace line-of-sight from (wx,wy) toward fire at (fx,fy).
-// Returns transmission factor: 1.0 = clear path (or through openings), 0.0 = blocked by wall.
-// Glass attenuates slightly; open doors pass fully; closed doors/walls block.
-fn trace_fire_los(wx: f32, wy: f32, fx: f32, fy: f32) -> f32 {
-    let dx = fx - wx;
-    let dy = fy - wy;
-    let dist = sqrt(dx * dx + dy * dy);
-    if dist < 0.5 {
-        return 1.0;
-    }
-    let dir_x = dx / dist;
-    let dir_y = dy / dist;
-    let step_size = 0.2;
-    let max_steps = i32(dist / step_size) + 1;
-    var transmission = 1.0;
-    var sx = wx;
-    var sy = wy;
-    var prev_bx = i32(floor(wx));
-    var prev_by = i32(floor(wy));
-
-    for (var i: i32 = 0; i < max_steps; i++) {
-        sx += dir_x * step_size;
-        sy += dir_y * step_size;
-        let bx = i32(floor(sx));
-        let by = i32(floor(sy));
-        // Skip if same block as previous step (avoid re-checking)
-        if bx == prev_bx && by == prev_by {
-            continue;
-        }
-        prev_bx = bx;
-        prev_by = by;
-
-        let block = get_block(bx, by);
-        let bt = block_type(block);
-        let bh = block_height(block);
-
-        // Air or roofed floor: passes through
-        if bh == 0u {
-            continue;
-        }
-        // Fireplace itself: passes through
-        if bt == 6u {
-            continue;
-        }
-        // Glass: attenuate but pass through
-        if bt == 5u {
-            transmission *= 0.7;
-            if transmission < 0.02 {
-                return 0.0;
-            }
-            continue;
-        }
-        // Open door: passes through
-        if is_door(block) && is_open(block) {
-            continue;
-        }
-        // Solid wall or closed door: blocked
-        return 0.0;
-    }
-    return transmission;
-}
-
-fn compute_fire_light_ex(wx: f32, wy: f32, time: f32, check_los: bool) -> vec4<f32> {
+// Compute interior point light contribution at a world position (fire + electric).
+// Scans nearby blocks for light sources and accumulates their contribution.
+// Returns vec4(light_color_rgb, light_intensity)
+fn compute_point_lights(wx: f32, wy: f32, time: f32) -> vec4<f32> {
     var total_light = 0.0;
     var total_color = vec3<f32>(0.0);
     let search = i32(FIRE_LIGHT_RADIUS);
@@ -385,48 +332,133 @@ fn compute_fire_light_ex(wx: f32, wy: f32, time: f32, check_los: bool) -> vec4<f
             let nx = bx + dx;
             let ny = by + dy;
             let nb = get_block(nx, ny);
-            if block_type(nb) == 6u {
-                let fcx = f32(nx) + 0.5;
-                let fcy = f32(ny) + 0.5;
-                let fdx = wx - fcx;
-                let fdy = wy - fcy;
-                let dist = sqrt(fdx * fdx + fdy * fdy);
+            let bt = block_type(nb);
 
-                // Line-of-sight check: if enabled, trace ray toward fire
-                // and only count light that passes through openings
-                var los = 1.0;
-                if check_los {
-                    los = trace_fire_los(wx, wy, fcx, fcy);
-                }
-                if los < 0.01 {
-                    continue;
-                }
-
-                // Each fire has a slightly different flicker phase based on position
-                let phase = fire_hash(vec2<f32>(fcx, fcy)) * 6.28;
-                let flicker = fire_flicker(time + phase);
-                let intensity = FIRE_BASE_INTENSITY + (flicker - 0.5) * 2.0 * FIRE_FLICKER_AMP;
-
-                // Inverse-square-ish falloff, softened to avoid harsh center
-                let atten = 1.0 / (1.0 + dist * dist * 0.3);
-                // Also fade to zero at range limit
-                let range_fade = max(0.0, 1.0 - dist / FIRE_LIGHT_RADIUS);
-
-                let contribution = intensity * atten * range_fade * los;
-                total_light += contribution;
-
-                // Fire color shifts: hotter (brighter) near the source
-                let heat = clamp(1.0 - dist / 3.0, 0.0, 1.0);
-                let fire_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, heat * flicker);
-                total_color += fire_col * contribution;
+            // Fire (type 6) or electric light (type 7)
+            if bt != 6u && bt != 7u {
+                continue;
             }
+
+            let lcx = f32(nx) + 0.5;
+            let lcy = f32(ny) + 0.5;
+            let fdx = wx - lcx;
+            let fdy = wy - lcy;
+            let dist = sqrt(fdx * fdx + fdy * fdy);
+
+            var intensity: f32;
+            var light_col: vec3<f32>;
+            var radius: f32;
+
+            if bt == 6u {
+                // Fireplace: flickering warm light
+                let phase = fire_hash(vec2<f32>(lcx, lcy)) * 6.28;
+                let flicker = fire_flicker(time + phase);
+                intensity = FIRE_BASE_INTENSITY + (flicker - 0.5) * 2.0 * FIRE_FLICKER_AMP;
+                let heat = clamp(1.0 - dist / 3.0, 0.0, 1.0);
+                light_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, heat * flicker);
+                radius = FIRE_LIGHT_RADIUS;
+            } else {
+                // Electric light: steady cool-white
+                intensity = ELIGHT_INTENSITY;
+                light_col = ELIGHT_COLOR;
+                radius = ELIGHT_RADIUS;
+            }
+
+            if dist > radius {
+                continue;
+            }
+
+            let atten = 1.0 / (1.0 + dist * dist * 0.3);
+            let range_fade = max(0.0, 1.0 - dist / radius);
+            let contribution = intensity * atten * range_fade;
+            total_light += contribution;
+            total_color += light_col * contribution;
         }
     }
 
     if total_light > 0.001 {
         total_color /= total_light; // normalize to get average color
     } else {
-        total_color = FIRE_COLOR;
+        total_color = vec3<f32>(0.9, 0.85, 0.7); // neutral warm default
+    }
+
+    return vec4<f32>(total_color, total_light);
+}
+
+// Compute light bleeding through windows/doors from interior to exterior.
+// Window-centric: scans nearby openings (glass/open doors), computes interior light
+// AT each opening, then applies distance falloff from the opening to this pixel.
+// Returns vec4(bleed_color_rgb, bleed_intensity)
+fn compute_light_bleed(wx: f32, wy: f32, time: f32) -> vec4<f32> {
+    var total_light = 0.0;
+    var total_color = vec3<f32>(0.0);
+    let search = i32(LIGHT_BLEED_SEARCH);
+    let bx = i32(floor(wx));
+    let by = i32(floor(wy));
+
+    for (var dy: i32 = -search; dy <= search; dy++) {
+        for (var dx: i32 = -search; dx <= search; dx++) {
+            let nx = bx + dx;
+            let ny = by + dy;
+            let nb = get_block(nx, ny);
+
+            // Only consider glass windows and open doors as light portals
+            let is_window = block_type(nb) == 5u;
+            let is_open_door = is_door(nb) && is_open(nb);
+            if !is_window && !is_open_door {
+                continue;
+            }
+
+            // Check that this opening is part of a roofed building
+            // (has a roofed neighbor — otherwise it's a freestanding window)
+            var has_roofed_neighbor = false;
+            for (var cy: i32 = -1; cy <= 1; cy++) {
+                for (var cx: i32 = -1; cx <= 1; cx++) {
+                    if cx == 0 && cy == 0 { continue; }
+                    let adj = get_block(nx + cx, ny + cy);
+                    if has_roof(adj) {
+                        has_roofed_neighbor = true;
+                    }
+                }
+            }
+            if !has_roofed_neighbor {
+                continue;
+            }
+
+            let wcx = f32(nx) + 0.5;
+            let wcy = f32(ny) + 0.5;
+            let wdx = wx - wcx;
+            let wdy = wy - wcy;
+            let dist = sqrt(wdx * wdx + wdy * wdy);
+
+            if dist > LIGHT_BLEED_SEARCH {
+                continue;
+            }
+
+            // Compute interior light AT this opening
+            let interior_light = compute_point_lights(wcx, wcy, time);
+            let light_intensity = interior_light.w;
+            if light_intensity < 0.01 {
+                continue;
+            }
+
+            // Distance falloff from opening to outdoor pixel
+            let falloff = 1.0 / (1.0 + dist * dist * 0.8);
+            let range_fade = max(0.0, 1.0 - dist / LIGHT_BLEED_SEARCH);
+
+            // Open doors let more light through than glass
+            let portal_mult = select(0.6, 1.0, is_open_door);
+
+            let contribution = light_intensity * falloff * range_fade * portal_mult;
+            total_light += contribution;
+            total_color += interior_light.xyz * contribution;
+        }
+    }
+
+    if total_light > 0.001 {
+        total_color /= total_light;
+    } else {
+        total_color = vec3<f32>(0.9, 0.85, 0.7);
     }
 
     return vec4<f32>(total_color, total_light);
@@ -489,6 +521,41 @@ fn render_fireplace(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> 
     return color;
 }
 
+// Render electric light block from top-down: ceiling-mounted fixture seen from above
+fn render_electric_light(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> {
+    // Floor beneath the light
+    let floor_color = vec3<f32>(0.45, 0.35, 0.20); // dirt floor base
+    var color = floor_color;
+
+    // Ceiling fixture: small bright disk in center
+    let cx = fx - 0.5;
+    let cy = fy - 0.5;
+    let dist = sqrt(cx * cx + cy * cy);
+
+    // Outer glow ring (light spill on ceiling seen from above)
+    let glow_radius = 0.4;
+    if dist < glow_radius {
+        let glow_t = 1.0 - dist / glow_radius;
+        color = mix(color, ELIGHT_COLOR * 0.5, glow_t * glow_t * 0.4);
+    }
+
+    // Fixture body: small circular plate
+    let fixture_radius = 0.18;
+    if dist < fixture_radius {
+        let fixture_t = 1.0 - dist / fixture_radius;
+        let fixture_color = vec3<f32>(0.7, 0.7, 0.72); // metallic grey
+        color = mix(fixture_color, ELIGHT_COLOR * 1.1, fixture_t * fixture_t);
+    }
+
+    // Bright center bulb
+    let bulb_radius = 0.08;
+    if dist < bulb_radius {
+        color = ELIGHT_COLOR * 1.2;
+    }
+
+    return color;
+}
+
 fn compute_interior_light(wx: f32, wy: f32, sun_intensity: f32, sun_dir: vec2<f32>) -> vec4<f32> {
     // Sun-only interior lighting (fire is handled separately in the main shader)
 
@@ -526,6 +593,7 @@ fn block_base_color(btype: u32, flags: u32) -> vec3<f32> {
         }
         case 5u: { return vec3<f32>(0.65, 0.78, 0.88); }    // glass
         case 6u: { return vec3<f32>(0.35, 0.30, 0.28); }    // fireplace stone
+        case 7u: { return vec3<f32>(0.45, 0.35, 0.20); }    // electric light (floor beneath)
         default: { return vec3<f32>(1.0, 0.0, 1.0); }
     }
 }
@@ -876,6 +944,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if btype == 6u {
         // Fireplace: animated emissive rendering
         color = render_fireplace(world_x, world_y, fx, fy, camera.time);
+    } else if btype == 7u {
+        // Electric light: ceiling fixture rendering
+        color = render_electric_light(world_x, world_y, fx, fy, camera.time);
     } else {
         color = block_base_color(btype, bflags);
     }
@@ -904,8 +975,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Shadow / interior lighting
     var shadow_tint = vec3<f32>(1.0);
     var light_factor = 1.0;
-    var fire_color_out = vec3<f32>(0.0);
-    var fire_intensity_out = 0.0;
+    var light_color_out = vec3<f32>(0.0);
+    var light_intensity_out = 0.0;
 
     if is_indoor {
         // Indoor pixel: skip shadow ray entirely. The roof blocks all direct sun.
@@ -915,25 +986,24 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         shadow_tint = interior.xyz;
         light_factor = interior.w;
 
-        // Fire light — independent of sun, will be applied additively
-        let fire = compute_fire_light(world_x, world_y, camera.time);
-        fire_color_out = fire.xyz;
-        fire_intensity_out = fire.w;
+        // Point lights (fire + electric) — independent of sun, applied additively
+        let pt = compute_point_lights(world_x, world_y, camera.time);
+        light_color_out = pt.xyz;
+        light_intensity_out = pt.w;
     } else {
         // Outdoor pixel: trace shadow ray toward sun
         let shadow_result = trace_shadow_ray(world_x, world_y, effective_fheight, sun_dir, sun_elev);
         shadow_tint = shadow_result.xyz;
         light_factor = shadow_result.w;
 
-        // Fire light bleeding through windows and open doors
-        // Uses LOS check so light only reaches outdoor pixels through openings
-        let fire = compute_fire_light_ex(world_x, world_y, camera.time, true);
-        fire_color_out = fire.xyz;
-        fire_intensity_out = fire.w;
+        // Light bleeding through windows and open doors (window-centric approach)
+        let bleed = compute_light_bleed(world_x, world_y, camera.time);
+        light_color_out = bleed.xyz;
+        light_intensity_out = bleed.w;
     }
 
-    if btype == 6u {
-        // Fireplace: emissive, not affected by shadow/lighting.
+    if btype == 6u || btype == 7u {
+        // Emissive block (fireplace/electric light): not affected by shadow/lighting.
         // Just clamp and output directly.
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
         textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
@@ -943,8 +1013,19 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     if btype == 5u && is_glass_pixel {
         // Glass pixel: translucent with tinted light + additive fire
         let glass_light = light_factor * 0.6 + 0.4;
-        color = color * (ambient + sun_color * glass_light * 0.9 * shadow_tint)
-              + color * fire_color_out * fire_intensity_out;
+        color = color * (ambient + sun_color * glass_light * 0.9 * shadow_tint);
+
+        // Light glow through glass: check if point lights are behind this window
+        // Use non-LOS point light (the glass IS the opening, light is on the interior side)
+        let glass_pt = compute_point_lights(world_x, world_y, camera.time);
+        let glass_pt_intensity = glass_pt.w;
+        let glass_pt_color = glass_pt.xyz;
+        if glass_pt_intensity > 0.01 {
+            // Strong warm glow — backlit window effect, not multiplied by base glass color
+            // Stronger at night when sun intensity is low
+            let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.7;
+            color = mix(color, glass_pt_color * 0.9, clamp(glass_pt_intensity * 1.5 * night_boost, 0.0, 0.85));
+        }
 
         // Refraction distortion
         let refracted_wx = world_x + GLASS_REFRACT_OFFSET * sin(world_y * 12.0);
@@ -958,7 +1039,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else {
         // Normal block: apply shadow + additive fire light
         color = color * (ambient + sun_color * light_factor * 0.85 * shadow_tint)
-              + color * fire_color_out * fire_intensity_out;
+              + color * light_color_out * light_intensity_out;
     }
 
     // Water effect
@@ -996,16 +1077,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Slightly desaturate and cool-shift to convey "indoors"
         color = mix(color, color * vec3<f32>(0.85, 0.88, 0.95), 0.3);
 
-        // Fire glow halo: subtle warm tinge on floor near fireplace
+        // Light glow halo: subtle warm tinge on floor near light sources
         // This is additive and independent of base color, so even dark floors glow
-        if fire_intensity_out > 0.01 {
-            color += fire_color_out * fire_intensity_out * 0.15;
+        if light_intensity_out > 0.01 {
+            color += light_color_out * light_intensity_out * 0.15;
         }
     }
 
-    // Outdoor fire glow: warm light spilling through windows/doors onto ground
-    if !is_indoor && fire_intensity_out > 0.01 {
-        color += fire_color_out * fire_intensity_out * 0.12;
+    // Outdoor light glow: warm light spilling through windows/doors onto ground
+    if !is_indoor && light_intensity_out > 0.01 {
+        // Stronger at night
+        let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.7;
+        color += light_color_out * light_intensity_out * 0.35 * night_boost;
     }
 
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));

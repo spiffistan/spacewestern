@@ -17,7 +17,7 @@ const DAY_DURATION: f32 = 60.0; // must match shader
 
 // --- Block representation on GPU ---
 // Each block is a u32 packed as: [type:8 | height:8 | flags:8 | reserved:8]
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof, bit2=is_open
 fn make_block(block_type: u8, height: u8, flags: u8) -> u32 {
@@ -91,6 +91,8 @@ fn generate_test_grid() -> Vec<u32> {
     }
     // Fireplace in center of house 1
     set(&mut grid, 19, 17, make_block(6, 1, roof_flag)); // fireplace (height 1, roofed)
+    // Electric light near left-wall window (2 tiles east of window at x=10, y=15)
+    set(&mut grid, 12, 15, make_block(7, 0, roof_flag)); // electric light (height 0, roofed)
 
     // === House 2: Tall building (roofed, with windows) ===
     let h2_h = 5u8;
@@ -259,7 +261,7 @@ impl App {
             camera: CameraUniform {
                 center_x: GRID_W as f32 / 2.0,
                 center_y: GRID_H as f32 / 2.0,
-                zoom: 20.0,
+                zoom: 1.0, // will be set in init_gfx_async to fit map
                 show_roofs: 0.0,
                 screen_w: 800.0,
                 screen_h: 600.0,
@@ -317,6 +319,8 @@ impl App {
 
         self.camera.screen_w = width as f32;
         self.camera.screen_h = height as f32;
+        // Fit the map to the window height
+        self.camera.zoom = height as f32 / GRID_H as f32;
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
@@ -913,6 +917,7 @@ impl ApplicationHandler for App {
 
         #[cfg(target_arch = "wasm32")]
         let attrs = {
+            use wasm_bindgen::JsCast;
             use winit::platform::web::WindowAttributesExtWebSys;
             let canvas = web_sys::window()
                 .unwrap()
@@ -935,8 +940,18 @@ impl ApplicationHandler for App {
 
         #[cfg(target_arch = "wasm32")]
         {
-            self.window = Some(window);
-            log::warn!("WASM GPU init not yet implemented in event handler");
+            let window_clone = window.clone();
+            // We need to move `self` data into the async block.
+            // Store the window now, then spawn the async GPU init.
+            self.window = Some(window.clone());
+
+            // We can't move `self` into a Future, so use a raw pointer trick:
+            // store a pointer to self and use it in the spawned future.
+            let app_ptr = self as *mut App;
+            wasm_bindgen_futures::spawn_local(async move {
+                let app = unsafe { &mut *app_ptr };
+                app.init_gfx_async(window_clone).await;
+            });
         }
     }
 
