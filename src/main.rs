@@ -78,16 +78,6 @@ fn generate_test_grid() -> Vec<u32> {
         }
     };
 
-    // Outer walls (tall, no roof)
-    for x in 0..GRID_W {
-        set(&mut grid, x, 0, make_block(4, 4, 0));
-        set(&mut grid, x, GRID_H - 1, make_block(4, 4, 0));
-    }
-    for y in 0..GRID_H {
-        set(&mut grid, 0, y, make_block(4, 4, 0));
-        set(&mut grid, GRID_W - 1, y, make_block(4, 4, 0));
-    }
-
     // === House 1: Stone cottage (roofed, with windows) ===
     // Walls: x=10..29, y=10..25
     let h1_h = 3u8; // wall height
