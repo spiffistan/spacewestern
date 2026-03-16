@@ -355,10 +355,8 @@ impl App {
 
         self.camera.screen_w = width as f32;
         self.camera.screen_h = height as f32;
-        // Fit the entire map in the viewport
-        let zoom_x = width as f32 / GRID_W as f32;
-        let zoom_y = height as f32 / GRID_H as f32;
-        self.camera.zoom = zoom_x.min(zoom_y);
+        // Lock zoom: map fills the square canvas exactly
+        self.camera.zoom = height as f32 / GRID_H as f32;
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
@@ -1013,17 +1011,6 @@ impl ApplicationHandler for App {
                 if event.state.is_pressed() {
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
-                        PhysicalKey::Code(KeyCode::Equal)
-                        | PhysicalKey::Code(KeyCode::NumpadAdd) => {
-                            self.camera.zoom *= 1.2;
-                            self.window.as_ref().unwrap().request_redraw();
-                        }
-                        PhysicalKey::Code(KeyCode::Minus)
-                        | PhysicalKey::Code(KeyCode::NumpadSubtract) => {
-                            self.camera.zoom /= 1.2;
-                            self.camera.zoom = self.camera.zoom.max(1.0);
-                            self.window.as_ref().unwrap().request_redraw();
-                        }
                         PhysicalKey::Code(KeyCode::KeyR) => {
                             if self.camera.show_roofs < 0.5 {
                                 self.camera.show_roofs = 1.0;
@@ -1041,19 +1028,6 @@ impl ApplicationHandler for App {
                         _ => {}
                     }
                 }
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let scroll = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64,
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 50.0,
-                };
-                if scroll > 0.0 {
-                    self.camera.zoom *= 1.1;
-                } else if scroll < 0.0 {
-                    self.camera.zoom /= 1.1;
-                    self.camera.zoom = self.camera.zoom.max(1.0);
-                }
-                self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == winit::event::MouseButton::Left {
