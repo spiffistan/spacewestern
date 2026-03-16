@@ -785,6 +785,13 @@ impl App {
         egui_state.ctx.begin_pass(raw_input);
 
         // Draw UI
+        // Version label in top-right corner
+        egui::Area::new(egui::Id::new("version_label"))
+            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
+            .show(&egui_state.ctx, |ui| {
+                ui.label(egui::RichText::new("v9").color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+            });
+
         let mut time_val = self.time_of_day;
         let mut paused = self.time_paused;
         let mut speed = self.time_speed;
