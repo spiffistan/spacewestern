@@ -28,4 +28,5 @@ web-sys = { version = "0.3", features = [
     "Window",
     "Element",
     "HtmlCanvasElement",
+    "Performance",
 ] }

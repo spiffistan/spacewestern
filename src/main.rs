@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -8,6 +7,43 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
+
+// --- Cross-platform time ---
+#[cfg(not(target_arch = "wasm32"))]
+mod time {
+    #[derive(Clone, Copy)]
+    pub struct Instant(std::time::Instant);
+
+    impl Instant {
+        pub fn now() -> Self {
+            Instant(std::time::Instant::now())
+        }
+        pub fn elapsed_secs_since(&self, earlier: &Instant) -> f32 {
+            (self.0 - earlier.0).as_secs_f32()
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod time {
+    #[derive(Clone, Copy)]
+    pub struct Instant(f64); // milliseconds from Performance.now()
+
+    impl Instant {
+        pub fn now() -> Self {
+            let perf = web_sys::window()
+                .expect("no window")
+                .performance()
+                .expect("no performance");
+            Instant(perf.now())
+        }
+        pub fn elapsed_secs_since(&self, earlier: &Instant) -> f32 {
+            ((self.0 - earlier.0) / 1000.0) as f32
+        }
+    }
+}
+
+use time::Instant;
 
 // --- Constants ---
 const GRID_W: u32 = 64;
@@ -702,7 +738,7 @@ impl App {
     fn render(&mut self) {
         // Advance time
         let now = Instant::now();
-        let dt = (now - self.last_frame_time).as_secs_f32();
+        let dt = now.elapsed_secs_since(&self.last_frame_time);
         self.last_frame_time = now;
 
         if !self.time_paused {
