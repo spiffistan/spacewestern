@@ -16,6 +16,10 @@ struct Camera {
     glass_light_mul: f32,
     indoor_glow_mul: f32,
     light_bleed_mul: f32,
+    foliage_opacity: f32,
+    foliage_variation: f32,
+    _pad0: f32,
+    _pad1: f32,
 };
 
 @group(0) @binding(0) var lightmap_in: texture_2d<f32>;

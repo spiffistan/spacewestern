@@ -46,14 +46,14 @@ mod time {
 use time::Instant;
 
 // --- Constants ---
-const GRID_W: u32 = 64;
-const GRID_H: u32 = 64;
+const GRID_W: u32 = 256;
+const GRID_H: u32 = 256;
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
 
 // --- Block representation on GPU ---
 // Each block is a u32 packed as: [type:8 | height:8 | flags:8 | reserved:8]
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof, bit2=is_open
 fn make_block(block_type: u8, height: u8, flags: u8) -> u32 {
@@ -215,7 +215,132 @@ fn generate_test_grid() -> Vec<u32> {
         }
     }
 
+    // Scatter trees across the map using a simple hash
+    // Avoid placing on existing structures
+    for y in 0..GRID_H {
+        for x in 0..GRID_W {
+            let idx = (y * w + x) as usize;
+            let existing = grid[idx];
+            // Only place on bare dirt floor (type 2, height 0, no flags)
+            if existing != make_block(2, 0, 0) {
+                continue;
+            }
+            // Simple hash-based pseudo-random placement
+            let h = ((x.wrapping_mul(374761393)) ^ (y.wrapping_mul(668265263)))
+                .wrapping_add(1013904223);
+            let r = (h >> 16) & 0xFFF; // 0..4095
+            // ~3% chance of a tree
+            if r < 120 {
+                // Tree height varies 2-4
+                let tree_h = 2 + ((h >> 8) & 0x3) as u8; // 2, 3, or 4
+                grid[idx] = make_block(8, tree_h, 0);
+            }
+        }
+    }
+
     grid
+}
+
+// --- Tree sprite generation ---
+// Each sprite is SPRITE_SIZE x SPRITE_SIZE pixels, stored as packed u32 (RGBA8).
+// R,G,B = color. A = height (0 = transparent/show ground, 1-255 = canopy/trunk height).
+// The atlas is SPRITE_VARIANTS sprites laid out in a flat array.
+const SPRITE_SIZE: u32 = 16;
+const SPRITE_VARIANTS: u32 = 4;
+
+fn generate_tree_sprites() -> Vec<u32> {
+    let pixels_per = (SPRITE_SIZE * SPRITE_SIZE) as usize;
+    let total = pixels_per * SPRITE_VARIANTS as usize;
+    let mut data = vec![0u32; total];
+
+    for variant in 0..SPRITE_VARIANTS {
+        for y in 0..SPRITE_SIZE {
+            for x in 0..SPRITE_SIZE {
+                let cx = (x as f32 + 0.5) / SPRITE_SIZE as f32 - 0.5;
+                let cy = (y as f32 + 0.5) / SPRITE_SIZE as f32 - 0.5;
+                let dist = (cx * cx + cy * cy).sqrt();
+
+                let (r, g, b, h) = match variant {
+                    0 => {
+                        // Round oak: large canopy
+                        let canopy_r = 0.43;
+                        let trunk_r = 0.07;
+                        if dist < trunk_r {
+                            (90, 58, 28, 220u8)
+                        } else if dist < canopy_r {
+                            let shade = 1.0 - dist / canopy_r;
+                            let g = (55.0 + shade * 90.0) as u8;
+                            let h = (140.0 + shade * 80.0) as u8;
+                            (30 + (shade * 25.0) as u8, g, 18, h)
+                        } else {
+                            (0, 0, 0, 0u8)
+                        }
+                    }
+                    1 => {
+                        // Pine/conifer: pointed, diamond-ish shape
+                        let abs_cx = cx.abs();
+                        let abs_cy = cy.abs();
+                        let diamond = abs_cx + abs_cy;
+                        let trunk_r = 0.05;
+                        let canopy_r = 0.38 - (cy + 0.1).abs() * 0.3; // tapers
+                        let canopy_r = canopy_r.max(0.05);
+                        if dist < trunk_r {
+                            (75, 48, 22, 240u8)
+                        } else if diamond < canopy_r + 0.1 && dist < 0.45 {
+                            let shade = 1.0 - diamond / (canopy_r + 0.1);
+                            let g = (40.0 + shade * 60.0) as u8;
+                            let h = (160.0 + shade * 70.0) as u8;
+                            (15 + (shade * 20.0) as u8, g, 22, h)
+                        } else {
+                            (0, 0, 0, 0u8)
+                        }
+                    }
+                    2 => {
+                        // Small bush: low, wide, lumpy
+                        let canopy_r = 0.35;
+                        let trunk_r = 0.05;
+                        // Make it lumpy with a simple hash
+                        let angle = cy.atan2(cx);
+                        let lump = 1.0 + 0.12 * (angle * 3.0).sin() + 0.08 * (angle * 7.0).sin();
+                        let effective_r = canopy_r * lump;
+                        if dist < trunk_r {
+                            (80, 52, 25, 120u8)
+                        } else if dist < effective_r {
+                            let shade = 1.0 - dist / effective_r;
+                            let g = (65.0 + shade * 70.0) as u8;
+                            let h = (80.0 + shade * 60.0) as u8;
+                            (40 + (shade * 20.0) as u8, g, 25, h)
+                        } else {
+                            (0, 0, 0, 0u8)
+                        }
+                    }
+                    _ => {
+                        // Tall narrow tree: thin canopy
+                        let canopy_rx = 0.22;
+                        let canopy_ry = 0.38;
+                        let trunk_r = 0.06;
+                        let ellipse = (cx / canopy_rx).powi(2) + (cy / canopy_ry).powi(2);
+                        if dist < trunk_r {
+                            (85, 55, 25, 250u8)
+                        } else if ellipse < 1.0 {
+                            let shade = 1.0 - ellipse;
+                            let g = (50.0 + shade * 80.0) as u8;
+                            let h = (170.0 + shade * 70.0) as u8;
+                            (25 + (shade * 20.0) as u8, g, 20, h)
+                        } else {
+                            (0, 0, 0, 0u8)
+                        }
+                    }
+                };
+
+                let packed = (r as u32) | ((g as u32) << 8) | ((b as u32) << 16) | ((h as u32) << 24);
+                let idx = (variant * SPRITE_SIZE * SPRITE_SIZE + y * SPRITE_SIZE + x) as usize;
+                data[idx] = packed;
+            }
+        }
+    }
+
+    data
 }
 
 // Rust-side helpers to read block fields from packed u32
@@ -248,6 +373,11 @@ struct CameraUniform {
     glass_light_mul: f32,     // how much interior light shows through glass (default 0.12)
     indoor_glow_mul: f32,     // indoor floor glow strength from point lights (default 0.25)
     light_bleed_mul: f32,     // outdoor ground glow from interior lights (default 0.6)
+    // Foliage shadow parameters
+    foliage_opacity: f32,     // overall canopy shadow density (0=transparent, 1=opaque) (default 0.55)
+    foliage_variation: f32,   // per-tree randomness in shadow density (default 0.3)
+    _pad0: f32,
+    _pad1: f32,
 }
 
 // --- Application state ---
@@ -271,7 +401,7 @@ struct App {
     last_frame_time: Instant, // for delta-time calculation
 }
 
-const LIGHTMAP_PROP_ITERATIONS: u32 = 16;
+const LIGHTMAP_PROP_ITERATIONS: u32 = 24;
 
 struct GfxState {
     surface: wgpu::Surface<'static>,
@@ -294,6 +424,7 @@ struct GfxState {
     output_texture: wgpu::Texture,
     camera_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
+    sprite_buffer: wgpu::Buffer,
 }
 
 struct EguiState {
@@ -321,6 +452,10 @@ impl App {
                 glass_light_mul: 0.12,
                 indoor_glow_mul: 0.25,
                 light_bleed_mul: 0.6,
+                foliage_opacity: 0.55,
+                foliage_variation: 0.3,
+                _pad0: 0.0,
+                _pad1: 0.0,
             },
             grid_data: Vec::new(),
             grid_dirty: false,
@@ -465,6 +600,16 @@ impl App {
             mapped_at_creation: false,
         });
         queue.write_buffer(&grid_buffer, 0, bytemuck::cast_slice(&self.grid_data));
+
+        // Tree sprite buffer
+        let sprite_data = generate_tree_sprites();
+        let sprite_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sprite-buffer"),
+            size: (sprite_data.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&sprite_buffer, 0, bytemuck::cast_slice(&sprite_data));
 
         // --- Lightmap textures (two for ping-pong, 64x64) ---
         let lightmap_desc = wgpu::TextureDescriptor {
@@ -723,6 +868,17 @@ impl App {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    // Tree sprite atlas (storage buffer, read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -752,6 +908,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: sprite_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -903,6 +1063,7 @@ impl App {
             output_texture,
             camera_buffer,
             grid_buffer,
+            sprite_buffer,
         });
 
         self.window = Some(window);
@@ -978,6 +1139,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: gfx.sprite_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -1080,6 +1245,8 @@ impl App {
         let mut glass_light = self.camera.glass_light_mul;
         let mut indoor_glow = self.camera.indoor_glow_mul;
         let mut bleed = self.camera.light_bleed_mul;
+        let mut foliage_opacity = self.camera.foliage_opacity;
+        let mut foliage_variation = self.camera.foliage_variation;
                 let base_zoom = (self.camera.screen_w / GRID_W as f32).min(self.camera.screen_h / GRID_H as f32);
         egui::Window::new("Time Control")
             .default_pos([10.0, 10.0])
@@ -1140,6 +1307,15 @@ impl App {
                 ui.add(egui::Slider::new(&mut bleed, 0.0..=2.0)
                     .text("Light bleed")
                     .step_by(0.01));
+
+                ui.separator();
+                ui.label("Foliage Shadows");
+                ui.add(egui::Slider::new(&mut foliage_opacity, 0.0..=1.0)
+                    .text("Canopy density")
+                    .step_by(0.01));
+                ui.add(egui::Slider::new(&mut foliage_variation, 0.0..=1.0)
+                    .text("Tree variation")
+                    .step_by(0.01));
             });
         self.time_of_day = time_val;
         self.time_paused = paused;
@@ -1148,6 +1324,8 @@ impl App {
         self.camera.glass_light_mul = glass_light;
         self.camera.indoor_glow_mul = indoor_glow;
         self.camera.light_bleed_mul = bleed;
+        self.camera.foliage_opacity = foliage_opacity;
+        self.camera.foliage_variation = foliage_variation;
 
         let egui_output = egui_state.ctx.end_pass();
         egui_state.winit_state.handle_platform_output(window, egui_output.platform_output.clone());

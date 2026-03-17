@@ -18,6 +18,10 @@ struct Camera {
     glass_light_mul: f32,
     indoor_glow_mul: f32,
     light_bleed_mul: f32,
+    foliage_opacity: f32,
+    foliage_variation: f32,
+    _pad0: f32,
+    _pad1: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -25,6 +29,25 @@ struct Camera {
 @group(0) @binding(2) var<storage, read> grid: array<u32>;
 @group(0) @binding(3) var lightmap_tex: texture_2d<f32>;
 @group(0) @binding(4) var lightmap_sampler: sampler;
+@group(0) @binding(5) var<storage, read> sprites: array<u32>;
+
+// --- Sprite constants ---
+const SPRITE_SIZE: u32 = 16u;
+const SPRITE_VARIANTS: u32 = 4u;
+
+// Sample a tree sprite. Returns vec4(r, g, b, height_normalized).
+// height_normalized: 0 = transparent (show ground), >0 = canopy/trunk.
+fn sample_sprite(variant: u32, fx: f32, fy: f32) -> vec4<f32> {
+    let lx = clamp(u32(fx * f32(SPRITE_SIZE)), 0u, SPRITE_SIZE - 1u);
+    let ly = clamp(u32(fy * f32(SPRITE_SIZE)), 0u, SPRITE_SIZE - 1u);
+    let idx = variant * SPRITE_SIZE * SPRITE_SIZE + ly * SPRITE_SIZE + lx;
+    let packed = sprites[idx];
+    let r = f32(packed & 0xFFu) / 255.0;
+    let g = f32((packed >> 8u) & 0xFFu) / 255.0;
+    let b = f32((packed >> 16u) & 0xFFu) / 255.0;
+    let h = f32((packed >> 24u) & 0xFFu) / 255.0;
+    return vec4<f32>(r, g, b, h);
+}
 
 // --- Lightmap sampling ---
 // Sample the pre-computed lightmap at a world position.
@@ -35,7 +58,7 @@ fn sample_lightmap(wx: f32, wy: f32) -> vec4<f32> {
 }
 
 // --- Block unpacking ---
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
@@ -477,6 +500,26 @@ fn render_electric_light(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<
     return color;
 }
 
+// Render tree from top-down using sprite atlas.
+// Returns vec4(color_rgb, is_canopy): is_canopy > 0 if this pixel is tree, 0 if ground beneath.
+fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32) -> vec4<f32> {
+    // Pick variant from world position hash
+    let tree_id = floor(wx) * 137.0 + floor(wy) * 311.0;
+    let id_hash = fract(sin(tree_id) * 43758.5453);
+    let variant = u32(id_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
+
+    let sprite = sample_sprite(variant, fx, fy);
+
+    if sprite.w < 0.01 {
+        // Transparent pixel — show dirt ground beneath
+        return vec4<f32>(0.45, 0.35, 0.20, 0.0);
+    }
+
+    // Sprite color with slight per-tree variation
+    let color = sprite.xyz * (0.85 + id_hash * 0.3);
+    return vec4<f32>(color, sprite.w);
+}
+
 fn compute_interior_light(wx: f32, wy: f32, sun_intensity: f32, sun_dir: vec2<f32>, window_amb: f32) -> vec4<f32> {
     // Sun-only interior lighting (fire is handled separately in the main shader)
     // window_amb is pre-computed from the lightmap (window proximity fill)
@@ -513,6 +556,7 @@ fn block_base_color(btype: u32, flags: u32) -> vec3<f32> {
         case 5u: { return vec3<f32>(0.65, 0.78, 0.88); }    // glass
         case 6u: { return vec3<f32>(0.35, 0.30, 0.28); }    // fireplace stone
         case 7u: { return vec3<f32>(0.45, 0.35, 0.20); }    // electric light (floor beneath)
+        case 8u: { return vec3<f32>(0.18, 0.35, 0.12); }    // tree (canopy green)
         default: { return vec3<f32>(1.0, 0.0, 1.0); }
     }
 }
@@ -576,6 +620,54 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         } else if rh > effective_h {
             effective_h = rh;
         }
+
+        // --- Tree: sprite-shaped semi-transparent shadow ---
+        if bt == 8u {
+            let tree_fx = fract(sx);
+            let tree_fy = fract(sy);
+
+            // Pick same variant as rendering
+            let tree_id = f32(bx) * 137.0 + f32(by) * 311.0;
+            let tree_hash = fract(sin(tree_id) * 43758.5453);
+            let variant = u32(tree_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
+
+            let sprite = sample_sprite(variant, tree_fx, tree_fy);
+
+            if sprite.w > 0.01 {
+                // Sprite height scaled to block height
+                let sprite_h = sprite.w * bh;
+
+                if sprite_h > current_h {
+                    // Per-tree density variation (some trees denser than others)
+                    let tree_density = 1.0 - camera.foliage_variation + tree_hash * camera.foliage_variation * 2.0;
+
+                    // Dappled light: high-frequency noise simulating gaps between leaves
+                    // Varies with position AND time for subtle wind shimmer
+                    let dapple_seed = sx * 127.1 + sy * 311.7 + camera.time * 0.5;
+                    let dapple1 = fract(sin(dapple_seed) * 43758.5453);
+                    let dapple2 = fract(sin(dapple_seed * 1.7 + 3.1) * 27183.6142);
+                    let dapple = 0.5 + 0.5 * (dapple1 * 0.7 + dapple2 * 0.3);
+
+                    // Center of canopy is denser (more foliage depth)
+                    let center_dist = length(vec2<f32>(tree_fx - 0.5, tree_fy - 0.5)) * 2.0;
+                    let depth_factor = 1.0 - center_dist * 0.4; // center=1.0, edge=0.6
+
+                    // Combined opacity per step
+                    let opacity = camera.foliage_opacity * tree_density * dapple * depth_factor
+                                * sprite.w * SHADOW_STEP * 3.0;
+                    light *= (1.0 - clamp(opacity, 0.0, 0.4));
+
+                    // Light filtering through green leaves: warm-green tint
+                    let tint_strength = clamp(opacity * 0.5, 0.0, 0.08);
+                    tint *= mix(vec3<f32>(1.0), vec3<f32>(0.88, 1.0, 0.82), tint_strength);
+
+                    if light < 0.02 {
+                        return vec4<f32>(tint, 0.0);
+                    }
+                }
+            }
+            // Skip the normal block shadow test for trees
+        } else
 
         // Does this block/roof intersect the ray?
         if effective_h > current_h {
@@ -851,6 +943,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- Not roofed (or roofs transparent): render the actual block surface ---
     var color: vec3<f32>;
     var is_glass_pixel = false;
+    var is_tree_pixel = false;
 
     // If under a roof but transparent mode, add subtle indoor tint
     let is_indoor = is_roofed && camera.show_roofs < 0.5;
@@ -866,20 +959,29 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if btype == 7u {
         // Electric light: ceiling fixture rendering
         color = render_electric_light(world_x, world_y, fx, fy, camera.time);
+    } else if btype == 8u {
+        // Tree: sprite-based rendering
+        let tree_result = render_tree(world_x, world_y, fx, fy, bheight);
+        color = tree_result.xyz;
+        is_tree_pixel = tree_result.w > 0.01;
     } else {
         color = block_base_color(btype, bflags);
     }
 
     // Open door: treat as floor-level opening (overrides wall type)
     let door_is_open = is_door(block) && is_open(block);
-    let effective_height = select(bheight, 0u, door_is_open);
+    // Trees: transparent sprite pixels are ground-level; canopy keeps height for shadows
+    let is_tree_ground = btype == 8u && !is_tree_pixel;
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground);
     let effective_fheight = f32(effective_height);
 
-    // Height-based brightness
-    color += vec3<f32>(effective_fheight * 0.03);
+    // Height-based brightness (skip for trees — they have their own shading)
+    if btype != 8u {
+        color += vec3<f32>(effective_fheight * 0.03);
+    }
 
-    // Wall side faces (3D bevel) — skip for open doors
-    if effective_height > 0u {
+    // Wall side faces (3D bevel) — skip for doors and trees
+    if effective_height > 0u && btype != 8u {
         color += wall_side_shade(world_x, world_y, bx, by, effective_height);
     }
 
