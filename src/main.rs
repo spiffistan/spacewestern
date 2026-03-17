@@ -484,6 +484,7 @@ struct App {
 }
 
 const LIGHTMAP_PROP_ITERATIONS: u32 = 24;
+const RENDER_SCALE: f32 = 0.5; // render at half resolution, upscale via blit
 
 struct GfxState {
     surface: wgpu::Surface<'static>,
@@ -559,8 +560,11 @@ impl App {
 
     /// Convert screen pixel coordinates to world block coordinates
     fn screen_to_world(&self, sx: f64, sy: f64) -> (f32, f32) {
-        let wx = self.camera.center_x + (sx as f32 - self.camera.screen_w * 0.5) / self.camera.zoom;
-        let wy = self.camera.center_y + (sy as f32 - self.camera.screen_h * 0.5) / self.camera.zoom;
+        // Scale mouse coords from window space to render space
+        let rx = sx as f32 * RENDER_SCALE;
+        let ry = sy as f32 * RENDER_SCALE;
+        let wx = self.camera.center_x + (rx - self.camera.screen_w * 0.5) / self.camera.zoom;
+        let wy = self.camera.center_y + (ry - self.camera.screen_h * 0.5) / self.camera.zoom;
         (wx, wy)
     }
 
@@ -653,14 +657,16 @@ impl App {
         let width = size.width.max(1);
         let height = size.height.max(1);
 
-        self.camera.screen_w = width as f32;
-        self.camera.screen_h = height as f32;
+        let render_w = ((width as f32) * RENDER_SCALE).max(1.0) as u32;
+        let render_h = ((height as f32) * RENDER_SCALE).max(1.0) as u32;
+        self.camera.screen_w = render_w as f32;
+        self.camera.screen_h = render_h as f32;
         // Zoom to show ~64 blocks (the houses area), not the full map
         let view_size = 64.0f32;
-        let fit_w = width as f32 / view_size;
-        let fit_h = height as f32 / view_size;
+        let fit_w = render_w as f32 / view_size;
+        let fit_h = render_h as f32 / view_size;
         self.camera.zoom = fit_w.min(fit_h);
-        log::info!("init_gfx: {}x{} (physical), zoom={}", width, height, self.camera.zoom);
+        log::info!("init_gfx: {}x{} (window), {}x{} (render), zoom={}", width, height, render_w, render_h, self.camera.zoom);
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
@@ -715,12 +721,12 @@ impl App {
         };
         surface.configure(&device, &config);
 
-        // Output texture (compute writes RGBA8, render samples it)
+        // Output texture at render resolution (compute writes RGBA8, blit upscales to window)
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("output-texture"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: render_w,
+                height: render_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -1094,8 +1100,8 @@ impl App {
             label: Some("blit-sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -1230,15 +1236,17 @@ impl App {
         gfx.config.height = height;
         gfx.surface.configure(&gfx.device, &gfx.config);
 
-        self.camera.screen_w = width as f32;
-        self.camera.screen_h = height as f32;
+        let render_w = ((width as f32) * RENDER_SCALE).max(1.0) as u32;
+        let render_h = ((height as f32) * RENDER_SCALE).max(1.0) as u32;
+        self.camera.screen_w = render_w as f32;
+        self.camera.screen_h = render_h as f32;
 
-        // Recreate output texture at new size
+        // Recreate output texture at render resolution
         gfx.output_texture = gfx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("output-texture"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: render_w,
+                height: render_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -1303,8 +1311,8 @@ impl App {
             label: Some("blit-sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         gfx.render_bind_group = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1394,7 +1402,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v20 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v21 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -1541,7 +1549,9 @@ impl App {
             cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
         }
 
-        // Compute pass 2: raytrace (per-pixel, screen resolution)
+        // Compute pass 2: raytrace (per-pixel, render resolution)
+        let rt_w = self.camera.screen_w as u32;
+        let rt_h = self.camera.screen_h as u32;
         {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("raytrace-pass"),
@@ -1549,8 +1559,8 @@ impl App {
             });
             cpass.set_pipeline(&gfx.compute_pipeline);
             cpass.set_bind_group(0, &gfx.compute_bind_group, &[]);
-            let wg_x = (gfx.config.width + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-            let wg_y = (gfx.config.height + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let wg_x = (rt_w + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let wg_y = (rt_h + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             cpass.dispatch_workgroups(wg_x, wg_y, 1);
         }
 
@@ -1762,8 +1772,8 @@ impl ApplicationHandler for App {
                         self.mouse_dragged = true;
                     }
                     if self.mouse_dragged {
-                        self.camera.center_x -= dx as f32 / self.camera.zoom;
-                        self.camera.center_y -= dy as f32 / self.camera.zoom;
+                        self.camera.center_x -= dx as f32 * RENDER_SCALE / self.camera.zoom;
+                        self.camera.center_y -= dy as f32 * RENDER_SCALE / self.camera.zoom;
                         self.window.as_ref().unwrap().request_redraw();
                     }
                 }
