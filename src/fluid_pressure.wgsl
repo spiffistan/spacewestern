@@ -1,5 +1,8 @@
-// Fluid pressure solver — Jacobi iteration.
-// Reads pressure + divergence, writes pressure. Run N times ping-ponging.
+// Fluid pressure solver — Jacobi iteration with hybrid boundary conditions.
+// Interior walls: Neumann BC (dp/dn=0) — pressure builds up in sealed rooms.
+// Domain edges (out-of-bounds): Dirichlet BC (p=0) — absolute reference anchor.
+// This is physically correct: outdoor atmosphere = zero pressure reference,
+// sealed rooms can accumulate pressure above atmospheric.
 
 struct FluidParams {
     sim_w: f32,
@@ -30,44 +33,51 @@ fn in_bounds(pos: vec2<i32>) -> bool {
     return pos.x >= 0 && pos.y >= 0 && pos.x < i32(params.sim_w) && pos.y < i32(params.sim_h);
 }
 
-fn is_fluid(pos: vec2<i32>) -> bool {
-    if !in_bounds(pos) { return false; }
-    return textureLoad(obstacle_tex, pos, 0).r < 0.5;
+fn is_solid(pos: vec2<i32>) -> bool {
+    if !in_bounds(pos) { return true; } // OOB treated as solid boundary
+    return textureLoad(obstacle_tex, pos, 0).r > 0.5;
 }
 
-fn pressure_at(pos: vec2<i32>) -> f32 {
-    if !in_bounds(pos) { return 0.0; }
-    return textureLoad(pressure_in, pos, 0).r;
+// Pure Neumann BC: solid/OOB neighbors use center cell's pressure.
+// dp/dn = 0 at all boundaries — pressure is relative, not absolute.
+// Combined with zero-clear each frame, this prevents temporal oscillation
+// while allowing pressure gradients within rooms.
+fn neighbor_pressure(n: vec2<i32>, center_p: f32) -> f32 {
+    if is_solid(n) { return center_p; }  // Neumann at walls and edges
+    return textureLoad(pressure_in, n, 0).r;
 }
 
-// Jacobi iteration: solve pressure Poisson equation
-// p_new = (pL + pR + pB + pT + div) * 0.25
+// Jacobi iteration with hybrid BCs
 @compute @workgroup_size(8, 8)
 fn main_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pos = vec2<i32>(gid.xy);
     if !in_bounds(pos) { return; }
 
-    if !is_fluid(pos) {
+    if is_solid(pos) {
+        // Wall cells store zero pressure (they're not fluid)
         textureStore(pressure_out, gid.xy, vec4(0.0));
         return;
     }
 
-    let pL = pressure_at(pos + vec2(-1, 0));
-    let pR = pressure_at(pos + vec2(1, 0));
-    let pB = pressure_at(pos + vec2(0, -1));
-    let pT = pressure_at(pos + vec2(0, 1));
+    let center = textureLoad(pressure_in, pos, 0).r;
+
+    let pL = neighbor_pressure(pos + vec2(-1, 0), center);
+    let pR = neighbor_pressure(pos + vec2( 1, 0), center);
+    let pB = neighbor_pressure(pos + vec2( 0,-1), center);
+    let pT = neighbor_pressure(pos + vec2( 0, 1), center);
     let div = textureLoad(divergence_tex, pos, 0).r;
 
-    let p = (pL + pR + pB + pT + div) * 0.25;
+    // Clamp pressure to prevent unbounded growth in fully sealed rooms
+    let p = clamp((pL + pR + pB + pT + div) * 0.25, -50.0, 50.0);
     textureStore(pressure_out, gid.xy, vec4(p, 0.0, 0.0, 0.0));
 }
 
-// Pressure clear/damp — multiply existing pressure by a factor (temporal coherence)
+// Pressure clear/damp — temporal coherence with mild damping
 @compute @workgroup_size(8, 8)
 fn main_pressure_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pos = vec2<i32>(gid.xy);
     if !in_bounds(pos) { return; }
 
     let p = textureLoad(pressure_in, pos, 0).r;
-    textureStore(pressure_out, gid.xy, vec4(p * 0.8, 0.0, 0.0, 0.0));
+    textureStore(pressure_out, gid.xy, vec4(p * 0.6, 0.0, 0.0, 0.0));
 }

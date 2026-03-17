@@ -144,11 +144,19 @@ fn main_gradient_subtract(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Read pressure from neighbors (aux_tex = pressure)
-    let pL = textureLoad(aux_tex, max(pos + vec2(-1, 0), vec2(0)), 0).r;
-    let pR = textureLoad(aux_tex, min(pos + vec2(1, 0), vec2<i32>(i32(params.sim_w) - 1, i32(params.sim_h) - 1)), 0).r;
-    let pB = textureLoad(aux_tex, max(pos + vec2(0, -1), vec2(0)), 0).r;
-    let pT = textureLoad(aux_tex, min(pos + vec2(0, 1), vec2<i32>(i32(params.sim_w) - 1, i32(params.sim_h) - 1)), 0).r;
+    // Pure Neumann BC: solid/OOB neighbors use center pressure (no gradient at walls)
+    let center_p = textureLoad(aux_tex, pos, 0).r;
+    let maxc = vec2<i32>(i32(params.sim_w) - 1, i32(params.sim_h) - 1);
+
+    let nL = pos + vec2(-1, 0);
+    let nR = pos + vec2( 1, 0);
+    let nB = pos + vec2( 0,-1);
+    let nT = pos + vec2( 0, 1);
+
+    let pL = select(textureLoad(aux_tex, clamp(nL, vec2(0), maxc), 0).r, center_p, !is_fluid(nL));
+    let pR = select(textureLoad(aux_tex, clamp(nR, vec2(0), maxc), 0).r, center_p, !is_fluid(nR));
+    let pB = select(textureLoad(aux_tex, clamp(nB, vec2(0), maxc), 0).r, center_p, !is_fluid(nB));
+    let pT = select(textureLoad(aux_tex, clamp(nT, vec2(0), maxc), 0).r, center_p, !is_fluid(nT));
 
     let grad = vec2(pR - pL, pT - pB) * 0.5;
     var v = textureLoad(vel_in, pos, 0).xy;
@@ -188,10 +196,10 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         let center = vec2<f32>(f32(pos.x) + 0.5, f32(pos.y) + 0.5);
         let phase = fract(sin(dot(center, vec2(127.1, 311.7))) * 43758.5) * 6.28;
         let wobble = vec2(
-            sin(params.time * 5.3 + phase) * 8.0,
-            cos(params.time * 4.1 + phase) * 8.0
+            sin(params.time * 5.3 + phase) * 5.0,
+            cos(params.time * 4.1 + phase) * 5.0
         );
-        new_v += (vec2(0.0, -25.0) + wobble) * params.dt;
+        new_v += (vec2(0.0, -12.0) + wobble) * params.dt;
     }
 
     textureStore(vel_out, gid.xy, vec4(new_v, 0.0, 0.0));

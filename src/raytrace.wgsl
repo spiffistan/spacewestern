@@ -40,6 +40,8 @@ struct Camera {
 @group(0) @binding(5) var<storage, read> sprites: array<u32>;
 @group(0) @binding(6) var fluid_dye_tex: texture_2d<f32>;
 @group(0) @binding(7) var fluid_dye_sampler: sampler;
+@group(0) @binding(8) var fluid_vel_tex: texture_2d<f32>;
+@group(0) @binding(9) var fluid_pres_tex: texture_2d<f32>;
 
 // --- Sprite constants ---
 const SPRITE_SIZE: u32 = 16u;
@@ -1449,20 +1451,59 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
         color = mix(color * 0.3, heat, clamp(density * 2.0, 0.0, 0.9));
     } else if camera.fluid_overlay < 2.5 {
-        // Velocity debug: read velocity from dye RGB channels (encoded as direction)
-        // Since we can't read velocity texture here, use dye motion as proxy
-        let vel_mag = length(smoke.rgb) * 2.0;
+        // Velocity: real velocity field visualization
+        let sim_pos = vec2<i32>(vec2<f32>(world_x, world_y));
+        let sim_clamped = clamp(sim_pos, vec2(0), vec2(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1));
+        let vel = textureLoad(fluid_vel_tex, sim_clamped, 0).xy;
+        let mag = length(vel);
+        let norm_mag = clamp(mag * 0.1, 0.0, 1.0);  // scale for visibility
+        // Direction -> hue, magnitude -> brightness
+        let angle = atan2(vel.y, vel.x) * 0.159 + 0.5;
         let vel_color = vec3(
-            clamp(vel_mag, 0.0, 1.0),
-            clamp(vel_mag * 0.5, 0.0, 1.0),
-            clamp(1.0 - vel_mag, 0.0, 1.0)
-        );
-        color = mix(color * 0.3, vel_color, clamp(vel_mag, 0.0, 0.8));
+            clamp(abs(angle * 6.0 - 3.0) - 1.0, 0.0, 1.0),
+            clamp(2.0 - abs(angle * 6.0 - 2.0), 0.0, 1.0),
+            clamp(2.0 - abs(angle * 6.0 - 4.0), 0.0, 1.0)
+        ) * norm_mag;
+        color = mix(color * 0.3, vel_color, clamp(norm_mag * 2.0, 0.0, 0.9));
     } else {
-        // Pressure debug: show density as cool-warm gradient
-        let p = clamp(smoke.a * 5.0, 0.0, 1.0);
-        let pcolor = vec3(p * 0.2, 0.1 + p * 0.4, 0.8 - p * 0.6);
-        color = mix(color * 0.4, pcolor, clamp(p, 0.0, 0.7));
+        // Pressure: absolute pressure with ROYGBIV colormap (violet=low, red=high)
+        // Bilinear interpolation for smooth display
+        let fp = vec2<f32>(world_x, world_y) - 0.5;
+        let f = fract(fp);
+        let base = vec2<i32>(floor(fp));
+        let maxc = vec2<i32>(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1);
+        let p00 = textureLoad(fluid_pres_tex, clamp(base, vec2(0), maxc), 0).r;
+        let p10 = textureLoad(fluid_pres_tex, clamp(base + vec2(1, 0), vec2(0), maxc), 0).r;
+        let p01 = textureLoad(fluid_pres_tex, clamp(base + vec2(0, 1), vec2(0), maxc), 0).r;
+        let p11 = textureLoad(fluid_pres_tex, clamp(base + vec2(1, 1), vec2(0), maxc), 0).r;
+        let p = mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y);
+
+        // Absolute pressure mapped to 0..1 range
+        let abs_p = clamp(abs(p) * 0.5, 0.0, 1.0);
+
+        // Reverse ROYGBIV: violet(0) → blue → cyan → green → yellow → orange → red(1)
+        var pcolor: vec3<f32>;
+        if abs_p < 0.167 {
+            let t = abs_p / 0.167;
+            pcolor = mix(vec3(0.56, 0.0, 1.0), vec3(0.0, 0.0, 1.0), t);   // violet → blue
+        } else if abs_p < 0.333 {
+            let t = (abs_p - 0.167) / 0.167;
+            pcolor = mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), t);   // blue → cyan
+        } else if abs_p < 0.5 {
+            let t = (abs_p - 0.333) / 0.167;
+            pcolor = mix(vec3(0.0, 1.0, 1.0), vec3(0.0, 1.0, 0.0), t);   // cyan → green
+        } else if abs_p < 0.667 {
+            let t = (abs_p - 0.5) / 0.167;
+            pcolor = mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), t);   // green → yellow
+        } else if abs_p < 0.833 {
+            let t = (abs_p - 0.667) / 0.167;
+            pcolor = mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 0.5, 0.0), t);   // yellow → orange
+        } else {
+            let t = (abs_p - 0.833) / 0.167;
+            pcolor = mix(vec3(1.0, 0.5, 0.0), vec3(1.0, 0.0, 0.0), t);   // orange → red
+        }
+
+        color = mix(color * 0.25, pcolor, clamp(abs_p * 2.5 + 0.1, 0.0, 0.9));
     }
 
     textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
