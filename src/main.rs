@@ -1387,6 +1387,14 @@ impl App {
 
         let render_w = ((width as f32) * RENDER_SCALE).max(1.0) as u32;
         let render_h = ((height as f32) * RENDER_SCALE).max(1.0) as u32;
+
+        // Scale zoom to maintain the same view when window resizes
+        let old_min = self.camera.screen_w.min(self.camera.screen_h);
+        let new_min = (render_w as f32).min(render_h as f32);
+        if old_min > 0.0 {
+            self.camera.zoom *= new_min / old_min;
+        }
+
         self.camera.screen_w = render_w as f32;
         self.camera.screen_h = render_h as f32;
 
@@ -1568,7 +1576,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v26 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v27 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;

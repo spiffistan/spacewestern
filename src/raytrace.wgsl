@@ -270,8 +270,8 @@ const ELIGHT_COLOR: vec3<f32> = vec3<f32>(0.95, 0.92, 0.85);    // warm white (~
 const GLOW_RADIUS: f32 = 6.0;
 const FIRE_GLOW_INTENSITY: f32 = 0.70;
 const ELIGHT_GLOW_INTENSITY: f32 = 0.85;
-const STANDING_LAMP_GLOW_INTENSITY: f32 = 0.90;
-const STANDING_LAMP_GLOW_RADIUS: f32 = 8.0;
+const STANDING_LAMP_GLOW_INTENSITY: f32 = 1.0;
+const STANDING_LAMP_GLOW_RADIUS: f32 = 6.0;
 const TABLE_LAMP_GLOW_INTENSITY: f32 = 0.55;
 const TABLE_LAMP_GLOW_RADIUS: f32 = 4.0;
 const STANDING_LAMP_COLOR: vec3<f32> = vec3<f32>(0.95, 0.85, 0.60);
@@ -356,7 +356,7 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
 // lightmap propagation can't capture.
 fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
     var glow = vec3<f32>(0.0);
-    let max_search = i32(STANDING_LAMP_GLOW_RADIUS); // largest possible radius
+    let max_search = 6; // capped for performance
     let bx = i32(floor(wx));
     let by = i32(floor(wy));
 
