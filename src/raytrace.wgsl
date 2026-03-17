@@ -87,7 +87,7 @@ fn sample_lightmap(wx: f32, wy: f32) -> vec4<f32> {
 }
 
 // --- Block unpacking ---
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp, 12=fan
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
@@ -1320,6 +1320,43 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let tl = render_table_lamp(fx, fy);
         color = tl.xyz;
         is_table_lamp_bulb = tl.w > 0.5;
+    } else if btype == 12u {
+        // Fan: metallic gray housing with grille and bold direction arrow
+        // Outer frame (dark steel border)
+        let edge = f32(fx < 0.08 || fx > 0.92 || fy < 0.08 || fy > 0.92);
+        let base_metal = vec3(0.50, 0.52, 0.55); // metallic gray
+        let frame_metal = vec3(0.35, 0.37, 0.40); // darker frame
+        color = mix(base_metal, frame_metal, edge);
+
+        // Grille bars (horizontal and vertical for cross-hatch)
+        let bar_h = fract(fx * 5.0);
+        let bar_v = fract(fy * 5.0);
+        let is_bar = f32(bar_h < 0.12 || bar_h > 0.88 || bar_v < 0.12 || bar_v > 0.88);
+        color = mix(color, vec3(0.38, 0.40, 0.43), is_bar * 0.6);
+
+        // Specular highlight (metallic sheen)
+        let spec = smoothstep(0.3, 0.5, fx) * smoothstep(0.7, 0.5, fx)
+                 * smoothstep(0.3, 0.5, fy) * smoothstep(0.7, 0.5, fy);
+        color += vec3(0.06) * spec;
+
+        // Bold direction arrow
+        let dir_bits = (block >> 19u) & 3u;
+        var fan_dx = 0.0;
+        var fan_dy = 0.0;
+        if dir_bits == 0u { fan_dy = -1.0; }
+        else if dir_bits == 1u { fan_dx = 1.0; }
+        else if dir_bits == 2u { fan_dy = 1.0; }
+        else { fan_dx = -1.0; }
+        // Arrow shaft
+        let along = (fx - 0.5) * fan_dx + (fy - 0.5) * fan_dy;
+        let perp_dist = abs(-(fx - 0.5) * fan_dy + (fy - 0.5) * fan_dx);
+        let on_shaft = along > -0.25 && along < 0.2 && perp_dist < 0.07;
+        // Arrowhead (triangle)
+        let head_t = (along - 0.1) / 0.25; // 0 at base, 1 at tip
+        let on_head = head_t > 0.0 && head_t < 1.0 && perp_dist < 0.2 * (1.0 - head_t);
+        if on_shaft || on_head {
+            color = vec3(0.85, 0.88, 0.92); // bright white-silver arrow
+        }
     } else {
         color = block_base_color(btype, bflags);
     }

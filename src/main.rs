@@ -53,7 +53,7 @@ const DAY_DURATION: f32 = 60.0; // must match shader
 
 // --- Block representation on GPU ---
 // Each block is a u32 packed as: [type:8 | height:8 | flags:8 | reserved:8]
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp, 12=fan
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof, bit2=is_open
 fn smoothstep_f32(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -536,7 +536,7 @@ struct FluidParams {
     dt: f32, dissipation: f32, vorticity_strength: f32, pressure_iterations: f32,
     splat_x: f32, splat_y: f32, splat_vx: f32, splat_vy: f32,
     splat_radius: f32, splat_active: f32, time: f32, wind_x: f32,
-    wind_y: f32, smoke_rate: f32, _pad2: f32, _pad3: f32,
+    wind_y: f32, smoke_rate: f32, fan_speed: f32, _pad3: f32,
 }
 
 const FLUID_SIM_W: u32 = 256;
@@ -552,7 +552,7 @@ fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
         let is_door = (b >> 16) & 1 != 0;
         let is_open = (b >> 16) & 4 != 0;
         // Walls and glass block fluid. Trees, open doors, and light sources don't.
-        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 11 && !(is_door && is_open) { 255 } else { 0 }
+        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 11 && bt != 12 && !(is_door && is_open) { 255 } else { 0 }
     }).collect()
 }
 
@@ -564,6 +564,7 @@ enum BuildTool {
     Bench,
     StandingLamp,
     TableLamp,
+    Fan,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -770,10 +771,10 @@ impl App {
                 splat_radius: 5.0,
                 splat_active: 0.0,
                 time: 0.0,
-                wind_x: 3.0,
-                wind_y: 0.0,
+                wind_x: 10.0,
+                wind_y: 10.0,
                 smoke_rate: 0.3,
-                _pad2: 0.0,
+                fan_speed: 40.0,
                 _pad3: 0.0,
             },
             fluid_overlay: FluidOverlay::None,
@@ -969,6 +970,19 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
+                BuildTool::Fan => {
+                    // Fan: must be placed on a wall (type 1 or 4 with height > 0)
+                    if (bt == 1 || bt == 4) && (block >> 8) & 0xFF > 0 {
+                        let wall_h = ((block >> 8) & 0xFF) as u8;
+                        let roof_flag = flags & 2;
+                        let roof_h = block & 0xFF000000;
+                        let dir_flags = roof_flag | ((self.build_rotation as u8) << 3);
+                        self.grid_data[idx] = make_block(12, wall_h, dir_flags) | roof_h;
+                        self.grid_dirty = true;
+                        log::info!("Placed fan at ({}, {}) dir={}", bx, by, self.build_rotation);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
                 BuildTool::None => {}
             }
             return;
@@ -993,6 +1007,16 @@ impl App {
             self.grid_dirty = true;
             let name = match bt { 6 => "Fireplace", 7 => "Electric light", 10 => "Floor lamp", 11 => "Table lamp", _ => "Light" };
             log::info!("Removed {} at ({}, {})", name, bx, by);
+        }
+
+        // Remove fan: revert to stone wall
+        if bt == 12 {
+            let roof_flag = flags & 2;
+            let roof_h = block & 0xFF000000;
+            let height = ((block >> 8) & 0xFF) as u8;
+            self.grid_data[idx] = make_block(1, height, roof_flag) | roof_h;
+            self.grid_dirty = true;
+            log::info!("Removed fan at ({}, {})", bx, by);
         }
     }
 
@@ -2444,7 +2468,21 @@ impl App {
                 _ => vec![(hbx, hby)],
             };
             let on_furniture = self.build_tool == BuildTool::TableLamp;
-            tiles.iter().map(|&(tx, ty)| ((tx, ty), self.can_place_on(tx, ty, on_furniture))).collect()
+            let on_wall = self.build_tool == BuildTool::Fan;
+            tiles.iter().map(|&(tx, ty)| {
+                if on_wall {
+                    let valid = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                        let bidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        let b = self.grid_data[bidx];
+                        let bbt = b & 0xFF;
+                        let bbh = (b >> 8) & 0xFF;
+                        (bbt == 1 || bbt == 4) && bbh > 0
+                    } else { false };
+                    ((tx, ty), valid)
+                } else {
+                    ((tx, ty), self.can_place_on(tx, ty, on_furniture))
+                }
+            }).collect()
         } else {
             vec![]
         };
@@ -2462,7 +2500,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v37 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v38 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -2577,6 +2615,11 @@ impl App {
                     .text("Smoke rate")
                     .step_by(0.05));
                 self.fluid_params.smoke_rate = sr;
+                let mut fs = self.fluid_params.fan_speed;
+                ui.add(egui::Slider::new(&mut fs, 0.0..=50.0)
+                    .text("Fan speed")
+                    .step_by(1.0));
+                self.fluid_params.fan_speed = fs;
 
                 ui.separator();
                 ui.label("Camera");
@@ -2618,6 +2661,9 @@ impl App {
                         if ui.selectable_label(*tool == BuildTool::TableLamp, "Table Lamp").clicked() {
                             *tool = if *tool == BuildTool::TableLamp { BuildTool::None } else { BuildTool::TableLamp };
                         }
+                        if ui.selectable_label(*tool == BuildTool::Fan, "Fan").clicked() {
+                            *tool = if *tool == BuildTool::Fan { BuildTool::None } else { BuildTool::Fan };
+                        }
                         if *tool != BuildTool::None {
                             ui.separator();
                             let hint = match *tool {
@@ -2626,6 +2672,10 @@ impl App {
                                     format!("Click to place | Q/E rotate [{}]", rot_label)
                                 }
                                 BuildTool::TableLamp => "Click on a bench to place".to_string(),
+                                BuildTool::Fan => {
+                                    let dir = match self.build_rotation { 0 => "N", 1 => "E", 2 => "S", _ => "W" };
+                                    format!("Click wall to place | Q/E rotate [{}]", dir)
+                                }
                                 _ => "Click to place".to_string(),
                             };
                             ui.label(hint);
@@ -2787,6 +2837,28 @@ impl App {
                     0.0,
                     color,
                 );
+
+                // Fan direction arrow
+                if self.build_tool == BuildTool::Fan {
+                    let center = egui::pos2((sx0 + sx1) / 2.0, (sy0 + sy1) / 2.0);
+                    let tile_size = (sx1 - sx0).max(1.0);
+                    let (adx, ady) = match self.build_rotation {
+                        0 => (0.0f32, -1.0f32),
+                        1 => (1.0, 0.0),
+                        2 => (0.0, 1.0),
+                        _ => (-1.0, 0.0),
+                    };
+                    let arrow_len = tile_size * 0.8;
+                    let tip = center + egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
+                    let tail = center - egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
+                    painter.line_segment([tail, tip], egui::Stroke::new(2.0, egui::Color32::WHITE));
+                    let perp = egui::Vec2::new(-ady, adx) * arrow_len * 0.2;
+                    let head_base = center + egui::Vec2::new(adx * arrow_len * 0.2, ady * arrow_len * 0.2);
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![tip, head_base + perp, head_base - perp],
+                        egui::Color32::WHITE, egui::Stroke::NONE,
+                    ));
+                }
             }
         }
 
@@ -3149,10 +3221,18 @@ impl ApplicationHandler for App {
                             log::info!("Time: {}", if self.time_paused { "paused" } else { "playing" });
                         }
                         PhysicalKey::Code(KeyCode::KeyQ) => {
-                            self.build_rotation = (self.build_rotation + 1) % 2;
+                            if self.build_tool == BuildTool::Fan {
+                                self.build_rotation = (self.build_rotation + 3) % 4;
+                            } else {
+                                self.build_rotation = (self.build_rotation + 1) % 2;
+                            }
                         }
                         PhysicalKey::Code(KeyCode::KeyE) => {
-                            self.build_rotation = (self.build_rotation + 1) % 2;
+                            if self.build_tool == BuildTool::Fan {
+                                self.build_rotation = (self.build_rotation + 1) % 4;
+                            } else {
+                                self.build_rotation = (self.build_rotation + 1) % 2;
+                            }
                         }
                         _ => {}
                     }

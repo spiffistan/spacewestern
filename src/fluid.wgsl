@@ -7,7 +7,7 @@ struct FluidParams {
     dt: f32, dissipation: f32, vorticity_strength: f32, pressure_iterations: f32,
     splat_x: f32, splat_y: f32, splat_vx: f32, splat_vy: f32,
     splat_radius: f32, splat_active: f32, time: f32, wind_x: f32,
-    wind_y: f32, smoke_rate: f32, _pad2: f32, _pad3: f32,
+    wind_y: f32, smoke_rate: f32, fan_speed: f32, _pad3: f32,
 };
 
 // --- Bind group layout (shared by all entry points) ---
@@ -189,6 +189,23 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
             cos(params.time * 4.1 + phase) * 4.0
         );
         new_v += (vec2(0.0, -20.0) + wobble) * params.dt;
+    }
+
+    // Fan: force velocity in fan direction (overrides pressure correction)
+    // Acts as a one-way valve — always pushes forward, resists reverse flow
+    if bt == 12u {
+        let dir_bits = (block >> 19u) & 3u;  // bits 3-4 of flags
+        var fan_dir = vec2(0.0, 0.0);
+        if dir_bits == 0u { fan_dir = vec2(0.0, -1.0); }
+        else if dir_bits == 1u { fan_dir = vec2(1.0, 0.0); }
+        else if dir_bits == 2u { fan_dir = vec2(0.0, 1.0); }
+        else { fan_dir = vec2(-1.0, 0.0); }
+        // Decompose into along-fan and perpendicular components
+        let along = dot(new_v, fan_dir);
+        let perp = new_v - fan_dir * along;
+        // Force minimum forward velocity, prevent reverse flow
+        let forced_along = max(along, params.fan_speed);
+        new_v = fan_dir * forced_along + perp * 0.3; // dampen perpendicular flow
     }
 
     // Global wind: outdoor cells receive wind force
