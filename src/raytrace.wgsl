@@ -20,7 +20,7 @@ struct Camera {
     light_bleed_mul: f32,
     foliage_opacity: f32,
     foliage_variation: f32,
-    _pad0: f32,
+    oblique_strength: f32,
     _pad1: f32,
 };
 
@@ -843,11 +843,33 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fx = fract(world_x);
     let fy = fract(world_y);
 
-    let block = get_block(bx, by);
-    let btype = block_type(block);
-    let bheight = block_height(block);
-    let bflags = block_flags(block);
-    let fheight = f32(bheight);
+    var block = get_block(bx, by);
+    var btype = block_type(block);
+    var bheight = block_height(block);
+    var bflags = block_flags(block);
+    var fheight = f32(bheight);
+
+    // --- Oblique projection: show south face within the wall's own tile ---
+    // The camera looks slightly from the south. If this block is tall and the
+    // block to the south is shorter, the bottom strip of THIS tile shows the
+    // south wall face. The wall stays entirely within its own block boundary.
+    var is_wall_face = false;
+    var wall_face_t = 0.0; // 0=top of face, 1=bottom of face
+
+    let south_block = get_block(bx, by + 1);
+    let south_h = block_height(south_block);
+    let is_exterior_south = bheight > south_h && btype != 8u
+        && !(is_door(block) && is_open(block));
+
+    if is_exterior_south {
+        let height_diff = f32(bheight - south_h);
+        let face_height = height_diff * camera.oblique_strength;
+        let face_start = 1.0 - face_height; // face occupies bottom strip of tile
+        if fy > face_start {
+            is_wall_face = true;
+            wall_face_t = (fy - face_start) / face_height; // 0=top of face, 1=bottom
+        }
+    }
 
     // Compute sun parameters for this frame
     let sun_info = get_sun(camera.time);
@@ -861,7 +883,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_roofed = roof_h > 0.5;
 
     // --- If roofed AND show_roofs is on, render the roof surface (hides everything below) ---
-    if is_roofed && camera.show_roofs > 0.5 {
+    // Wall face pixels always render the face, even if the ground tile is roofed
+    if is_roofed && camera.show_roofs > 0.5 && !is_wall_face {
         let roof_col = roof_color(world_x, world_y);
 
         // Shadow on roof surface
@@ -947,6 +970,36 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // If under a roof but transparent mode, add subtle indoor tint
     let is_indoor = is_roofed && camera.show_roofs < 0.5;
+
+    // --- Wall face rendering (south face, oblique projection) ---
+    if is_wall_face {
+        var face_color = block_base_color(btype, bflags);
+
+        // Darken toward bottom of face (ambient occlusion at ground junction)
+        face_color *= (0.60 + 0.40 * (1.0 - wall_face_t));
+
+        // Subtle mortar/plank lines along the face
+        let line = fract(fx * 4.0);
+        let mortar = f32(line < 0.06) * 0.04;
+        face_color -= vec3<f32>(mortar);
+
+        // Glass face: show a window strip in the middle
+        if btype == 5u {
+            let glass_zone = wall_face_t > 0.2 && wall_face_t < 0.8;
+            if glass_zone {
+                face_color = vec3<f32>(0.4, 0.55, 0.7) * (0.8 + 0.2 * (1.0 - wall_face_t));
+            }
+        }
+
+        // South face is always mostly in shade (sun stays north in our model).
+        // Slight indirect bounce: south face catches a tiny bit of reflected ground light.
+        let indirect = sun_color * get_sun_intensity(camera.time) * 0.12;
+        color = face_color * (ambient * 0.6 + indirect);
+
+        color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+        textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
+        return;
+    }
 
     if btype == 5u {
         // Glass block: render with thin inset

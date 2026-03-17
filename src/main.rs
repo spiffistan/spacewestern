@@ -376,7 +376,7 @@ struct CameraUniform {
     // Foliage shadow parameters
     foliage_opacity: f32,     // overall canopy shadow density (0=transparent, 1=opaque) (default 0.55)
     foliage_variation: f32,   // per-tree randomness in shadow density (default 0.3)
-    _pad0: f32,
+    oblique_strength: f32,    // wall face visibility per height unit (default 0.12)
     _pad1: f32,
 }
 
@@ -454,7 +454,7 @@ impl App {
                 light_bleed_mul: 0.6,
                 foliage_opacity: 0.55,
                 foliage_variation: 0.3,
-                _pad0: 0.0,
+                oblique_strength: 0.12,
                 _pad1: 0.0,
             },
             grid_data: Vec::new(),
@@ -1247,6 +1247,7 @@ impl App {
         let mut bleed = self.camera.light_bleed_mul;
         let mut foliage_opacity = self.camera.foliage_opacity;
         let mut foliage_variation = self.camera.foliage_variation;
+        let mut oblique = self.camera.oblique_strength;
                 let base_zoom = (self.camera.screen_w / GRID_W as f32).min(self.camera.screen_h / GRID_H as f32);
         egui::Window::new("Time Control")
             .default_pos([10.0, 10.0])
@@ -1316,6 +1317,12 @@ impl App {
                 ui.add(egui::Slider::new(&mut foliage_variation, 0.0..=1.0)
                     .text("Tree variation")
                     .step_by(0.01));
+
+                ui.separator();
+                ui.label("Camera");
+                ui.add(egui::Slider::new(&mut oblique, 0.0..=0.3)
+                    .text("Wall face tilt")
+                    .step_by(0.005));
             });
         self.time_of_day = time_val;
         self.time_paused = paused;
@@ -1326,6 +1333,7 @@ impl App {
         self.camera.light_bleed_mul = bleed;
         self.camera.foliage_opacity = foliage_opacity;
         self.camera.foliage_variation = foliage_variation;
+        self.camera.oblique_strength = oblique;
 
         let egui_output = egui_state.ctx.end_pass();
         egui_state.winit_state.handle_platform_output(window, egui_output.platform_output.clone());

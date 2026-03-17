@@ -18,7 +18,7 @@ struct Camera {
     light_bleed_mul: f32,
     foliage_opacity: f32,
     foliage_variation: f32,
-    _pad0: f32,
+    oblique_strength: f32,
     _pad1: f32,
 };
 
