@@ -1394,7 +1394,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v19 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v20 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -1628,6 +1628,7 @@ impl ApplicationHandler for App {
             return;
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
         let attrs = Window::default_attributes()
             .with_title("Spacewestern")
             .with_inner_size(PhysicalSize::new(1280u32, 1280u32));
@@ -1644,7 +1645,10 @@ impl ApplicationHandler for App {
                 .unwrap()
                 .dyn_into::<web_sys::HtmlCanvasElement>()
                 .unwrap();
-            attrs.with_canvas(Some(canvas))
+            // Don't set inner_size — use the canvas dimensions from HTML
+            Window::default_attributes()
+                .with_title("Spacewestern")
+                .with_canvas(Some(canvas))
         };
 
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
