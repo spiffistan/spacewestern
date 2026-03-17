@@ -20,9 +20,8 @@
       }
       canvas {
         display: block;
-        /* Square: use the smaller of viewport width/height */
-        width: min(100vw, 100vh);
-        height: min(100vw, 100vh);
+        width: 100vw;
+        height: 100vh;
       }
     </style>
   </head>
@@ -33,9 +32,8 @@
       const canvas = document.getElementById('rayworld-canvas');
       // Cap at 1x DPR — the raytracer is expensive per-pixel and the
       // block art style doesn't benefit from retina resolution.
-      const size = Math.min(window.innerWidth, window.innerHeight);
-      canvas.width = size;
-      canvas.height = size;
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
     </script>
   </body>
 </html>
