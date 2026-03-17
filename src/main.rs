@@ -53,7 +53,7 @@ const DAY_DURATION: f32 = 60.0; // must match shader
 
 // --- Block representation on GPU ---
 // Each block is a u32 packed as: [type:8 | height:8 | flags:8 | reserved:8]
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof, bit2=is_open
 fn make_block(block_type: u8, height: u8, flags: u8) -> u32 {
@@ -477,6 +477,7 @@ enum BuildTool {
     None,
     Fireplace,
     ElectricLight,
+    Bench,
 }
 
 // --- Application state ---
@@ -508,6 +509,8 @@ struct App {
     lightmap_frame: u32,
     // Build mode
     build_tool: BuildTool,
+    build_rotation: u32,       // 0=horizontal (E-W), 1=vertical (N-S)
+    hover_world: (f32, f32),   // world coords under mouse cursor
 }
 
 const LIGHTMAP_PROP_ITERATIONS: u32 = 16;
@@ -585,7 +588,40 @@ impl App {
             fps_display: 0.0,
             lightmap_frame: 0,
             build_tool: BuildTool::None,
+            build_rotation: 0,
+            hover_world: (0.0, 0.0),
         }
+    }
+
+    /// Convert world block coordinates to window screen pixels
+    #[allow(dead_code)]
+    fn world_to_screen(&self, wx: f32, wy: f32) -> (f32, f32) {
+        let rx = (wx - self.camera.center_x) * self.camera.zoom + self.camera.screen_w * 0.5;
+        let ry = (wy - self.camera.center_y) * self.camera.zoom + self.camera.screen_h * 0.5;
+        (rx / RENDER_SCALE, ry / RENDER_SCALE)
+    }
+
+    /// Get the tiles a bench would occupy at (bx, by) with given rotation
+    fn bench_tiles(&self, bx: i32, by: i32, rotation: u32) -> [(i32, i32); 3] {
+        if rotation == 0 {
+            // Horizontal: extends east
+            [(bx, by), (bx + 1, by), (bx + 2, by)]
+        } else {
+            // Vertical: extends south
+            [(bx, by), (bx, by + 1), (bx, by + 2)]
+        }
+    }
+
+    /// Check if a tile is valid for placement (ground level, in bounds)
+    fn can_place_at(&self, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 {
+            return false;
+        }
+        let idx = (y as u32 * GRID_W + x as u32) as usize;
+        let block = self.grid_data[idx];
+        let bt = block_type_rs(block);
+        let bh = (block >> 8) & 0xFF;
+        (bt == 0 || bt == 2) && bh == 0
     }
 
     /// Convert screen pixel coordinates to world block coordinates
@@ -675,21 +711,41 @@ impl App {
 
         // Build tool placement
         if self.build_tool != BuildTool::None {
-            // Can only place on ground-level tiles (dirt/air, height 0)
-            let bh = (block >> 8) & 0xFF;
-            if (bt == 0 || bt == 2) && bh == 0 {
-                let roof_flag = flags & 2; // preserve roof flag
-                let new_block = match self.build_tool {
-                    BuildTool::Fireplace => make_block(6, 1, roof_flag),
-                    BuildTool::ElectricLight => make_block(7, 0, roof_flag),
-                    BuildTool::None => unreachable!(),
-                };
-                // Preserve precomputed roof height (bits 24-31)
-                let roof_h = block & 0xFF000000;
-                self.grid_data[idx] = new_block | roof_h;
-                self.grid_dirty = true;
-                log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
-                self.build_tool = BuildTool::None;
+            match self.build_tool {
+                BuildTool::Bench => {
+                    let tiles = self.bench_tiles(bx, by, self.build_rotation);
+                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
+                    if all_valid {
+                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tblock = self.grid_data[tidx];
+                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
+                            let roof_h = tblock & 0xFF000000;
+                            // flags: bit3-4 = segment (0,1,2), bit5-6 = rotation
+                            let seg_flags = roof_flag | ((i as u8) << 3) | ((self.build_rotation as u8) << 5);
+                            self.grid_data[tidx] = make_block(9, 1, seg_flags) | roof_h;
+                        }
+                        self.grid_dirty = true;
+                        log::info!("Placed bench at ({}, {})", bx, by);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::Fireplace | BuildTool::ElectricLight => {
+                    if self.can_place_at(bx, by) {
+                        let roof_flag = flags & 2;
+                        let new_block = match self.build_tool {
+                            BuildTool::Fireplace => make_block(6, 1, roof_flag),
+                            BuildTool::ElectricLight => make_block(7, 0, roof_flag),
+                            _ => unreachable!(),
+                        };
+                        let roof_h = block & 0xFF000000;
+                        self.grid_data[idx] = new_block | roof_h;
+                        self.grid_dirty = true;
+                        log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::None => {}
             }
             return;
         }
@@ -1459,6 +1515,22 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Pre-compute blueprint preview data (before egui borrows self)
+        let blueprint_tiles: Vec<((i32, i32), bool)> = if self.build_tool != BuildTool::None {
+            let (hwx, hwy) = self.hover_world;
+            let hbx = hwx.floor() as i32;
+            let hby = hwy.floor() as i32;
+            let tiles: Vec<(i32, i32)> = match self.build_tool {
+                BuildTool::Bench => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
+                _ => vec![(hbx, hby)],
+            };
+            tiles.iter().map(|&(tx, ty)| ((tx, ty), self.can_place_at(tx, ty))).collect()
+        } else {
+            vec![]
+        };
+        let bp_cam = (self.camera.center_x, self.camera.center_y, self.camera.zoom, self.camera.screen_w, self.camera.screen_h);
+        let bp_ppp = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
+
         // --- egui frame ---
         let egui_state = self.egui_state.as_mut().unwrap();
         let window = self.window.as_ref().unwrap();
@@ -1470,7 +1542,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v24 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v25 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -1590,13 +1662,49 @@ impl App {
                         if ui.selectable_label(*tool == BuildTool::ElectricLight, "Electric Light").clicked() {
                             *tool = if *tool == BuildTool::ElectricLight { BuildTool::None } else { BuildTool::ElectricLight };
                         }
+                        if ui.selectable_label(*tool == BuildTool::Bench, "Bench").clicked() {
+                            *tool = if *tool == BuildTool::Bench { BuildTool::None } else { BuildTool::Bench };
+                        }
                         if *tool != BuildTool::None {
                             ui.separator();
-                            ui.label("Click to place");
+                            let rot_label = if self.build_rotation == 0 { "H" } else { "V" };
+                            ui.label(format!("Click to place | Q/E rotate [{}]", rot_label));
                         }
                     });
                 });
             });
+
+        // Blueprint preview — draw ghost overlay for placement
+        if !blueprint_tiles.is_empty() {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+
+            let painter = egui_state.ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("blueprint"),
+            ));
+
+            for &((tx, ty), valid) in &blueprint_tiles {
+                let color = if valid {
+                    egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80)
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(255, 60, 60, 80)
+                };
+
+                let wx0 = tx as f32;
+                let wy0 = ty as f32;
+                // World → physical pixels → logical points (egui coords)
+                let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / RENDER_SCALE / bp_ppp;
+                let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / RENDER_SCALE / bp_ppp;
+                let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / RENDER_SCALE / bp_ppp;
+                let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / RENDER_SCALE / bp_ppp;
+
+                painter.rect_filled(
+                    egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
+                    0.0,
+                    color,
+                );
+            }
+        }
 
         let egui_output = egui_state.ctx.end_pass();
         egui_state.winit_state.handle_platform_output(window, egui_output.platform_output.clone());
@@ -1796,6 +1904,13 @@ impl ApplicationHandler for App {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        // Always track cursor position for blueprint preview
+        if let WindowEvent::CursorMoved { position, .. } = &event {
+            self.last_mouse_x = position.x;
+            self.last_mouse_y = position.y;
+            self.hover_world = self.screen_to_world(position.x, position.y);
+        }
+
         // Let egui process the event first
         if let Some(egui_state) = self.egui_state.as_mut() {
             let response = egui_state.winit_state.on_window_event(self.window.as_ref().unwrap(), &event);
@@ -1829,6 +1944,12 @@ impl ApplicationHandler for App {
                         PhysicalKey::Code(KeyCode::Space) => {
                             self.time_paused = !self.time_paused;
                             log::info!("Time: {}", if self.time_paused { "paused" } else { "playing" });
+                        }
+                        PhysicalKey::Code(KeyCode::KeyQ) => {
+                            self.build_rotation = (self.build_rotation + 1) % 2;
+                        }
+                        PhysicalKey::Code(KeyCode::KeyE) => {
+                            self.build_rotation = (self.build_rotation + 1) % 2;
                         }
                         _ => {}
                     }
@@ -1894,6 +2015,7 @@ impl ApplicationHandler for App {
                 }
                 self.last_mouse_x = position.x;
                 self.last_mouse_y = position.y;
+                self.hover_world = self.screen_to_world(position.x, position.y);
             }
             WindowEvent::Resized(new_size) => {
                 if self.gfx.is_some() {

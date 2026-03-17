@@ -58,7 +58,7 @@ fn sample_lightmap(wx: f32, wy: f32) -> vec4<f32> {
 }
 
 // --- Block unpacking ---
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
@@ -571,6 +571,72 @@ fn render_electric_light(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<
 
 // Render tree from top-down using sprite atlas.
 // Returns vec4(color_rgb, is_canopy): is_canopy > 0 if this pixel is tree, 0 if ground beneath.
+// Render bench from top-down: wooden plank seat with visible legs
+fn render_bench(fx: f32, fy: f32, flags: u32) -> vec3<f32> {
+    let segment = (flags >> 3u) & 3u;  // 0=left/top, 1=center, 2=right/bottom
+    let rotation = (flags >> 5u) & 3u; // 0=horizontal, 1=vertical
+
+    // Transform local coords based on rotation
+    var lx = fx; // along bench length
+    var ly = fy; // across bench width
+    if rotation == 1u {
+        lx = fy;
+        ly = fx;
+    }
+
+    let wood_color = vec3<f32>(0.55, 0.38, 0.18);
+    let wood_dark = vec3<f32>(0.40, 0.28, 0.12);
+    let leg_color = vec3<f32>(0.35, 0.24, 0.10);
+    let ground = vec3<f32>(0.45, 0.35, 0.20); // dirt beneath
+
+    // Bench seat: centered strip across the width
+    let seat_min = 0.2;
+    let seat_max = 0.8;
+    let on_seat = ly >= seat_min && ly <= seat_max;
+
+    if !on_seat {
+        // Ground visible on either side of the bench
+        return ground;
+    }
+
+    // Plank grain lines running along the bench length
+    let grain = fract(ly * 6.0);
+    let grain_line = f32(grain < 0.08) * 0.04;
+    var color = wood_color - vec3<f32>(grain_line);
+
+    // Slight color variation per plank
+    let plank_id = floor(ly * 3.0);
+    let plank_var = fract(sin(plank_id * 127.1) * 43758.5453) * 0.06 - 0.03;
+    color += vec3<f32>(plank_var);
+
+    // Legs: small dark squares at the ends and middle of each segment
+    let leg_size = 0.12;
+    let at_edge_x = lx < leg_size || lx > (1.0 - leg_size);
+    let at_edge_y = ly < (seat_min + leg_size) || ly > (seat_max - leg_size);
+
+    // End segments (0, 2) have legs at the outer end; center (1) has no end legs
+    var show_leg = false;
+    if segment == 0u && lx < leg_size && at_edge_y {
+        show_leg = true;
+    }
+    if segment == 2u && lx > (1.0 - leg_size) && at_edge_y {
+        show_leg = true;
+    }
+    // All segments have a subtle cross-brace shadow in the middle
+    if segment == 1u {
+        let mid_brace = abs(lx - 0.5) < 0.04 && at_edge_y;
+        if mid_brace {
+            color = wood_dark;
+        }
+    }
+
+    if show_leg {
+        color = leg_color;
+    }
+
+    return color;
+}
+
 fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32, flags: u32) -> vec4<f32> {
     let is_large = (flags & 32u) != 0u;
     let quadrant = (flags >> 3u) & 3u; // 0=TL, 1=TR, 2=BL, 3=BR
@@ -657,6 +723,7 @@ fn block_base_color(btype: u32, flags: u32) -> vec3<f32> {
         case 6u: { return vec3<f32>(0.35, 0.30, 0.28); }    // fireplace stone
         case 7u: { return vec3<f32>(0.45, 0.35, 0.20); }    // electric light (floor beneath)
         case 8u: { return vec3<f32>(0.18, 0.35, 0.12); }    // tree (canopy green)
+        case 9u: { return vec3<f32>(0.55, 0.38, 0.18); }    // bench (wood)
         default: { return vec3<f32>(1.0, 0.0, 1.0); }
     }
 }
@@ -1085,6 +1152,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let tree_result = render_tree(world_x, world_y, fx, fy, bheight, bflags);
         color = tree_result.xyz;
         is_tree_pixel = tree_result.w > 0.01;
+    } else if btype == 9u {
+        // Bench
+        color = render_bench(fx, fy, bflags);
     } else {
         color = block_base_color(btype, bflags);
     }
