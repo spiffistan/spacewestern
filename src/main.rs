@@ -472,6 +472,13 @@ struct CameraUniform {
     _pad1: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BuildTool {
+    None,
+    Fireplace,
+    ElectricLight,
+}
+
 // --- Application state ---
 struct App {
     window: Option<Arc<Window>>,
@@ -499,6 +506,8 @@ struct App {
     fps_display: f32,
     // Lightmap update throttle (skip most frames)
     lightmap_frame: u32,
+    // Build mode
+    build_tool: BuildTool,
 }
 
 const LIGHTMAP_PROP_ITERATIONS: u32 = 16;
@@ -575,6 +584,7 @@ impl App {
             fps_accum: 0.0,
             fps_display: 0.0,
             lightmap_frame: 0,
+            build_tool: BuildTool::None,
         }
     }
 
@@ -651,8 +661,8 @@ impl App {
         }
     }
 
-    /// Try to toggle a door at the given world coordinates
-    fn try_toggle_door(&mut self, wx: f32, wy: f32) {
+    /// Handle left-click: build tool placement, door toggle, or light toggle
+    fn handle_click(&mut self, wx: f32, wy: f32) {
         let bx = wx.floor() as i32;
         let by = wy.floor() as i32;
         if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
@@ -660,15 +670,49 @@ impl App {
         }
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
         let block = self.grid_data[idx];
+        let bt = block_type_rs(block);
+        let flags = block_flags_rs(block);
+
+        // Build tool placement
+        if self.build_tool != BuildTool::None {
+            // Can only place on ground-level tiles (dirt/air, height 0)
+            let bh = (block >> 8) & 0xFF;
+            if (bt == 0 || bt == 2) && bh == 0 {
+                let roof_flag = flags & 2; // preserve roof flag
+                let new_block = match self.build_tool {
+                    BuildTool::Fireplace => make_block(6, 1, roof_flag),
+                    BuildTool::ElectricLight => make_block(7, 0, roof_flag),
+                    BuildTool::None => unreachable!(),
+                };
+                // Preserve precomputed roof height (bits 24-31)
+                let roof_h = block & 0xFF000000;
+                self.grid_data[idx] = new_block | roof_h;
+                self.grid_dirty = true;
+                log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
+                self.build_tool = BuildTool::None;
+            }
+            return;
+        }
+
+        // Toggle door
         if is_door_rs(block) {
-            // Toggle bit2 (is_open)
-            let flags = block_flags_rs(block);
-            let new_flags = flags ^ 4; // toggle bit2
+            let new_flags = flags ^ 4; // toggle bit2 (is_open)
             let new_block = (block & 0xFF00FFFF) | ((new_flags as u32) << 16);
             self.grid_data[idx] = new_block;
             self.grid_dirty = true;
             let open = (new_flags & 4) != 0;
             log::info!("Door at ({}, {}): {}", bx, by, if open { "opened" } else { "closed" });
+            return;
+        }
+
+        // Toggle electric light on/off (swap between type 7 and type 2 dirt)
+        if bt == 7 {
+            // Turn off: replace with dirt floor, preserve roof flag + roof height
+            let roof_flag = flags & 2;
+            let roof_h = block & 0xFF000000;
+            self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
+            self.grid_dirty = true;
+            log::info!("Light OFF at ({}, {})", bx, by);
         }
     }
 
@@ -1426,7 +1470,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v23 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v24 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -1474,6 +1518,12 @@ impl App {
                     ui.add(egui::Slider::new(&mut speed, 0.1..=5.0)
                         .text("Speed")
                         .logarithmic(true));
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Night").clicked()  { time_val = DAY_DURATION * 0.0; paused = true; }
+                    if ui.button("Dawn").clicked()   { time_val = DAY_DURATION * 0.18; paused = true; }
+                    if ui.button("Day").clicked()    { time_val = DAY_DURATION * 0.5; paused = true; }
+                    if ui.button("Dusk").clicked()   { time_val = DAY_DURATION * 0.82; paused = true; }
                 });
 
                 ui.separator();
@@ -1525,6 +1575,28 @@ impl App {
         self.camera.foliage_opacity = foliage_opacity;
         self.camera.foliage_variation = foliage_variation;
         self.camera.oblique_strength = oblique;
+
+        // Build toolbar — floating bottom-center bar
+        egui::Area::new(egui::Id::new("build_bar"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -20.0])
+            .show(&egui_state.ctx, |ui| {
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Build:");
+                        let tool = &mut self.build_tool;
+                        if ui.selectable_label(*tool == BuildTool::Fireplace, "Fireplace").clicked() {
+                            *tool = if *tool == BuildTool::Fireplace { BuildTool::None } else { BuildTool::Fireplace };
+                        }
+                        if ui.selectable_label(*tool == BuildTool::ElectricLight, "Electric Light").clicked() {
+                            *tool = if *tool == BuildTool::ElectricLight { BuildTool::None } else { BuildTool::ElectricLight };
+                        }
+                        if *tool != BuildTool::None {
+                            ui.separator();
+                            ui.label("Click to place");
+                        }
+                    });
+                });
+            });
 
         let egui_output = egui_state.ctx.end_pass();
         egui_state.winit_state.handle_platform_output(window, egui_output.platform_output.clone());
@@ -1673,7 +1745,7 @@ impl ApplicationHandler for App {
         #[cfg(not(target_arch = "wasm32"))]
         let attrs = Window::default_attributes()
             .with_title("Spacewestern")
-            .with_inner_size(PhysicalSize::new(1280u32, 1280u32));
+            .with_inner_size(PhysicalSize::new(1920u32, 1920u32));
 
         #[cfg(target_arch = "wasm32")]
         let attrs = {
@@ -1737,7 +1809,13 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state.is_pressed() {
                     match event.physical_key {
-                        PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
+                        PhysicalKey::Code(KeyCode::Escape) => {
+                            if self.build_tool != BuildTool::None {
+                                self.build_tool = BuildTool::None;
+                            } else {
+                                event_loop.exit();
+                            }
+                        }
                         PhysicalKey::Code(KeyCode::KeyR) => {
                             if self.camera.show_roofs < 0.5 {
                                 self.camera.show_roofs = 1.0;
@@ -1779,7 +1857,7 @@ impl ApplicationHandler for App {
                         // Mouse released — if we didn't drag, treat as a click
                         if !self.mouse_dragged {
                             let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
-                            self.try_toggle_door(wx, wy);
+                            self.handle_click(wx, wy);
                         }
                         self.mouse_pressed = false;
                         self.mouse_dragged = false;

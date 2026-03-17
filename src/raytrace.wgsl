@@ -311,6 +311,13 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
             continue;
         }
 
+        // Trees: partial transmission through foliage
+        if sbt == 8u {
+            vis *= 0.4;
+            if vis < 0.02 { return 0.0; }
+            continue;
+        }
+
         // Open door: passes through
         if is_door(sb) && is_open(sb) { continue; }
 
@@ -587,12 +594,23 @@ fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32, flags: u32) -> v
         sprite_v = (qy + fy) * 0.5;
     }
 
-    // Pick variant from origin position hash (consistent for 2x2 groups)
+    // Pick variant and rotation from origin position hash
     let tree_id = origin_x * 137.0 + origin_y * 311.0;
     let id_hash = fract(sin(tree_id) * 43758.5453);
     let variant = u32(id_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
 
-    let sprite = sample_sprite(variant, sprite_u, sprite_v);
+    // Random 90° rotation (0, 90, 180, 270) via UV transform around center
+    let rot_hash = fract(sin(tree_id * 1.7 + 5.3) * 27183.6142);
+    let rotation = u32(rot_hash * 4.0) % 4u;
+    var ru = sprite_u - 0.5;
+    var rv = sprite_v - 0.5;
+    switch rotation {
+        case 1u: { let tmp = ru; ru = -rv; rv = tmp; }   // 90°
+        case 2u: { ru = -ru; rv = -rv; }                  // 180°
+        case 3u: { let tmp = ru; ru = rv; rv = -tmp; }    // 270°
+        default: { }                                       // 0°
+    }
+    let sprite = sample_sprite(variant, ru + 0.5, rv + 0.5);
 
     if sprite.w < 0.01 {
         return vec4<f32>(0.45, 0.35, 0.20, 0.0);
@@ -724,7 +742,18 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
             let tree_hash = fract(sin(tree_id) * 43758.5453);
             let variant = u32(tree_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
 
-            let sprite = sample_sprite(variant, tree_fx, tree_fy);
+            // Same rotation as rendering
+            let rot_hash = fract(sin(tree_id * 1.7 + 5.3) * 27183.6142);
+            let rotation = u32(rot_hash * 4.0) % 4u;
+            var ru = tree_fx - 0.5;
+            var rv = tree_fy - 0.5;
+            switch rotation {
+                case 1u: { let tmp = ru; ru = -rv; rv = tmp; }
+                case 2u: { ru = -ru; rv = -rv; }
+                case 3u: { let tmp = ru; ru = rv; rv = -tmp; }
+                default: { }
+            }
+            let sprite = sample_sprite(variant, ru + 0.5, rv + 0.5);
 
             if sprite.w > 0.01 {
                 // Sprite height scaled to block height
@@ -1107,8 +1136,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         shadow_tint = shadow_result.xyz;
         light_factor = shadow_result.w;
 
-        // Directional light bleeding through windows/doors.
-        // Only for ground-level outdoor pixels near buildings.
+        // Outdoor lighting: directional window bleed only.
+        // Outdoor point lights are handled by proximity glow (line-of-sight traced)
+        // rather than the lightmap (which floods around obstacles unrealistically).
         if effective_height == 0u {
             let bleed = compute_directional_bleed(world_x, world_y);
             light_color_out = bleed.xyz;
@@ -1197,10 +1227,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = mix(color, color * vec3<f32>(0.85, 0.88, 0.95), 0.3);
     }
 
-    // Per-pixel proximity glow for indoor floor tiles only.
-    // Wall faces get their glow in the wall face rendering block above (which returns early).
+    // Per-pixel proximity glow for floor tiles near light sources.
+    // Applies to indoor floors AND outdoor ground (for outdoor campfires etc).
     // Wall tops are excluded to prevent light bleed onto the roof surface.
-    if is_indoor {
+    if is_indoor || (!is_roofed_wall && effective_height == 0u) {
         let prox_glow = compute_proximity_glow(world_x, world_y, camera.time);
         let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.7;
         color += prox_glow * camera.indoor_glow_mul * (0.5 + night_boost);

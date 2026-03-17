@@ -47,6 +47,8 @@ fn is_wall(b: u32) -> bool {
     let bt = block_type(b);
     // Glass transmits (attenuated)
     if bt == 5u { return false; }
+    // Trees transmit (attenuated, like foliage)
+    if bt == 8u { return false; }
     // Open doors transmit
     if is_door(b) && is_open(b) { return false; }
     // Everything else with height blocks
@@ -57,6 +59,8 @@ fn is_wall(b: u32) -> bool {
 const PROP_FALLOFF: f32 = 0.08;
 // Glass attenuation factor
 const GLASS_ATTEN: f32 = 0.4;
+// Tree/foliage attenuation factor
+const TREE_ATTEN: f32 = 0.5;
 // Diagonal falloff = cardinal * sqrt(2)
 const DIAG_FALLOFF: f32 = 0.1131; // 0.08 * 1.414
 
@@ -73,9 +77,14 @@ fn sample_neighbor(nx: i32, ny: i32, falloff: f32) -> vec4<f32> {
     }
     let nval = textureLoad(lightmap_in, vec2<i32>(nx, ny), 0);
     var intensity = nval.w - falloff;
+    let nbt = block_type(nb);
     // Glass attenuates light passing through
-    if block_type(nb) == 5u {
+    if nbt == 5u {
         intensity *= GLASS_ATTEN;
+    }
+    // Trees/foliage partially block light
+    if nbt == 8u {
+        intensity *= TREE_ATTEN;
     }
     if intensity <= 0.0 {
         return vec4<f32>(0.0);
@@ -136,6 +145,10 @@ fn main_lightmap_propagate(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Glass blocks themselves get attenuated
     if bt == 5u {
         best = vec4<f32>(best.xyz, best.w * GLASS_ATTEN);
+    }
+    // Tree blocks themselves attenuate light passing through foliage
+    if bt == 8u {
+        best = vec4<f32>(best.xyz, best.w * TREE_ATTEN);
     }
 
     textureStore(lightmap_out, vec2<u32>(gid.xy), max(best, vec4<f32>(0.0)));
