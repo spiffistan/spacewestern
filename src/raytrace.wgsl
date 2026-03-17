@@ -42,6 +42,10 @@ struct Camera {
     _pad2: f32,
     _pad3: f32,
     _pad4: f32,
+    prev_center_x: f32,
+    prev_center_y: f32,
+    prev_zoom: f32,
+    prev_time: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -54,6 +58,7 @@ struct Camera {
 @group(0) @binding(7) var fluid_dye_sampler: sampler;
 @group(0) @binding(8) var fluid_vel_tex: texture_2d<f32>;
 @group(0) @binding(9) var fluid_pres_tex: texture_2d<f32>;
+@group(0) @binding(10) var prev_output: texture_2d<f32>;
 
 // --- Sprite constants ---
 const SPRITE_SIZE: u32 = 16u;
@@ -1151,6 +1156,38 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fx = fract(world_x);
     let fy = fract(world_y);
 
+    // --- Temporal reprojection: reuse previous frame if possible ---
+    {
+        let prev_px = (world_x - camera.prev_center_x) * camera.prev_zoom + camera.screen_w * 0.5;
+        let prev_py = (world_y - camera.prev_center_y) * camera.prev_zoom + camera.screen_h * 0.5;
+
+        let zoom_stable = abs(camera.zoom - camera.prev_zoom) < 0.01;
+        let in_prev_bounds = prev_px >= 0.0 && prev_py >= 0.0
+            && prev_px < camera.screen_w && prev_py < camera.screen_h;
+        let camera_delta = length(vec2(camera.center_x - camera.prev_center_x,
+                                        camera.center_y - camera.prev_center_y));
+
+        // Check fluid activity at this position
+        let fluid_uv_check = vec2(world_x / camera.grid_w, world_y / camera.grid_h);
+        let dye_check = textureSampleLevel(fluid_dye_tex, fluid_dye_sampler, fluid_uv_check, 0.0);
+        let near_fluid = dye_check.r > 0.001 || abs(dye_check.g - 1.0) > 0.01 || dye_check.b > 0.005;
+
+        // Time change invalidates lighting (sun position, shadows, flicker)
+        let time_delta = abs(camera.time - camera.prev_time);
+        let time_stable = time_delta < 0.0005; // only truly paused time allows reprojection
+
+        // Only reproject when NOTHING changed: camera still, time paused, no fluid
+        let can_reproject = zoom_stable && in_prev_bounds && time_stable
+            && camera_delta < 0.001 && !near_fluid;
+
+        if can_reproject {
+            // Use exact integer coords when camera hasn't moved (avoids sub-pixel drift)
+            let prev_color = textureLoad(prev_output, vec2<i32>(i32(px), i32(py)), 0).rgb;
+            textureStore(output, vec2<u32>(px, py), vec4(prev_color, 1.0));
+            return;
+        }
+    }
+
     var block = get_block(bx, by);
     var btype = block_type(block);
     var bheight = block_height(block);
@@ -1430,9 +1467,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Apply proximity glow to floors, outdoor ground, and furniture (benches)
     let is_furniture = btype == 9u || (btype == 11u && !is_table_lamp_bulb);
     if camera.enable_prox_glow > 0.5 && (is_indoor || is_furniture || (!is_roofed_wall && effective_height == 0u)) {
-        let prox_glow = compute_proximity_glow(world_x, world_y, camera.time);
-        let night_boost = 1.0 - camera.sun_intensity * 0.7;
-        color += prox_glow * camera.indoor_glow_mul * (0.5 + night_boost);
+        // Conditional glow: skip expensive 13x13 scan if lightmap shows no nearby light
+        let lm_gate = sample_lightmap(world_x, world_y);
+        if lm_gate.w > 0.02 {
+            let prox_glow = compute_proximity_glow(world_x, world_y, camera.time);
+            let night_boost = 1.0 - camera.sun_intensity * 0.7;
+            color += prox_glow * camera.indoor_glow_mul * (0.5 + night_boost);
+        }
     }
 
     // Outdoor light glow: warm light spilling through windows/doors onto ground

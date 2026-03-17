@@ -32,6 +32,7 @@ struct Camera {
     ambient_r: f32, ambient_g: f32, ambient_b: f32,
     enable_prox_glow: f32, enable_dir_bleed: f32,
     _pad2: f32, _pad3: f32, _pad4: f32,
+    prev_center_x: f32, prev_center_y: f32, prev_zoom: f32, prev_time: f32,
 };
 
 @group(0) @binding(0) var lightmap_in: texture_2d<f32>;

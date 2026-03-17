@@ -522,6 +522,10 @@ struct CameraUniform {
     _pad2: f32,
     _pad3: f32,
     _pad4: f32,
+    prev_center_x: f32,
+    prev_center_y: f32,
+    prev_zoom: f32,
+    prev_time: f32,
 }
 
 // --- Fluid simulation uniform ---
@@ -607,6 +611,11 @@ struct App {
     // Fluid simulation
     fluid_params: FluidParams,
     fluid_dye_phase: usize,    // 0 or 1: which dye texture is current (readable)
+    output_phase: usize,       // 0 or 1: ping-pong for temporal reprojection
+    prev_cam_x: f32,           // previous frame's camera center (for temporal reprojection)
+    prev_cam_y: f32,
+    prev_cam_zoom: f32,
+    prev_cam_time: f32,
     fluid_overlay: FluidOverlay,
     fluid_speed: f32,             // fluid simulation speed multiplier
     debug_mode: bool,             // show debug tooltip at cursor
@@ -640,10 +649,10 @@ struct GfxState {
     lightmap_textures: [wgpu::Texture; 2],
     // Raytrace pass (per-pixel, screen resolution)
     compute_pipeline: wgpu::ComputePipeline,
-    compute_bind_groups: [wgpu::BindGroup; 2],
+    compute_bind_groups: [wgpu::BindGroup; 4],
     render_pipeline: wgpu::RenderPipeline,
-    render_bind_group: wgpu::BindGroup,
-    output_texture: wgpu::Texture,
+    render_bind_groups: [wgpu::BindGroup; 2],
+    output_textures: [wgpu::Texture; 2],
     camera_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
     sprite_buffer: wgpu::Buffer,
@@ -723,6 +732,7 @@ impl App {
                 enable_prox_glow: 1.0,
                 enable_dir_bleed: 1.0,
                 _pad2: 0.0, _pad3: 0.0, _pad4: 0.0,
+                prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -774,6 +784,11 @@ impl App {
             debug_fluid_density: [0.0; 4],
             debug_fluid_readback_pending: false,
             fluid_dye_phase: 0,
+            output_phase: 0,
+            prev_cam_x: 0.0,
+            prev_cam_y: 0.0,
+            prev_cam_zoom: 0.0,
+            prev_cam_time: 0.0,
             fluid_mouse_active: false,
             fluid_mouse_prev: None,
         }
@@ -1054,9 +1069,9 @@ impl App {
         };
         surface.configure(&device, &config);
 
-        // Output texture at render resolution (compute writes RGBA8, blit upscales to window)
-        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("output-texture"),
+        // Output textures at render resolution (ping-pong for temporal reprojection)
+        let output_texture_a = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("output-texture-a"),
             size: wgpu::Extent3d {
                 width: render_w,
                 height: render_h,
@@ -1069,7 +1084,22 @@ impl App {
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_texture_b = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("output-texture-b"),
+            size: wgpu::Extent3d {
+                width: render_w,
+                height: render_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let output_view_a = output_texture_a.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view_b = output_texture_b.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Camera uniform buffer
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1759,6 +1789,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Previous frame output for temporal reprojection
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1775,11 +1816,13 @@ impl App {
             ..Default::default()
         });
 
+        // 4 compute bind groups: [dye_phase * 2 + output_phase]
+        // output_phase 0: write A, read prev B; output_phase 1: write B, read prev A
         let compute_bind_group_0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("compute-bg-0"),
+            label: Some("compute-bg-0"), // dye_A, write output_A, read prev output_B
             layout: &compute_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view) },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_a) },
                 wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
@@ -1789,13 +1832,31 @@ impl App {
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
                 wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_b) },
             ],
         });
         let compute_bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("compute-bg-1"),
+            label: Some("compute-bg-1"), // dye_A, write output_B, read prev output_A
             layout: &compute_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view) },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_a) },
+            ],
+        });
+        let compute_bind_group_2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("compute-bg-2"), // dye_B, write output_A, read prev output_B
+            layout: &compute_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_a) },
                 wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
@@ -1805,6 +1866,24 @@ impl App {
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
                 wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_b) },
+            ],
+        });
+        let compute_bind_group_3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("compute-bg-3"), // dye_B, write output_B, read prev output_A
+            layout: &compute_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_a) },
             ],
         });
 
@@ -1863,13 +1942,27 @@ impl App {
                 ],
             });
 
-        let render_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blit-bg"),
+        let render_bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blit-bg-a"),
             layout: &render_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&output_view),
+                    resource: wgpu::BindingResource::TextureView(&output_view_a),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        let render_bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blit-bg-b"),
+            layout: &render_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&output_view_b),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1956,10 +2049,10 @@ impl App {
             lightmap_prop_bind_groups: [prop_bg_0, prop_bg_1],
             lightmap_textures: [lightmap_a, lightmap_b],
             compute_pipeline,
-            compute_bind_groups: [compute_bind_group_0, compute_bind_group_1],
+            compute_bind_groups: [compute_bind_group_0, compute_bind_group_1, compute_bind_group_2, compute_bind_group_3],
             render_pipeline,
-            render_bind_group,
-            output_texture,
+            render_bind_groups: [render_bind_group_a, render_bind_group_b],
+            output_textures: [output_texture_a, output_texture_b],
             camera_buffer,
             grid_buffer,
             sprite_buffer,
@@ -2021,9 +2114,9 @@ impl App {
         self.camera.screen_w = render_w as f32;
         self.camera.screen_h = render_h as f32;
 
-        // Recreate output texture at render resolution
-        gfx.output_texture = gfx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("output-texture"),
+        // Recreate both output textures at render resolution (ping-pong)
+        let output_desc = wgpu::TextureDescriptor {
+            label: Some("output-texture-a"),
             size: wgpu::Extent3d {
                 width: render_w,
                 height: render_h,
@@ -2035,10 +2128,18 @@ impl App {
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
+        };
+        gfx.output_textures[0] = gfx.device.create_texture(&output_desc);
+        gfx.output_textures[1] = gfx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("output-texture-b"),
+            ..output_desc
         });
 
-        let output_view = gfx
-            .output_texture
+        let output_view_a = gfx
+            .output_textures[0]
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view_b = gfx
+            .output_textures[1]
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Rebuild bind groups with new texture view
@@ -2069,10 +2170,10 @@ impl App {
         let fv_pres_b_view = gfx.fluid_pres[1].create_view(&wgpu::TextureViewDescriptor::default());
         gfx.compute_bind_groups = [
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("compute-bg-0"),
+                label: Some("compute-bg-0"), // dye_A, write output_A, read prev output_B
                 layout: &compute_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view) },
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_a) },
                     wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
@@ -2082,13 +2183,31 @@ impl App {
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
                     wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b_view) },
+                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_b) },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("compute-bg-1"),
+                label: Some("compute-bg-1"), // dye_A, write output_B, read prev output_A
                 layout: &compute_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view) },
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_b) },
+                    wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
+                    wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
+                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
+                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b_view) },
+                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_a) },
+                ],
+            }),
+            gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("compute-bg-2"), // dye_B, write output_A, read prev output_B
+                layout: &compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_a) },
                     wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
@@ -2098,6 +2217,24 @@ impl App {
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
                     wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b_view) },
+                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_b) },
+                ],
+            }),
+            gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("compute-bg-3"), // dye_B, write output_B, read prev output_A
+                layout: &compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_b) },
+                    wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
+                    wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
+                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
+                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
+                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b_view) },
+                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_a) },
                 ],
             }),
         ];
@@ -2111,20 +2248,36 @@ impl App {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        gfx.render_bind_group = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blit-bg"),
-            layout: &render_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&output_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
+        gfx.render_bind_groups = [
+            gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blit-bg-a"),
+                layout: &render_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&output_view_a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            }),
+            gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blit-bg-b"),
+                layout: &render_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&output_view_b),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            }),
+        ];
     }
 
     fn render(&mut self) {
@@ -2163,6 +2316,13 @@ impl App {
                 self.time_of_day += DAY_DURATION;
             }
         }
+
+        // Save previous camera state for temporal reprojection
+        // Set prev camera from LAST frame's values (not current — otherwise delta is always 0)
+        self.camera.prev_center_x = self.prev_cam_x;
+        self.camera.prev_center_y = self.prev_cam_y;
+        self.camera.prev_zoom = self.prev_cam_zoom;
+        self.camera.prev_time = self.prev_cam_time;
 
         self.camera.time = self.time_of_day;
 
@@ -2290,7 +2450,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v35 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v36 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -2758,7 +2918,7 @@ impl App {
                 timestamp_writes: None,
             });
             cpass.set_pipeline(&gfx.compute_pipeline);
-            cpass.set_bind_group(0, &gfx.compute_bind_groups[self.fluid_dye_phase], &[]);
+            cpass.set_bind_group(0, &gfx.compute_bind_groups[self.fluid_dye_phase * 2 + self.output_phase], &[]);
             let wg_x = (rt_w + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             let wg_y = (rt_h + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             cpass.dispatch_workgroups(wg_x, wg_y, 1);
@@ -2781,11 +2941,20 @@ impl App {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            // Blit the raytraced scene
+            // Blit the raytraced scene (read from current output phase)
             rpass.set_pipeline(&gfx.render_pipeline);
-            rpass.set_bind_group(0, &gfx.render_bind_group, &[]);
+            rpass.set_bind_group(0, &gfx.render_bind_groups[self.output_phase], &[]);
             rpass.draw(0..3, 0..1);
         }
+
+        // Flip output phase for next frame (ping-pong)
+        self.output_phase = 1 - self.output_phase;
+
+        // Store current camera for next frame's temporal reprojection
+        self.prev_cam_x = self.camera.center_x;
+        self.prev_cam_y = self.camera.center_y;
+        self.prev_cam_zoom = self.camera.zoom;
+        self.prev_cam_time = self.camera.time;
 
         // Render pass: egui overlay (separate encoder to avoid lifetime issues)
         {
