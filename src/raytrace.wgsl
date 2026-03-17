@@ -1469,13 +1469,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         );
         color = mix(color * 0.3, heat, clamp(density * 2.0, 0.0, 0.9) * border_fade);
     } else if camera.fluid_overlay < 2.5 {
-        // Velocity: real velocity field visualization
+        // Velocity: hue = direction, brightness = magnitude, with per-block arrows
         let sim_pos = vec2<i32>(vec2<f32>(world_x, world_y));
         let sim_clamped = clamp(sim_pos, vec2(0), vec2(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1));
         let vel = textureLoad(fluid_vel_tex, sim_clamped, 0).xy;
         let mag = length(vel);
-        let norm_mag = clamp(mag * 0.1, 0.0, 1.0);  // scale for visibility
-        // Direction -> hue, magnitude -> brightness
+        let norm_mag = clamp(mag * 0.1, 0.0, 1.0);
         let angle = atan2(vel.y, vel.x) * 0.159 + 0.5;
         let vel_color = vec3(
             clamp(abs(angle * 6.0 - 3.0) - 1.0, 0.0, 1.0),
@@ -1483,6 +1482,25 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             clamp(2.0 - abs(angle * 6.0 - 4.0), 0.0, 1.0)
         ) * norm_mag;
         color = mix(color * 0.3, vel_color, clamp(norm_mag * 2.0, 0.0, 0.9) * border_fade);
+
+        // Procedural arrow per block (no extra texture reads)
+        if mag > 0.3 {
+            let fx = fract(world_x) - 0.5;  // -0.5 to 0.5 within block
+            let fy = fract(world_y) - 0.5;
+            let dir = vel / mag;
+            // Project pixel offset onto arrow direction and perpendicular
+            let along = fx * dir.x + fy * dir.y;     // distance along arrow
+            let perp = abs(-fx * dir.y + fy * dir.x); // distance from arrow axis
+            let arrow_len = clamp(mag * 0.02, 0.1, 0.4);
+            // Shaft: thin line from center toward tip
+            let on_shaft = along > -0.05 && along < arrow_len && perp < 0.06;
+            // Arrowhead: wider near the tip
+            let head_t = (along - arrow_len + 0.12) / 0.12; // 0 at start of head, 1 at tip
+            let on_head = head_t > 0.0 && head_t < 1.0 && perp < 0.15 * (1.0 - head_t);
+            if on_shaft || on_head {
+                color = mix(color, vec3(1.0), 0.8);
+            }
+        }
     } else if camera.fluid_overlay < 3.5 {
         // Pressure: absolute pressure with ROYGBIV colormap (violet=low, red=high)
         // Bilinear interpolation for smooth display

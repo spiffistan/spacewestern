@@ -2219,7 +2219,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v32 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v33 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -2421,6 +2421,43 @@ impl App {
                     });
                 });
             });
+
+        // Wind direction compass (bottom-right, above overlay bar)
+        {
+            let wx = self.fluid_params.wind_x;
+            let wy = self.fluid_params.wind_y;
+            let wind_mag = (wx * wx + wy * wy).sqrt();
+            egui::Area::new(egui::Id::new("wind_compass"))
+                .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -60.0])
+                .interactable(false)
+                .show(&egui_state.ctx, |ui| {
+                    let size = 40.0;
+                    let (resp, painter) = ui.allocate_painter(egui::Vec2::splat(size), egui::Sense::hover());
+                    let center = resp.rect.center();
+                    // Circle background
+                    painter.circle_filled(center, size * 0.45, egui::Color32::from_rgba_unmultiplied(30, 30, 40, 180));
+                    painter.circle_stroke(center, size * 0.45, egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
+                    if wind_mag > 0.1 {
+                        let dir_x = wx / wind_mag;
+                        let dir_y = wy / wind_mag;
+                        let arrow_len = size * 0.35 * (wind_mag / 20.0).min(1.0).max(0.3);
+                        let tip = center + egui::Vec2::new(dir_x * arrow_len, dir_y * arrow_len);
+                        let tail = center - egui::Vec2::new(dir_x * arrow_len * 0.3, dir_y * arrow_len * 0.3);
+                        // Arrow shaft
+                        painter.line_segment([tail, tip], egui::Stroke::new(2.0, egui::Color32::from_rgb(200, 220, 255)));
+                        // Arrowhead
+                        let perp = egui::Vec2::new(-dir_y, dir_x) * arrow_len * 0.3;
+                        let head_base = center + egui::Vec2::new(dir_x * arrow_len * 0.5, dir_y * arrow_len * 0.5);
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![tip, head_base + perp, head_base - perp],
+                            egui::Color32::from_rgb(200, 220, 255),
+                            egui::Stroke::NONE,
+                        ));
+                    } else {
+                        painter.text(center, egui::Align2::CENTER_CENTER, "·", egui::FontId::proportional(14.0), egui::Color32::from_gray(150));
+                    }
+                });
+        }
 
         // Debug tooltip at cursor position
         if self.debug_mode {
