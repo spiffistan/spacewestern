@@ -94,6 +94,12 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if bt == 7u {
         // Electric light
         value = vec4<f32>(ELIGHT_COLOR, ELIGHT_INTENSITY);
+    } else if bt == 10u {
+        // Standing lamp: large warm glow
+        value = vec4<f32>(0.95, 0.85, 0.60, 1.0);
+    } else if bt == 11u {
+        // Table lamp: smaller warm glow
+        value = vec4<f32>(0.95, 0.80, 0.50, 0.6);
     }
 
     textureStore(lightmap_out, vec2<u32>(bx, by), value);

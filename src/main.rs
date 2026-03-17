@@ -53,7 +53,7 @@ const DAY_DURATION: f32 = 60.0; // must match shader
 
 // --- Block representation on GPU ---
 // Each block is a u32 packed as: [type:8 | height:8 | flags:8 | reserved:8]
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof, bit2=is_open
 fn make_block(block_type: u8, height: u8, flags: u8) -> u32 {
@@ -478,6 +478,8 @@ enum BuildTool {
     Fireplace,
     ElectricLight,
     Bench,
+    StandingLamp,
+    TableLamp,
 }
 
 // --- Application state ---
@@ -579,7 +581,7 @@ impl App {
             last_mouse_y: 0.0,
             dragging_light: None,
             start_time: Instant::now(),
-            time_of_day: 0.0,
+            time_of_day: DAY_DURATION * (8.0 / 24.0), // start at 08:00
             time_paused: false,
             time_speed: 1.0,
             last_frame_time: Instant::now(),
@@ -614,6 +616,12 @@ impl App {
 
     /// Check if a tile is valid for placement (ground level, in bounds)
     fn can_place_at(&self, x: i32, y: i32) -> bool {
+        self.can_place_on(x, y, false)
+    }
+
+    /// Check if a tile is valid for placement. If `on_furniture` is true,
+    /// allows placement on benches (for table lamps).
+    fn can_place_on(&self, x: i32, y: i32, on_furniture: bool) -> bool {
         if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 {
             return false;
         }
@@ -621,7 +629,11 @@ impl App {
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
         let bh = (block >> 8) & 0xFF;
-        (bt == 0 || bt == 2) && bh == 0
+        if on_furniture {
+            bt == 9 // bench
+        } else {
+            (bt == 0 || bt == 2) && bh == 0
+        }
     }
 
     /// Convert screen pixel coordinates to world block coordinates
@@ -730,18 +742,31 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
-                BuildTool::Fireplace | BuildTool::ElectricLight => {
+                BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp => {
                     if self.can_place_at(bx, by) {
                         let roof_flag = flags & 2;
                         let new_block = match self.build_tool {
                             BuildTool::Fireplace => make_block(6, 1, roof_flag),
                             BuildTool::ElectricLight => make_block(7, 0, roof_flag),
+                            BuildTool::StandingLamp => make_block(10, 2, roof_flag), // height 2: above bench, below ceiling
                             _ => unreachable!(),
                         };
                         let roof_h = block & 0xFF000000;
                         self.grid_data[idx] = new_block | roof_h;
                         self.grid_dirty = true;
                         log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::TableLamp => {
+                    // Table lamp can only be placed on benches (type 9)
+                    if bt == 9 {
+                        // Replace the bench tile with a table lamp, keeping bench flags
+                        let roof_h = block & 0xFF000000;
+                        let roof_flag = flags & 2;
+                        self.grid_data[idx] = make_block(11, 1, roof_flag) | roof_h;
+                        self.grid_dirty = true;
+                        log::info!("Placed table lamp at ({}, {})", bx, by);
                         self.build_tool = BuildTool::None;
                     }
                 }
@@ -782,7 +807,7 @@ impl App {
         self.camera.screen_w = render_w as f32;
         self.camera.screen_h = render_h as f32;
         // Zoom to show ~64 blocks (the houses area), not the full map
-        let view_size = 64.0f32;
+        let view_size = 32.0f32; // default zoom
         let fit_w = render_w as f32 / view_size;
         let fit_h = render_h as f32 / view_size;
         self.camera.zoom = fit_w.min(fit_h);
@@ -1524,7 +1549,8 @@ impl App {
                 BuildTool::Bench => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
                 _ => vec![(hbx, hby)],
             };
-            tiles.iter().map(|&(tx, ty)| ((tx, ty), self.can_place_at(tx, ty))).collect()
+            let on_furniture = self.build_tool == BuildTool::TableLamp;
+            tiles.iter().map(|&(tx, ty)| ((tx, ty), self.can_place_on(tx, ty, on_furniture))).collect()
         } else {
             vec![]
         };
@@ -1542,7 +1568,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v25 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v26 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -1555,7 +1581,7 @@ impl App {
         let mut foliage_opacity = self.camera.foliage_opacity;
         let mut foliage_variation = self.camera.foliage_variation;
         let mut oblique = self.camera.oblique_strength;
-                let base_zoom = (self.camera.screen_w / GRID_W as f32).min(self.camera.screen_h / GRID_H as f32);
+                let base_zoom = (self.camera.screen_w / 32.0).min(self.camera.screen_h / 32.0);
         egui::Window::new("Time Control")
             .default_pos([10.0, 10.0])
             .default_width(300.0)
@@ -1602,7 +1628,7 @@ impl App {
 
                 let zoom_pct = zoom / base_zoom * 100.0;
                 ui.label(format!("Zoom: {:.0}%", zoom_pct));
-                ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.5..=base_zoom * 4.0)
+                ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.05..=base_zoom * 8.0)
                     .text("Zoom")
                     .show_value(false)
                     .logarithmic(true));
@@ -1665,10 +1691,23 @@ impl App {
                         if ui.selectable_label(*tool == BuildTool::Bench, "Bench").clicked() {
                             *tool = if *tool == BuildTool::Bench { BuildTool::None } else { BuildTool::Bench };
                         }
+                        if ui.selectable_label(*tool == BuildTool::StandingLamp, "Floor Lamp").clicked() {
+                            *tool = if *tool == BuildTool::StandingLamp { BuildTool::None } else { BuildTool::StandingLamp };
+                        }
+                        if ui.selectable_label(*tool == BuildTool::TableLamp, "Table Lamp").clicked() {
+                            *tool = if *tool == BuildTool::TableLamp { BuildTool::None } else { BuildTool::TableLamp };
+                        }
                         if *tool != BuildTool::None {
                             ui.separator();
-                            let rot_label = if self.build_rotation == 0 { "H" } else { "V" };
-                            ui.label(format!("Click to place | Q/E rotate [{}]", rot_label));
+                            let hint = match *tool {
+                                BuildTool::Bench => {
+                                    let rot_label = if self.build_rotation == 0 { "H" } else { "V" };
+                                    format!("Click to place | Q/E rotate [{}]", rot_label)
+                                }
+                                BuildTool::TableLamp => "Click on a bench to place".to_string(),
+                                _ => "Click to place".to_string(),
+                            };
+                            ui.label(hint);
                         }
                     });
                 });
@@ -1904,8 +1943,25 @@ impl ApplicationHandler for App {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        // Always track cursor position for blueprint preview
+        // Always track cursor position and handle panning before egui
         if let WindowEvent::CursorMoved { position, .. } = &event {
+            if self.mouse_pressed {
+                let dx = position.x - self.last_mouse_x;
+                let dy = position.y - self.last_mouse_y;
+                if dx.abs() > 3.0 || dy.abs() > 3.0 {
+                    self.mouse_dragged = true;
+                }
+                if self.mouse_dragged {
+                    self.camera.center_x -= dx as f32 * RENDER_SCALE / self.camera.zoom;
+                    self.camera.center_y -= dy as f32 * RENDER_SCALE / self.camera.zoom;
+                    self.window.as_ref().unwrap().request_redraw();
+                }
+            }
+            // Move dragged light source
+            if self.dragging_light.is_some() {
+                let (wx, wy) = self.screen_to_world(position.x, position.y);
+                self.move_light_to(wx, wy);
+            }
             self.last_mouse_x = position.x;
             self.last_mouse_y = position.y;
             self.hover_world = self.screen_to_world(position.x, position.y);
@@ -1960,13 +2016,13 @@ impl ApplicationHandler for App {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 50.0,
                 };
-        let base_zoom = (self.camera.screen_w / GRID_W as f32).min(self.camera.screen_h / GRID_H as f32);
+        let base_zoom = (self.camera.screen_w / 32.0).min(self.camera.screen_h / 32.0);
                 if scroll > 0.0 {
                     self.camera.zoom *= 1.1;
                 } else if scroll < 0.0 {
                     self.camera.zoom /= 1.1;
                 }
-                self.camera.zoom = self.camera.zoom.clamp(base_zoom * 0.5, base_zoom * 4.0);
+                self.camera.zoom = self.camera.zoom.clamp(base_zoom * 0.05, base_zoom * 8.0);
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -1994,28 +2050,8 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                if self.mouse_pressed {
-                    let dx = position.x - self.last_mouse_x;
-                    let dy = position.y - self.last_mouse_y;
-                    // Only count as drag if moved more than 3 pixels
-                    if dx.abs() > 3.0 || dy.abs() > 3.0 {
-                        self.mouse_dragged = true;
-                    }
-                    if self.mouse_dragged {
-                        self.camera.center_x -= dx as f32 * RENDER_SCALE / self.camera.zoom;
-                        self.camera.center_y -= dy as f32 * RENDER_SCALE / self.camera.zoom;
-                        self.window.as_ref().unwrap().request_redraw();
-                    }
-                }
-                // Move dragged light source
-                if self.dragging_light.is_some() {
-                    let (wx, wy) = self.screen_to_world(position.x, position.y);
-                    self.move_light_to(wx, wy);
-                }
-                self.last_mouse_x = position.x;
-                self.last_mouse_y = position.y;
-                self.hover_world = self.screen_to_world(position.x, position.y);
+            WindowEvent::CursorMoved { .. } => {
+                // Handled in the pre-egui block above
             }
             WindowEvent::Resized(new_size) => {
                 if self.gfx.is_some() {

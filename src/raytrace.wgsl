@@ -58,7 +58,7 @@ fn sample_lightmap(wx: f32, wy: f32) -> vec4<f32> {
 }
 
 // --- Block unpacking ---
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
@@ -179,9 +179,13 @@ fn trace_interior_sun_ray(wx: f32, wy: f32, sun_dir: vec2<f32>) -> vec4<f32> {
     let step_size = 0.25;
     let step_x = dir2d.x * step_size;
     let step_y = dir2d.y * step_size;
+    // Sun elevation for the ray height — starts at floor level, rises as it traces toward sun
+    let sun_elev = get_sun_elevation(camera.time);
+    let step_h = sun_elev * step_size;
 
     var sx = wx;
     var sy = wy;
+    var ray_h = 0.0; // ray starts at floor level (looking up toward the window)
     var tint = vec3<f32>(1.0);
     var light = 1.0;
 
@@ -190,20 +194,22 @@ fn trace_interior_sun_ray(wx: f32, wy: f32, sun_dir: vec2<f32>) -> vec4<f32> {
     for (var i: i32 = 0; i < max_steps; i++) {
         sx += step_x;
         sy += step_y;
+        ray_h += step_h;
 
         let bx = i32(floor(sx));
         let by = i32(floor(sy));
         let block = get_block(bx, by);
         let bt = block_type(block);
         let bh = block_height(block);
+        let fbh = f32(bh);
 
         // Still on a roofed floor tile — ray is in interior airspace, continue
         if has_roof(block) && bh == 0u {
             continue;
         }
 
-        // Fireplace or electric light: low interior block, ray passes over it
-        if bt == 6u || bt == 7u {
+        // Light sources: interior fixtures, ray passes over them
+        if bt == 6u || bt == 7u || bt == 10u || bt == 11u {
             continue;
         }
 
@@ -227,15 +233,19 @@ fn trace_interior_sun_ray(wx: f32, wy: f32, sun_dir: vec2<f32>) -> vec4<f32> {
         // Hit a door — open doors let light through, closed doors block most
         if is_door(block) {
             if is_open(block) {
-                // Open door: ray passes through freely
                 continue;
             }
-            light *= 0.4; // closed door blocks most light
+            light *= 0.4;
             continue;
         }
 
-        // Hit any solid block (wall, stone, etc.) — ray is blocked
+        // Block with height
         if bh > 0u {
+            // Furniture (benches): sun passes over if ray is above furniture height
+            if bt == 9u && fbh <= ray_h {
+                continue;
+            }
+            // Walls and everything else: always block the interior sun ray
             return vec4<f32>(tint, 0.0);
         }
 
@@ -260,6 +270,12 @@ const ELIGHT_COLOR: vec3<f32> = vec3<f32>(0.95, 0.92, 0.85);    // warm white (~
 const GLOW_RADIUS: f32 = 6.0;
 const FIRE_GLOW_INTENSITY: f32 = 0.70;
 const ELIGHT_GLOW_INTENSITY: f32 = 0.85;
+const STANDING_LAMP_GLOW_INTENSITY: f32 = 0.90;
+const STANDING_LAMP_GLOW_RADIUS: f32 = 8.0;
+const TABLE_LAMP_GLOW_INTENSITY: f32 = 0.55;
+const TABLE_LAMP_GLOW_RADIUS: f32 = 4.0;
+const STANDING_LAMP_COLOR: vec3<f32> = vec3<f32>(0.95, 0.85, 0.60);
+const TABLE_LAMP_COLOR: vec3<f32> = vec3<f32>(0.95, 0.80, 0.50);
 
 // Simple pseudo-random hash for fire flicker
 fn fire_hash(p: vec2<f32>) -> f32 {
@@ -281,8 +297,9 @@ fn fire_flicker(time: f32) -> f32 {
 }
 
 // Trace a line from (x0,y0) to (x1,y1) checking for wall occlusion.
-// Returns 1.0 if clear, 0.0 if blocked by a wall, partial for glass.
-fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
+// light_h: height of the light source. Blocks shorter than this are skipped.
+// Returns 1.0 if clear, 0.0 if blocked by a wall, partial for glass/trees.
+fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f32 {
     let dx = x1 - x0;
     let dy = y1 - y0;
     let dist = sqrt(dx * dx + dy * dy);
@@ -299,10 +316,15 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
         let sbt = block_type(sb);
         let sbh = block_height(sb);
 
-        // Skip the source block itself (light sources have height)
-        if sbt == 6u || sbt == 7u { continue; }
+        // Skip light source blocks
+        if sbt == 6u || sbt == 7u || sbt == 10u || sbt == 11u { continue; }
 
         if sbh == 0u { continue; } // open floor
+
+        // Light is above this block — passes over (furniture below light height)
+        if f32(sbh) <= light_h {
+            continue;
+        }
 
         // Glass: partial transmission
         if sbt == 5u {
@@ -334,18 +356,19 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
 // lightmap propagation can't capture.
 fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
     var glow = vec3<f32>(0.0);
-    let search = i32(GLOW_RADIUS);
+    let max_search = i32(STANDING_LAMP_GLOW_RADIUS); // largest possible radius
     let bx = i32(floor(wx));
     let by = i32(floor(wy));
 
-    for (var dy: i32 = -search; dy <= search; dy++) {
-        for (var dx: i32 = -search; dx <= search; dx++) {
+    for (var dy: i32 = -max_search; dy <= max_search; dy++) {
+        for (var dx: i32 = -max_search; dx <= max_search; dx++) {
             let nx = bx + dx;
             let ny = by + dy;
             let nb = get_block(nx, ny);
             let bt = block_type(nb);
 
-            if bt != 6u && bt != 7u {
+            // All light source types
+            if bt != 6u && bt != 7u && bt != 10u && bt != 11u {
                 continue;
             }
 
@@ -355,26 +378,48 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             let fdy = wy - lcy;
             let dist = sqrt(fdx * fdx + fdy * fdy);
 
-            if dist > GLOW_RADIUS { continue; }
+            // Per-type radius and intensity
+            var radius: f32;
+            var intensity: f32;
+            var light_col: vec3<f32>;
 
-            // Check wall occlusion between this pixel and the light
-            let vis = trace_glow_visibility(wx, wy, lcx, lcy);
-            if vis < 0.01 { continue; }
-
-            // Inverse-square-ish falloff with gentle range fade
-            let atten = (1.0 / (1.0 + dist * 0.6 + dist * dist * 0.15))
-                      * smoothstep(GLOW_RADIUS, GLOW_RADIUS * 0.15, dist);
+            // Per-type light height (for visibility over furniture)
+            var light_h = 0.0;
 
             if bt == 6u {
+                radius = GLOW_RADIUS;
+                light_h = 1.0; // fireplace at floor level
                 let phase = fire_hash(vec2<f32>(lcx, lcy)) * 6.28;
                 let flicker = fire_flicker(time + phase);
-                let intensity = FIRE_GLOW_INTENSITY * (0.7 + 0.3 * flicker);
+                intensity = FIRE_GLOW_INTENSITY * (0.7 + 0.3 * flicker);
                 let heat = clamp(1.0 - dist / 3.0, 0.0, 1.0);
-                let col = mix(FIRE_COLOR, FIRE_COLOR_HOT, heat * flicker);
-                glow += col * intensity * atten * vis;
+                light_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, heat * flicker);
+            } else if bt == 10u {
+                radius = STANDING_LAMP_GLOW_RADIUS;
+                light_h = 2.0; // standing lamp above benches
+                intensity = STANDING_LAMP_GLOW_INTENSITY;
+                light_col = STANDING_LAMP_COLOR;
+            } else if bt == 11u {
+                radius = TABLE_LAMP_GLOW_RADIUS;
+                light_h = 1.5; // table lamp slightly above bench height
+                intensity = TABLE_LAMP_GLOW_INTENSITY;
+                light_col = TABLE_LAMP_COLOR;
             } else {
-                glow += ELIGHT_COLOR * ELIGHT_GLOW_INTENSITY * atten * vis;
+                radius = GLOW_RADIUS;
+                light_h = 0.0; // ceiling light
+                intensity = ELIGHT_GLOW_INTENSITY;
+                light_col = ELIGHT_COLOR;
             }
+
+            if dist > radius { continue; }
+
+            let vis = trace_glow_visibility(wx, wy, lcx, lcy, light_h);
+            if vis < 0.01 { continue; }
+
+            let atten = (1.0 / (1.0 + dist * 0.6 + dist * dist * 0.15))
+                      * smoothstep(radius, radius * 0.15, dist);
+
+            glow += light_col * intensity * atten * vis;
         }
     }
 
@@ -637,6 +682,65 @@ fn render_bench(fx: f32, fy: f32, flags: u32) -> vec3<f32> {
     return color;
 }
 
+// Render standing lamp from top-down: thin pole with circular shade
+fn render_standing_lamp(fx: f32, fy: f32, time: f32) -> vec3<f32> {
+    let cx = fx - 0.5;
+    let cy = fy - 0.5;
+    let dist = sqrt(cx * cx + cy * cy);
+    let floor_color = vec3<f32>(0.45, 0.35, 0.20);
+
+    // Lamp shade: warm glowing circle
+    let shade_r = 0.30;
+    if dist < shade_r {
+        let shade_t = 1.0 - dist / shade_r;
+        let warm = vec3<f32>(0.95, 0.85, 0.60);
+        let bright = vec3<f32>(1.0, 0.95, 0.80);
+        return mix(warm, bright, shade_t * shade_t);
+    }
+
+    // Pole shadow on floor (thin dark line)
+    let pole_r = 0.04;
+    if dist < pole_r {
+        return floor_color * 0.6;
+    }
+
+    return floor_color;
+}
+
+// Render table lamp from top-down: small bright fixture on bench surface
+fn render_table_lamp(fx: f32, fy: f32, time: f32) -> vec3<f32> {
+    let cx = fx - 0.5;
+    let cy = fy - 0.5;
+    let dist = sqrt(cx * cx + cy * cy);
+
+    // Bench surface beneath
+    let bench_color = vec3<f32>(0.55, 0.38, 0.18);
+    let grain = fract(fy * 6.0);
+    let grain_line = f32(grain < 0.08) * 0.04;
+    var color = bench_color - vec3<f32>(grain_line);
+
+    // Lamp base: small dark circle
+    let base_r = 0.12;
+    if dist < base_r {
+        color = vec3<f32>(0.3, 0.28, 0.25);
+    }
+
+    // Lamp shade: small warm glow
+    let shade_r = 0.18;
+    if dist < shade_r {
+        let shade_t = 1.0 - dist / shade_r;
+        let warm = vec3<f32>(0.95, 0.80, 0.50);
+        color = mix(color, warm, shade_t * shade_t * 0.8);
+    }
+
+    // Bright bulb center
+    if dist < 0.06 {
+        color = vec3<f32>(1.0, 0.95, 0.75);
+    }
+
+    return color;
+}
+
 fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32, flags: u32) -> vec4<f32> {
     let is_large = (flags & 32u) != 0u;
     let quadrant = (flags >> 3u) & 3u; // 0=TL, 1=TR, 2=BL, 3=BR
@@ -724,6 +828,8 @@ fn block_base_color(btype: u32, flags: u32) -> vec3<f32> {
         case 7u: { return vec3<f32>(0.45, 0.35, 0.20); }    // electric light (floor beneath)
         case 8u: { return vec3<f32>(0.18, 0.35, 0.12); }    // tree (canopy green)
         case 9u: { return vec3<f32>(0.55, 0.38, 0.18); }    // bench (wood)
+        case 10u: { return vec3<f32>(0.45, 0.35, 0.20); }   // standing lamp (floor beneath)
+        case 11u: { return vec3<f32>(0.55, 0.38, 0.18); }   // table lamp (bench beneath)
         default: { return vec3<f32>(1.0, 0.0, 1.0); }
     }
 }
@@ -1155,6 +1261,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if btype == 9u {
         // Bench
         color = render_bench(fx, fy, bflags);
+    } else if btype == 10u {
+        // Standing lamp (emissive)
+        color = render_standing_lamp(fx, fy, camera.time);
+    } else if btype == 11u {
+        // Table lamp (emissive)
+        color = render_table_lamp(fx, fy, camera.time);
     } else {
         color = block_base_color(btype, bflags);
     }
@@ -1216,7 +1328,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    if btype == 6u || btype == 7u {
+    if btype == 6u || btype == 7u || btype == 10u || btype == 11u {
         // Emissive block (fireplace/electric light): not affected by shadow/lighting.
         // Just clamp and output directly.
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));

@@ -111,7 +111,7 @@ fn main_lightmap_propagate(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Light sources always keep their seed value
-    if bt == 6u || bt == 7u {
+    if bt == 6u || bt == 7u || bt == 10u || bt == 11u {
         let self_val = textureLoad(lightmap_in, vec2<i32>(bx, by), 0);
         textureStore(lightmap_out, vec2<u32>(gid.xy), self_val);
         return;
