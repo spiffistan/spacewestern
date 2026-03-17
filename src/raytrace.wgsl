@@ -272,7 +272,7 @@ const FIRE_GLOW_INTENSITY: f32 = 0.70;
 const ELIGHT_GLOW_INTENSITY: f32 = 0.85;
 const STANDING_LAMP_GLOW_INTENSITY: f32 = 1.0;
 const STANDING_LAMP_GLOW_RADIUS: f32 = 6.0;
-const TABLE_LAMP_GLOW_INTENSITY: f32 = 0.55;
+const TABLE_LAMP_GLOW_INTENSITY: f32 = 0.35;
 const TABLE_LAMP_GLOW_RADIUS: f32 = 4.0;
 const STANDING_LAMP_COLOR: vec3<f32> = vec3<f32>(0.95, 0.85, 0.60);
 const TABLE_LAMP_COLOR: vec3<f32> = vec3<f32>(0.95, 0.80, 0.50);
@@ -707,38 +707,27 @@ fn render_standing_lamp(fx: f32, fy: f32, time: f32) -> vec3<f32> {
     return floor_color;
 }
 
-// Render table lamp from top-down: small bright fixture on bench surface
-fn render_table_lamp(fx: f32, fy: f32, time: f32) -> vec3<f32> {
+// Render table lamp from top-down: warm glowing circle on bench surface
+// Returns vec4(color, is_lamp_bulb). is_lamp_bulb > 0 = emissive circle, 0 = bench surface.
+fn render_table_lamp(fx: f32, fy: f32) -> vec4<f32> {
     let cx = fx - 0.5;
     let cy = fy - 0.5;
     let dist = sqrt(cx * cx + cy * cy);
 
-    // Bench surface beneath
-    let bench_color = vec3<f32>(0.55, 0.38, 0.18);
-    let grain = fract(fy * 6.0);
-    let grain_line = f32(grain < 0.08) * 0.04;
-    var color = bench_color - vec3<f32>(grain_line);
-
-    // Lamp base: small dark circle
-    let base_r = 0.12;
-    if dist < base_r {
-        color = vec3<f32>(0.3, 0.28, 0.25);
-    }
-
-    // Lamp shade: small warm glow
     let shade_r = 0.18;
-    if dist < shade_r {
-        let shade_t = 1.0 - dist / shade_r;
-        let warm = vec3<f32>(0.95, 0.80, 0.50);
-        color = mix(color, warm, shade_t * shade_t * 0.8);
+    if dist > shade_r {
+        // Bench surface — not emissive, receives normal lighting
+        let bench_color = vec3<f32>(0.55, 0.38, 0.18);
+        let grain = fract(fy * 6.0);
+        let grain_line = f32(grain < 0.08) * 0.03;
+        return vec4<f32>(bench_color - vec3<f32>(grain_line), 0.0);
     }
 
-    // Bright bulb center
-    if dist < 0.06 {
-        color = vec3<f32>(1.0, 0.95, 0.75);
-    }
-
-    return color;
+    // Warm glowing circle (emissive)
+    let t = 1.0 - dist / shade_r;
+    let outer = vec3<f32>(0.85, 0.65, 0.35);
+    let inner = vec3<f32>(1.0, 0.92, 0.75);
+    return vec4<f32>(mix(outer, inner, t * t), 1.0);
 }
 
 fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32, flags: u32) -> vec4<f32> {
@@ -1198,6 +1187,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     var color: vec3<f32>;
     var is_glass_pixel = false;
     var is_tree_pixel = false;
+    var is_table_lamp_bulb = false;
 
     // If under a roof but transparent mode, add subtle indoor tint
     // Only ground-level tiles under a roof are truly indoor.
@@ -1265,8 +1255,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Standing lamp (emissive)
         color = render_standing_lamp(fx, fy, camera.time);
     } else if btype == 11u {
-        // Table lamp (emissive)
-        color = render_table_lamp(fx, fy, camera.time);
+        // Table lamp: bulb circle is emissive, bench surface is not
+        let tl = render_table_lamp(fx, fy);
+        color = tl.xyz;
+        is_table_lamp_bulb = tl.w > 0.5;
     } else {
         color = block_base_color(btype, bflags);
     }
@@ -1328,7 +1320,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    if btype == 6u || btype == 7u || btype == 10u || btype == 11u {
+    if btype == 6u || btype == 7u || btype == 10u || (btype == 11u && is_table_lamp_bulb) {
         // Emissive block (fireplace/electric light): not affected by shadow/lighting.
         // Just clamp and output directly.
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -1412,7 +1404,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Per-pixel proximity glow for floor tiles near light sources.
     // Applies to indoor floors AND outdoor ground (for outdoor campfires etc).
     // Wall tops are excluded to prevent light bleed onto the roof surface.
-    if is_indoor || (!is_roofed_wall && effective_height == 0u) {
+    // Apply proximity glow to floors, outdoor ground, and furniture (benches)
+    let is_furniture = btype == 9u || (btype == 11u && !is_table_lamp_bulb);
+    if is_indoor || is_furniture || (!is_roofed_wall && effective_height == 0u) {
         let prox_glow = compute_proximity_glow(world_x, world_y, camera.time);
         let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.7;
         color += prox_glow * camera.indoor_glow_mul * (0.5 + night_boost);

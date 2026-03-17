@@ -1576,7 +1576,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v27 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v28 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;

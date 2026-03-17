@@ -99,7 +99,7 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
         value = vec4<f32>(0.95, 0.85, 0.60, 1.0);
     } else if bt == 11u {
         // Table lamp: smaller warm glow
-        value = vec4<f32>(0.95, 0.80, 0.50, 0.6);
+        value = vec4<f32>(0.95, 0.80, 0.50, 0.35);
     }
 
     textureStore(lightmap_out, vec2<u32>(bx, by), value);
