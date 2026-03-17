@@ -126,7 +126,8 @@ fn get_sun_elevation(time: f32) -> f32 {
     let noon_factor = sin(day_t * 3.14159265);
     // Fade elevation smoothly to near-zero at dawn/dusk
     let edge_fade = smoothstep(0.0, 0.15, day_t) * smoothstep(1.0, 0.85, day_t);
-    return mix(0.3, 1.8, noon_factor) * edge_fade;
+    // High elevation range: sun is very far away, shadows are short and parallel
+    return mix(1.0, 4.0, noon_factor) * edge_fade;
 }
 
 // Returns 0..1 indicating how much sunlight is active (0 = night, 1 = full day)
