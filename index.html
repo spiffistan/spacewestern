@@ -31,10 +31,11 @@
     <link data-trunk rel="rust" data-wasm-opt="z" />
     <script>
       const canvas = document.getElementById('rayworld-canvas');
-      const dpr = window.devicePixelRatio || 1;
+      // Cap at 1x DPR — the raytracer is expensive per-pixel and the
+      // block art style doesn't benefit from retina resolution.
       const size = Math.min(window.innerWidth, window.innerHeight);
-      canvas.width = size * dpr;
-      canvas.height = size * dpr;
+      canvas.width = size;
+      canvas.height = size;
     </script>
   </body>
 </html>
