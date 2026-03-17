@@ -24,6 +24,10 @@ struct Camera {
     lm_vp_max_x: f32,
     lm_vp_max_y: f32,
     lm_scale: f32,
+    fluid_overlay: f32,
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
 };
 
 // --- Seed pass bindings ---

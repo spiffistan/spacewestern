@@ -474,6 +474,49 @@ struct CameraUniform {
     lm_vp_max_x: f32,        // lightmap viewport max x (grid coordinates)
     lm_vp_max_y: f32,        // lightmap viewport max y (grid coordinates)
     lm_scale: f32,           // lightmap texels per grid cell (e.g. 2.0 for 2x resolution)
+    fluid_overlay: f32,      // 0=off, 1=smoke, 2=velocity, 3=pressure
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
+}
+
+// --- Fluid simulation uniform ---
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct FluidParams {
+    sim_w: f32,
+    sim_h: f32,
+    dye_w: f32,
+    dye_h: f32,
+    dt: f32,
+    dissipation: f32,
+    vorticity_strength: f32,
+    pressure_iterations: f32,
+    splat_x: f32,
+    splat_y: f32,
+    splat_vx: f32,
+    splat_vy: f32,
+    splat_radius: f32,
+    splat_active: f32,
+    time: f32,
+    _pad: f32,
+}
+
+const FLUID_SIM_W: u32 = 256;
+const FLUID_SIM_H: u32 = 256;
+const FLUID_DYE_W: u32 = 512;
+const FLUID_DYE_H: u32 = 512;
+const FLUID_PRESSURE_ITERS: u32 = 16;
+
+fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
+    grid.iter().map(|&b| {
+        let bt = b & 0xFF;
+        let bh = (b >> 8) & 0xFF;
+        let is_door = (b >> 16) & 1 != 0;
+        let is_open = (b >> 16) & 4 != 0;
+        // Walls block fluid. Trees, glass, open doors, and light sources don't.
+        if bh > 0 && bt != 8 && bt != 5 && bt != 6 && bt != 7 && bt != 10 && bt != 11 && !(is_door && is_open) { 255 } else { 0 }
+    }).collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -484,6 +527,14 @@ enum BuildTool {
     Bench,
     StandingLamp,
     TableLamp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FluidOverlay {
+    None,
+    Smoke,     // show dye density as colored overlay
+    Velocity,  // show velocity magnitude as heatmap
+    Pressure,  // show pressure field
 }
 
 // --- Application state ---
@@ -517,6 +568,12 @@ struct App {
     build_tool: BuildTool,
     build_rotation: u32,       // 0=horizontal (E-W), 1=vertical (N-S)
     hover_world: (f32, f32),   // world coords under mouse cursor
+    // Fluid simulation
+    fluid_params: FluidParams,
+    fluid_dye_phase: usize,    // 0 or 1: which dye texture is current (readable)
+    fluid_overlay: FluidOverlay,
+    fluid_mouse_active: bool,  // middle mouse button held
+    fluid_mouse_prev: Option<(f32, f32)>, // previous world position for velocity calc
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -541,13 +598,44 @@ struct GfxState {
     lightmap_textures: [wgpu::Texture; 2],
     // Raytrace pass (per-pixel, screen resolution)
     compute_pipeline: wgpu::ComputePipeline,
-    compute_bind_group: wgpu::BindGroup,
+    compute_bind_groups: [wgpu::BindGroup; 2],
     render_pipeline: wgpu::RenderPipeline,
     render_bind_group: wgpu::BindGroup,
     output_texture: wgpu::Texture,
     camera_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
     sprite_buffer: wgpu::Buffer,
+    // Fluid simulation GPU resources
+    fluid_params_buffer: wgpu::Buffer,
+    fluid_vel: [wgpu::Texture; 2],
+    fluid_pres: [wgpu::Texture; 2],
+    fluid_div: wgpu::Texture,
+    fluid_curl: wgpu::Texture,
+    fluid_dye: [wgpu::Texture; 2],
+    fluid_obstacle: wgpu::Texture,
+    fluid_dummy_rg: wgpu::Texture,  // 1x1 Rg32Float dummy for unused bindings
+    fluid_dummy_r: wgpu::Texture,   // 1x1 R32Float dummy (read)
+    fluid_dummy_r_w: wgpu::Texture,  // 1x1 R32Float dummy (write, separate to avoid read-write conflict)
+    // Fluid pipelines
+    fluid_p_curl: wgpu::ComputePipeline,
+    fluid_p_vorticity: wgpu::ComputePipeline,
+    fluid_p_divergence: wgpu::ComputePipeline,
+    fluid_p_gradient: wgpu::ComputePipeline,
+    fluid_p_advect_vel: wgpu::ComputePipeline,
+    fluid_p_splat: wgpu::ComputePipeline,
+    fluid_p_pressure: wgpu::ComputePipeline,
+    fluid_p_pressure_clear: wgpu::ComputePipeline,
+    fluid_p_advect_dye: wgpu::ComputePipeline,
+    // Fluid bind groups (fixed phase assignments per frame)
+    fluid_bg_curl: wgpu::BindGroup,
+    fluid_bg_vorticity: wgpu::BindGroup,
+    fluid_bg_splat: wgpu::BindGroup,
+    fluid_bg_divergence: wgpu::BindGroup,
+    fluid_bg_gradient: wgpu::BindGroup,
+    fluid_bg_advect_vel: wgpu::BindGroup,
+    fluid_bg_pressure: [wgpu::BindGroup; 2],       // ping-pong
+    fluid_bg_pressure_clear: wgpu::BindGroup,       // A→B clear
+    fluid_bg_advect_dye: [wgpu::BindGroup; 2],     // ping-pong dye
 }
 
 struct EguiState {
@@ -583,6 +671,10 @@ impl App {
                 lm_vp_max_x: GRID_W as f32,
                 lm_vp_max_y: GRID_H as f32,
                 lm_scale: LIGHTMAP_SCALE as f32,
+                fluid_overlay: 0.0,
+                _pad2: 0.0,
+                _pad3: 0.0,
+                _pad4: 0.0,
             },
             grid_data: Vec::new(),
             grid_dirty: false,
@@ -603,6 +695,28 @@ impl App {
             build_tool: BuildTool::None,
             build_rotation: 0,
             hover_world: (0.0, 0.0),
+            fluid_params: FluidParams {
+                sim_w: FLUID_SIM_W as f32,
+                sim_h: FLUID_SIM_H as f32,
+                dye_w: FLUID_DYE_W as f32,
+                dye_h: FLUID_DYE_H as f32,
+                dt: 1.0 / 60.0,
+                dissipation: 0.997,
+                vorticity_strength: 35.0,
+                pressure_iterations: FLUID_PRESSURE_ITERS as f32,
+                splat_x: 0.0,
+                splat_y: 0.0,
+                splat_vx: 0.0,
+                splat_vy: 0.0,
+                splat_radius: 5.0,
+                splat_active: 0.0,
+                time: 0.0,
+                _pad: 0.0,
+            },
+            fluid_overlay: FluidOverlay::None,
+            fluid_dye_phase: 0,
+            fluid_mouse_active: false,
+            fluid_mouse_prev: None,
         }
     }
 
@@ -1146,6 +1260,305 @@ impl App {
             cache: None,
         });
 
+        // --- Fluid simulation GPU resources ---
+        let make_fluid_tex = |label: &str, w: u32, h: u32, format: wgpu::TextureFormat| -> wgpu::Texture {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+
+        let fluid_vel_a = make_fluid_tex("fluid-vel-a", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::Rg32Float);
+        let fluid_vel_b = make_fluid_tex("fluid-vel-b", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::Rg32Float);
+        let fluid_pres_a = make_fluid_tex("fluid-pres-a", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::R32Float);
+        let fluid_pres_b = make_fluid_tex("fluid-pres-b", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::R32Float);
+        let fluid_div = make_fluid_tex("fluid-div", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::R32Float);
+        let fluid_curl_tex = make_fluid_tex("fluid-curl", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::R32Float);
+        let fluid_dye_a = make_fluid_tex("fluid-dye-a", FLUID_DYE_W, FLUID_DYE_H, wgpu::TextureFormat::Rgba16Float);
+        let fluid_dye_b = make_fluid_tex("fluid-dye-b", FLUID_DYE_W, FLUID_DYE_H, wgpu::TextureFormat::Rgba16Float);
+        let fluid_obstacle_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("fluid-obstacle"),
+            size: wgpu::Extent3d { width: FLUID_SIM_W, height: FLUID_SIM_H, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let fluid_dummy_rg = make_fluid_tex("fluid-dummy-rg", 1, 1, wgpu::TextureFormat::Rg32Float);
+        let fluid_dummy_r = make_fluid_tex("fluid-dummy-r", 1, 1, wgpu::TextureFormat::R32Float);
+        let fluid_dummy_r_w = make_fluid_tex("fluid-dummy-r-w", 1, 1, wgpu::TextureFormat::R32Float);
+
+        // Texture views
+        let fv_vel_a = fluid_vel_a.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_vel_b = fluid_vel_b.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_pres_a = fluid_pres_a.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_pres_b = fluid_pres_b.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_div = fluid_div.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_curl = fluid_curl_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dye_a = fluid_dye_a.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dye_b = fluid_dye_b.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_obstacle = fluid_obstacle_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dummy_rg = fluid_dummy_rg.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dummy_r = fluid_dummy_r.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dummy_r_w = fluid_dummy_r_w.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Upload initial obstacle field
+        let obstacle_data = build_obstacle_field(&self.grid_data);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &fluid_obstacle_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &obstacle_data,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(FLUID_SIM_W), rows_per_image: Some(FLUID_SIM_H) },
+            wgpu::Extent3d { width: FLUID_SIM_W, height: FLUID_SIM_H, depth_or_array_layers: 1 },
+        );
+
+        // Fluid params buffer
+        let fluid_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("fluid-params"),
+            size: std::mem::size_of::<FluidParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // --- Fluid bind group layouts ---
+        let fluid_sim_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("fluid-sim-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::Rg32Float, view_dimension: wgpu::TextureViewDimension::D2 }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::R32Float, view_dimension: wgpu::TextureViewDimension::D2 }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        let fluid_pressure_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("fluid-pressure-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::R32Float, view_dimension: wgpu::TextureViewDimension::D2 }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        let fluid_dye_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("fluid-dye-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::Rgba16Float, view_dimension: wgpu::TextureViewDimension::D2 }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        // --- Fluid shader modules ---
+        let fluid_sim_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fluid-sim"), source: wgpu::ShaderSource::Wgsl(include_str!("fluid.wgsl").into()),
+        });
+        let fluid_pressure_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fluid-pressure"), source: wgpu::ShaderSource::Wgsl(include_str!("fluid_pressure.wgsl").into()),
+        });
+        let fluid_dye_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fluid-dye"), source: wgpu::ShaderSource::Wgsl(include_str!("fluid_dye.wgsl").into()),
+        });
+
+        // --- Fluid pipelines ---
+        let make_fluid_sim_pipeline = |label: &str, entry: &str| -> wgpu::ComputePipeline {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some(label), bind_group_layouts: &[&fluid_sim_bgl], push_constant_ranges: &[],
+                })),
+                module: &fluid_sim_shader,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let fluid_p_curl = make_fluid_sim_pipeline("fluid-curl", "main_curl");
+        let fluid_p_vorticity = make_fluid_sim_pipeline("fluid-vorticity", "main_vorticity");
+        let fluid_p_divergence = make_fluid_sim_pipeline("fluid-divergence", "main_divergence");
+        let fluid_p_gradient = make_fluid_sim_pipeline("fluid-gradient", "main_gradient_subtract");
+        let fluid_p_advect_vel = make_fluid_sim_pipeline("fluid-advect-vel", "main_advect_velocity");
+        let fluid_p_splat = make_fluid_sim_pipeline("fluid-splat", "main_splat");
+
+        let fluid_p_pressure = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("fluid-pressure"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("fluid-pressure-pl"), bind_group_layouts: &[&fluid_pressure_bgl], push_constant_ranges: &[],
+            })),
+            module: &fluid_pressure_shader,
+            entry_point: Some("main_pressure"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let fluid_p_pressure_clear = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("fluid-pressure-clear"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("fluid-pressure-clear-pl"), bind_group_layouts: &[&fluid_pressure_bgl], push_constant_ranges: &[],
+            })),
+            module: &fluid_pressure_shader,
+            entry_point: Some("main_pressure_clear"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let fluid_p_advect_dye = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("fluid-advect-dye"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("fluid-advect-dye-pl"), bind_group_layouts: &[&fluid_dye_bgl], push_constant_ranges: &[],
+            })),
+            module: &fluid_dye_shader,
+            entry_point: Some("main_advect_dye"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // --- Fluid bind groups (fixed phase assignments) ---
+        // curl: reads vel_A → writes curl
+        let fluid_bg_curl = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-curl"), layout: &fluid_sim_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_dummy_rg) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_dummy_r) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_curl) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+        // vorticity: reads vel_A, curl → writes vel_B
+        let fluid_bg_vorticity = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-vorticity"), layout: &fluid_sim_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_vel_b) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_curl) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_dummy_r) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+        // splat: reads vel_B → writes vel_A
+        let fluid_bg_splat = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-splat"), layout: &fluid_sim_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_vel_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_dummy_r) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_dummy_r_w) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+        // divergence: reads vel_A → writes div
+        let fluid_bg_divergence = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-divergence"), layout: &fluid_sim_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_dummy_rg) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_dummy_r) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_div) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+        // gradient: reads vel_A, pres_A → writes vel_B
+        let fluid_bg_gradient = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-gradient"), layout: &fluid_sim_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_vel_b) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_pres_a) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_dummy_r) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+        // advect_vel: reads vel_B → writes vel_A
+        let fluid_bg_advect_vel = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-advect-vel"), layout: &fluid_sim_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_vel_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_dummy_r) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_dummy_r_w) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+
+        // Pressure bind groups
+        // pressure_clear: A→B (same config as pressure[0])
+        let fluid_bg_pressure_clear = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-pressure-clear"), layout: &fluid_pressure_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_pres_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_pres_b) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_div) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 4, resource: fluid_params_buffer.as_entire_binding() },
+            ],
+        });
+        // pressure[0]: A→B
+        let fluid_bg_pressure_ab = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-pressure-ab"), layout: &fluid_pressure_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_pres_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_pres_b) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_div) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 4, resource: fluid_params_buffer.as_entire_binding() },
+            ],
+        });
+        let fluid_bg_pressure_ba = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-pressure-ba"), layout: &fluid_pressure_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_pres_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_pres_a) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_div) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 4, resource: fluid_params_buffer.as_entire_binding() },
+            ],
+        });
+
+        // Dye advection bind groups
+        let fluid_bg_advect_dye_0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-advect-dye-0"), layout: &fluid_dye_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 3, resource: fluid_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+        let fluid_bg_advect_dye_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-advect-dye-1"), layout: &fluid_dye_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
+                wgpu::BindGroupEntry { binding: 3, resource: fluid_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+
         // --- Raytrace compute pipeline (now also reads the lightmap) ---
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("raytrace-compute"),
@@ -1214,40 +1627,65 @@ impl App {
                         },
                         count: None,
                     },
+                    // Fluid dye texture (sampled, bilinear)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
 
         // Raytrace shader samples the final lightmap result (texture A after even iterations)
         let lightmap_sample_view = lightmap_a.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("compute-bg"),
+        // Fluid dye sampler (bilinear for smooth smoke overlay)
+        let fluid_dye_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("fluid-dye-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let compute_bind_group_0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("compute-bg-0"),
             layout: &compute_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&output_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: grid_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&lightmap_sample_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: sprite_buffer.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
+            ],
+        });
+        let compute_bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("compute-bg-1"),
+            layout: &compute_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
             ],
         });
 
@@ -1392,13 +1830,42 @@ impl App {
             lightmap_prop_bind_groups: [prop_bg_0, prop_bg_1],
             lightmap_textures: [lightmap_a, lightmap_b],
             compute_pipeline,
-            compute_bind_group,
+            compute_bind_groups: [compute_bind_group_0, compute_bind_group_1],
             render_pipeline,
             render_bind_group,
             output_texture,
             camera_buffer,
             grid_buffer,
             sprite_buffer,
+            // Fluid simulation GPU resources
+            fluid_params_buffer,
+            fluid_vel: [fluid_vel_a, fluid_vel_b],
+            fluid_pres: [fluid_pres_a, fluid_pres_b],
+            fluid_div,
+            fluid_curl: fluid_curl_tex,
+            fluid_dye: [fluid_dye_a, fluid_dye_b],
+            fluid_obstacle: fluid_obstacle_tex,
+            fluid_dummy_rg,
+            fluid_dummy_r,
+            fluid_dummy_r_w,
+            fluid_p_curl,
+            fluid_p_vorticity,
+            fluid_p_divergence,
+            fluid_p_gradient,
+            fluid_p_advect_vel,
+            fluid_p_splat,
+            fluid_p_pressure,
+            fluid_p_pressure_clear,
+            fluid_p_advect_dye,
+            fluid_bg_curl,
+            fluid_bg_vorticity,
+            fluid_bg_splat,
+            fluid_bg_divergence,
+            fluid_bg_gradient,
+            fluid_bg_advect_vel,
+            fluid_bg_pressure: [fluid_bg_pressure_ab, fluid_bg_pressure_ba],
+            fluid_bg_pressure_clear,
+            fluid_bg_advect_dye: [fluid_bg_advect_dye_0, fluid_bg_advect_dye_1],
         });
 
         self.window = Some(window);
@@ -1461,36 +1928,46 @@ impl App {
         });
 
         let compute_bgl = gfx.compute_pipeline.get_bind_group_layout(0);
-        gfx.compute_bind_group = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("compute-bg"),
-            layout: &compute_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&output_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: gfx.camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: gfx.grid_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&lightmap_sample_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: gfx.sprite_buffer.as_entire_binding(),
-                },
-            ],
+        let fluid_dye_sampler = gfx.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("fluid-dye-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
         });
+        let fv_dye_a = gfx.fluid_dye[0].create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dye_b = gfx.fluid_dye[1].create_view(&wgpu::TextureViewDescriptor::default());
+        gfx.compute_bind_groups = [
+            gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("compute-bg-0"),
+                layout: &compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
+                    wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
+                ],
+            }),
+            gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("compute-bg-1"),
+                layout: &compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
+                    wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
+                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
+                ],
+            }),
+        ];
 
         let render_bgl = gfx.render_pipeline.get_bind_group_layout(0);
         let sampler = gfx.device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1543,6 +2020,12 @@ impl App {
         }
 
         self.camera.time = self.time_of_day;
+        self.camera.fluid_overlay = match self.fluid_overlay {
+            FluidOverlay::None => 0.0,
+            FluidOverlay::Smoke => 1.0,
+            FluidOverlay::Velocity => 2.0,
+            FluidOverlay::Pressure => 3.0,
+        };
 
         let gfx = self.gfx.as_ref().unwrap();
 
@@ -1553,8 +2036,21 @@ impl App {
                 0,
                 bytemuck::cast_slice(&self.grid_data),
             );
+            // Rebuild fluid obstacle field
+            let obs_data = build_obstacle_field(&self.grid_data);
+            gfx.queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &gfx.fluid_obstacle, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &obs_data,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(FLUID_SIM_W), rows_per_image: Some(FLUID_SIM_H) },
+                wgpu::Extent3d { width: FLUID_SIM_W, height: FLUID_SIM_H, depth_or_array_layers: 1 },
+            );
             self.grid_dirty = false;
         }
+
+        // Upload fluid params
+        self.fluid_params.time = self.time_of_day;
+        self.fluid_params.splat_active = if self.fluid_mouse_active { 1.0 } else { 0.0 };
+        gfx.queue.write_buffer(&gfx.fluid_params_buffer, 0, bytemuck::bytes_of(&self.fluid_params));
 
         // Compute lightmap viewport bounds (grid coordinates with margin for light propagation)
         let half_w = self.camera.screen_w * 0.5 / self.camera.zoom;
@@ -1614,7 +2110,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v29 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v30 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -1759,6 +2255,30 @@ impl App {
                 });
             });
 
+        // --- Overlay toggle bar (bottom-right) ---
+        egui::Area::new(egui::Id::new("overlay_bar"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -20.0])
+            .show(&egui_state.ctx, |ui| {
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Overlay:");
+                        let ov = &mut self.fluid_overlay;
+                        if ui.selectable_label(*ov == FluidOverlay::None, "Off").clicked() {
+                            *ov = FluidOverlay::None;
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::Smoke, "Smoke").clicked() {
+                            *ov = if *ov == FluidOverlay::Smoke { FluidOverlay::None } else { FluidOverlay::Smoke };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::Velocity, "Velocity").clicked() {
+                            *ov = if *ov == FluidOverlay::Velocity { FluidOverlay::None } else { FluidOverlay::Velocity };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::Pressure, "Pressure").clicked() {
+                            *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
+                        }
+                    });
+                });
+            });
+
         // Blueprint preview — draw ghost overlay for placement
         if !blueprint_tiles.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
@@ -1854,6 +2374,46 @@ impl App {
             }
         }
 
+        // --- Fluid simulation (every frame) ---
+        let fluid_wg = (FLUID_SIM_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let dye_wg = (FLUID_DYE_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+
+        // 1. Curl
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-curl"), timestamp_writes: None });
+          p.set_pipeline(&gfx.fluid_p_curl); p.set_bind_group(0, &gfx.fluid_bg_curl, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        // 2. Vorticity
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-vorticity"), timestamp_writes: None });
+          p.set_pipeline(&gfx.fluid_p_vorticity); p.set_bind_group(0, &gfx.fluid_bg_vorticity, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        // 3. Splat
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-splat"), timestamp_writes: None });
+          p.set_pipeline(&gfx.fluid_p_splat); p.set_bind_group(0, &gfx.fluid_bg_splat, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        // 4. Divergence
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-div"), timestamp_writes: None });
+          p.set_pipeline(&gfx.fluid_p_divergence); p.set_bind_group(0, &gfx.fluid_bg_divergence, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        // 5. Pressure clear
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-pres-clear"), timestamp_writes: None });
+          p.set_pipeline(&gfx.fluid_p_pressure_clear); p.set_bind_group(0, &gfx.fluid_bg_pressure_clear, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        // 6. Pressure Jacobi (16 iterations, ping-pong)
+        for i in 0..FLUID_PRESSURE_ITERS {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-pressure"), timestamp_writes: None });
+            p.set_pipeline(&gfx.fluid_p_pressure);
+            p.set_bind_group(0, &gfx.fluid_bg_pressure[(i as usize) % 2], &[]);
+            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+        }
+        // 7. Gradient subtract
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-gradient"), timestamp_writes: None });
+          p.set_pipeline(&gfx.fluid_p_gradient); p.set_bind_group(0, &gfx.fluid_bg_gradient, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        // 8. Advect velocity
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-advect-vel"), timestamp_writes: None });
+          p.set_pipeline(&gfx.fluid_p_advect_vel); p.set_bind_group(0, &gfx.fluid_bg_advect_vel, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        // 9. Advect dye (512x512)
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-advect-dye"), timestamp_writes: None });
+          p.set_pipeline(&gfx.fluid_p_advect_dye); p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]); p.dispatch_workgroups(dye_wg, dye_wg, 1); }
+        // Flip dye phase for next frame
+        self.fluid_dye_phase = 1 - self.fluid_dye_phase;
+        // Reset splat
+        self.fluid_params.splat_active = 0.0;
+
         // Compute pass 2: raytrace (per-pixel, render resolution)
         let rt_w = self.camera.screen_w as u32;
         let rt_h = self.camera.screen_h as u32;
@@ -1863,7 +2423,7 @@ impl App {
                 timestamp_writes: None,
             });
             cpass.set_pipeline(&gfx.compute_pipeline);
-            cpass.set_bind_group(0, &gfx.compute_bind_group, &[]);
+            cpass.set_bind_group(0, &gfx.compute_bind_groups[self.fluid_dye_phase], &[]);
             let wg_x = (rt_w + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             let wg_y = (rt_h + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             cpass.dispatch_workgroups(wg_x, wg_y, 1);

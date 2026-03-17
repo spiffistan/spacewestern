@@ -26,6 +26,10 @@ struct Camera {
     lm_vp_max_x: f32,
     lm_vp_max_y: f32,
     lm_scale: f32,
+    fluid_overlay: f32,
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -34,6 +38,8 @@ struct Camera {
 @group(0) @binding(3) var lightmap_tex: texture_2d<f32>;
 @group(0) @binding(4) var lightmap_sampler: sampler;
 @group(0) @binding(5) var<storage, read> sprites: array<u32>;
+@group(0) @binding(6) var fluid_dye_tex: texture_2d<f32>;
+@group(0) @binding(7) var fluid_dye_sampler: sampler;
 
 // --- Sprite constants ---
 const SPRITE_SIZE: u32 = 16u;
@@ -1424,5 +1430,40 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+
+    // Fluid sim overlay
+    let fluid_uv = vec2<f32>(world_x / camera.grid_w, world_y / camera.grid_h);
+    let smoke = textureSampleLevel(fluid_dye_tex, fluid_dye_sampler, fluid_uv, 0.0);
+
+    if camera.fluid_overlay < 0.5 {
+        // Normal mode: subtle smoke blending
+        let smoke_alpha = clamp(smoke.a, 0.0, 0.85);
+        color = mix(color, smoke.rgb, smoke_alpha);
+    } else if camera.fluid_overlay < 1.5 {
+        // Smoke debug: amplified dye density as false-color heat map
+        let density = clamp(smoke.a * 3.0, 0.0, 1.0);
+        let heat = vec3(
+            clamp(density * 3.0, 0.0, 1.0),
+            clamp(density * 3.0 - 1.0, 0.0, 1.0),
+            clamp(density * 3.0 - 2.0, 0.0, 1.0)
+        );
+        color = mix(color * 0.3, heat, clamp(density * 2.0, 0.0, 0.9));
+    } else if camera.fluid_overlay < 2.5 {
+        // Velocity debug: read velocity from dye RGB channels (encoded as direction)
+        // Since we can't read velocity texture here, use dye motion as proxy
+        let vel_mag = length(smoke.rgb) * 2.0;
+        let vel_color = vec3(
+            clamp(vel_mag, 0.0, 1.0),
+            clamp(vel_mag * 0.5, 0.0, 1.0),
+            clamp(1.0 - vel_mag, 0.0, 1.0)
+        );
+        color = mix(color * 0.3, vel_color, clamp(vel_mag, 0.0, 0.8));
+    } else {
+        // Pressure debug: show density as cool-warm gradient
+        let p = clamp(smoke.a * 5.0, 0.0, 1.0);
+        let pcolor = vec3(p * 0.2, 0.1 + p * 0.4, 0.8 - p * 0.6);
+        color = mix(color * 0.4, pcolor, clamp(p, 0.0, 0.7));
+    }
+
     textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
 }
