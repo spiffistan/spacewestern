@@ -356,6 +356,82 @@ fn is_door_rs(b: u32) -> bool {
     (block_flags_rs(b) & 1) != 0
 }
 
+/// Precompute roof heights and store in bits 24-31 of each block.
+/// For every tile that's part of a roofed building, find the max wall height
+/// in a large radius. This runs once at grid generation.
+fn compute_roof_heights(grid: &mut Vec<u32>) {
+    let w = GRID_W as i32;
+    let h = GRID_H as i32;
+
+    // Pass 1: identify which tiles are part of a roofed building
+    let mut is_building = vec![false; grid.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+            let block = grid[idx];
+            let flags = block_flags_rs(block);
+
+            if (flags & 2) != 0 {
+                // Has roof flag
+                is_building[idx] = true;
+            } else if (block >> 8) & 0xFF > 0 || (flags & 1) != 0 {
+                // Has height or is a door — check if adjacent to a roofed tile
+                'outer: for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        let nx = x + dx;
+                        let ny = y + dy;
+                        if nx >= 0 && ny >= 0 && nx < w && ny < h {
+                            let nflags = (grid[(ny * w + nx) as usize] >> 16) & 0xFF;
+                            if (nflags & 2) != 0 {
+                                is_building[idx] = true;
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Pass 2: for each building tile, find max wall height in a large radius
+    let search = 15i32; // handles buildings up to 30x30
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+            if !is_building[idx] {
+                continue;
+            }
+
+            let mut max_h: u8 = 0;
+            for dy in -search..=search {
+                for dx in -search..=search {
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                        continue;
+                    }
+                    let nidx = (ny * w + nx) as usize;
+                    let nb = grid[nidx];
+                    let nbh = ((nb >> 8) & 0xFF) as u8;
+                    let nbt = (nb & 0xFF) as u8;
+                    let nb_flags = ((nb >> 16) & 0xFF) as u8;
+                    // Wall-type blocks: has height, not roofed floor, not tree/fire/light
+                    if nbh > 0 && (nb_flags & 2) == 0 && nbt != 8 && nbt != 6 && nbt != 7 {
+                        max_h = max_h.max(nbh);
+                    }
+                }
+            }
+
+            if max_h == 0 {
+                max_h = 2; // fallback
+            }
+
+            // Store in bits 24-31
+            grid[idx] = (grid[idx] & 0x00FFFFFF) | ((max_h as u32) << 24);
+        }
+    }
+}
+
 // --- Camera uniform ---
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -392,6 +468,8 @@ struct App {
     mouse_dragged: bool, // true if mouse moved while pressed (pan, not click)
     last_mouse_x: f64,
     last_mouse_y: f64,
+    // Right-click drag to move light sources
+    dragging_light: Option<(u32, u32)>, // grid position of light being dragged
     #[allow(dead_code)]
     start_time: Instant,
     // Time control
@@ -440,8 +518,8 @@ impl App {
             gfx: None,
             egui_state: None,
             camera: CameraUniform {
-                center_x: GRID_W as f32 / 2.0,
-                center_y: GRID_H as f32 / 2.0,
+                center_x: 30.0, // centered on the houses area
+                center_y: 30.0,
                 zoom: 1.0, // will be set in init_gfx_async to fit map
                 show_roofs: 0.0,
                 screen_w: 800.0,
@@ -463,6 +541,7 @@ impl App {
             mouse_dragged: false,
             last_mouse_x: 0.0,
             last_mouse_y: 0.0,
+            dragging_light: None,
             start_time: Instant::now(),
             time_of_day: 0.0,
             time_paused: false,
@@ -476,6 +555,69 @@ impl App {
         let wx = self.camera.center_x + (sx as f32 - self.camera.screen_w * 0.5) / self.camera.zoom;
         let wy = self.camera.center_y + (sy as f32 - self.camera.screen_h * 0.5) / self.camera.zoom;
         (wx, wy)
+    }
+
+    /// Try to pick up a light source at the given world coordinates (right-click)
+    fn try_pick_light(&mut self, wx: f32, wy: f32) -> bool {
+        let bx = wx.floor() as i32;
+        let by = wy.floor() as i32;
+        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
+            return false;
+        }
+        let idx = (by as u32 * GRID_W + bx as u32) as usize;
+        let block = self.grid_data[idx];
+        let bt = block_type_rs(block);
+        if bt == 6 || bt == 7 {
+            self.dragging_light = Some((bx as u32, by as u32));
+            log::info!("Picked up light at ({}, {})", bx, by);
+            return true;
+        }
+        false
+    }
+
+    /// Move a dragged light source to a new position
+    fn move_light_to(&mut self, wx: f32, wy: f32) {
+        let new_bx = wx.floor() as i32;
+        let new_by = wy.floor() as i32;
+        if new_bx < 0 || new_by < 0 || new_bx >= GRID_W as i32 || new_by >= GRID_H as i32 {
+            return;
+        }
+        if let Some((old_x, old_y)) = self.dragging_light {
+            let old_idx = (old_y * GRID_W + old_x) as usize;
+            let new_idx = (new_by as u32 * GRID_W + new_bx as u32) as usize;
+
+            // Only move if destination is a floor tile (type 2, height 0)
+            let dest = self.grid_data[new_idx];
+            let dest_bt = block_type_rs(dest);
+            let dest_h = (dest >> 8) & 0xFF;
+            if (dest_bt == 2 || dest_bt == 0) && dest_h == 0 && new_idx != old_idx {
+                let light_block = self.grid_data[old_idx];
+                let light_flags = block_flags_rs(light_block);
+                let dest_flags = (dest >> 16) & 0xFF;
+
+                // Replace old position with floor (preserve roof flag)
+                self.grid_data[old_idx] = make_block(2, 0, (light_flags & 2) as u8);
+
+                // Place light at new position (preserve destination roof flag)
+                let new_block = (light_block & 0x0000FFFF) | ((dest_flags as u32) << 16);
+                // Also preserve the precomputed roof height from destination
+                let dest_roof_h = (dest >> 24) & 0xFF;
+                self.grid_data[new_idx] = (new_block & 0x00FFFFFF) | (dest_roof_h << 24);
+
+                self.dragging_light = Some((new_bx as u32, new_by as u32));
+                self.grid_dirty = true;
+            }
+        }
+    }
+
+    /// Drop a dragged light source
+    fn drop_light(&mut self) {
+        if let Some((x, y)) = self.dragging_light.take() {
+            log::info!("Placed light at ({}, {})", x, y);
+            // Recompute roof heights since light moved
+            compute_roof_heights(&mut self.grid_data);
+            self.grid_dirty = true;
+        }
     }
 
     /// Try to toggle a door at the given world coordinates
@@ -506,9 +648,10 @@ impl App {
 
         self.camera.screen_w = width as f32;
         self.camera.screen_h = height as f32;
-        // Fit map to canvas: zoom = pixels per world unit (use smaller axis)
-        let fit_w = width as f32 / GRID_W as f32;
-        let fit_h = height as f32 / GRID_H as f32;
+        // Zoom to show ~64 blocks (the houses area), not the full map
+        let view_size = 64.0f32;
+        let fit_w = width as f32 / view_size;
+        let fit_h = height as f32 / view_size;
         self.camera.zoom = fit_w.min(fit_h);
         log::info!("init_gfx: {}x{} (physical), zoom={}", width, height, self.camera.zoom);
 
@@ -593,6 +736,7 @@ impl App {
 
         // Grid storage buffer
         self.grid_data = generate_test_grid();
+        compute_roof_heights(&mut self.grid_data);
         let grid_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grid-buffer"),
             size: (self.grid_data.len() * std::mem::size_of::<u32>()) as u64,
@@ -1235,7 +1379,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new("v15").color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new("v16").color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -1580,6 +1724,15 @@ impl ApplicationHandler for App {
                         self.mouse_dragged = false;
                     }
                 }
+                // Right-click: pick up / drop light sources
+                if button == winit::event::MouseButton::Right {
+                    if state.is_pressed() {
+                        let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                        self.try_pick_light(wx, wy);
+                    } else {
+                        self.drop_light();
+                    }
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if self.mouse_pressed {
@@ -1594,6 +1747,11 @@ impl ApplicationHandler for App {
                         self.camera.center_y -= dy as f32 / self.camera.zoom;
                         self.window.as_ref().unwrap().request_redraw();
                     }
+                }
+                // Move dragged light source
+                if self.dragging_light.is_some() {
+                    let (wx, wy) = self.screen_to_world(position.x, position.y);
+                    self.move_light_to(wx, wy);
                 }
                 self.last_mouse_x = position.x;
                 self.last_mouse_y = position.y;

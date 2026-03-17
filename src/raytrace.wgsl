@@ -81,45 +81,11 @@ fn get_block_f(wx: f32, wy: f32) -> u32 {
 }
 
 // --- Roof detection ---
-// A block is "under a roof" if it has the roof flag, OR if it's a wall/glass/door
-// block that has a roofed neighbor (i.e., it's part of a roofed building).
-// Returns the roof height (0 = no roof).
+// Roof height is precomputed on the CPU and stored in bits 24-31 of each block.
+// Returns 0 if the block is not part of a roofed building.
 fn get_roof_height(bx: i32, by: i32) -> f32 {
     let block = get_block(bx, by);
-
-    // If the block itself is a roofed floor tile, find roof height from nearby walls
-    if has_roof(block) {
-        var rh: f32 = 0.0;
-        for (var dy: i32 = -2; dy <= 2; dy++) {
-            for (var dx: i32 = -2; dx <= 2; dx++) {
-                let nb = get_block(bx + dx, by + dy);
-                if block_height(nb) > 0u && !has_roof(nb) {
-                    rh = max(rh, f32(block_height(nb)));
-                }
-            }
-        }
-        if rh < 1.0 { rh = 2.0; }
-        return rh;
-    }
-
-    // If the block is a wall/glass/door with height, check if any neighbor is roofed
-    // (meaning this block is part of a roofed building's envelope)
-    // Exception: open doors are openings, not part of the roof envelope
-    if block_height(block) > 0u && !(is_door(block) && is_open(block)) {
-        let bh = f32(block_height(block));
-        for (var dy: i32 = -1; dy <= 1; dy++) {
-            for (var dx: i32 = -1; dx <= 1; dx++) {
-                if dx == 0 && dy == 0 { continue; }
-                let nb = get_block(bx + dx, by + dy);
-                if has_roof(nb) {
-                    // This wall/glass is part of a roofed building
-                    return bh;
-                }
-            }
-        }
-    }
-
-    return 0.0;
+    return f32((block >> 24u) & 0xFFu);
 }
 
 // --- Lighting ---
@@ -409,6 +375,102 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
 }
 
 // Render fireplace block from top-down: stone hearth with animated fire
+// Directional light bleeding through windows/doors.
+// For outdoor pixels, scans nearby for glass/open doors, determines window orientation,
+// samples interior light from the propagated lightmap behind the window, and projects
+// it outward with angular + distance falloff — creating realistic light pools.
+fn compute_directional_bleed(wx: f32, wy: f32) -> vec4<f32> {
+    var total_light = 0.0;
+    var total_color = vec3<f32>(0.0);
+    let bx = i32(floor(wx));
+    let by = i32(floor(wy));
+    let search = 10;
+    let max_range = 10.0;
+
+    for (var dy: i32 = -search; dy <= search; dy++) {
+        for (var dx: i32 = -search; dx <= search; dx++) {
+            let nx = bx + dx;
+            let ny = by + dy;
+            let nb = get_block(nx, ny);
+            let bt = block_type(nb);
+
+            // Only windows (glass) and open doors are portals
+            let is_window = bt == 5u;
+            let is_open_door = is_door(nb) && is_open(nb);
+            if !is_window && !is_open_door { continue; }
+
+            let wcx = f32(nx) + 0.5;
+            let wcy = f32(ny) + 0.5;
+            let to_pixel = vec2<f32>(wx - wcx, wy - wcy);
+            let dist = length(to_pixel);
+            if dist < 0.5 || dist > max_range { continue; }
+            let dir = to_pixel / dist;
+
+            // Determine window orientation from wall neighbors
+            let left_h = block_height(get_block(nx - 1, ny));
+            let right_h = block_height(get_block(nx + 1, ny));
+            let top_h = block_height(get_block(nx, ny - 1));
+            let bot_h = block_height(get_block(nx, ny + 1));
+
+            let h_wall = (left_h > 0u) || (right_h > 0u);
+            let v_wall = (top_h > 0u) || (bot_h > 0u);
+
+            // Window normal candidates: perpendicular to wall run
+            var normal1: vec2<f32>;
+            var normal2: vec2<f32>;
+            if h_wall && !v_wall {
+                normal1 = vec2<f32>(0.0, 1.0);
+                normal2 = vec2<f32>(0.0, -1.0);
+            } else if v_wall && !h_wall {
+                normal1 = vec2<f32>(1.0, 0.0);
+                normal2 = vec2<f32>(-1.0, 0.0);
+            } else {
+                // Corner or standalone — use direction to pixel
+                normal1 = dir;
+                normal2 = -dir;
+            }
+
+            // Sample interior light behind the window in both directions.
+            // The brighter side is the interior.
+            let behind1 = sample_lightmap(wcx - normal1.x * 1.5, wcy - normal1.y * 1.5);
+            let behind2 = sample_lightmap(wcx - normal2.x * 1.5, wcy - normal2.y * 1.5);
+
+            var outward_normal: vec2<f32>;
+            var interior_light: vec4<f32>;
+            if behind1.w > behind2.w {
+                outward_normal = normal1; // interior is behind normal1 → normal1 points outward
+                interior_light = behind1;
+            } else {
+                outward_normal = normal2;
+                interior_light = behind2;
+            }
+
+            if interior_light.w < 0.01 { continue; }
+
+            // Angular falloff: bright directly in front of window, fades to sides
+            let angle_factor = max(0.0, dot(dir, outward_normal));
+            let angle_shaped = pow(angle_factor, 1.5); // focus into a cone
+
+            // Distance falloff with smooth fade to zero (no hard cutoff)
+            let atten = (1.0 / (1.0 + dist * 0.4 + dist * dist * 0.15))
+                      * smoothstep(max_range, max_range * 0.3, dist);
+
+            // Open doors let through more light than glass panes
+            var portal_mul = select(0.6, 1.0, is_open_door);
+
+            let contribution = interior_light.w * angle_shaped * atten * portal_mul * 0.4;
+            total_light += contribution;
+            total_color += interior_light.xyz * contribution;
+        }
+    }
+
+    if total_light > 0.001 {
+        total_color /= total_light;
+    }
+
+    return vec4<f32>(total_color, total_light);
+}
+
 fn render_fireplace(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> {
     // Stone hearth base
     let hearth_color = vec3<f32>(0.32, 0.28, 0.25);
@@ -562,16 +624,13 @@ fn block_base_color(btype: u32, flags: u32) -> vec3<f32> {
 }
 
 // Roof color with tile pattern
+// Corrugated steel roof: dark gray with parallel ridges
 fn roof_color(wx: f32, wy: f32) -> vec3<f32> {
-    let base = vec3<f32>(0.55, 0.35, 0.25); // terracotta
-    let tile_x = fract(wx * 2.0);
-    let tile_y = fract(wy * 2.0);
-    let tile_edge = f32(tile_x < 0.06 || tile_y < 0.06) * 0.08;
-    let row = floor(wy * 2.0);
-    let offset = fract(row * 0.5) * 0.5;
-    let shifted_x = fract(wx * 2.0 + offset);
-    let shingle_edge = f32(shifted_x < 0.06) * 0.05;
-    return base - vec3<f32>(tile_edge + shingle_edge);
+    let base = vec3<f32>(0.28, 0.27, 0.26); // dark steel gray
+    // Corrugation ridges running east-west (along X)
+    let ridge = sin(wy * 3.14159265 * 4.0) * 0.5 + 0.5; // 4 ridges per block
+    let highlight = ridge * ridge * 0.06; // subtle bright line on ridge crests
+    return base + vec3<f32>(highlight);
 }
 
 // --- Pixel-level shadow ray ---
@@ -863,7 +922,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if is_exterior_south {
         let height_diff = f32(bheight - south_h);
-        let face_height = height_diff * camera.oblique_strength;
+        let face_height = min(height_diff * camera.oblique_strength, 0.35);
         let face_start = 1.0 - face_height; // face occupies bottom strip of tile
         if fy > face_start {
             is_wall_face = true;
@@ -882,9 +941,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let roof_h = get_roof_height(bx, by);
     let is_roofed = roof_h > 0.5;
 
-    // --- If roofed AND show_roofs is on, render the roof surface (hides everything below) ---
-    // Wall face pixels always render the face, even if the ground tile is roofed
-    if is_roofed && camera.show_roofs > 0.5 && !is_wall_face {
+    // --- If roofed AND show_roofs is on, render corrugated steel roof surface ---
+    // Roof is a solid opaque layer that covers everything (walls, faces, doors).
+    if is_roofed && camera.show_roofs > 0.5 {
         let roof_col = roof_color(world_x, world_y);
 
         // Shadow on roof surface
@@ -893,70 +952,6 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let roof_tint = roof_shadow.xyz;
 
         var color = roof_col * (ambient + sun_color * roof_light * 0.8 * roof_tint);
-
-        // Edge where roof meets walls that stick above: darken slightly
-        // Check if any neighbor is taller than the roof
-        var near_tall = false;
-        for (var dy: i32 = -1; dy <= 1; dy++) {
-            for (var dx: i32 = -1; dx <= 1; dx++) {
-                if dx == 0 && dy == 0 { continue; }
-                let nb = get_block(bx + dx, by + dy);
-                let nb_rh = get_roof_height(bx + dx, by + dy);
-                // Neighbor is a non-roofed wall taller than our roof = edge
-                if f32(block_height(nb)) >= roof_h && nb_rh < 0.5 {
-                    near_tall = true;
-                }
-            }
-        }
-
-        // Eave shadow at roof edges (near outer walls)
-        let dist_to_edge = min(min(fx, 1.0 - fx), min(fy, 1.0 - fy));
-        var has_adjacent_exterior = false;
-        let nb_t = get_block(bx, by - 1);
-        let nb_b = get_block(bx, by + 1);
-        let nb_l = get_block(bx - 1, by);
-        let nb_r = get_block(bx + 1, by);
-        let rh_t = get_roof_height(bx, by - 1);
-        let rh_b = get_roof_height(bx, by + 1);
-        let rh_l = get_roof_height(bx - 1, by);
-        let rh_r = get_roof_height(bx + 1, by);
-
-        // Directional eave shadow on edges facing away from sun
-        // Sun dir points toward sun; edges facing away get darker
-        let sun_n = normalize(sun_dir);
-        if rh_b < 0.5 && fy > 0.7 && sun_n.y < 0.0 {
-            let t = smoothstep(0.7, 1.0, fy) * 0.12 * (-sun_n.y);
-            color *= (1.0 - t);
-        }
-        if rh_t < 0.5 && fy < 0.3 && sun_n.y > 0.0 {
-            let t = smoothstep(0.3, 0.0, fy) * 0.12 * sun_n.y;
-            color *= (1.0 - t);
-        }
-        if rh_r < 0.5 && fx > 0.7 && sun_n.x < 0.0 {
-            let t = smoothstep(0.7, 1.0, fx) * 0.10 * (-sun_n.x);
-            color *= (1.0 - t);
-        }
-        if rh_l < 0.5 && fx < 0.3 && sun_n.x > 0.0 {
-            let t = smoothstep(0.3, 0.0, fx) * 0.10 * sun_n.x;
-            color *= (1.0 - t);
-        }
-        // Bright edge on sun-facing sides
-        if rh_t < 0.5 && fy < 0.3 && sun_n.y < 0.0 {
-            let t = smoothstep(0.3, 0.0, fy) * 0.06 * (-sun_n.y);
-            color += vec3<f32>(t);
-        }
-        if rh_b < 0.5 && fy > 0.7 && sun_n.y > 0.0 {
-            let t = smoothstep(0.7, 1.0, fy) * 0.06 * sun_n.y;
-            color += vec3<f32>(t);
-        }
-        if rh_l < 0.5 && fx < 0.3 && sun_n.x < 0.0 {
-            let t = smoothstep(0.3, 0.0, fx) * 0.04 * (-sun_n.x);
-            color += vec3<f32>(t);
-        }
-        if rh_r < 0.5 && fx > 0.7 && sun_n.x > 0.0 {
-            let t = smoothstep(0.7, 1.0, fx) * 0.04 * sun_n.x;
-            color += vec3<f32>(t);
-        }
 
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
         textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
@@ -969,7 +964,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     var is_tree_pixel = false;
 
     // If under a roof but transparent mode, add subtle indoor tint
-    let is_indoor = is_roofed && camera.show_roofs < 0.5;
+    // Only ground-level tiles under a roof are truly indoor.
+    // Wall blocks (height > 0) that are part of a roofed building should NOT
+    // get interior lighting — they're the building envelope, not the interior.
+    let is_indoor = is_roofed && camera.show_roofs < 0.5 && bheight == 0u;
 
     // --- Wall face rendering (south face, oblique projection) ---
     if is_wall_face {
@@ -995,6 +993,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Slight indirect bounce: south face catches a tiny bit of reflected ground light.
         let indirect = sun_color * get_sun_intensity(camera.time) * 0.12;
         color = face_color * (ambient * 0.6 + indirect);
+
+        // Interior light glow on wall faces (proximity-traced, no lightmap bleed)
+        if is_roofed {
+            let face_glow = compute_proximity_glow(world_x, world_y, camera.time);
+            let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.7;
+            color += face_glow * camera.indoor_glow_mul * (0.5 + night_boost);
+        }
 
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
         textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
@@ -1038,45 +1043,43 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color += wall_side_shade(world_x, world_y, bx, by, effective_height);
     }
 
-    // Grid lines (subtle, ground-level only)
-    if effective_height == 0u {
-        let grid_line_w = 0.03;
-        let on_grid = f32(fx < grid_line_w || fx > (1.0 - grid_line_w) ||
-                          fy < grid_line_w || fy > (1.0 - grid_line_w));
-        color = mix(color, color * 0.75, on_grid * 0.4);
-    }
-
     // Shadow / interior lighting
     var shadow_tint = vec3<f32>(1.0);
     var light_factor = 1.0;
     var light_color_out = vec3<f32>(0.0);
     var light_intensity_out = 0.0;
 
+    // Roofed wall tops: under the roof, no direct sun — just ambient
+    let is_roofed_wall = is_roofed && bheight > 0u && camera.show_roofs < 0.5;
+
     if is_indoor {
-        // Indoor pixel: skip shadow ray entirely. The roof blocks all direct sun.
+        // Indoor floor: skip shadow ray entirely. The roof blocks all direct sun.
         // Sample lightmap for point lights (pre-computed per block).
         let lm = sample_lightmap(world_x, world_y);
         light_color_out = lm.xyz;
         light_intensity_out = lm.w;
 
         // Interior sun lighting still needs per-pixel sunbeam tracing.
-        // Window ambient is no longer in the lightmap; pass 0.0 — the
-        // INTERIOR_INDIRECT base (0.18) already prevents pitch-black interiors,
-        // and sunbeams through glass provide the directional fill.
         let sun_int = get_sun_intensity(camera.time);
         let interior = compute_interior_light(world_x, world_y, sun_int, sun_dir, 0.0);
         shadow_tint = interior.xyz;
         light_factor = interior.w;
+    } else if is_roofed_wall {
+        // Wall under a roof: no sun, no shadow ray. Just ambient + interior indirect.
+        light_factor = INTERIOR_INDIRECT;
     } else {
         // Outdoor pixel: trace shadow ray toward sun (per-pixel, stays here)
         let shadow_result = trace_shadow_ray(world_x, world_y, effective_fheight, sun_dir, sun_elev);
         shadow_tint = shadow_result.xyz;
         light_factor = shadow_result.w;
 
-        // Light bleeding through windows/doors — now from lightmap
-        let lm = sample_lightmap(world_x, world_y);
-        light_color_out = lm.xyz;
-        light_intensity_out = lm.w;
+        // Directional light bleeding through windows/doors.
+        // Only for ground-level outdoor pixels near buildings.
+        if effective_height == 0u {
+            let bleed = compute_directional_bleed(world_x, world_y);
+            light_color_out = bleed.xyz;
+            light_intensity_out = bleed.w;
+        }
     }
 
     if btype == 6u || btype == 7u {
@@ -1158,8 +1161,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     if is_indoor {
         // Slightly desaturate and cool-shift to convey "indoors"
         color = mix(color, color * vec3<f32>(0.85, 0.88, 0.95), 0.3);
+    }
 
-        // Per-pixel proximity glow: bright hot spot near light sources
+    // Per-pixel proximity glow for indoor floor tiles only.
+    // Wall faces get their glow in the wall face rendering block above (which returns early).
+    // Wall tops are excluded to prevent light bleed onto the roof surface.
+    if is_indoor {
         let prox_glow = compute_proximity_glow(world_x, world_y, camera.time);
         let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.7;
         color += prox_glow * camera.indoor_glow_mul * (0.5 + night_boost);
