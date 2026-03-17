@@ -54,11 +54,11 @@ fn is_wall(b: u32) -> bool {
 }
 
 // Propagation falloff per cardinal step (1 block)
-const PROP_FALLOFF: f32 = 0.06;
+const PROP_FALLOFF: f32 = 0.08;
 // Glass attenuation factor
 const GLASS_ATTEN: f32 = 0.4;
 // Diagonal falloff = cardinal * sqrt(2)
-const DIAG_FALLOFF: f32 = 0.0849; // 0.06 * 1.414
+const DIAG_FALLOFF: f32 = 0.1131; // 0.08 * 1.414
 
 // Try to take light from a neighbor at (nx, ny).
 // Returns the attenuated value, or zero if blocked.

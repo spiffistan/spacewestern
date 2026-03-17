@@ -215,25 +215,41 @@ fn generate_test_grid() -> Vec<u32> {
         }
     }
 
-    // Scatter trees across the map using a simple hash
-    // Avoid placing on existing structures
+    // Scatter trees and bushes across the map
+    // Large trees (2x2), medium trees (1x1), bushes (1x1 short)
+    // Flags bits 3-4 = quadrant (for 2x2 trees), bit 5 = is large (2x2)
+    let is_bare = |grid: &Vec<u32>, x: u32, y: u32| -> bool {
+        if x >= GRID_W || y >= GRID_H { return false; }
+        grid[(y * w + x) as usize] == make_block(2, 0, 0)
+    };
     for y in 0..GRID_H {
         for x in 0..GRID_W {
             let idx = (y * w + x) as usize;
-            let existing = grid[idx];
-            // Only place on bare dirt floor (type 2, height 0, no flags)
-            if existing != make_block(2, 0, 0) {
+            if grid[idx] != make_block(2, 0, 0) {
                 continue;
             }
-            // Simple hash-based pseudo-random placement
             let h = ((x.wrapping_mul(374761393)) ^ (y.wrapping_mul(668265263)))
                 .wrapping_add(1013904223);
             let r = (h >> 16) & 0xFFF; // 0..4095
-            // ~3% chance of a tree
-            if r < 120 {
-                // Tree height varies 2-4
-                let tree_h = 2 + ((h >> 8) & 0x3) as u8; // 2, 3, or 4
+
+            if r < 30 {
+                // Large tree (2x2) — check all 4 tiles are bare
+                if is_bare(&grid, x+1, y) && is_bare(&grid, x, y+1) && is_bare(&grid, x+1, y+1) {
+                    let tree_h = 4 + ((h >> 8) & 0x1) as u8; // height 4-5
+                    // bit5 = large flag (32), bits 3-4 = quadrant
+                    set(&mut grid, x,   y,   make_block(8, tree_h, 32 | 0));  // TL, quadrant 0
+                    set(&mut grid, x+1, y,   make_block(8, tree_h, 32 | 8));  // TR, quadrant 1
+                    set(&mut grid, x,   y+1, make_block(8, tree_h, 32 | 16)); // BL, quadrant 2
+                    set(&mut grid, x+1, y+1, make_block(8, tree_h, 32 | 24)); // BR, quadrant 3
+                }
+            } else if r < 90 {
+                // Medium tree (1x1)
+                let tree_h = 2 + ((h >> 8) & 0x3) as u8; // height 2-5
                 grid[idx] = make_block(8, tree_h, 0);
+            } else if r < 140 {
+                // Bush (1x1, short)
+                let bush_h = 1 + ((h >> 8) & 0x1) as u8; // height 1-2
+                grid[idx] = make_block(8, bush_h, 0);
             }
         }
     }
@@ -263,8 +279,8 @@ fn generate_tree_sprites() -> Vec<u32> {
                 let (r, g, b, h) = match variant {
                     0 => {
                         // Round oak: large canopy
-                        let canopy_r = 0.43;
-                        let trunk_r = 0.07;
+                        let canopy_r = 0.48;
+                        let trunk_r = 0.08;
                         if dist < trunk_r {
                             (90, 58, 28, 220u8)
                         } else if dist < canopy_r {
@@ -282,11 +298,11 @@ fn generate_tree_sprites() -> Vec<u32> {
                         let abs_cy = cy.abs();
                         let diamond = abs_cx + abs_cy;
                         let trunk_r = 0.05;
-                        let canopy_r = 0.38 - (cy + 0.1).abs() * 0.3; // tapers
-                        let canopy_r = canopy_r.max(0.05);
+                        let canopy_r = 0.42 - (cy + 0.1).abs() * 0.25;
+                        let canopy_r = canopy_r.max(0.06);
                         if dist < trunk_r {
                             (75, 48, 22, 240u8)
-                        } else if diamond < canopy_r + 0.1 && dist < 0.45 {
+                        } else if diamond < canopy_r + 0.12 && dist < 0.48 {
                             let shade = 1.0 - diamond / (canopy_r + 0.1);
                             let g = (40.0 + shade * 60.0) as u8;
                             let h = (160.0 + shade * 70.0) as u8;
@@ -297,7 +313,7 @@ fn generate_tree_sprites() -> Vec<u32> {
                     }
                     2 => {
                         // Small bush: low, wide, lumpy
-                        let canopy_r = 0.35;
+                        let canopy_r = 0.40;
                         let trunk_r = 0.05;
                         // Make it lumpy with a simple hash
                         let angle = cy.atan2(cx);
@@ -316,8 +332,8 @@ fn generate_tree_sprites() -> Vec<u32> {
                     }
                     _ => {
                         // Tall narrow tree: thin canopy
-                        let canopy_rx = 0.22;
-                        let canopy_ry = 0.38;
+                        let canopy_rx = 0.26;
+                        let canopy_ry = 0.44;
                         let trunk_r = 0.06;
                         let ellipse = (cx / canopy_rx).powi(2) + (cy / canopy_ry).powi(2);
                         if dist < trunk_r {
@@ -537,7 +553,7 @@ impl App {
                 time: 0.0,
                 glass_light_mul: 0.12,
                 indoor_glow_mul: 0.25,
-                light_bleed_mul: 0.6,
+                light_bleed_mul: 0.10,
                 foliage_opacity: 0.55,
                 foliage_variation: 0.3,
                 oblique_strength: 0.12,
@@ -706,12 +722,16 @@ impl App {
             .expect("Failed to create device");
 
         let surface_caps = surface.get_capabilities(&adapter);
+        // Always use a non-sRGB (linear) surface format.
+        // Gamma correction is applied in the raytrace shader for consistency
+        // between native and web (WebGPU often lacks sRGB surfaces).
         let surface_format = surface_caps
             .formats
             .iter()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
+        log::info!("Surface format: {:?}", surface_format);
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1406,7 +1426,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v22 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v23 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;

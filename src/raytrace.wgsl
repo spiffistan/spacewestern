@@ -141,8 +141,8 @@ fn get_sun_color(time: f32) -> vec3<f32> {
 
 fn get_ambient(time: f32) -> vec3<f32> {
     let intensity = get_sun_intensity(time);
-    let night_ambient = vec3<f32>(0.04, 0.04, 0.08);
-    let day_ambient = vec3<f32>(0.14, 0.14, 0.18);
+    let night_ambient = vec3<f32>(0.008, 0.008, 0.02);
+    let day_ambient = vec3<f32>(0.10, 0.10, 0.13);
     return mix(night_ambient, day_ambient, intensity);
 }
 
@@ -165,7 +165,7 @@ const WINDOW_THICKNESS: f32 = 0.35;
 
 // Interior indirect light: interiors get a base level of bounced light
 // so they're not pitch black behind walls
-const INTERIOR_INDIRECT: f32 = 0.18;
+const INTERIOR_INDIRECT: f32 = 0.06;
 // Direct sunbeam strength through windows
 const INTERIOR_SUNBEAM: f32 = 0.70;
 // Ambient bounce near windows (even when not in direct beam)
@@ -354,9 +354,9 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             let vis = trace_glow_visibility(wx, wy, lcx, lcy);
             if vis < 0.01 { continue; }
 
-            // Inverse-square-ish falloff with smooth range fade
+            // Inverse-square-ish falloff with gentle range fade
             let atten = (1.0 / (1.0 + dist * 0.6 + dist * dist * 0.15))
-                      * smoothstep(GLOW_RADIUS, GLOW_RADIUS * 0.4, dist);
+                      * smoothstep(GLOW_RADIUS, GLOW_RADIUS * 0.15, dist);
 
             if bt == 6u {
                 let phase = fire_hash(vec2<f32>(lcx, lcy)) * 6.28;
@@ -451,9 +451,9 @@ fn compute_directional_bleed(wx: f32, wy: f32) -> vec4<f32> {
             let angle_factor = max(0.0, dot(dir, outward_normal));
             let angle_shaped = pow(angle_factor, 1.5); // focus into a cone
 
-            // Distance falloff with smooth fade to zero (no hard cutoff)
+            // Distance falloff with gentle fade to zero
             let atten = (1.0 / (1.0 + dist * 0.4 + dist * dist * 0.15))
-                      * smoothstep(max_range, max_range * 0.3, dist);
+                      * smoothstep(max_range, max_range * 0.15, dist);
 
             // Open doors let through more light than glass panes
             var portal_mul = select(0.6, 1.0, is_open_door);
@@ -564,20 +564,40 @@ fn render_electric_light(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<
 
 // Render tree from top-down using sprite atlas.
 // Returns vec4(color_rgb, is_canopy): is_canopy > 0 if this pixel is tree, 0 if ground beneath.
-fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32) -> vec4<f32> {
-    // Pick variant from world position hash
-    let tree_id = floor(wx) * 137.0 + floor(wy) * 311.0;
+fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32, flags: u32) -> vec4<f32> {
+    let is_large = (flags & 32u) != 0u;
+    let quadrant = (flags >> 3u) & 3u; // 0=TL, 1=TR, 2=BL, 3=BR
+
+    // For large (2x2) trees, compute UV across the 2x2 footprint
+    var sprite_u = fx;
+    var sprite_v = fy;
+    // Use the top-left corner for the tree ID hash (consistent across all 4 tiles)
+    var origin_x = floor(wx);
+    var origin_y = floor(wy);
+
+    if is_large {
+        // Offset origin to top-left tile of the 2x2 group
+        if (quadrant & 1u) != 0u { origin_x -= 1.0; } // TR or BR → shift left
+        if (quadrant & 2u) != 0u { origin_y -= 1.0; } // BL or BR → shift up
+
+        // Map fx/fy to 0..1 across the full 2x2 area
+        let qx = f32(quadrant & 1u); // 0 or 1
+        let qy = f32((quadrant >> 1u) & 1u); // 0 or 1
+        sprite_u = (qx + fx) * 0.5;
+        sprite_v = (qy + fy) * 0.5;
+    }
+
+    // Pick variant from origin position hash (consistent for 2x2 groups)
+    let tree_id = origin_x * 137.0 + origin_y * 311.0;
     let id_hash = fract(sin(tree_id) * 43758.5453);
     let variant = u32(id_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
 
-    let sprite = sample_sprite(variant, fx, fy);
+    let sprite = sample_sprite(variant, sprite_u, sprite_v);
 
     if sprite.w < 0.01 {
-        // Transparent pixel — show dirt ground beneath
         return vec4<f32>(0.45, 0.35, 0.20, 0.0);
     }
 
-    // Sprite color with slight per-tree variation
     let color = sprite.xyz * (0.85 + id_hash * 0.3);
     return vec4<f32>(color, sprite.w);
 }
@@ -682,11 +702,25 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
 
         // --- Tree: sprite-shaped semi-transparent shadow ---
         if bt == 8u {
-            let tree_fx = fract(sx);
-            let tree_fy = fract(sy);
+            let tree_flags = block_flags(block);
+            let is_large = (tree_flags & 32u) != 0u;
+            let quadrant = (tree_flags >> 3u) & 3u;
 
-            // Pick same variant as rendering
-            let tree_id = f32(bx) * 137.0 + f32(by) * 311.0;
+            var tree_fx = fract(sx);
+            var tree_fy = fract(sy);
+            var origin_x = f32(bx);
+            var origin_y = f32(by);
+
+            if is_large {
+                if (quadrant & 1u) != 0u { origin_x -= 1.0; }
+                if (quadrant & 2u) != 0u { origin_y -= 1.0; }
+                let qx = f32(quadrant & 1u);
+                let qy = f32((quadrant >> 1u) & 1u);
+                tree_fx = (qx + fract(sx)) * 0.5;
+                tree_fy = (qy + fract(sy)) * 0.5;
+            }
+
+            let tree_id = origin_x * 137.0 + origin_y * 311.0;
             let tree_hash = fract(sin(tree_id) * 43758.5453);
             let variant = u32(tree_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
 
@@ -707,7 +741,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
                     let dapple2 = fract(sin(dapple_seed * 1.7 + 3.1) * 27183.6142);
                     let dapple = 0.5 + 0.5 * (dapple1 * 0.7 + dapple2 * 0.3);
 
-                    // Center of canopy is denser (more foliage depth)
+                    // Center of canopy is denser (sprite UV center = 0.5, 0.5)
                     let center_dist = length(vec2<f32>(tree_fx - 0.5, tree_fy - 0.5)) * 2.0;
                     let depth_factor = 1.0 - center_dist * 0.4; // center=1.0, edge=0.6
 
@@ -1019,7 +1053,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = render_electric_light(world_x, world_y, fx, fy, camera.time);
     } else if btype == 8u {
         // Tree: sprite-based rendering
-        let tree_result = render_tree(world_x, world_y, fx, fy, bheight);
+        let tree_result = render_tree(world_x, world_y, fx, fy, bheight, bflags);
         color = tree_result.xyz;
         is_tree_pixel = tree_result.w > 0.01;
     } else {
