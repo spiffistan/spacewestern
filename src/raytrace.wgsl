@@ -27,6 +27,18 @@ struct Camera {
     lm_vp_max_y: f32,
     lm_scale: f32,
     fluid_overlay: f32,
+    sun_dir_x: f32,
+    sun_dir_y: f32,
+    sun_elevation: f32,
+    sun_intensity: f32,
+    sun_color_r: f32,
+    sun_color_g: f32,
+    sun_color_b: f32,
+    ambient_r: f32,
+    ambient_g: f32,
+    ambient_b: f32,
+    enable_prox_glow: f32,
+    enable_dir_bleed: f32,
     _pad2: f32,
     _pad3: f32,
     _pad4: f32,
@@ -1167,12 +1179,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Compute sun parameters for this frame
-    let sun_info = get_sun(camera.time);
-    let sun_dir = vec2<f32>(sun_info.x, sun_info.y);
-    let sun_elev = get_sun_elevation(camera.time);
-    let sun_color = get_sun_color(camera.time);
-    let ambient = get_ambient(camera.time);
+    // Sun parameters precomputed on CPU (no per-pixel trig)
+    let sun_dir = vec2<f32>(camera.sun_dir_x, camera.sun_dir_y);
+    let sun_elev = camera.sun_elevation;
+    let sun_color = vec3<f32>(camera.sun_color_r, camera.sun_color_g, camera.sun_color_b);
+    let ambient = vec3<f32>(camera.ambient_r, camera.ambient_g, camera.ambient_b);
 
     // --- Determine if this pixel is covered by a roof ---
     let roof_h = get_roof_height(bx, by);
@@ -1229,13 +1240,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // South face is always mostly in shade (sun stays north in our model).
         // Slight indirect bounce: south face catches a tiny bit of reflected ground light.
-        let indirect = sun_color * get_sun_intensity(camera.time) * 0.12;
+        let indirect = sun_color * camera.sun_intensity * 0.12;
         color = face_color * (ambient * 0.6 + indirect);
 
         // Interior light glow on wall faces (proximity-traced, no lightmap bleed)
         if is_roofed {
             let face_glow = compute_proximity_glow(world_x, world_y, camera.time);
-            let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.7;
+            let night_boost = 1.0 - camera.sun_intensity * 0.7;
             color += face_glow * camera.indoor_glow_mul * (0.5 + night_boost);
         }
 
@@ -1309,7 +1320,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         light_intensity_out = lm.w;
 
         // Interior sun lighting still needs per-pixel sunbeam tracing.
-        let sun_int = get_sun_intensity(camera.time);
+        let sun_int = camera.sun_intensity;
         let interior = compute_interior_light(world_x, world_y, sun_int, sun_dir, 0.0);
         shadow_tint = interior.xyz;
         light_factor = interior.w;
@@ -1325,7 +1336,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Outdoor lighting: directional window bleed only.
         // Outdoor point lights are handled by proximity glow (line-of-sight traced)
         // rather than the lightmap (which floods around obstacles unrealistically).
-        if effective_height == 0u {
+        if camera.enable_dir_bleed > 0.5 && effective_height == 0u {
             let bleed = compute_directional_bleed(world_x, world_y);
             light_color_out = bleed.xyz;
             light_intensity_out = bleed.w;
@@ -1352,7 +1363,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if glass_pt_intensity > 0.01 {
             // Strong warm glow — backlit window effect, not multiplied by base glass color
             // Stronger at night when sun intensity is low
-            let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.7;
+            let night_boost = 1.0 - camera.sun_intensity * 0.7;
             color = mix(color, glass_pt_color * 0.9, clamp(glass_pt_intensity * 1.5 * night_boost, 0.0, 0.85));
         }
 
@@ -1418,16 +1429,16 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Wall tops are excluded to prevent light bleed onto the roof surface.
     // Apply proximity glow to floors, outdoor ground, and furniture (benches)
     let is_furniture = btype == 9u || (btype == 11u && !is_table_lamp_bulb);
-    if is_indoor || is_furniture || (!is_roofed_wall && effective_height == 0u) {
+    if camera.enable_prox_glow > 0.5 && (is_indoor || is_furniture || (!is_roofed_wall && effective_height == 0u)) {
         let prox_glow = compute_proximity_glow(world_x, world_y, camera.time);
-        let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.7;
+        let night_boost = 1.0 - camera.sun_intensity * 0.7;
         color += prox_glow * camera.indoor_glow_mul * (0.5 + night_boost);
     }
 
     // Outdoor light glow: warm light spilling through windows/doors onto ground
     if !is_indoor && light_intensity_out > 0.01 {
         // Stronger at night — warm pools of light on the ground outside windows
-        let night_boost = 1.0 - get_sun_intensity(camera.time) * 0.8;
+        let night_boost = 1.0 - camera.sun_intensity * 0.8;
         color += light_color_out * light_intensity_out * camera.light_bleed_mul * night_boost;
     }
 

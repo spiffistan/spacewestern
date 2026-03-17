@@ -25,9 +25,11 @@ struct Camera {
     lm_vp_max_y: f32,
     lm_scale: f32,
     fluid_overlay: f32,
-    _pad2: f32,
-    _pad3: f32,
-    _pad4: f32,
+    sun_dir_x: f32, sun_dir_y: f32, sun_elevation: f32,
+    sun_intensity: f32, sun_color_r: f32, sun_color_g: f32, sun_color_b: f32,
+    ambient_r: f32, ambient_g: f32, ambient_b: f32,
+    enable_prox_glow: f32, enable_dir_bleed: f32,
+    _pad2: f32, _pad3: f32, _pad4: f32,
 };
 
 // --- Seed pass bindings ---

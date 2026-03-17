@@ -56,6 +56,11 @@ const DAY_DURATION: f32 = 60.0; // must match shader
 // type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof, bit2=is_open
+fn smoothstep_f32(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 fn half_to_f32(h: u16) -> f32 {
     let sign = ((h >> 15) & 1) as u32;
     let exp = ((h >> 10) & 0x1F) as u32;
@@ -501,7 +506,19 @@ struct CameraUniform {
     lm_vp_max_x: f32,        // lightmap viewport max x (grid coordinates)
     lm_vp_max_y: f32,        // lightmap viewport max y (grid coordinates)
     lm_scale: f32,           // lightmap texels per grid cell (e.g. 2.0 for 2x resolution)
-    fluid_overlay: f32,      // 0=off, 1=smoke, 2=velocity, 3=pressure
+    fluid_overlay: f32,      // 0=off, 1=smoke, 2=velocity, 3=pressure, 4=O2, 5=CO2
+    sun_dir_x: f32,          // precomputed sun direction X
+    sun_dir_y: f32,          // precomputed sun direction Y
+    sun_elevation: f32,      // precomputed sun elevation
+    sun_intensity: f32,      // precomputed sun intensity (0=night, 1=day)
+    sun_color_r: f32,        // precomputed sun color R
+    sun_color_g: f32,        // precomputed sun color G
+    sun_color_b: f32,        // precomputed sun color B
+    ambient_r: f32,          // precomputed ambient R
+    ambient_g: f32,          // precomputed ambient G
+    ambient_b: f32,          // precomputed ambient B
+    enable_prox_glow: f32,   // 1.0 = on, 0.0 = off
+    enable_dir_bleed: f32,   // 1.0 = on, 0.0 = off
     _pad2: f32,
     _pad3: f32,
     _pad4: f32,
@@ -561,6 +578,7 @@ struct App {
     gfx: Option<GfxState>,
     egui_state: Option<EguiState>,
     camera: CameraUniform,
+    render_scale: f32,
     grid_data: Vec<u32>,
     grid_dirty: bool, // true when grid needs re-upload to GPU
     mouse_pressed: bool,
@@ -592,6 +610,8 @@ struct App {
     fluid_overlay: FluidOverlay,
     fluid_speed: f32,             // fluid simulation speed multiplier
     debug_mode: bool,             // show debug tooltip at cursor
+    enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
+    enable_dir_bleed: bool,       // directional light bleed (expensive)
     debug_fluid_density: [f32; 4], // last readback: RGBA from dye texture at cursor
     debug_fluid_readback_pending: bool,
     fluid_mouse_active: bool,  // middle mouse button held
@@ -603,7 +623,7 @@ const LIGHTMAP_W: u32 = GRID_W * LIGHTMAP_SCALE;
 const LIGHTMAP_H: u32 = GRID_H * LIGHTMAP_SCALE;
 const LIGHTMAP_PROP_ITERATIONS: u32 = 26; // more iterations for 2x res (covers ~13 tile radius)
 const LIGHTMAP_UPDATE_INTERVAL: u32 = 2; // recompute every N frames (~30fps lightmap at 60fps)
-const RENDER_SCALE: f32 = 0.5; // render at half resolution, upscale via blit
+const DEFAULT_RENDER_SCALE: f32 = 0.5;
 
 struct GfxState {
     surface: wgpu::Surface<'static>,
@@ -696,10 +716,15 @@ impl App {
                 lm_vp_max_y: GRID_H as f32,
                 lm_scale: LIGHTMAP_SCALE as f32,
                 fluid_overlay: 0.0,
-                _pad2: 0.0,
-                _pad3: 0.0,
-                _pad4: 0.0,
+                sun_dir_x: 0.0, sun_dir_y: 0.0, sun_elevation: 0.0,
+                sun_intensity: 0.0,
+                sun_color_r: 0.0, sun_color_g: 0.0, sun_color_b: 0.0,
+                ambient_r: 0.0, ambient_g: 0.0, ambient_b: 0.0,
+                enable_prox_glow: 1.0,
+                enable_dir_bleed: 1.0,
+                _pad2: 0.0, _pad3: 0.0, _pad4: 0.0,
             },
+            render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
             grid_dirty: false,
             mouse_pressed: false,
@@ -744,6 +769,8 @@ impl App {
             fluid_overlay: FluidOverlay::None,
             fluid_speed: 1.0,
             debug_mode: false,
+            enable_prox_glow: true,
+            enable_dir_bleed: true,
             debug_fluid_density: [0.0; 4],
             debug_fluid_readback_pending: false,
             fluid_dye_phase: 0,
@@ -757,7 +784,7 @@ impl App {
     fn world_to_screen(&self, wx: f32, wy: f32) -> (f32, f32) {
         let rx = (wx - self.camera.center_x) * self.camera.zoom + self.camera.screen_w * 0.5;
         let ry = (wy - self.camera.center_y) * self.camera.zoom + self.camera.screen_h * 0.5;
-        (rx / RENDER_SCALE, ry / RENDER_SCALE)
+        (rx / self.render_scale, ry / self.render_scale)
     }
 
     /// Get the tiles a bench would occupy at (bx, by) with given rotation
@@ -796,8 +823,8 @@ impl App {
     /// Convert screen pixel coordinates to world block coordinates
     fn screen_to_world(&self, sx: f64, sy: f64) -> (f32, f32) {
         // Scale mouse coords from window space to render space
-        let rx = sx as f32 * RENDER_SCALE;
-        let ry = sy as f32 * RENDER_SCALE;
+        let rx = sx as f32 * self.render_scale;
+        let ry = sy as f32 * self.render_scale;
         let wx = self.camera.center_x + (rx - self.camera.screen_w * 0.5) / self.camera.zoom;
         let wy = self.camera.center_y + (ry - self.camera.screen_h * 0.5) / self.camera.zoom;
         (wx, wy)
@@ -959,8 +986,8 @@ impl App {
         let width = size.width.max(1);
         let height = size.height.max(1);
 
-        let render_w = ((width as f32) * RENDER_SCALE).max(1.0) as u32;
-        let render_h = ((height as f32) * RENDER_SCALE).max(1.0) as u32;
+        let render_w = ((width as f32) * self.render_scale).max(1.0) as u32;
+        let render_h = ((height as f32) * self.render_scale).max(1.0) as u32;
         self.camera.screen_w = render_w as f32;
         self.camera.screen_h = render_h as f32;
         // Zoom to show ~64 blocks (the houses area), not the full map
@@ -1981,8 +2008,8 @@ impl App {
         gfx.config.height = height;
         gfx.surface.configure(&gfx.device, &gfx.config);
 
-        let render_w = ((width as f32) * RENDER_SCALE).max(1.0) as u32;
-        let render_h = ((height as f32) * RENDER_SCALE).max(1.0) as u32;
+        let render_w = ((width as f32) * self.render_scale).max(1.0) as u32;
+        let render_h = ((height as f32) * self.render_scale).max(1.0) as u32;
 
         // Scale zoom to maintain the same view when window resizes
         let old_min = self.camera.screen_w.min(self.camera.screen_h);
@@ -2101,6 +2128,18 @@ impl App {
     }
 
     fn render(&mut self) {
+        // Check if render scale changed — trigger resize to recreate output texture
+        {
+            let gfx = self.gfx.as_ref().unwrap();
+            let expected_w = ((gfx.config.width as f32) * self.render_scale).max(1.0) as u32;
+            let expected_h = ((gfx.config.height as f32) * self.render_scale).max(1.0) as u32;
+            if expected_w != self.camera.screen_w as u32 || expected_h != self.camera.screen_h as u32 {
+                let size = PhysicalSize::new(gfx.config.width, gfx.config.height);
+                let _ = gfx;
+                self.resize(size);
+            }
+        }
+
         // Advance time + FPS tracking
         let now = Instant::now();
         let dt = now.elapsed_secs_since(&self.last_frame_time);
@@ -2126,6 +2165,36 @@ impl App {
         }
 
         self.camera.time = self.time_of_day;
+
+        // Precompute sun on CPU (avoids trig per pixel in shader)
+        {
+            let t = (self.time_of_day / DAY_DURATION).rem_euclid(1.0);
+            let dawn = 0.15f32;
+            let dusk = 0.85f32;
+            let day_t = ((t - dawn) / (dusk - dawn)).clamp(0.0, 1.0);
+            let angle = day_t * std::f32::consts::PI;
+            self.camera.sun_dir_x = -angle.cos();
+            self.camera.sun_dir_y = -angle.sin() * 0.6 - 0.2;
+            let noon = (day_t * std::f32::consts::PI).sin();
+            let edge = smoothstep_f32(0.0, 0.15, day_t) * smoothstep_f32(1.0, 0.85, day_t);
+            self.camera.sun_elevation = (1.0 + 3.0 * noon) * edge;
+            let fade_in = smoothstep_f32(dawn - 0.05, dawn + 0.05, t);
+            let fade_out = smoothstep_f32(dusk + 0.05, dusk - 0.05, t);
+            let intensity = fade_in * fade_out;
+            self.camera.sun_intensity = intensity;
+            let dawn_col = [1.0f32, 0.55, 0.25];
+            let noon_col = [1.0f32, 0.97, 0.90];
+            let s = smoothstep_f32(0.0, 0.6, noon);
+            self.camera.sun_color_r = (dawn_col[0] + (noon_col[0] - dawn_col[0]) * s) * intensity;
+            self.camera.sun_color_g = (dawn_col[1] + (noon_col[1] - dawn_col[1]) * s) * intensity;
+            self.camera.sun_color_b = (dawn_col[2] + (noon_col[2] - dawn_col[2]) * s) * intensity;
+            let night_amb = [0.008f32, 0.008, 0.02];
+            let day_amb = [0.10f32, 0.10, 0.13];
+            self.camera.ambient_r = night_amb[0] + (day_amb[0] - night_amb[0]) * intensity;
+            self.camera.ambient_g = night_amb[1] + (day_amb[1] - night_amb[1]) * intensity;
+            self.camera.ambient_b = night_amb[2] + (day_amb[2] - night_amb[2]) * intensity;
+        }
+
         self.camera.fluid_overlay = match self.fluid_overlay {
             FluidOverlay::None => 0.0,
             FluidOverlay::Smoke => 1.0,
@@ -2134,6 +2203,8 @@ impl App {
             FluidOverlay::O2 => 4.0,
             FluidOverlay::CO2 => 5.0,
         };
+        self.camera.enable_prox_glow = if self.enable_prox_glow { 1.0 } else { 0.0 };
+        self.camera.enable_dir_bleed = if self.enable_dir_bleed { 1.0 } else { 0.0 };
 
         let gfx = self.gfx.as_ref().unwrap();
 
@@ -2219,7 +2290,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v34 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v35 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -2286,6 +2357,11 @@ impl App {
                 if ui.button("Reset zoom").clicked() {
                     zoom = base_zoom;
                 }
+                let mut rs = self.render_scale;
+                ui.add(egui::Slider::new(&mut rs, 0.15..=1.0)
+                    .text("Render quality")
+                    .step_by(0.05));
+                self.render_scale = rs;
 
                 ui.separator();
                 ui.label("Lighting");
@@ -2418,6 +2494,13 @@ impl App {
                             debug = !debug;
                         }
                         self.debug_mode = debug;
+                        ui.separator();
+                        if ui.selectable_label(self.enable_prox_glow, "Glow").clicked() {
+                            self.enable_prox_glow = !self.enable_prox_glow;
+                        }
+                        if ui.selectable_label(self.enable_dir_bleed, "Bleed").clicked() {
+                            self.enable_dir_bleed = !self.enable_dir_bleed;
+                        }
                     });
                 });
             });
@@ -2522,10 +2605,10 @@ impl App {
                 let wx0 = tx as f32;
                 let wy0 = ty as f32;
                 // World → physical pixels → logical points (egui coords)
-                let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / RENDER_SCALE / bp_ppp;
-                let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / RENDER_SCALE / bp_ppp;
-                let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / RENDER_SCALE / bp_ppp;
-                let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / RENDER_SCALE / bp_ppp;
+                let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
 
                 painter.rect_filled(
                     egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
@@ -2835,8 +2918,8 @@ impl ApplicationHandler for App {
                     self.mouse_dragged = true;
                 }
                 if self.mouse_dragged {
-                    self.camera.center_x -= dx as f32 * RENDER_SCALE / self.camera.zoom;
-                    self.camera.center_y -= dy as f32 * RENDER_SCALE / self.camera.zoom;
+                    self.camera.center_x -= dx as f32 * self.render_scale / self.camera.zoom;
+                    self.camera.center_y -= dy as f32 * self.render_scale / self.camera.zoom;
                     self.window.as_ref().unwrap().request_redraw();
                 }
             }
