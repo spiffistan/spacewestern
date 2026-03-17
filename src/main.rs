@@ -481,9 +481,12 @@ struct App {
     frame_count: u32,
     fps_accum: f32,
     fps_display: f32,
+    // Lightmap update throttle (skip most frames)
+    lightmap_frame: u32,
 }
 
-const LIGHTMAP_PROP_ITERATIONS: u32 = 24;
+const LIGHTMAP_PROP_ITERATIONS: u32 = 16;
+const LIGHTMAP_UPDATE_INTERVAL: u32 = 6; // recompute lightmap every N frames (~10fps at 60fps)
 const RENDER_SCALE: f32 = 0.5; // render at half resolution, upscale via blit
 
 struct GfxState {
@@ -555,6 +558,7 @@ impl App {
             frame_count: 0,
             fps_accum: 0.0,
             fps_display: 0.0,
+            lightmap_frame: 0,
         }
     }
 
@@ -1402,7 +1406,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v21 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v22 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -1525,28 +1529,36 @@ impl App {
             });
         egui_state.renderer.update_buffers(&gfx.device, &gfx.queue, &mut encoder, &paint_jobs, &screen_descriptor);
 
-        // Lightmap pass 1: seed light sources into texture A
-        let lm_wg_x = (GRID_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        let lm_wg_y = (GRID_H + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("lightmap-seed"),
-                timestamp_writes: None,
-            });
-            cpass.set_pipeline(&gfx.lightmap_seed_pipeline);
-            cpass.set_bind_group(0, &gfx.lightmap_seed_bind_group, &[]);
-            cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
-        }
+        // Lightmap: only recompute every N frames (fire flicker at ~10fps is fine)
+        // Always recompute when grid is dirty (door toggle, light moved)
+        self.lightmap_frame += 1;
+        let need_lightmap = self.grid_dirty || self.lightmap_frame >= LIGHTMAP_UPDATE_INTERVAL;
+        if need_lightmap {
+            self.lightmap_frame = 0;
+            let lm_wg_x = (GRID_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let lm_wg_y = (GRID_H + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
-        // Lightmap passes 2..N+1: propagate (ping-pong between textures)
-        for i in 0..LIGHTMAP_PROP_ITERATIONS {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("lightmap-propagate"),
-                timestamp_writes: None,
-            });
-            cpass.set_pipeline(&gfx.lightmap_prop_pipeline);
-            cpass.set_bind_group(0, &gfx.lightmap_prop_bind_groups[(i as usize) % 2], &[]);
-            cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
+            // Seed pass
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("lightmap-seed"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&gfx.lightmap_seed_pipeline);
+                cpass.set_bind_group(0, &gfx.lightmap_seed_bind_group, &[]);
+                cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
+            }
+
+            // Propagation passes
+            for i in 0..LIGHTMAP_PROP_ITERATIONS {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("lightmap-propagate"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&gfx.lightmap_prop_pipeline);
+                cpass.set_bind_group(0, &gfx.lightmap_prop_bind_groups[(i as usize) % 2], &[]);
+                cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
+            }
         }
 
         // Compute pass 2: raytrace (per-pixel, render resolution)

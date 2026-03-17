@@ -257,7 +257,7 @@ const FIRE_COLOR_HOT: vec3<f32> = vec3<f32>(1.0, 0.85, 0.4);    // bright yellow
 const ELIGHT_COLOR: vec3<f32> = vec3<f32>(0.95, 0.92, 0.85);    // warm white (~4000K)
 
 // Point light proximity glow radius and intensity
-const GLOW_RADIUS: f32 = 8.0;
+const GLOW_RADIUS: f32 = 6.0;
 const FIRE_GLOW_INTENSITY: f32 = 0.70;
 const ELIGHT_GLOW_INTENSITY: f32 = 0.85;
 
@@ -384,8 +384,8 @@ fn compute_directional_bleed(wx: f32, wy: f32) -> vec4<f32> {
     var total_color = vec3<f32>(0.0);
     let bx = i32(floor(wx));
     let by = i32(floor(wy));
-    let search = 10;
-    let max_range = 10.0;
+    let search = 6;
+    let max_range = 6.0;
 
     for (var dy: i32 = -search; dy <= search; dy++) {
         for (var dx: i32 = -search; dx <= search; dx++) {
