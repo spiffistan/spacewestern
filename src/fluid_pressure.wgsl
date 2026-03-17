@@ -5,22 +5,11 @@
 // sealed rooms can accumulate pressure above atmospheric.
 
 struct FluidParams {
-    sim_w: f32,
-    sim_h: f32,
-    dye_w: f32,
-    dye_h: f32,
-    dt: f32,
-    dissipation: f32,
-    vorticity_strength: f32,
-    pressure_iterations: f32,
-    splat_x: f32,
-    splat_y: f32,
-    splat_vx: f32,
-    splat_vy: f32,
-    splat_radius: f32,
-    splat_active: f32,
-    time: f32,
-    _pad: f32,
+    sim_w: f32, sim_h: f32, dye_w: f32, dye_h: f32,
+    dt: f32, dissipation: f32, vorticity_strength: f32, pressure_iterations: f32,
+    splat_x: f32, splat_y: f32, splat_vx: f32, splat_vy: f32,
+    splat_radius: f32, splat_active: f32, time: f32, wind_x: f32,
+    wind_y: f32, smoke_rate: f32, _pad2: f32, _pad3: f32,
 };
 
 @group(0) @binding(0) var pressure_in: texture_2d<f32>;

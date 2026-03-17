@@ -1431,6 +1431,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color += light_color_out * light_intensity_out * camera.light_bleed_mul * night_boost;
     }
 
+    // Border zone: 20-tile edge fades to dark fog-of-war
+    let border_dist = min(
+        min(world_x, camera.grid_w - world_x),
+        min(world_y, camera.grid_h - world_y)
+    );
+    let border_fade = clamp((border_dist - 5.0) / 15.0, 0.0, 1.0);
+    color = mix(vec3(0.12, 0.12, 0.15), color, border_fade);
+
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 
     // Fluid sim overlay
@@ -1438,18 +1446,28 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let smoke = textureSampleLevel(fluid_dye_tex, fluid_dye_sampler, fluid_uv, 0.0);
 
     if camera.fluid_overlay < 0.5 {
-        // Normal mode: subtle smoke blending
-        let smoke_alpha = clamp(smoke.a, 0.0, 0.85);
-        color = mix(color, smoke.rgb, smoke_alpha);
+        // Normal mode: smoke (R), O2 depletion, CO2 effects
+        let smoke_density = clamp(smoke.r * 0.4, 0.0, 0.85) * border_fade;
+        let smoke_color = vec3(0.75, 0.73, 0.72);
+        color = mix(color, smoke_color, smoke_density);
+
+        // O2 depletion: darkening + slight blue tint
+        let o2_deficit = clamp(1.0 - smoke.g, 0.0, 1.0) * border_fade;
+        color *= 1.0 - o2_deficit * 0.3;
+        color = mix(color, vec3(0.05, 0.05, 0.15), o2_deficit * 0.2);
+
+        // CO2: slight darkening
+        let co2 = clamp(smoke.b, 0.0, 1.0) * border_fade;
+        color *= 1.0 - co2 * 0.15;
     } else if camera.fluid_overlay < 1.5 {
-        // Smoke debug: amplified dye density as false-color heat map
-        let density = clamp(smoke.a * 3.0, 0.0, 1.0);
+        // Smoke overlay: R channel density as heat map
+        let density = clamp(smoke.r, 0.0, 1.0);
         let heat = vec3(
             clamp(density * 3.0, 0.0, 1.0),
             clamp(density * 3.0 - 1.0, 0.0, 1.0),
             clamp(density * 3.0 - 2.0, 0.0, 1.0)
         );
-        color = mix(color * 0.3, heat, clamp(density * 2.0, 0.0, 0.9));
+        color = mix(color * 0.3, heat, clamp(density * 2.0, 0.0, 0.9) * border_fade);
     } else if camera.fluid_overlay < 2.5 {
         // Velocity: real velocity field visualization
         let sim_pos = vec2<i32>(vec2<f32>(world_x, world_y));
@@ -1464,8 +1482,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             clamp(2.0 - abs(angle * 6.0 - 2.0), 0.0, 1.0),
             clamp(2.0 - abs(angle * 6.0 - 4.0), 0.0, 1.0)
         ) * norm_mag;
-        color = mix(color * 0.3, vel_color, clamp(norm_mag * 2.0, 0.0, 0.9));
-    } else {
+        color = mix(color * 0.3, vel_color, clamp(norm_mag * 2.0, 0.0, 0.9) * border_fade);
+    } else if camera.fluid_overlay < 3.5 {
         // Pressure: absolute pressure with ROYGBIV colormap (violet=low, red=high)
         // Bilinear interpolation for smooth display
         let fp = vec2<f32>(world_x, world_y) - 0.5;
@@ -1503,7 +1521,17 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             pcolor = mix(vec3(1.0, 0.5, 0.0), vec3(1.0, 0.0, 0.0), t);   // orange → red
         }
 
-        color = mix(color * 0.25, pcolor, clamp(abs_p * 2.5 + 0.1, 0.0, 0.9));
+        color = mix(color * 0.25, pcolor, clamp(abs_p * 2.5 + 0.1, 0.0, 0.9) * border_fade);
+    } else if camera.fluid_overlay < 4.5 {
+        // O2: blue (high/atmospheric) to red (depleted)
+        let o2 = clamp(smoke.g, 0.0, 1.0);
+        let o2_color = mix(vec3(0.9, 0.1, 0.0), vec3(0.1, 0.4, 1.0), o2);
+        color = mix(color * 0.3, o2_color, 0.7 * border_fade);
+    } else {
+        // CO2: dark (none) to yellow-green (high)
+        let co2 = clamp(smoke.b * 3.0, 0.0, 1.0);
+        let co2_color = mix(vec3(0.05, 0.1, 0.05), vec3(0.85, 0.9, 0.2), co2);
+        color = mix(color * 0.3, co2_color, clamp(co2 + 0.1, 0.0, 0.8) * border_fade);
     }
 
     textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));

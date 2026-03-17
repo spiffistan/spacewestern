@@ -3,22 +3,11 @@
 // All share one bind group layout. Unused bindings are bound to dummies.
 
 struct FluidParams {
-    sim_w: f32,
-    sim_h: f32,
-    dye_w: f32,
-    dye_h: f32,
-    dt: f32,
-    dissipation: f32,
-    vorticity_strength: f32,
-    pressure_iterations: f32,
-    splat_x: f32,
-    splat_y: f32,
-    splat_vx: f32,
-    splat_vy: f32,
-    splat_radius: f32,
-    splat_active: f32,
-    time: f32,
-    _pad: f32,
+    sim_w: f32, sim_h: f32, dye_w: f32, dye_h: f32,
+    dt: f32, dissipation: f32, vorticity_strength: f32, pressure_iterations: f32,
+    splat_x: f32, splat_y: f32, splat_vx: f32, splat_vy: f32,
+    splat_radius: f32, splat_active: f32, time: f32, wind_x: f32,
+    wind_y: f32, smoke_rate: f32, _pad2: f32, _pad3: f32,
 };
 
 // --- Bind group layout (shared by all entry points) ---
@@ -196,10 +185,17 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         let center = vec2<f32>(f32(pos.x) + 0.5, f32(pos.y) + 0.5);
         let phase = fract(sin(dot(center, vec2(127.1, 311.7))) * 43758.5) * 6.28;
         let wobble = vec2(
-            sin(params.time * 5.3 + phase) * 5.0,
-            cos(params.time * 4.1 + phase) * 5.0
+            sin(params.time * 5.3 + phase) * 4.0,
+            cos(params.time * 4.1 + phase) * 4.0
         );
-        new_v += (vec2(0.0, -12.0) + wobble) * params.dt;
+        new_v += (vec2(0.0, -20.0) + wobble) * params.dt;
+    }
+
+    // Global wind: outdoor cells receive wind force
+    let bh = (block >> 8u) & 0xFFu;
+    let has_roof = ((block >> 16u) & 2u) != 0u;
+    if bh == 0u && !has_roof {
+        new_v += vec2(params.wind_x, params.wind_y) * params.dt;
     }
 
     textureStore(vel_out, gid.xy, vec4(new_v, 0.0, 0.0));

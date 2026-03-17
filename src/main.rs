@@ -93,92 +93,104 @@ fn generate_test_grid() -> Vec<u32> {
         }
     };
 
+    // Center the building cluster in the map (offset from border)
+    let ox = 90u32;
+    let oy = 84u32;
+
+    let oset = |grid: &mut Vec<u32>, x: u32, y: u32, b: u32| {
+        if x + ox < GRID_W && y + oy < GRID_H {
+            grid[((y + oy) * w + (x + ox)) as usize] = b;
+        }
+    };
+
     // === House 1: Stone cottage (roofed, with windows) ===
     // Walls: x=10..29, y=10..25
     let h1_h = 3u8; // wall height
     let roof_flag = 2u8; // bit1 = has_roof
     // Top and bottom walls
     for x in 10..30 {
-        set(&mut grid, x, 10, make_block(1, h1_h, 0));
-        set(&mut grid, x, 25, make_block(1, h1_h, 0));
+        oset(&mut grid, x, 10, make_block(1, h1_h, 0));
+        oset(&mut grid, x, 25, make_block(1, h1_h, 0));
     }
     // Left and right walls
     for y in 10..26 {
-        set(&mut grid, 10, y, make_block(1, h1_h, 0));
-        set(&mut grid, 29, y, make_block(1, h1_h, 0));
+        oset(&mut grid, 10, y, make_block(1, h1_h, 0));
+        oset(&mut grid, 29, y, make_block(1, h1_h, 0));
     }
     // Windows (glass) in house 1 — top wall
-    set(&mut grid, 14, 10, make_block(5, h1_h, 0)); // glass
-    set(&mut grid, 15, 10, make_block(5, h1_h, 0));
-    set(&mut grid, 24, 10, make_block(5, h1_h, 0));
-    set(&mut grid, 25, 10, make_block(5, h1_h, 0));
+    oset(&mut grid, 14, 10, make_block(5, h1_h, 0)); // glass
+    oset(&mut grid, 15, 10, make_block(5, h1_h, 0));
+    oset(&mut grid, 24, 10, make_block(5, h1_h, 0));
+    oset(&mut grid, 25, 10, make_block(5, h1_h, 0));
     // Windows — bottom wall
-    set(&mut grid, 14, 25, make_block(5, h1_h, 0));
-    set(&mut grid, 15, 25, make_block(5, h1_h, 0));
-    set(&mut grid, 24, 25, make_block(5, h1_h, 0));
-    set(&mut grid, 25, 25, make_block(5, h1_h, 0));
+    oset(&mut grid, 14, 25, make_block(5, h1_h, 0));
+    oset(&mut grid, 15, 25, make_block(5, h1_h, 0));
+    oset(&mut grid, 24, 25, make_block(5, h1_h, 0));
+    oset(&mut grid, 25, 25, make_block(5, h1_h, 0));
     // Windows — side walls
-    set(&mut grid, 10, 15, make_block(5, h1_h, 0));
-    set(&mut grid, 10, 20, make_block(5, h1_h, 0));
-    set(&mut grid, 29, 15, make_block(5, h1_h, 0));
-    set(&mut grid, 29, 20, make_block(5, h1_h, 0));
+    oset(&mut grid, 10, 15, make_block(5, h1_h, 0));
+    oset(&mut grid, 10, 20, make_block(5, h1_h, 0));
+    oset(&mut grid, 29, 15, make_block(5, h1_h, 0));
+    oset(&mut grid, 29, 20, make_block(5, h1_h, 0));
     // Door
-    set(&mut grid, 20, 10, make_block(4, 1, 1)); // door (low, flag=door)
+    oset(&mut grid, 20, 10, make_block(4, 1, 1)); // door (low, flag=door)
     // Roof: fill interior with roofed floor
     for y in 11..25 {
         for x in 11..29 {
-            set(&mut grid, x, y, make_block(2, 0, roof_flag)); // dirt floor + roof
+            oset(&mut grid, x, y, make_block(2, 0, roof_flag)); // dirt floor + roof
         }
     }
     // Interior divider wall in house 1 (splits into two rooms)
     // Horizontal wall from x=11..28 at y=18, with a door at x=16
     for x in 11..29 {
-        set(&mut grid, x, 18, make_block(1, h1_h, 0));
+        oset(&mut grid, x, 18, make_block(1, h1_h, 0));
     }
-    set(&mut grid, 16, 18, make_block(4, 1, 1)); // door in divider
+    oset(&mut grid, 16, 18, make_block(4, 1, 1)); // door in divider
 
     // Small alcove wall in north room (L-shaped room test)
     for y in 11..15 {
-        set(&mut grid, 22, y, make_block(1, h1_h, 0));
+        oset(&mut grid, 22, y, make_block(1, h1_h, 0));
     }
 
     // Fireplace in south room of house 1
-    set(&mut grid, 19, 21, make_block(6, 1, roof_flag)); // fireplace (height 1, roofed)
+    oset(&mut grid, 19, 21, make_block(6, 1, roof_flag)); // fireplace (height 1, roofed)
+    // Outdoor fireplace (for comparison with indoor — O2 doesn't deplete outside)
+    oset(&mut grid, 40, 15, make_block(6, 1, 0)); // no roof flag = outdoor
     // Electric light in north room
-    set(&mut grid, 15, 14, make_block(7, 0, roof_flag)); // electric light (height 0, roofed)
+    oset(&mut grid, 15, 14, make_block(7, 0, roof_flag)); // electric light (height 0, roofed)
 
     // === House 2: Tall building (roofed, with windows) ===
     let h2_h = 5u8;
     for x in 35..55 {
-        set(&mut grid, x, 30, make_block(1, h2_h, 0));
-        set(&mut grid, x, 50, make_block(1, h2_h, 0));
+        oset(&mut grid, x, 30, make_block(1, h2_h, 0));
+        oset(&mut grid, x, 50, make_block(1, h2_h, 0));
     }
     for y in 30..51 {
-        set(&mut grid, 35, y, make_block(1, h2_h, 0));
-        set(&mut grid, 54, y, make_block(1, h2_h, 0));
+        oset(&mut grid, 35, y, make_block(1, h2_h, 0));
+        oset(&mut grid, 54, y, make_block(1, h2_h, 0));
     }
     // Windows — evenly spaced along each wall
     for &wx in &[38u32, 41, 44, 47, 50] {
-        set(&mut grid, wx, 30, make_block(5, h2_h, 0));
-        set(&mut grid, wx, 50, make_block(5, h2_h, 0));
+        oset(&mut grid, wx, 30, make_block(5, h2_h, 0));
+        oset(&mut grid, wx, 50, make_block(5, h2_h, 0));
     }
     for &wy in &[34u32, 38, 42, 46] {
-        set(&mut grid, 35, wy, make_block(5, h2_h, 0));
-        set(&mut grid, 54, wy, make_block(5, h2_h, 0));
+        oset(&mut grid, 35, wy, make_block(5, h2_h, 0));
+        oset(&mut grid, 54, wy, make_block(5, h2_h, 0));
     }
     // Door
-    set(&mut grid, 45, 30, make_block(4, 1, 1));
+    oset(&mut grid, 45, 30, make_block(4, 1, 1));
     // Interior room divider wall
     for x in 36..54 {
-        set(&mut grid, x, 40, make_block(1, h2_h, 0));
+        oset(&mut grid, x, 40, make_block(1, h2_h, 0));
     }
-    set(&mut grid, 44, 40, make_block(4, 1, 1)); // door in divider
+    oset(&mut grid, 44, 40, make_block(4, 1, 1)); // door in divider
     // Roof: fill interior
     for y in 31..50 {
         for x in 36..54 {
-            let existing = grid[(y * w + x) as usize];
+            let existing = grid[((y + oy) * w + (x + ox)) as usize];
             if block_type_rs(existing) == 0 || block_type_rs(existing) == 2 {
-                set(&mut grid, x, y, make_block(2, 0, roof_flag));
+                oset(&mut grid, x, y, make_block(2, 0, roof_flag));
             }
         }
     }
@@ -186,47 +198,47 @@ fn generate_test_grid() -> Vec<u32> {
     // === Small shed (low walls, glass roof/skylight feel) ===
     let h3_h = 2u8;
     for x in 45..52 {
-        set(&mut grid, x, 8, make_block(1, h3_h, 0));
-        set(&mut grid, x, 14, make_block(1, h3_h, 0));
+        oset(&mut grid, x, 8, make_block(1, h3_h, 0));
+        oset(&mut grid, x, 14, make_block(1, h3_h, 0));
     }
     for y in 8..15 {
-        set(&mut grid, 45, y, make_block(1, h3_h, 0));
-        set(&mut grid, 51, y, make_block(1, h3_h, 0));
+        oset(&mut grid, 45, y, make_block(1, h3_h, 0));
+        oset(&mut grid, 51, y, make_block(1, h3_h, 0));
     }
     // Glass windows on sides
-    set(&mut grid, 48, 8, make_block(5, h3_h, 0));
-    set(&mut grid, 48, 14, make_block(5, h3_h, 0));
-    set(&mut grid, 45, 11, make_block(5, h3_h, 0));
-    set(&mut grid, 51, 11, make_block(5, h3_h, 0));
+    oset(&mut grid, 48, 8, make_block(5, h3_h, 0));
+    oset(&mut grid, 48, 14, make_block(5, h3_h, 0));
+    oset(&mut grid, 45, 11, make_block(5, h3_h, 0));
+    oset(&mut grid, 51, 11, make_block(5, h3_h, 0));
     // Door
-    set(&mut grid, 49, 14, make_block(4, 1, 1));
+    oset(&mut grid, 49, 14, make_block(4, 1, 1));
     // Roof
     for y in 9..14 {
         for x in 46..51 {
-            set(&mut grid, x, y, make_block(2, 0, roof_flag));
+            oset(&mut grid, x, y, make_block(2, 0, roof_flag));
         }
     }
 
     // Water pool (unchanged)
     for y in 40..48 {
         for x in 12..22 {
-            set(&mut grid, x, y, make_block(3, 0, 0));
+            oset(&mut grid, x, y, make_block(3, 0, 0));
         }
     }
 
     // Some standalone glass walls (like a greenhouse fragment)
     for x in 5..9 {
-        set(&mut grid, x, 55, make_block(5, 2, 0));
-        set(&mut grid, x, 60, make_block(5, 2, 0));
+        oset(&mut grid, x, 55, make_block(5, 2, 0));
+        oset(&mut grid, x, 60, make_block(5, 2, 0));
     }
     for y in 55..61 {
-        set(&mut grid, 5, y, make_block(5, 2, 0));
-        set(&mut grid, 8, y, make_block(5, 2, 0));
+        oset(&mut grid, 5, y, make_block(5, 2, 0));
+        oset(&mut grid, 8, y, make_block(5, 2, 0));
     }
     // Greenhouse interior: roofed
     for y in 56..60 {
         for x in 6..8 {
-            set(&mut grid, x, y, make_block(2, 0, roof_flag));
+            oset(&mut grid, x, y, make_block(2, 0, roof_flag));
         }
     }
 
@@ -499,22 +511,11 @@ struct CameraUniform {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct FluidParams {
-    sim_w: f32,
-    sim_h: f32,
-    dye_w: f32,
-    dye_h: f32,
-    dt: f32,
-    dissipation: f32,
-    vorticity_strength: f32,
-    pressure_iterations: f32,
-    splat_x: f32,
-    splat_y: f32,
-    splat_vx: f32,
-    splat_vy: f32,
-    splat_radius: f32,
-    splat_active: f32,
-    time: f32,
-    _pad: f32,
+    sim_w: f32, sim_h: f32, dye_w: f32, dye_h: f32,
+    dt: f32, dissipation: f32, vorticity_strength: f32, pressure_iterations: f32,
+    splat_x: f32, splat_y: f32, splat_vx: f32, splat_vy: f32,
+    splat_radius: f32, splat_active: f32, time: f32, wind_x: f32,
+    wind_y: f32, smoke_rate: f32, _pad2: f32, _pad3: f32,
 }
 
 const FLUID_SIM_W: u32 = 256;
@@ -550,6 +551,8 @@ enum FluidOverlay {
     Smoke,     // show dye density as colored overlay
     Velocity,  // show velocity magnitude as heatmap
     Pressure,  // show pressure field
+    O2,        // show O2 levels (blue=high, red=depleted)
+    CO2,       // show CO2 levels (dark=none, yellow-green=high)
 }
 
 // --- Application state ---
@@ -672,8 +675,8 @@ impl App {
             gfx: None,
             egui_state: None,
             camera: CameraUniform {
-                center_x: 30.0, // centered on the houses area
-                center_y: 30.0,
+                center_x: 128.0, // centered on the map
+                center_y: 128.0,
                 zoom: 1.0, // will be set in init_gfx_async to fit map
                 show_roofs: 0.0,
                 screen_w: 800.0,
@@ -732,7 +735,11 @@ impl App {
                 splat_radius: 5.0,
                 splat_active: 0.0,
                 time: 0.0,
-                _pad: 0.0,
+                wind_x: 3.0,
+                wind_y: 0.0,
+                smoke_rate: 0.3,
+                _pad2: 0.0,
+                _pad3: 0.0,
             },
             fluid_overlay: FluidOverlay::None,
             fluid_speed: 1.0,
@@ -1293,7 +1300,7 @@ impl App {
                 mip_level_count: 1, sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             })
         };
@@ -1306,6 +1313,39 @@ impl App {
         let fluid_curl_tex = make_fluid_tex("fluid-curl", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::R32Float);
         let fluid_dye_a = make_fluid_tex("fluid-dye-a", FLUID_DYE_W, FLUID_DYE_H, wgpu::TextureFormat::Rgba16Float);
         let fluid_dye_b = make_fluid_tex("fluid-dye-b", FLUID_DYE_W, FLUID_DYE_H, wgpu::TextureFormat::Rgba16Float);
+
+        // Initialize dye textures with O2 = 1.0 (channel G = f16(1.0) = 0x3C00)
+        {
+            let texels = (FLUID_DYE_W * FLUID_DYE_H) as usize;
+            let mut init_data = vec![0u8; texels * 8]; // 8 bytes per RGBA16Float texel
+            for i in 0..texels {
+                // G channel = f16(1.0) = 0x3C00, little-endian at byte offset 2
+                init_data[i * 8 + 2] = 0x00;
+                init_data[i * 8 + 3] = 0x3C;
+            }
+            for tex in [&fluid_dye_a, &fluid_dye_b] {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &init_data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(FLUID_DYE_W * 8),
+                        rows_per_image: Some(FLUID_DYE_H),
+                    },
+                    wgpu::Extent3d {
+                        width: FLUID_DYE_W,
+                        height: FLUID_DYE_H,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+
         let fluid_obstacle_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("fluid-obstacle"),
             size: wgpu::Extent3d { width: FLUID_SIM_W, height: FLUID_SIM_H, depth_or_array_layers: 1 },
@@ -2091,6 +2131,8 @@ impl App {
             FluidOverlay::Smoke => 1.0,
             FluidOverlay::Velocity => 2.0,
             FluidOverlay::Pressure => 3.0,
+            FluidOverlay::O2 => 4.0,
+            FluidOverlay::CO2 => 5.0,
         };
 
         let gfx = self.gfx.as_ref().unwrap();
@@ -2177,7 +2219,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v30 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v32 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -2273,6 +2315,20 @@ impl App {
                     .text("Fluid speed")
                     .step_by(0.1));
                 self.fluid_speed = fluid_spd;
+                ui.horizontal(|ui| {
+                    ui.label("Wind:");
+                    let mut wx = self.fluid_params.wind_x;
+                    let mut wy = self.fluid_params.wind_y;
+                    ui.add(egui::Slider::new(&mut wx, -20.0..=20.0).text("X").step_by(0.5));
+                    ui.add(egui::Slider::new(&mut wy, -20.0..=20.0).text("Y").step_by(0.5));
+                    self.fluid_params.wind_x = wx;
+                    self.fluid_params.wind_y = wy;
+                });
+                let mut sr = self.fluid_params.smoke_rate;
+                ui.add(egui::Slider::new(&mut sr, 0.0..=1.0)
+                    .text("Smoke rate")
+                    .step_by(0.05));
+                self.fluid_params.smoke_rate = sr;
 
                 ui.separator();
                 ui.label("Camera");
@@ -2350,6 +2406,12 @@ impl App {
                         if ui.selectable_label(*ov == FluidOverlay::Pressure, "Pressure").clicked() {
                             *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
                         }
+                        if ui.selectable_label(*ov == FluidOverlay::O2, "O2").clicked() {
+                            *ov = if *ov == FluidOverlay::O2 { FluidOverlay::None } else { FluidOverlay::O2 };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::CO2, "CO2").clicked() {
+                            *ov = if *ov == FluidOverlay::CO2 { FluidOverlay::None } else { FluidOverlay::CO2 };
+                        }
                         ui.separator();
                         let mut debug = self.debug_mode;
                         if ui.selectable_label(debug, "Debug").clicked() {
@@ -2384,10 +2446,10 @@ impl App {
                 block_info = format!("{}(h{}){}{}", type_name, bh, roof, door);
             }
 
-            let [r, g, b, a] = self.debug_fluid_density;
+            let [smoke_r, o2, co2, _unused] = self.debug_fluid_density;
             let tip = format!(
-                "({:.1}, {:.1})\n{}\nSmoke: {:.3} (a={:.3})\nRGB: ({:.2}, {:.2}, {:.2})",
-                wx, wy, block_info, a, a, r, g, b
+                "({:.1}, {:.1})\n{}\nSmoke: {:.3}\nO2: {:.3}\nCO2: {:.3}",
+                wx, wy, block_info, smoke_r, o2, co2
             );
 
             // Position tooltip near cursor

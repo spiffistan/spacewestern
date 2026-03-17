@@ -4,22 +4,11 @@
 // Also injects smoke at fire block positions and mouse splat dye.
 
 struct FluidParams {
-    sim_w: f32,
-    sim_h: f32,
-    dye_w: f32,
-    dye_h: f32,
-    dt: f32,
-    dissipation: f32,
-    vorticity_strength: f32,
-    pressure_iterations: f32,
-    splat_x: f32,
-    splat_y: f32,
-    splat_vx: f32,
-    splat_vy: f32,
-    splat_radius: f32,
-    splat_active: f32,
-    time: f32,
-    _pad: f32,
+    sim_w: f32, sim_h: f32, dye_w: f32, dye_h: f32,
+    dt: f32, dissipation: f32, vorticity_strength: f32, pressure_iterations: f32,
+    splat_x: f32, splat_y: f32, splat_vx: f32, splat_vy: f32,
+    splat_radius: f32, splat_active: f32, time: f32, wind_x: f32,
+    wind_y: f32, smoke_rate: f32, _pad2: f32, _pad3: f32,
 };
 
 @group(0) @binding(0) var dye_in: texture_2d<f32>;
@@ -101,10 +90,10 @@ fn bilinear_dye(pos: vec2<f32>) -> vec4<f32> {
     let obs01 = is_obstacle(vec2<i32>(vec2<f32>(p01) * scale));
     let obs11 = is_obstacle(vec2<i32>(vec2<f32>(p11) * scale));
 
-    if obs00 { d00 = vec4(0.0); }
-    if obs10 { d10 = vec4(0.0); }
-    if obs01 { d01 = vec4(0.0); }
-    if obs11 { d11 = vec4(0.0); }
+    if obs00 { d00 = vec4(0.0, 1.0, 0.0, 0.0); }
+    if obs10 { d10 = vec4(0.0, 1.0, 0.0, 0.0); }
+    if obs01 { d01 = vec4(0.0, 1.0, 0.0, 0.0); }
+    if obs11 { d11 = vec4(0.0, 1.0, 0.0, 0.0); }
 
     return mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
 }
@@ -124,10 +113,10 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     let scale = dye_to_sim();
     let inv_scale = sim_to_dye();
 
-    // Check if this dye texel is inside an obstacle — walls have zero smoke
+    // Check if this dye texel is inside an obstacle — walls have no smoke, atmospheric O2
     let sim_cell = vec2<i32>(vec2<f32>(gid.xy) * scale);
     if is_obstacle(sim_cell) {
-        textureStore(dye_out, gid.xy, vec4(0.0));
+        textureStore(dye_out, gid.xy, vec4(0.0, 1.0, 0.0, 0.0));
         return;
     }
 
@@ -143,8 +132,9 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Obstacle-aware bilinear sample of dye at backtraced position
     var result = bilinear_dye(back_pos);
 
-    // Dissipation
-    result *= params.dissipation;
+    // Per-channel dissipation: smoke fades, O2 and CO2 are conserved
+    result.r *= params.dissipation;  // smoke fades over time
+    // O2 (G) and CO2 (B) are conserved gases — no dissipation
 
     // --- Fire source injection ---
     let bx = sim_cell.x;
@@ -153,16 +143,34 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         let block = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         let bt = block & 0xFFu;
         if bt == 6u {
-            // Fire block: inject warm smoke
+            // Fire block: O2-dependent combustion
+            let fire_o2 = result.g;
+            let fire_strength = clamp(fire_o2 * 3.0 - 0.5, 0.0, 1.0);
             let wx = f32(bx) + 0.5;
             let wy = f32(by) + 0.5;
             let phase = fire_hash(vec2(wx, wy)) * 6.28;
             let flicker = sin(params.time * 8.3 + phase) * 0.3 + 0.7;
-            result += vec4(1.0 * flicker, 0.6 * flicker, 0.35 * flicker, 2.0 * flicker);
+            // Produce smoke (scaled by smoke_rate slider)
+            result.r += params.smoke_rate * flicker * fire_strength;
+            // Consume O2
+            result.g -= 0.03 * fire_strength;
+            // Produce CO2
+            result.b += 0.02 * fire_strength;
         }
     }
 
-    // --- Mouse splat dye injection ---
+    // Outdoor cells: fresh air exchange (O2 recovers, CO2 dissipates)
+    if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
+        let block_full = grid[u32(by) * u32(params.sim_w) + u32(bx)];
+        let has_roof = ((block_full >> 16u) & 2u) != 0u;
+        let btype = block_full & 0xFFu;
+        if !has_roof && (btype == 0u || btype == 2u) {
+            result.g += (1.0 - result.g) * 0.008;  // O2 recovery toward 1.0
+            result.b *= 0.992;                       // CO2 dissipates outdoors
+        }
+    }
+
+    // --- Mouse splat dye injection (smoke channel only) ---
     if params.splat_active > 0.5 {
         let splat_dye_pos = vec2(params.splat_x, params.splat_y) * inv_scale;
         let dx = dye_pos - splat_dye_pos;
@@ -170,13 +178,7 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         let r = params.splat_radius * inv_scale.x;
         let r2 = r * r;
         let factor = exp(-d2 / r2);
-        let hue = atan2(params.splat_vy, params.splat_vx) * 0.159 + 0.5;
-        let splat_color = vec3(
-            abs(hue * 6.0 - 3.0) - 1.0,
-            2.0 - abs(hue * 6.0 - 2.0),
-            2.0 - abs(hue * 6.0 - 4.0)
-        );
-        result += vec4(clamp(splat_color, vec3(0.2), vec3(1.0)) * factor, factor * 0.5);
+        result.r += factor * 0.5;
     }
 
     // --- Diffusion: smoke spreads to adjacent cells (physical mixing in still air) ---
@@ -188,15 +190,45 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     let avg_neighbors = (d_l + d_r + d_u + d_d) * 0.25;
     result += (avg_neighbors - result) * 0.1;
 
-    // --- Accumulation: cells with smoke gain density (particles settling/mixing) ---
-    if result.a > 0.01 {
-        let smoke_color = result.rgb / max(result.a, 0.01); // preserve color ratio
-        result.a += 0.01;
-        result = vec4(smoke_color * result.a, result.a);
+    // --- Accumulation: smoke gains density only when smoke_rate > 0 ---
+    if params.smoke_rate > 0.01 && result.r > 0.05 {
+        result.r += 0.005 * params.smoke_rate;
     }
 
-    // Clamp smoke density to prevent unbounded growth
-    result = clamp(result, vec4(0.0), vec4(3.0, 3.0, 3.0, 2.0));
+    // --- Edge zone: gases reset to atmospheric at map borders ---
+    let edge_dist = min(
+        min(f32(bx), params.sim_w - f32(bx)),
+        min(f32(by), params.sim_h - f32(by))
+    );
+    if edge_dist < 20.0 {
+        let edge_fade = clamp(edge_dist / 20.0, 0.0, 1.0);
+        result.r *= edge_fade;               // smoke dissipates at edges
+        result.b *= edge_fade;               // CO2 dissipates at edges
+        result.g += (1.0 - result.g) * (1.0 - edge_fade) * 0.05; // O2 recovers at edges
+    }
+
+    // --- Windward edge: inject fresh O2 from upwind direction ---
+    // Wind blows FROM the upwind edge, carrying fresh air into the map
+    let wind_mag = length(vec2(params.wind_x, params.wind_y));
+    if wind_mag > 0.1 {
+        let wind_dir = vec2(params.wind_x, params.wind_y) / wind_mag;
+        // Distance from upwind edge (where wind enters the map)
+        let upwind_x = select(f32(bx), params.sim_w - f32(bx), wind_dir.x > 0.0);
+        let upwind_y = select(f32(by), params.sim_h - f32(by), wind_dir.y > 0.0);
+        let upwind_dist = min(upwind_x * abs(wind_dir.x) + upwind_y * abs(wind_dir.y), 30.0);
+        if upwind_dist < 15.0 {
+            let fresh_air = (1.0 - upwind_dist / 15.0) * 0.02;
+            result.g += (1.0 - result.g) * fresh_air;  // inject O2
+            result.r *= 1.0 - fresh_air;                // clear smoke
+            result.b *= 1.0 - fresh_air;                // clear CO2
+        }
+    }
+
+    // Per-channel clamping
+    result.r = clamp(result.r, 0.0, 2.0);   // smoke
+    result.g = clamp(result.g, 0.0, 1.0);   // O2
+    result.b = clamp(result.b, 0.0, 1.5);   // CO2
+    result.a = 0.0;                           // unused
 
     textureStore(dye_out, gid.xy, result);
 }
