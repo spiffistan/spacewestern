@@ -39,7 +39,7 @@ struct Camera {
     ambient_b: f32,
     enable_prox_glow: f32,
     enable_dir_bleed: f32,
-    _pad2: f32,
+    force_refresh: f32,
     _pad3: f32,
     _pad4: f32,
     prev_center_x: f32,
@@ -1176,9 +1176,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let time_delta = abs(camera.time - camera.prev_time);
         let time_stable = time_delta < 0.0005; // only truly paused time allows reprojection
 
-        // Only reproject when NOTHING changed: camera still, time paused, no fluid
+        // Only reproject when NOTHING changed: camera still, time paused, no fluid, no grid change
         let can_reproject = zoom_stable && in_prev_bounds && time_stable
-            && camera_delta < 0.001 && !near_fluid;
+            && camera_delta < 0.001 && !near_fluid
+            && camera.force_refresh < 0.5;
 
         if can_reproject {
             // Use exact integer coords when camera hasn't moved (avoids sub-pixel drift)

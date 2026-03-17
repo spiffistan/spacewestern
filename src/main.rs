@@ -519,7 +519,7 @@ struct CameraUniform {
     ambient_b: f32,          // precomputed ambient B
     enable_prox_glow: f32,   // 1.0 = on, 0.0 = off
     enable_dir_bleed: f32,   // 1.0 = on, 0.0 = off
-    _pad2: f32,
+    force_refresh: f32,      // 1.0 = skip reprojection this frame (grid changed)
     _pad3: f32,
     _pad4: f32,
     prev_center_x: f32,
@@ -731,7 +731,7 @@ impl App {
                 ambient_r: 0.0, ambient_g: 0.0, ambient_b: 0.0,
                 enable_prox_glow: 1.0,
                 enable_dir_bleed: 1.0,
-                _pad2: 0.0, _pad3: 0.0, _pad4: 0.0,
+                force_refresh: 1.0, _pad3: 0.0, _pad4: 0.0,
                 prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
@@ -985,14 +985,14 @@ impl App {
             return;
         }
 
-        // Toggle electric light on/off (swap between type 7 and type 2 dirt)
-        if bt == 7 {
-            // Turn off: replace with dirt floor, preserve roof flag + roof height
+        // Remove any light source by clicking on it (replace with dirt floor)
+        if bt == 6 || bt == 7 || bt == 10 || bt == 11 {
             let roof_flag = flags & 2;
             let roof_h = block & 0xFF000000;
             self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
             self.grid_dirty = true;
-            log::info!("Light OFF at ({}, {})", bx, by);
+            let name = match bt { 6 => "Fireplace", 7 => "Electric light", 10 => "Floor lamp", 11 => "Table lamp", _ => "Light" };
+            log::info!("Removed {} at ({}, {})", name, bx, by);
         }
     }
 
@@ -2363,8 +2363,20 @@ impl App {
             FluidOverlay::O2 => 4.0,
             FluidOverlay::CO2 => 5.0,
         };
+        let prev_glow = self.camera.enable_prox_glow;
+        let prev_bleed = self.camera.enable_dir_bleed;
         self.camera.enable_prox_glow = if self.enable_prox_glow { 1.0 } else { 0.0 };
         self.camera.enable_dir_bleed = if self.enable_dir_bleed { 1.0 } else { 0.0 };
+
+        // Force refresh when grid changes or render settings toggle
+        // Persist for several frames so lightmap has time to propagate changes
+        let settings_changed = (self.camera.enable_prox_glow - prev_glow).abs() > 0.5
+            || (self.camera.enable_dir_bleed - prev_bleed).abs() > 0.5;
+        if self.grid_dirty || settings_changed {
+            self.camera.force_refresh = 5.0; // refresh for 5 frames
+        } else if self.camera.force_refresh > 0.5 {
+            self.camera.force_refresh -= 1.0;
+        }
 
         let gfx = self.gfx.as_ref().unwrap();
 
@@ -2450,7 +2462,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v36 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v37 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
