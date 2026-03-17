@@ -115,10 +115,22 @@ fn generate_test_grid() -> Vec<u32> {
             set(&mut grid, x, y, make_block(2, 0, roof_flag)); // dirt floor + roof
         }
     }
-    // Fireplace in center of house 1
-    set(&mut grid, 19, 17, make_block(6, 1, roof_flag)); // fireplace (height 1, roofed)
-    // Electric light near left-wall window (2 tiles east of window at x=10, y=15)
-    set(&mut grid, 12, 15, make_block(7, 0, roof_flag)); // electric light (height 0, roofed)
+    // Interior divider wall in house 1 (splits into two rooms)
+    // Horizontal wall from x=11..28 at y=18, with a door at x=16
+    for x in 11..29 {
+        set(&mut grid, x, 18, make_block(1, h1_h, 0));
+    }
+    set(&mut grid, 16, 18, make_block(4, 1, 1)); // door in divider
+
+    // Small alcove wall in north room (L-shaped room test)
+    for y in 11..15 {
+        set(&mut grid, 22, y, make_block(1, h1_h, 0));
+    }
+
+    // Fireplace in south room of house 1
+    set(&mut grid, 19, 21, make_block(6, 1, roof_flag)); // fireplace (height 1, roofed)
+    // Electric light in north room
+    set(&mut grid, 15, 14, make_block(7, 0, roof_flag)); // electric light (height 0, roofed)
 
     // === House 2: Tall building (roofed, with windows) ===
     let h2_h = 5u8;
@@ -232,7 +244,10 @@ struct CameraUniform {
     grid_w: f32,
     grid_h: f32,
     time: f32, // elapsed seconds, drives sun animation
-    _pad2: f32,
+    // Lightmap tuning parameters (adjustable via UI)
+    glass_light_mul: f32,     // how much interior light shows through glass (default 0.12)
+    indoor_glow_mul: f32,     // indoor floor glow strength from point lights (default 0.25)
+    light_bleed_mul: f32,     // outdoor ground glow from interior lights (default 0.6)
 }
 
 // --- Application state ---
@@ -256,6 +271,8 @@ struct App {
     last_frame_time: Instant, // for delta-time calculation
 }
 
+const LIGHTMAP_PROP_ITERATIONS: u32 = 16;
+
 struct GfxState {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -263,6 +280,13 @@ struct GfxState {
     config: wgpu::SurfaceConfiguration,
     #[allow(dead_code)]
     surface_format: wgpu::TextureFormat,
+    // Lightmap: seed + iterative propagation (ping-pong, 64x64)
+    lightmap_seed_pipeline: wgpu::ComputePipeline,
+    lightmap_seed_bind_group: wgpu::BindGroup,
+    lightmap_prop_pipeline: wgpu::ComputePipeline,
+    lightmap_prop_bind_groups: [wgpu::BindGroup; 2], // [0]: read A write B, [1]: read B write A
+    lightmap_textures: [wgpu::Texture; 2],
+    // Raytrace pass (per-pixel, screen resolution)
     compute_pipeline: wgpu::ComputePipeline,
     compute_bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
@@ -294,7 +318,9 @@ impl App {
                 grid_w: GRID_W as f32,
                 grid_h: GRID_H as f32,
                 time: 0.0,
-                _pad2: 0.0,
+                glass_light_mul: 0.12,
+                indoor_glow_mul: 0.25,
+                light_bleed_mul: 0.6,
             },
             grid_data: Vec::new(),
             grid_dirty: false,
@@ -345,8 +371,10 @@ impl App {
 
         self.camera.screen_w = width as f32;
         self.camera.screen_h = height as f32;
-        // Fit map to canvas: zoom = pixels per world unit
-        self.camera.zoom = height as f32 / GRID_H as f32;
+        // Fit map to canvas: zoom = pixels per world unit (use smaller axis)
+        let fit_w = width as f32 / GRID_W as f32;
+        let fit_h = height as f32 / GRID_H as f32;
+        self.camera.zoom = fit_w.min(fit_h);
         log::info!("init_gfx: {}x{} (physical), zoom={}", width, height, self.camera.zoom);
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -438,7 +466,207 @@ impl App {
         });
         queue.write_buffer(&grid_buffer, 0, bytemuck::cast_slice(&self.grid_data));
 
-        // --- Compute pipeline ---
+        // --- Lightmap textures (two for ping-pong, 64x64) ---
+        let lightmap_desc = wgpu::TextureDescriptor {
+            label: Some("lightmap-texture-a"),
+            size: wgpu::Extent3d {
+                width: GRID_W,
+                height: GRID_H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+        let lightmap_a = device.create_texture(&lightmap_desc);
+        let lightmap_b = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("lightmap-texture-b"),
+            ..lightmap_desc
+        });
+        let lm_view_a = lightmap_a.create_view(&wgpu::TextureViewDescriptor::default());
+        let lm_view_b = lightmap_b.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Lightmap sampler (bilinear for smooth gradients — used by raytrace shader)
+        let lightmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("lightmap-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // --- Lightmap seed pipeline (writes to texture A) ---
+        let lightmap_seed_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("lightmap-seed"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("lightmap.wgsl").into()),
+        });
+
+        let seed_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lightmap-seed-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let lightmap_seed_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lightmap-seed-bg"),
+            layout: &seed_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&lm_view_a),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: grid_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let lightmap_seed_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("lightmap-seed-pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("lightmap-seed-pl"),
+                bind_group_layouts: &[&seed_bgl],
+                push_constant_ranges: &[],
+            })),
+            module: &lightmap_seed_shader,
+            entry_point: Some("main_lightmap_seed"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // --- Lightmap propagation pipeline (reads texture_2d, writes storage) ---
+        let lightmap_prop_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("lightmap-propagate"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("lightmap_propagate.wgsl").into()),
+        });
+
+        let prop_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lightmap-prop-bgl"),
+            entries: &[
+                // binding 0: source lightmap (read via textureLoad)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 1: destination lightmap (write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // binding 2: camera uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 3: grid buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        // Bind group [0]: read A, write B
+        let prop_bg_0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lightmap-prop-bg-0"),
+            layout: &prop_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&lm_view_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&lm_view_b) },
+                wgpu::BindGroupEntry { binding: 2, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+
+        // Bind group [1]: read B, write A
+        let prop_bg_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lightmap-prop-bg-1"),
+            layout: &prop_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&lm_view_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&lm_view_a) },
+                wgpu::BindGroupEntry { binding: 2, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: grid_buffer.as_entire_binding() },
+            ],
+        });
+
+        let lightmap_prop_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("lightmap-prop-pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("lightmap-prop-pl"),
+                bind_group_layouts: &[&prop_bgl],
+                push_constant_ranges: &[],
+            })),
+            module: &lightmap_prop_shader,
+            entry_point: Some("main_lightmap_propagate"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // --- Raytrace compute pipeline (now also reads the lightmap) ---
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("raytrace-compute"),
             source: wgpu::ShaderSource::Wgsl(include_str!("raytrace.wgsl").into()),
@@ -478,8 +706,28 @@ impl App {
                         },
                         count: None,
                     },
+                    // Lightmap texture (sampled, bilinear)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
             });
+
+        // Raytrace shader samples the final lightmap result (texture A after even iterations)
+        let lightmap_sample_view = lightmap_a.create_view(&wgpu::TextureViewDescriptor::default());
 
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("compute-bg"),
@@ -496,6 +744,14 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: grid_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&lightmap_sample_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
                 },
             ],
         });
@@ -635,6 +891,11 @@ impl App {
             queue,
             config,
             surface_format,
+            lightmap_seed_pipeline,
+            lightmap_seed_bind_group,
+            lightmap_prop_pipeline,
+            lightmap_prop_bind_groups: [prop_bg_0, prop_bg_1],
+            lightmap_textures: [lightmap_a, lightmap_b],
             compute_pipeline,
             compute_bind_group,
             render_pipeline,
@@ -681,6 +942,18 @@ impl App {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Rebuild bind groups with new texture view
+        let lightmap_sample_view = gfx
+            .lightmap_textures[0]
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let lightmap_sampler = gfx.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("lightmap-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let compute_bgl = gfx.compute_pipeline.get_bind_group_layout(0);
         gfx.compute_bind_group = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("compute-bg"),
@@ -697,6 +970,14 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: gfx.grid_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&lightmap_sample_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
                 },
             ],
         });
@@ -789,14 +1070,17 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new("v9").color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new("v14").color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
         let mut paused = self.time_paused;
         let mut speed = self.time_speed;
         let mut zoom = self.camera.zoom;
-        let base_zoom = self.camera.screen_h / GRID_H as f32;
+        let mut glass_light = self.camera.glass_light_mul;
+        let mut indoor_glow = self.camera.indoor_glow_mul;
+        let mut bleed = self.camera.light_bleed_mul;
+                let base_zoom = (self.camera.screen_w / GRID_W as f32).min(self.camera.screen_h / GRID_H as f32);
         egui::Window::new("Time Control")
             .default_pos([10.0, 10.0])
             .default_width(300.0)
@@ -844,11 +1128,26 @@ impl App {
                 if ui.button("Reset zoom").clicked() {
                     zoom = base_zoom;
                 }
+
+                ui.separator();
+                ui.label("Lighting");
+                ui.add(egui::Slider::new(&mut glass_light, 0.0..=0.5)
+                    .text("Window glow")
+                    .step_by(0.01));
+                ui.add(egui::Slider::new(&mut indoor_glow, 0.0..=1.0)
+                    .text("Indoor glow")
+                    .step_by(0.01));
+                ui.add(egui::Slider::new(&mut bleed, 0.0..=2.0)
+                    .text("Light bleed")
+                    .step_by(0.01));
             });
         self.time_of_day = time_val;
         self.time_paused = paused;
         self.time_speed = speed;
         self.camera.zoom = zoom;
+        self.camera.glass_light_mul = glass_light;
+        self.camera.indoor_glow_mul = indoor_glow;
+        self.camera.light_bleed_mul = bleed;
 
         let egui_output = egui_state.ctx.end_pass();
         egui_state.winit_state.handle_platform_output(window, egui_output.platform_output.clone());
@@ -873,7 +1172,31 @@ impl App {
             });
         egui_state.renderer.update_buffers(&gfx.device, &gfx.queue, &mut encoder, &paint_jobs, &screen_descriptor);
 
-        // Compute pass: raytrace
+        // Lightmap pass 1: seed light sources into texture A
+        let lm_wg_x = (GRID_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let lm_wg_y = (GRID_H + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("lightmap-seed"),
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&gfx.lightmap_seed_pipeline);
+            cpass.set_bind_group(0, &gfx.lightmap_seed_bind_group, &[]);
+            cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
+        }
+
+        // Lightmap passes 2..N+1: propagate (ping-pong between textures)
+        for i in 0..LIGHTMAP_PROP_ITERATIONS {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("lightmap-propagate"),
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&gfx.lightmap_prop_pipeline);
+            cpass.set_bind_group(0, &gfx.lightmap_prop_bind_groups[(i as usize) % 2], &[]);
+            cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
+        }
+
+        // Compute pass 2: raytrace (per-pixel, screen resolution)
         {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("raytrace-pass"),
@@ -962,7 +1285,7 @@ impl ApplicationHandler for App {
 
         let attrs = Window::default_attributes()
             .with_title("Spacewestern")
-            .with_inner_size(PhysicalSize::new(2560u32, 1600u32));
+            .with_inner_size(PhysicalSize::new(2048u32, 2048u32));
 
         #[cfg(target_arch = "wasm32")]
         let attrs = {
@@ -1047,7 +1370,7 @@ impl ApplicationHandler for App {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 50.0,
                 };
-                let base_zoom = self.camera.screen_h / GRID_H as f32;
+        let base_zoom = (self.camera.screen_w / GRID_W as f32).min(self.camera.screen_h / GRID_H as f32);
                 if scroll > 0.0 {
                     self.camera.zoom *= 1.1;
                 } else if scroll < 0.0 {
