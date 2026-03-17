@@ -469,7 +469,11 @@ struct CameraUniform {
     foliage_opacity: f32,     // overall canopy shadow density (0=transparent, 1=opaque) (default 0.55)
     foliage_variation: f32,   // per-tree randomness in shadow density (default 0.3)
     oblique_strength: f32,    // wall face visibility per height unit (default 0.12)
-    _pad1: f32,
+    lm_vp_min_x: f32,        // lightmap viewport min x (grid coordinates)
+    lm_vp_min_y: f32,        // lightmap viewport min y (grid coordinates)
+    lm_vp_max_x: f32,        // lightmap viewport max x (grid coordinates)
+    lm_vp_max_y: f32,        // lightmap viewport max y (grid coordinates)
+    lm_scale: f32,           // lightmap texels per grid cell (e.g. 2.0 for 2x resolution)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -515,8 +519,11 @@ struct App {
     hover_world: (f32, f32),   // world coords under mouse cursor
 }
 
-const LIGHTMAP_PROP_ITERATIONS: u32 = 16;
-const LIGHTMAP_UPDATE_INTERVAL: u32 = 6; // recompute lightmap every N frames (~10fps at 60fps)
+const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
+const LIGHTMAP_W: u32 = GRID_W * LIGHTMAP_SCALE;
+const LIGHTMAP_H: u32 = GRID_H * LIGHTMAP_SCALE;
+const LIGHTMAP_PROP_ITERATIONS: u32 = 26; // more iterations for 2x res (covers ~13 tile radius)
+const LIGHTMAP_UPDATE_INTERVAL: u32 = 2; // recompute every N frames (~30fps lightmap at 60fps)
 const RENDER_SCALE: f32 = 0.5; // render at half resolution, upscale via blit
 
 struct GfxState {
@@ -526,9 +533,9 @@ struct GfxState {
     config: wgpu::SurfaceConfiguration,
     #[allow(dead_code)]
     surface_format: wgpu::TextureFormat,
-    // Lightmap: seed + iterative propagation (ping-pong, 64x64)
+    // Lightmap: seed + iterative propagation (ping-pong, 512x512 at 2x scale)
     lightmap_seed_pipeline: wgpu::ComputePipeline,
-    lightmap_seed_bind_group: wgpu::BindGroup,
+    lightmap_seed_bind_groups: [wgpu::BindGroup; 2], // [0]: write A, [1]: write B
     lightmap_prop_pipeline: wgpu::ComputePipeline,
     lightmap_prop_bind_groups: [wgpu::BindGroup; 2], // [0]: read A write B, [1]: read B write A
     lightmap_textures: [wgpu::Texture; 2],
@@ -571,7 +578,11 @@ impl App {
                 foliage_opacity: 0.55,
                 foliage_variation: 0.3,
                 oblique_strength: 0.12,
-                _pad1: 0.0,
+                lm_vp_min_x: 0.0,
+                lm_vp_min_y: 0.0,
+                lm_vp_max_x: GRID_W as f32,
+                lm_vp_max_y: GRID_H as f32,
+                lm_scale: LIGHTMAP_SCALE as f32,
             },
             grid_data: Vec::new(),
             grid_dirty: false,
@@ -917,12 +928,12 @@ impl App {
         });
         queue.write_buffer(&sprite_buffer, 0, bytemuck::cast_slice(&sprite_data));
 
-        // --- Lightmap textures (two for ping-pong, 64x64) ---
+        // --- Lightmap textures (two for ping-pong, at LIGHTMAP_SCALE × grid resolution) ---
         let lightmap_desc = wgpu::TextureDescriptor {
             label: Some("lightmap-texture-a"),
             size: wgpu::Extent3d {
-                width: GRID_W,
-                height: GRID_H,
+                width: LIGHTMAP_W,
+                height: LIGHTMAP_H,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -992,13 +1003,31 @@ impl App {
             ],
         });
 
-        let lightmap_seed_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("lightmap-seed-bg"),
+        let lightmap_seed_bind_group_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lightmap-seed-bg-a"),
             layout: &seed_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(&lm_view_a),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: grid_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let lightmap_seed_bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lightmap-seed-bg-b"),
+            layout: &seed_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&lm_view_b),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1358,7 +1387,7 @@ impl App {
             config,
             surface_format,
             lightmap_seed_pipeline,
-            lightmap_seed_bind_group,
+            lightmap_seed_bind_groups: [lightmap_seed_bind_group_a, lightmap_seed_bind_group_b],
             lightmap_prop_pipeline,
             lightmap_prop_bind_groups: [prop_bg_0, prop_bg_1],
             lightmap_textures: [lightmap_a, lightmap_b],
@@ -1527,6 +1556,15 @@ impl App {
             self.grid_dirty = false;
         }
 
+        // Compute lightmap viewport bounds (grid coordinates with margin for light propagation)
+        let half_w = self.camera.screen_w * 0.5 / self.camera.zoom;
+        let half_h = self.camera.screen_h * 0.5 / self.camera.zoom;
+        let lm_margin = 14.0; // tiles of margin (>= max light radius)
+        self.camera.lm_vp_min_x = (self.camera.center_x - half_w - lm_margin).max(0.0);
+        self.camera.lm_vp_min_y = (self.camera.center_y - half_h - lm_margin).max(0.0);
+        self.camera.lm_vp_max_x = (self.camera.center_x + half_w + lm_margin).min(GRID_W as f32);
+        self.camera.lm_vp_max_y = (self.camera.center_y + half_h + lm_margin).min(GRID_H as f32);
+
         // Update camera uniform
         gfx.queue
             .write_buffer(&gfx.camera_buffer, 0, bytemuck::bytes_of(&self.camera));
@@ -1576,7 +1614,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v28 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v29 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -1776,27 +1814,35 @@ impl App {
             });
         egui_state.renderer.update_buffers(&gfx.device, &gfx.queue, &mut encoder, &paint_jobs, &screen_descriptor);
 
-        // Lightmap: only recompute every N frames (fire flicker at ~10fps is fine)
-        // Always recompute when grid is dirty (door toggle, light moved)
+        // Lightmap: viewport-culled propagation at 2x resolution
         self.lightmap_frame += 1;
-        let need_lightmap = self.grid_dirty || self.lightmap_frame >= LIGHTMAP_UPDATE_INTERVAL;
+        let need_lightmap = self.lightmap_frame >= LIGHTMAP_UPDATE_INTERVAL;
         if need_lightmap {
             self.lightmap_frame = 0;
-            let lm_wg_x = (GRID_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-            let lm_wg_y = (GRID_H + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let lm_wg_x = (LIGHTMAP_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let lm_wg_y = (LIGHTMAP_H + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
-            // Seed pass
+            // Seed pass: write to both textures (ensures clean state for ping-pong)
             {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("lightmap-seed"),
+                    label: Some("lightmap-seed-a"),
                     timestamp_writes: None,
                 });
                 cpass.set_pipeline(&gfx.lightmap_seed_pipeline);
-                cpass.set_bind_group(0, &gfx.lightmap_seed_bind_group, &[]);
+                cpass.set_bind_group(0, &gfx.lightmap_seed_bind_groups[0], &[]);
+                cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
+            }
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("lightmap-seed-b"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&gfx.lightmap_seed_pipeline);
+                cpass.set_bind_group(0, &gfx.lightmap_seed_bind_groups[1], &[]);
                 cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
             }
 
-            // Propagation passes
+            // Propagation passes (viewport-culled in shader)
             for i in 0..LIGHTMAP_PROP_ITERATIONS {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("lightmap-propagate"),

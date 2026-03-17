@@ -21,7 +21,11 @@ struct Camera {
     foliage_opacity: f32,
     foliage_variation: f32,
     oblique_strength: f32,
-    _pad1: f32,
+    lm_vp_min_x: f32,
+    lm_vp_min_y: f32,
+    lm_vp_max_x: f32,
+    lm_vp_max_y: f32,
+    lm_scale: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;

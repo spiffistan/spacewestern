@@ -1,8 +1,6 @@
-// Lightmap compute shader — two-pass iterative light propagation.
-// Pass 1 (seed): Write light source values at fire/electric light positions.
-// Pass 2 (propagate): Flood-fill light through open tiles, stop at walls.
-//   Runs N iterations ping-ponging between two textures.
-// Output: Rgba16Float texture where RGB = light color, A = light intensity.
+// Lightmap compute shader — seed pass.
+// Writes light source values at fire/electric light positions, zeros everywhere else.
+// Works at lightmap resolution (lm_scale × grid resolution).
 // The main raytrace shader bilinearly samples this for smooth gradients.
 
 struct Camera {
@@ -21,7 +19,11 @@ struct Camera {
     foliage_opacity: f32,
     foliage_variation: f32,
     oblique_strength: f32,
-    _pad1: f32,
+    lm_vp_min_x: f32,
+    lm_vp_min_y: f32,
+    lm_vp_max_x: f32,
+    lm_vp_max_y: f32,
+    lm_scale: f32,
 };
 
 // --- Seed pass bindings ---
@@ -68,14 +70,19 @@ fn fire_flicker(time: f32) -> f32 {
 }
 
 // --- Seed pass: write light source values, zero everything else ---
+// gid indexes lightmap texels (not grid cells)
 @compute @workgroup_size(8, 8)
 fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let bx = gid.x;
-    let by = gid.y;
+    let lm_w = u32(camera.grid_w * camera.lm_scale);
+    let lm_h = u32(camera.grid_h * camera.lm_scale);
 
-    if bx >= u32(camera.grid_w) || by >= u32(camera.grid_h) {
+    if gid.x >= lm_w || gid.y >= lm_h {
         return;
     }
+
+    // Convert lightmap texel to block coordinates
+    let bx = u32(f32(gid.x) / camera.lm_scale);
+    let by = u32(f32(gid.y) / camera.lm_scale);
 
     let block = get_block(i32(bx), i32(by));
     let bt = block_type(block);
@@ -83,7 +90,7 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
     var value = vec4<f32>(0.0);
 
     if bt == 6u {
-        // Fireplace
+        // Fireplace — use block coords for consistent flicker across all texels in block
         let wx = f32(bx) + 0.5;
         let wy = f32(by) + 0.5;
         let phase = fire_hash(vec2<f32>(wx, wy)) * 6.28;
@@ -102,5 +109,5 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
         value = vec4<f32>(0.95, 0.80, 0.50, 0.35);
     }
 
-    textureStore(lightmap_out, vec2<u32>(bx, by), value);
+    textureStore(lightmap_out, vec2<u32>(gid.x, gid.y), value);
 }

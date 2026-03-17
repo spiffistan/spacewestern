@@ -1,7 +1,9 @@
-// Lightmap propagation pass — iterative flood-fill.
+// Lightmap propagation pass — iterative flood-fill with viewport culling.
 // Reads from source lightmap, writes to destination lightmap.
 // Each open cell takes the brightest neighbor minus falloff.
 // Walls block propagation. Glass attenuates.
+// Works at lightmap resolution (lm_scale × grid resolution).
+// Threads outside the viewport+margin region early-return for efficiency.
 
 struct Camera {
     center_x: f32,
@@ -19,7 +21,11 @@ struct Camera {
     foliage_opacity: f32,
     foliage_variation: f32,
     oblique_strength: f32,
-    _pad1: f32,
+    lm_vp_min_x: f32,
+    lm_vp_min_y: f32,
+    lm_vp_max_x: f32,
+    lm_vp_max_y: f32,
+    lm_scale: f32,
 };
 
 @group(0) @binding(0) var lightmap_in: texture_2d<f32>;
@@ -55,27 +61,28 @@ fn is_wall(b: u32) -> bool {
     return true;
 }
 
-// Propagation falloff per cardinal step (1 block)
-const PROP_FALLOFF: f32 = 0.08;
 // Glass attenuation factor
 const GLASS_ATTEN: f32 = 0.4;
 // Tree/foliage attenuation factor
 const TREE_ATTEN: f32 = 0.5;
-// Diagonal falloff = cardinal * sqrt(2)
-const DIAG_FALLOFF: f32 = 0.1131; // 0.08 * 1.414
+// Base propagation falloff per grid cell (scaled by lm_scale for per-texel step)
+const BASE_FALLOFF: f32 = 0.08;
 
-// Try to take light from a neighbor at (nx, ny).
+// Try to take light from a neighbor at lightmap texel (ntx, nty).
 // Returns the attenuated value, or zero if blocked.
-fn sample_neighbor(nx: i32, ny: i32, falloff: f32) -> vec4<f32> {
-    if nx < 0 || ny < 0 || nx >= i32(camera.grid_w) || ny >= i32(camera.grid_h) {
+fn sample_neighbor(ntx: i32, nty: i32, falloff: f32, lm_w: i32, lm_h: i32) -> vec4<f32> {
+    if ntx < 0 || nty < 0 || ntx >= lm_w || nty >= lm_h {
         return vec4<f32>(0.0);
     }
-    let nb = get_block(nx, ny);
+    // Convert texel to block coordinates for grid lookup
+    let nbx = i32(f32(ntx) / camera.lm_scale);
+    let nby = i32(f32(nty) / camera.lm_scale);
+    let nb = get_block(nbx, nby);
     // Can't receive light from a solid wall
     if is_wall(nb) {
         return vec4<f32>(0.0);
     }
-    let nval = textureLoad(lightmap_in, vec2<i32>(nx, ny), 0);
+    let nval = textureLoad(lightmap_in, vec2<i32>(ntx, nty), 0);
     var intensity = nval.w - falloff;
     let nbt = block_type(nb);
     // Glass attenuates light passing through
@@ -94,13 +101,29 @@ fn sample_neighbor(nx: i32, ny: i32, falloff: f32) -> vec4<f32> {
 
 @compute @workgroup_size(8, 8)
 fn main_lightmap_propagate(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let bx = i32(gid.x);
-    let by = i32(gid.y);
+    let lm_w = i32(camera.grid_w * camera.lm_scale);
+    let lm_h = i32(camera.grid_h * camera.lm_scale);
+    let tx = i32(gid.x);
+    let ty = i32(gid.y);
 
-    if bx >= i32(camera.grid_w) || by >= i32(camera.grid_h) {
+    if tx >= lm_w || ty >= lm_h {
         return;
     }
 
+    // Viewport culling: skip propagation outside the viewport+margin region.
+    // Both textures were seeded with clean values, so untouched texels are correct.
+    let vp_min_tx = i32(camera.lm_vp_min_x * camera.lm_scale);
+    let vp_min_ty = i32(camera.lm_vp_min_y * camera.lm_scale);
+    let vp_max_tx = i32(camera.lm_vp_max_x * camera.lm_scale);
+    let vp_max_ty = i32(camera.lm_vp_max_y * camera.lm_scale);
+
+    if tx < vp_min_tx || tx >= vp_max_tx || ty < vp_min_ty || ty >= vp_max_ty {
+        return;
+    }
+
+    // Convert texel to block coordinates
+    let bx = i32(f32(tx) / camera.lm_scale);
+    let by = i32(f32(ty) / camera.lm_scale);
     let block = get_block(bx, by);
     let bt = block_type(block);
 
@@ -112,19 +135,23 @@ fn main_lightmap_propagate(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Light sources always keep their seed value
     if bt == 6u || bt == 7u || bt == 10u || bt == 11u {
-        let self_val = textureLoad(lightmap_in, vec2<i32>(bx, by), 0);
+        let self_val = textureLoad(lightmap_in, vec2<i32>(tx, ty), 0);
         textureStore(lightmap_out, vec2<u32>(gid.xy), self_val);
         return;
     }
 
+    // Falloff scaled by lightmap resolution (finer steps = less falloff per texel)
+    let prop_falloff = BASE_FALLOFF / camera.lm_scale;
+    let diag_falloff = prop_falloff * 1.414;
+
     // Start with own current value
-    var best = textureLoad(lightmap_in, vec2<i32>(bx, by), 0);
+    var best = textureLoad(lightmap_in, vec2<i32>(tx, ty), 0);
 
     // Cardinal neighbors
-    let n0 = sample_neighbor(bx + 1, by, PROP_FALLOFF);
-    let n1 = sample_neighbor(bx - 1, by, PROP_FALLOFF);
-    let n2 = sample_neighbor(bx, by + 1, PROP_FALLOFF);
-    let n3 = sample_neighbor(bx, by - 1, PROP_FALLOFF);
+    let n0 = sample_neighbor(tx + 1, ty, prop_falloff, lm_w, lm_h);
+    let n1 = sample_neighbor(tx - 1, ty, prop_falloff, lm_w, lm_h);
+    let n2 = sample_neighbor(tx, ty + 1, prop_falloff, lm_w, lm_h);
+    let n3 = sample_neighbor(tx, ty - 1, prop_falloff, lm_w, lm_h);
 
     if n0.w > best.w { best = n0; }
     if n1.w > best.w { best = n1; }
@@ -132,10 +159,10 @@ fn main_lightmap_propagate(@builtin(global_invocation_id) gid: vec3<u32>) {
     if n3.w > best.w { best = n3; }
 
     // Diagonal neighbors (sqrt(2) falloff for circular spread)
-    let d0 = sample_neighbor(bx + 1, by + 1, DIAG_FALLOFF);
-    let d1 = sample_neighbor(bx - 1, by + 1, DIAG_FALLOFF);
-    let d2 = sample_neighbor(bx + 1, by - 1, DIAG_FALLOFF);
-    let d3 = sample_neighbor(bx - 1, by - 1, DIAG_FALLOFF);
+    let d0 = sample_neighbor(tx + 1, ty + 1, diag_falloff, lm_w, lm_h);
+    let d1 = sample_neighbor(tx - 1, ty + 1, diag_falloff, lm_w, lm_h);
+    let d2 = sample_neighbor(tx + 1, ty - 1, diag_falloff, lm_w, lm_h);
+    let d3 = sample_neighbor(tx - 1, ty - 1, diag_falloff, lm_w, lm_h);
 
     if d0.w > best.w { best = d0; }
     if d1.w > best.w { best = d1; }
