@@ -2612,10 +2612,17 @@ impl App {
                 block_info = format!("{}(h{}){}{}", type_name, bh, roof, door);
             }
 
-            let [smoke_r, o2, co2, temp] = self.debug_fluid_density;
+            #[cfg(not(target_arch = "wasm32"))]
+            let gas_info = {
+                let [smoke_r, o2, co2, temp] = self.debug_fluid_density;
+                format!("Smoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C", smoke_r, o2, co2, temp)
+            };
+            #[cfg(target_arch = "wasm32")]
+            let gas_info = String::from("(gas readback: native only)");
+
             let tip = format!(
-                "({:.1}, {:.1})\n{}\nSmoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C",
-                wx, wy, block_info, smoke_r, o2, co2, temp
+                "({:.1}, {:.1})\n{}\n{}",
+                wx, wy, block_info, gas_info
             );
 
             // Position tooltip near cursor
@@ -2926,25 +2933,24 @@ impl App {
             gfx.queue.submit(std::iter::once(encoder.finish()));
 
             // Debug: read back the dye texel
-            // Synchronous readback — native only (WASM can't block-wait on GPU)
-            #[cfg(not(target_arch = "wasm32"))]
+            // Debug readback processing
             if self.debug_fluid_readback_pending {
                 self.debug_fluid_readback_pending = false;
-                let buffer_slice = gfx.debug_readback_buffer.slice(..);
-                buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                // Synchronous readback — native only (WASM can't block-wait on GPU)
+                #[cfg(not(target_arch = "wasm32"))]
                 {
+                    let buffer_slice = gfx.debug_readback_buffer.slice(..);
+                    buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+                    gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
                     let data = buffer_slice.get_mapped_range();
                     let f16_data: &[u16] = bytemuck::cast_slice(&data);
                     for i in 0..4 {
                         self.debug_fluid_density[i] = half_to_f32(f16_data[i]);
                     }
+                    drop(data);
+                    gfx.debug_readback_buffer.unmap();
                 }
-                gfx.debug_readback_buffer.unmap();
             }
-            // On WASM: readback not supported, tooltip shows last known values
-            #[cfg(target_arch = "wasm32")]
-            { self.debug_fluid_readback_pending = false; }
 
             let mut egui_encoder = gfx
                 .device
