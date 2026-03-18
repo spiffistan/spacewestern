@@ -12,7 +12,12 @@ mod pleb;
 use pleb::{Pleb, is_walkable_pos, astar_path};
 
 mod build;
+mod camera;
+mod fluid;
+
 use build::{BuildTool, FluidOverlay};
+use camera::CameraUniform;
+use fluid::{FluidParams, FLUID_SIM_W, FLUID_SIM_H, FLUID_DYE_W, FLUID_DYE_H, FLUID_PRESSURE_ITERS, build_obstacle_field, smoothstep_f32, half_to_f32};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -61,106 +66,6 @@ use time::Instant;
 
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
-
-fn smoothstep_f32(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-fn half_to_f32(h: u16) -> f32 {
-    let sign = ((h >> 15) & 1) as u32;
-    let exp = ((h >> 10) & 0x1F) as u32;
-    let mant = (h & 0x3FF) as u32;
-    if exp == 0 {
-        if mant == 0 { return if sign == 1 { -0.0 } else { 0.0 }; }
-        // Denormalized
-        let v = (mant as f32) / 1024.0 * 2.0f32.powi(-14);
-        return if sign == 1 { -v } else { v };
-    }
-    if exp == 31 { return if mant == 0 { f32::INFINITY } else { f32::NAN }; }
-    let v = 2.0f32.powi(exp as i32 - 15) * (1.0 + mant as f32 / 1024.0);
-    if sign == 1 { -v } else { v }
-}
-
-// --- Camera uniform ---
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct CameraUniform {
-    center_x: f32,
-    center_y: f32,
-    zoom: f32,
-    show_roofs: f32, // 0.0 = transparent (see interior), 1.0 = opaque roofs
-    screen_w: f32,
-    screen_h: f32,
-    grid_w: f32,
-    grid_h: f32,
-    time: f32, // elapsed seconds, drives sun animation
-    // Lightmap tuning parameters (adjustable via UI)
-    glass_light_mul: f32,     // how much interior light shows through glass (default 0.12)
-    indoor_glow_mul: f32,     // indoor floor glow strength from point lights (default 0.25)
-    light_bleed_mul: f32,     // outdoor ground glow from interior lights (default 0.6)
-    // Foliage shadow parameters
-    foliage_opacity: f32,     // overall canopy shadow density (0=transparent, 1=opaque) (default 0.55)
-    foliage_variation: f32,   // per-tree randomness in shadow density (default 0.3)
-    oblique_strength: f32,    // wall face visibility per height unit (default 0.12)
-    lm_vp_min_x: f32,        // lightmap viewport min x (grid coordinates)
-    lm_vp_min_y: f32,        // lightmap viewport min y (grid coordinates)
-    lm_vp_max_x: f32,        // lightmap viewport max x (grid coordinates)
-    lm_vp_max_y: f32,        // lightmap viewport max y (grid coordinates)
-    lm_scale: f32,           // lightmap texels per grid cell (e.g. 2.0 for 2x resolution)
-    fluid_overlay: f32,      // 0=off, 1=smoke, 2=velocity, 3=pressure, 4=O2, 5=CO2
-    sun_dir_x: f32,          // precomputed sun direction X
-    sun_dir_y: f32,          // precomputed sun direction Y
-    sun_elevation: f32,      // precomputed sun elevation
-    sun_intensity: f32,      // precomputed sun intensity (0=night, 1=day)
-    sun_color_r: f32,        // precomputed sun color R
-    sun_color_g: f32,        // precomputed sun color G
-    sun_color_b: f32,        // precomputed sun color B
-    ambient_r: f32,          // precomputed ambient R
-    ambient_g: f32,          // precomputed ambient G
-    ambient_b: f32,          // precomputed ambient B
-    enable_prox_glow: f32,   // 1.0 = on, 0.0 = off
-    enable_dir_bleed: f32,   // 1.0 = on, 0.0 = off
-    force_refresh: f32,      // 1.0 = skip reprojection this frame (grid changed)
-    pleb_x: f32,             // pleb world X (0 = no pleb)
-    pleb_y: f32,             // pleb world Y
-    pleb_angle: f32,         // pleb facing direction
-    pleb_selected: f32,      // 1.0 = show selection ring
-    pleb_torch: f32,         // 1.0 = torch on
-    pleb_headlight: f32,     // 1.0 = headlight on
-    prev_center_x: f32,
-    prev_center_y: f32,
-    prev_zoom: f32,
-    prev_time: f32,
-}
-
-// --- Fluid simulation uniform ---
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct FluidParams {
-    sim_w: f32, sim_h: f32, dye_w: f32, dye_h: f32,
-    dt: f32, dissipation: f32, vorticity_strength: f32, pressure_iterations: f32,
-    splat_x: f32, splat_y: f32, splat_vx: f32, splat_vy: f32,
-    splat_radius: f32, splat_active: f32, time: f32, wind_x: f32,
-    wind_y: f32, smoke_rate: f32, fan_speed: f32, _pad3: f32,
-}
-
-const FLUID_SIM_W: u32 = 256;
-const FLUID_SIM_H: u32 = 256;
-const FLUID_DYE_W: u32 = 512;
-const FLUID_DYE_H: u32 = 512;
-const FLUID_PRESSURE_ITERS: u32 = 35; // odd: final in B, clear reads B→A, cycle consistent
-
-fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
-    grid.iter().map(|&b| {
-        let bt = b & 0xFF;
-        let bh = (b >> 8) & 0xFF;
-        let is_door = (b >> 16) & 1 != 0;
-        let is_open = (b >> 16) & 4 != 0;
-        // Walls and glass block fluid. Trees, open doors, and light sources don't.
-        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 11 && bt != 12 && bt != 13 && !(is_door && is_open) { 255 } else { 0 }
-    }).collect()
-}
 
 // --- Application state ---
 struct App {
