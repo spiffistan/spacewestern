@@ -90,7 +90,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 13u)];
+    return materials[min(bt, 14u)];
 }
 
 // --- Sprite constants ---
@@ -864,7 +864,10 @@ fn block_base_color(btype: u32, flags: u32) -> vec3<f32> {
         case 9u: { return vec3<f32>(0.55, 0.38, 0.18); }    // bench (wood)
         case 10u: { return vec3<f32>(0.45, 0.35, 0.20); }   // standing lamp (floor beneath)
         case 11u: { return vec3<f32>(0.55, 0.38, 0.18); }   // table lamp (bench beneath)
-        default: { return vec3<f32>(1.0, 0.0, 1.0); }
+        default: {
+            let m = get_material(btype);
+            return vec3<f32>(m.color_r, m.color_g, m.color_b);
+        }
     }
 }
 
@@ -1813,6 +1816,20 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
             let brightness = clamp(vel_mag * 0.03, 0.0, 1.0);
             hf_color = mix(hf_color, flow_color, brightness);
+
+            // Per-block arrow showing flow direction
+            let hf_fx = fract(world_x) - 0.5;
+            let hf_fy = fract(world_y) - 0.5;
+            let hf_dir = vel_raw / vel_mag;
+            let hf_along = hf_fx * hf_dir.x + hf_fy * hf_dir.y;
+            let hf_perp = abs(-hf_fx * hf_dir.y + hf_fy * hf_dir.x);
+            let hf_arrow_len = clamp(vel_mag * 0.02, 0.1, 0.4);
+            let hf_on_shaft = hf_along > -0.05 && hf_along < hf_arrow_len && hf_perp < 0.06;
+            let hf_head_t = (hf_along - hf_arrow_len + 0.12) / 0.12;
+            let hf_on_head = hf_head_t > 0.0 && hf_head_t < 1.0 && hf_perp < 0.15 * (1.0 - hf_head_t);
+            if hf_on_shaft || hf_on_head {
+                hf_color = mix(hf_color, flow_color * 1.5, 0.8);
+            }
         }
 
         color = hf_color;

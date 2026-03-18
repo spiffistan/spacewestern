@@ -5,7 +5,7 @@
 
 use bytemuck::Zeroable;
 
-pub const NUM_MATERIALS: usize = 14;
+pub const NUM_MATERIALS: usize = 15;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]
@@ -146,6 +146,13 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.render_style = 9.0;
         m.walkable = 1.0; m.is_removable = 1.0;
         m.heat_capacity = 2.0; m.conductivity = 0.005; m.solar_absorption = 0.5;
+    }
+
+    // 14: Insulated wall (perfectly insulating — zero conductivity)
+    { let m = &mut mats[14];
+        m.color_r = 0.45; m.color_g = 0.48; m.color_b = 0.55;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
+        m.heat_capacity = 10.0; m.conductivity = 0.0; m.solar_absorption = 0.0;
     }
 
     mats
