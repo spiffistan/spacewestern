@@ -12,14 +12,16 @@ pub struct PipeCell {
     pub pressure: f32,         // internal pressure (0 = atmospheric, >0 = pressurized)
     pub gas: [f32; 4],         // [smoke, O2, CO2, temperature]
     pub volume: f32,           // effective volume (tank=10, pipe=1)
+    pub pump_rate: f32,        // for pumps/inlets: adjustable flow rate (0-20)
 }
 
 impl Default for PipeCell {
     fn default() -> Self {
         PipeCell {
             pressure: 0.0,
-            gas: [0.0, 1.0, 0.0, 15.0], // atmospheric: no smoke, full O2, no CO2, 15°C
+            gas: [0.0, 1.0, 0.0, 15.0],
             volume: 1.0,
+            pump_rate: 8.0, // default pump speed
         }
     }
 }
@@ -82,19 +84,22 @@ impl PipeNetwork {
         }
     }
 
-    /// Rebuild the network from the grid. Called when grid changes.
+    /// Rebuild the network from the grid. Preserves existing cell state —
+    /// only adds new cells and removes cells that are no longer pipe components.
     pub fn rebuild(&mut self, grid: &[u32]) {
-        self.cells.clear();
+        // Remove cells whose blocks are no longer pipe components
+        self.cells.retain(|&idx, _| {
+            is_pipe_component(block_type_rs(grid[idx as usize]))
+        });
+        // Add new cells for newly placed pipe components
         for y in 0..GRID_H {
             for x in 0..GRID_W {
                 let idx = y * GRID_W + x;
                 let bt = block_type_rs(grid[idx as usize]);
-                if is_pipe_component(bt) {
+                if is_pipe_component(bt) && !self.cells.contains_key(&idx) {
                     let mut cell = PipeCell::default();
-                    // Tanks have large volume
-                    if bt == 17 {
-                        cell.volume = 10.0;
-                    }
+                    if bt == 17 { cell.volume = 10.0; }
+                    // New cells start at atmospheric, will equalize with neighbors
                     self.cells.insert(idx, cell);
                 }
             }
@@ -105,7 +110,7 @@ impl PipeNetwork {
     /// `dt` is the frame delta time.
     /// `grid` is the block grid for reading valve states, pump directions, etc.
     /// Returns a list of (x, y, gas[4], velocity) for outlet injections.
-    pub fn tick(&mut self, dt: f32, grid: &[u32]) -> Vec<(f32, f32, [f32; 4], f32)> {
+    pub fn tick(&mut self, dt: f32, grid: &[u32], pipe_width: f32) -> Vec<(f32, f32, [f32; 4], f32)> {
         let mut outlet_injections = Vec::new();
 
         // Collect all pipe indices for iteration
@@ -128,7 +133,7 @@ impl PipeNetwork {
             }
 
             let cell = &self.cells[&idx];
-            let conductance = if bt == 17 { 2.0 } else { 1.0 }; // tanks flow faster
+            let conductance = if bt == 17 { pipe_width * 2.0 } else { pipe_width };
 
             for &(dx, dy) in &[(0i32, -1i32), (0, 1), (1, 0), (-1, 0)] {
                 let nx = x + dx;
@@ -157,25 +162,78 @@ impl PipeNetwork {
                     *pressure_delta.entry(idx).or_insert(0.0) -= flow / cell.volume;
                     *pressure_delta.entry(nidx).or_insert(0.0) += flow / neighbor.volume;
 
-                    // Gas composition transfer (proportional to flow)
-                    if flow > 0.001 {
-                        // Gas flows from this cell to neighbor
-                        let gas_flow_frac = (flow / cell.volume).min(0.1);
+                    // Gas composition transfer: unidirectional (flow direction only)
+                    // Each pair is visited from both sides, so only transfer from
+                    // high-pressure to low-pressure side to avoid double-counting.
+                    let diffusion_rate = 1.0 * dt;
+                    let flow_rate = (flow.abs() * 0.1).min(0.15);
+                    let rate = (flow_rate + diffusion_rate).min(0.2);
+
+                    if dp > 0.0 {
+                        // This cell has higher pressure → send gas to neighbor
                         let gd = gas_delta.entry(nidx).or_insert([0.0; 4]);
                         for i in 0..4 {
-                            gd[i] += (cell.gas[i] - neighbor.gas[i]) * gas_flow_frac;
+                            gd[i] += (cell.gas[i] - neighbor.gas[i]) * rate;
                         }
                     }
                 }
             }
 
-            // Phase 2: Pump — inject pressure + extract gas from environment
+            // Phase 2: Pump — inject pressure at adjustable rate
             if bt == 16 {
-                let dir_bits = (flags >> 3) & 3; // bits 3-4 = direction
-                let cell = self.cells.get(&idx).unwrap();
-                // Pump adds pressure continuously
-                let pump_rate = 0.5 * dt;
-                *pressure_delta.entry(idx).or_insert(0.0) += pump_rate;
+                let rate = self.cells[&idx].pump_rate;
+                *pressure_delta.entry(idx).or_insert(0.0) += rate * dt;
+            }
+
+            // Inlet (type 20) — extract gas from adjacent room into pipe network
+            if bt == 20 {
+                let rate = self.cells[&idx].pump_rate;
+                *pressure_delta.entry(idx).or_insert(0.0) += rate * 0.8 * dt;
+
+                // Sample adjacent non-pipe blocks to determine what gas to extract
+                // This approximates reading the fluid sim at the inlet position
+                let mut env_gas = [0.0f32, 1.0, 0.0, 15.0]; // default: fresh air
+                let mut found_room = false;
+                for &(adx, ady) in &[(0i32, -1i32), (0, 1), (1, 0), (-1, 0)] {
+                    let ax = x + adx;
+                    let ay = y + ady;
+                    if ax < 0 || ay < 0 || ax >= GRID_W as i32 || ay >= GRID_H as i32 { continue; }
+                    let aidx = (ay as u32 * GRID_W + ax as u32) as usize;
+                    let ab = grid[aidx];
+                    let abt = block_type_rs(ab);
+                    if is_pipe_component(abt) { continue; } // skip pipe neighbors
+
+                    let adj_has_roof = (block_flags_rs(ab) & 2) != 0;
+
+                    // Check for fire nearby (within 5 blocks of inlet)
+                    let mut near_fire = false;
+                    for fy in -5i32..=5 {
+                        for fx in -5i32..=5 {
+                            let cx = x + fx;
+                            let cy = y + fy;
+                            if cx < 0 || cy < 0 || cx >= GRID_W as i32 || cy >= GRID_H as i32 { continue; }
+                            let cb = grid[(cy as u32 * GRID_W + cx as u32) as usize];
+                            if block_type_rs(cb) == 6 { near_fire = true; break; }
+                        }
+                        if near_fire { break; }
+                    }
+
+                    if adj_has_roof && near_fire {
+                        // Indoor room with fire: smoky, hot, depleted O2
+                        env_gas = [0.6, 0.5, 0.25, 80.0];
+                        found_room = true;
+                    } else if adj_has_roof {
+                        // Indoor room without fire: slightly stale
+                        env_gas = [0.0, 0.9, 0.02, 18.0];
+                        found_room = true;
+                    }
+                    if found_room { break; }
+                }
+
+                let gd = gas_delta.entry(idx).or_insert([0.0; 4]);
+                for i in 0..4 {
+                    gd[i] += (env_gas[i] - cell.gas[i]) * 3.0 * dt; // strong extraction
+                }
             }
 
             // Phase 3: Outlet — release gas into environment
@@ -203,13 +261,24 @@ impl PipeNetwork {
                 for i in 0..4 {
                     cell.gas[i] = (cell.gas[i] + gd[i]).max(0.0);
                 }
-                cell.gas[1] = cell.gas[1].min(1.0); // O2 cap
+                // Clamp all gas values to sane ranges
+                cell.gas[0] = cell.gas[0].min(2.0);   // smoke
+                cell.gas[1] = cell.gas[1].min(1.0);   // O2
+                cell.gas[2] = cell.gas[2].min(2.0);   // CO2
+                cell.gas[3] = cell.gas[3].clamp(-20.0, 500.0); // temp
             }
         }
 
-        // Pressure decay (slow leak to prevent infinite buildup)
+        // Pressure decay + cap
         for cell in self.cells.values_mut() {
-            cell.pressure *= 0.999;
+            cell.pressure = (cell.pressure * 0.998).min(50.0); // cap at 50
+        }
+
+        // Thermal dissipation: pipes lose heat to ambient
+        let ambient_temp = 15.0;
+        for cell in self.cells.values_mut() {
+            let temp_diff = cell.gas[3] - ambient_temp;
+            cell.gas[3] -= temp_diff * 0.005 * dt;
         }
 
         outlet_injections

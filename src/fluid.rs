@@ -29,7 +29,10 @@ pub fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         let is_open = (b >> 16) & 4 != 0;
-        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 11 && bt != 12 && bt != 13 && !(is_door && is_open) { 255 } else { 0 }
+        // Inlets (20) and outlets (19) block gas like walls (they suck/push through the pipe system)
+        // Other pipe components (15-18) are passable
+        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 11 && bt != 12 && bt != 13
+            && !(bt >= 15 && bt <= 18) && !(is_door && is_open) { 255 } else { 0 }
     }).collect()
 }
 
@@ -37,6 +40,19 @@ pub fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
 pub fn smoothstep_f32(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Convert f32 to IEEE 754 half-precision float (u16).
+pub fn f32_to_f16(v: f32) -> u16 {
+    let bits = v.to_bits();
+    let sign = (bits >> 31) & 1;
+    let exp = ((bits >> 23) & 0xFF) as i32 - 127;
+    let mant = bits & 0x7FFFFF;
+    if exp > 15 { return ((sign << 15) | (0x1F << 10)) as u16; } // inf
+    if exp < -14 { return (sign << 15) as u16; } // zero/denorm
+    let h_exp = (exp + 15) as u32;
+    let h_mant = mant >> 13;
+    ((sign << 15) | (h_exp << 10) | h_mant) as u16
 }
 
 /// Convert IEEE 754 half-precision float to f32.

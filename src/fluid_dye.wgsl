@@ -181,6 +181,9 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
             result.b += 0.05;  // steady CO2 output
             result.r += 0.005; // trace haze (decomposition gases)
         }
+
+        // Outlet/Inlet (types 19-20) are obstacles — gas injection/extraction
+        // is handled by CPU-side pipe network writing directly to the dye texture.
     }
 
     // Outdoor cells: fresh air exchange (O2 recovers, CO2 dissipates)

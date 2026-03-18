@@ -17,7 +17,7 @@ mod fluid;
 
 use build::{BuildTool, FluidOverlay};
 use camera::CameraUniform;
-use fluid::{FluidParams, FLUID_SIM_W, FLUID_SIM_H, FLUID_DYE_W, FLUID_DYE_H, FLUID_PRESSURE_ITERS, build_obstacle_field, smoothstep_f32, half_to_f32};
+use fluid::{FluidParams, FLUID_SIM_W, FLUID_SIM_H, FLUID_DYE_W, FLUID_DYE_H, FLUID_PRESSURE_ITERS, build_obstacle_field, smoothstep_f32, half_to_f32, f32_to_f16};
 
 mod pipes;
 use pipes::PipeNetwork;
@@ -85,6 +85,10 @@ struct App {
     enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
     enable_dir_bleed: bool,       // directional light bleed (expensive)
     enable_temporal: bool,        // temporal reprojection (reuse previous frame)
+    show_pipe_overlay: bool,       // draw pipe gas contents as egui overlay
+    pipe_width: f32,               // pipe conductance multiplier (1=narrow, 10=wide)
+    selected_pump: Option<u32>,     // grid index of pump being adjusted
+    selected_pump_world: (f32, f32), // world position for pump slider
     debug_fluid_density: [f32; 4], // last readback: RGBA from dye texture at cursor
     debug_fluid_readback_pending: bool,
     fluid_mouse_active: bool,  // middle mouse button held
@@ -259,6 +263,10 @@ impl App {
             enable_prox_glow: true,
             enable_dir_bleed: true,
             enable_temporal: true,
+            show_pipe_overlay: false,
+            pipe_width: 5.0,
+            selected_pump: None,
+            selected_pump_world: (0.0, 0.0),
             debug_fluid_density: [0.0; 4],
             debug_fluid_readback_pending: false,
             fluid_dye_phase: 0,
@@ -477,7 +485,7 @@ impl App {
                     }
                 }
                 BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost
-                | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve | BuildTool::Outlet | BuildTool::Inlet => {
+                | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve => {
                     if self.can_place_at(bx, by) {
                         let roof_flag = flags & 2;
                         let rot_flags = (self.build_rotation as u8) << 3; // bits 3-4 = direction
@@ -490,12 +498,30 @@ impl App {
                             BuildTool::Pump => make_block(16, 1, roof_flag | rot_flags),
                             BuildTool::Tank => make_block(17, 1, roof_flag),
                             BuildTool::Valve => make_block(18, 1, roof_flag | 4), // start open (bit2)
-                            BuildTool::Outlet => make_block(19, 1, roof_flag | rot_flags),
-                            BuildTool::Inlet => make_block(20, 1, roof_flag | rot_flags),
                             _ => unreachable!(),
                         };
                         let roof_h = block & 0xFF000000;
                         self.grid_data[idx] = new_block | roof_h;
+                        self.grid_dirty = true;
+                        log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
+                        // Pipe stays selected for drag-to-place; others deselect
+                        if self.build_tool != BuildTool::Pipe {
+                            self.build_tool = BuildTool::None;
+                        }
+                    }
+                }
+                BuildTool::Outlet | BuildTool::Inlet => {
+                    // Can place on ground OR on walls (like fans)
+                    let on_ground = self.can_place_at(bx, by);
+                    let bt_at = block_type_rs(block);
+                    let on_wall = (bt_at == 1 || bt_at == 4) && (block >> 8) & 0xFF > 0;
+                    if on_ground || on_wall {
+                        let height = if on_wall { ((block >> 8) & 0xFF) as u8 } else { 1 };
+                        let roof_flag = flags & 2;
+                        let rot_flags = (self.build_rotation as u8) << 3;
+                        let bt_new = if self.build_tool == BuildTool::Outlet { 19 } else { 20 };
+                        let roof_h = block & 0xFF000000;
+                        self.grid_data[idx] = make_block(bt_new, height, roof_flag | rot_flags) | roof_h;
                         self.grid_dirty = true;
                         log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
                         self.build_tool = BuildTool::None;
@@ -588,13 +614,39 @@ impl App {
             return;
         }
 
+        // Click pump: toggle pump speed popup
+        if bt == 16 {
+            let pidx = by as u32 * GRID_W + bx as u32;
+            self.selected_pump = if self.selected_pump == Some(pidx) { None } else { Some(pidx) };
+            self.selected_pump_world = (bx as f32 + 0.5, by as f32 + 0.5);
+            return;
+        }
+
         // Remove any placeable by clicking on it (replace with dirt floor)
-        if bt == 6 || bt == 7 || bt == 10 || bt == 11 || bt == 13 || (bt >= 15 && bt <= 20) {
+        if bt == 6 || bt == 7 || bt == 10 || bt == 11 || bt == 13 || bt == 15 || bt == 17 || bt == 18 {
             let roof_flag = flags & 2;
             let roof_h = block & 0xFF000000;
             self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
             self.grid_dirty = true;
-            let name = match bt { 6 => "Fireplace", 7 => "Electric light", 10 => "Floor lamp", 11 => "Table lamp", 13 => "Compost", _ => "?" };
+            let name = match bt { 6 => "Fireplace", 7 => "Electric light", 10 => "Floor lamp", 11 => "Table lamp", 13 => "Compost",
+                15 => "Pipe", 16 => "Pump", 17 => "Tank", 18 => "Valve", _ => "?" };
+            log::info!("Removed {} at ({}, {})", name, bx, by);
+        }
+
+        // Remove inlet/outlet: revert to wall if wall-mounted, dirt if ground
+        if bt == 19 || bt == 20 {
+            let roof_flag = flags & 2;
+            let roof_h = block & 0xFF000000;
+            let height = ((block >> 8) & 0xFF) as u8;
+            if height > 1 {
+                // Was wall-mounted: revert to stone wall
+                self.grid_data[idx] = make_block(1, height, roof_flag) | roof_h;
+            } else {
+                // Was ground-placed: revert to dirt
+                self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
+            }
+            self.grid_dirty = true;
+            let name = if bt == 19 { "Outlet" } else { "Inlet" };
             log::info!("Removed {} at ({}, {})", name, bx, by);
         }
 
@@ -2245,9 +2297,8 @@ impl App {
             self.pipe_network.rebuild(&self.grid_data);
         }
 
-        // Tick pipe network simulation
-        let _pipe_injections = self.pipe_network.tick(dt, &self.grid_data);
-        // TODO: apply outlet injections to fluid dye texture
+        // Tick pipe network simulation — store outlet injections for post-shader application
+        let pipe_injections = self.pipe_network.tick(dt, &self.grid_data, self.pipe_width);
 
         // Upload fluid params
         self.fluid_params.time = self.time_of_day;
@@ -2447,6 +2498,9 @@ impl App {
                     .text("Fan speed")
                     .step_by(1.0));
                 self.fluid_params.fan_speed = fs;
+                ui.add(egui::Slider::new(&mut self.pipe_width, 1.0..=20.0)
+                    .text("Pipe width")
+                    .step_by(0.5));
 
                 ui.separator();
                 ui.label("Camera");
@@ -2555,6 +2609,8 @@ impl App {
                             BuildTool::Bench => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
                             BuildTool::TableLamp => "On bench".to_string(),
                             BuildTool::Fan => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}] wall", d) }
+                            BuildTool::Pump => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}]", d) }
+                            BuildTool::Inlet | BuildTool::Outlet => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}] ground/wall", d) }
                             _ => "Click place".to_string(),
                         };
                         ui.label(egui::RichText::new(hint).weak().size(9.0));
@@ -2598,6 +2654,9 @@ impl App {
                             *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
                         }
                         ui.separator();
+                        if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
+                            self.show_pipe_overlay = !self.show_pipe_overlay;
+                        }
                         let mut debug = self.debug_mode;
                         if ui.selectable_label(debug, "Debug").clicked() {
                             debug = !debug;
@@ -2694,6 +2753,8 @@ impl App {
                     0 => "air", 1 => "stone", 2 => "dirt", 3 => "water",
                     4 => "wall", 5 => "glass", 6 => "fire", 7 => "e-light",
                     8 => "tree", 9 => "bench", 10 => "floor-lamp", 11 => "table-lamp",
+                    12 => "fan", 13 => "compost", 15 => "pipe", 16 => "pump",
+                    17 => "tank", 18 => "valve", 19 => "outlet", 20 => "inlet",
                     _ => "?",
                 };
                 let roof = if flags & 2 != 0 { " R" } else { "" };
@@ -2709,9 +2770,28 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             let gas_info = String::from("(gas readback: native only)");
 
+            // Show pipe state if hovering over a pipe component
+            let pipe_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                let pidx = by as u32 * GRID_W + bx as u32;
+                let b = self.grid_data[pidx as usize];
+                let pbt = b & 0xFF;
+                if pbt >= 15 && pbt <= 20 {
+                    if let Some(cell) = self.pipe_network.cells.get(&pidx) {
+                        format!("\n--- Pipe ---\nPressure: {:.2}\nSmoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C\nVol: {:.0}",
+                            cell.pressure, cell.gas[0], cell.gas[1], cell.gas[2], cell.gas[3], cell.volume)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
             let tip = format!(
-                "({:.1}, {:.1})\n{}\n{}",
-                wx, wy, block_info, gas_info
+                "({:.1}, {:.1})\n{}\n{}{}",
+                wx, wy, block_info, gas_info, pipe_info
             );
 
             // Position tooltip near cursor
@@ -2758,8 +2838,8 @@ impl App {
                     color,
                 );
 
-                // Fan direction arrow
-                if self.build_tool == BuildTool::Fan {
+                // Direction arrow for fan, pump, inlet, outlet
+                if matches!(self.build_tool, BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet) {
                     let center = egui::pos2((sx0 + sx1) / 2.0, (sy0 + sy1) / 2.0);
                     let tile_size = (sx1 - sx0).max(1.0);
                     let (adx, ady) = match self.build_rotation {
@@ -2830,6 +2910,85 @@ impl App {
                 let last = pleb.path.last().unwrap();
                 let end = to_screen(last.0 as f32 + 0.5, last.1 as f32 + 0.5);
                 painter.circle_stroke(end, 4.0, egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(100, 255, 100, 200)));
+            }
+        }
+
+        // Pipe overlay: draw pipe gas contents as colored blocks
+        if self.show_pipe_overlay && !self.pipe_network.cells.is_empty() {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let painter = egui_state.ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("pipe_overlay"),
+            ));
+            let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                egui::pos2(sx, sy)
+            };
+            for (&idx, cell) in &self.pipe_network.cells {
+                let x = (idx % GRID_W) as f32;
+                let y = (idx / GRID_W) as f32;
+                let p0 = to_screen(x + 0.15, y + 0.15);
+                let p1 = to_screen(x + 0.85, y + 0.85);
+                // Color by gas content: smoke=gray, O2=blue, CO2=yellow, temp=red
+                let smoke = cell.gas[0].min(1.0);
+                let o2 = cell.gas[1].min(1.0);
+                let co2 = cell.gas[2].min(1.0);
+                let temp = ((cell.gas[3] - 15.0) / 100.0).clamp(0.0, 1.0);
+                let pres = (cell.pressure / 2.0).clamp(0.0, 1.0);
+                // Mix: blue for O2-rich, yellow for CO2, gray for smoke, red for hot
+                let r = ((1.0 - o2) * 0.5 + co2 * 0.8 + temp * 0.9 + smoke * 0.5).min(1.0);
+                let g = (o2 * 0.4 + co2 * 0.7 + temp * 0.2).min(1.0);
+                let b = (o2 * 0.9 + smoke * 0.3).min(1.0);
+                let alpha = (0.3 + pres * 0.4).min(0.7);
+                let color = egui::Color32::from_rgba_unmultiplied(
+                    (r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, (alpha * 255.0) as u8,
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_max(p0, p1),
+                    2.0,
+                    color,
+                );
+                // Pressure indicator: small text
+                if cam_zoom > 10.0 { // only show text when zoomed in enough
+                    let center = egui::pos2((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
+                    painter.text(
+                        center,
+                        egui::Align2::CENTER_CENTER,
+                        format!("{:.1}", cell.pressure),
+                        egui::FontId::proportional(8.0),
+                        egui::Color32::WHITE,
+                    );
+                }
+            }
+        }
+
+        // Pump speed slider popup
+        if let Some(pump_idx) = self.selected_pump {
+            let (pwx, pwy) = self.selected_pump_world;
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let sx = ((pwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
+            let sy = ((pwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
+            let mut still_valid = false;
+            egui::Area::new(egui::Id::new("pump_slider"))
+                .fixed_pos(egui::pos2(sx, sy))
+                .show(&egui_state.ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        if let Some(cell) = self.pipe_network.cells.get_mut(&pump_idx) {
+                            ui.label(egui::RichText::new("Pump").strong().size(11.0));
+                            ui.add(egui::Slider::new(&mut cell.pump_rate, 0.0..=20.0)
+                                .text("Rate")
+                                .step_by(0.5));
+                            ui.label(egui::RichText::new(format!("P: {:.1}", cell.pressure)).size(9.0).weak());
+                            still_valid = true;
+                        }
+                        if ui.small_button("Close").clicked() {
+                            still_valid = false;
+                        }
+                    });
+                });
+            if !still_valid {
+                self.selected_pump = None;
             }
         }
 
@@ -3023,6 +3182,58 @@ impl App {
             // Submit the main encoder FIRST (compute + blit) so the surface has content
             gfx.queue.submit(std::iter::once(encoder.finish()));
 
+            // Apply pipe outlet injections to dye texture (AFTER shader runs)
+            // Write into cells ADJACENT to the outlet (in the outlet's facing direction)
+            for &(ox, oy, gas, pressure) in &pipe_injections {
+                if pressure < 0.05 { continue; }
+                let grid_idx = (oy as u32) * GRID_W + (ox as u32);
+                let block = self.grid_data[grid_idx as usize];
+                let dir_bits = (block >> 19) & 3; // bits 3-4 of flags = direction
+                // Outlet direction: which way it faces (into the room)
+                let (adx, ady): (i32, i32) = match dir_bits {
+                    0 => (0, -1), // north
+                    1 => (1, 0),  // east
+                    2 => (0, 1),  // south
+                    _ => (-1, 0), // west
+                };
+                let inject_x = ox as i32 + adx;
+                let inject_y = oy as i32 + ady;
+                if inject_x < 0 || inject_y < 0 || inject_x >= GRID_W as i32 || inject_y >= GRID_H as i32 { continue; }
+
+                let dye_scale = (FLUID_DYE_W / FLUID_SIM_W) as i32;
+                let dye_x = inject_x * dye_scale;
+                let dye_y = inject_y * dye_scale;
+                let s = (pressure * 0.5).min(1.0);
+                let pixel: [u16; 4] = [
+                    f32_to_f16(gas[0] * s),
+                    f32_to_f16(gas[1].max(0.3)),
+                    f32_to_f16(gas[2] * s),
+                    f32_to_f16(gas[3]),
+                ];
+                let bytes: &[u8] = bytemuck::cast_slice(&pixel);
+                // Write to BOTH dye textures so next frame's shader reads the injection
+                // regardless of which texture is the ping-pong input
+                for dy_off in 0..dye_scale {
+                    for dx_off in 0..dye_scale {
+                        let tx = (dye_x + dx_off).clamp(0, FLUID_DYE_W as i32 - 1) as u32;
+                        let ty = (dye_y + dy_off).clamp(0, FLUID_DYE_H as i32 - 1) as u32;
+                        for dye_idx in 0..2 {
+                        gfx.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &gfx.fluid_dye[dye_idx],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d { x: tx, y: ty, z: 0 },
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            bytes,
+                            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
+                            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                        );
+                        } // for dye_idx
+                    }
+                }
+            }
+
             // Debug: read back the dye texel
             // Debug readback processing
             if self.debug_fluid_readback_pending {
@@ -3162,7 +3373,25 @@ impl ApplicationHandler for App {
                 if dx.abs() > 3.0 || dy.abs() > 3.0 {
                     self.mouse_dragged = true;
                 }
-                if self.mouse_dragged {
+                // Pipe drag-to-place: draw pipes along drag path instead of panning
+                if self.mouse_dragged && self.build_tool == BuildTool::Pipe {
+                    let (wx, wy) = self.screen_to_world(position.x, position.y);
+                    let bx = wx.floor() as i32;
+                    let by = wy.floor() as i32;
+                    if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                        let idx = (by as u32 * GRID_W + bx as u32) as usize;
+                        let block = self.grid_data[idx];
+                        let bt = block_type_rs(block);
+                        let bh = (block >> 8) & 0xFF;
+                        // Only place on empty ground
+                        if (bt == 0 || bt == 2) && bh == 0 {
+                            let roof_flag = block_flags_rs(block) & 2;
+                            let roof_h = block & 0xFF000000;
+                            self.grid_data[idx] = make_block(15, 1, roof_flag) | roof_h;
+                            self.grid_dirty = true;
+                        }
+                    }
+                } else if self.mouse_dragged {
                     self.camera.center_x -= dx as f32 * self.render_scale / self.camera.zoom;
                     self.camera.center_y -= dy as f32 * self.render_scale / self.camera.zoom;
                     self.window.as_ref().unwrap().request_redraw();
@@ -3227,7 +3456,7 @@ impl ApplicationHandler for App {
                         }
                         PhysicalKey::Code(KeyCode::KeyQ) => {
                             if !self.pleb_selected {
-                                if self.build_tool == BuildTool::Fan {
+                                if matches!(self.build_tool, BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet) {
                                     self.build_rotation = (self.build_rotation + 3) % 4;
                                 } else {
                                     self.build_rotation = (self.build_rotation + 1) % 2;
@@ -3236,7 +3465,7 @@ impl ApplicationHandler for App {
                         }
                         PhysicalKey::Code(KeyCode::KeyE) => {
                             if !self.pleb_selected {
-                                if self.build_tool == BuildTool::Fan {
+                                if matches!(self.build_tool, BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet) {
                                     self.build_rotation = (self.build_rotation + 1) % 4;
                                 } else {
                                     self.build_rotation = (self.build_rotation + 1) % 2;

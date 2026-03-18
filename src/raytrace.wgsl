@@ -382,6 +382,7 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
         if get_material(sbt).light_intensity > 0.0 { continue; } // skip light sources
 
         if sbh == 0u { continue; } // open floor
+        if sbt >= 15u && sbt <= 20u { continue; } // pipe components don't block light
 
         // Light is above this block — passes over (furniture below light height)
         if f32(sbh) <= light_h {
@@ -917,7 +918,10 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let rh = get_roof_height(bx, by);
         let is_roofed_floor = has_roof(block) && bh < 0.5;
 
-        var effective_h = bh;
+        // Pipe components (15-20) don't cast shadows — they're ground-level equipment
+        let is_pipe_block = bt >= 15u && bt <= 20u;
+
+        var effective_h = select(bh, 0.0, is_pipe_block);
         if is_roofed_floor {
             // The roof is a thin plane at height rh. Rather than a hard threshold
             // that flickers, always set effective_h to rh but apply a smooth
@@ -1385,6 +1389,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color += vec3(0.05) * max(wisp, 0.0) * heap;
     } else if btype >= 15u && btype <= 20u {
         // Piping system: auto-connected thin pipe rendering
+        // Start with dirt floor as background (pipe sits on ground)
+        color = block_base_color(2u, 0u);
+
         let n_n = block_type(get_block(bx, by - 1));
         let n_s = block_type(get_block(bx, by + 1));
         let n_e = block_type(get_block(bx + 1, by));
@@ -1394,7 +1401,6 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ce = n_e >= 15u && n_e <= 20u;
         let cw = n_w >= 15u && n_w <= 20u;
 
-        let ground = vec3<f32>(0.45, 0.35, 0.20);
         let cx = fx - 0.5;
         let cy = fy - 0.5;
 
@@ -1434,9 +1440,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if ellipse > 0.75 && ellipse < 0.95 && (rivet < 0.1 || rivet > 0.9) {
                     color = vec3(0.3, 0.32, 0.35);
                 }
-            } else {
-                color = ground;
             }
+            // else: background (dirt floor) already set above
         } else {
             // --- Pipe / Pump / Valve / Outlet / Inlet: thin round pipe ---
             let pipe_r = 0.10; // pipe radius (thin)
@@ -1538,9 +1543,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                         color = mix(color, accent * 1.8, 0.7);
                     }
                 }
-            } else {
-                color = ground;
             }
+            // else: background (dirt floor) already set above
         }
     } else {
         color = block_base_color(btype, bflags);
@@ -1550,7 +1554,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let door_is_open = is_door(block) && is_open(block);
     // Trees: transparent sprite pixels are ground-level; canopy keeps height for shadows
     let is_tree_ground = btype == 8u && !is_tree_pixel;
-    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground);
+    let is_pipe = btype >= 15u && btype <= 20u;
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)

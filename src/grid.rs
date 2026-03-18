@@ -172,6 +172,18 @@ pub fn generate_test_grid() -> Vec<u32> {
     // Door on south wall (can open to release heat)
     oset(&mut grid, 5, 39, make_block(4, 1, 1)); // closed door
 
+    // === Example pipe network: sealed room → house 2 ===
+    // Inlet on east wall of sealed room at (9, 35) — sucks smoke out
+    oset(&mut grid, 9, 35, make_block(20, seal_h, 1 << 3)); // inlet, dir=east (bits 3-4 = 1)
+    // Pipes running east from inlet
+    for x in 10..20 { oset(&mut grid, x, 35, make_block(15, 1, 0)); } // horizontal pipe run
+    // Pump at midpoint
+    oset(&mut grid, 15, 35, make_block(16, 1, 1 << 3)); // pump, dir=east
+    // Outlet into house 2's west wall at (35, 35) — pushes gas eastward into the building
+    oset(&mut grid, 35, 35, make_block(19, h2_h, 1 << 3)); // outlet, dir=east (bits 3-4 = 1)
+    // Connect pipe to house 2
+    for x in 20..35 { oset(&mut grid, x, 35, make_block(15, 1, 0)); }
+
     // Trees and bushes
     let is_bare = |grid: &Vec<u32>, x: u32, y: u32| -> bool {
         if x >= GRID_W || y >= GRID_H { return false; }
