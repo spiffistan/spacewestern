@@ -2926,6 +2926,8 @@ impl App {
             gfx.queue.submit(std::iter::once(encoder.finish()));
 
             // Debug: read back the dye texel
+            // Synchronous readback — native only (WASM can't block-wait on GPU)
+            #[cfg(not(target_arch = "wasm32"))]
             if self.debug_fluid_readback_pending {
                 self.debug_fluid_readback_pending = false;
                 let buffer_slice = gfx.debug_readback_buffer.slice(..);
@@ -2940,6 +2942,9 @@ impl App {
                 }
                 gfx.debug_readback_buffer.unmap();
             }
+            // On WASM: readback not supported, tooltip shows last known values
+            #[cfg(target_arch = "wasm32")]
+            { self.debug_fluid_readback_pending = false; }
 
             let mut egui_encoder = gfx
                 .device
