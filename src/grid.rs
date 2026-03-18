@@ -162,6 +162,16 @@ pub fn generate_test_grid() -> Vec<u32> {
     for y in 55..61 { oset(&mut grid, 5, y, make_block(5, 2, 0)); oset(&mut grid, 8, y, make_block(5, 2, 0)); }
     for y in 56..60 { for x in 6..8 { oset(&mut grid, x, y, make_block(2, 0, roof_flag)); } }
 
+    // === Sealed insulated room (thermal test — no windows, no doors) ===
+    // 8x8 interior, stone walls, fire inside
+    let seal_h = 3u8;
+    for x in 0..10 { oset(&mut grid, x, 30, make_block(1, seal_h, 0)); oset(&mut grid, x, 39, make_block(1, seal_h, 0)); }
+    for y in 30..40 { oset(&mut grid, 0, y, make_block(1, seal_h, 0)); oset(&mut grid, 9, y, make_block(1, seal_h, 0)); }
+    for y in 31..39 { for x in 1..9 { oset(&mut grid, x, y, make_block(2, 0, roof_flag)); } }
+    oset(&mut grid, 4, 35, make_block(6, 1, roof_flag)); // fire in center
+    // Door on south wall (can open to release heat)
+    oset(&mut grid, 5, 39, make_block(4, 1, 1)); // closed door
+
     // Trees and bushes
     let is_bare = |grid: &Vec<u32>, x: u32, y: u32| -> bool {
         if x >= GRID_W || y >= GRID_H { return false; }

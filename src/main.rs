@@ -2843,8 +2843,7 @@ impl App {
           let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
           p.set_pipeline(&gfx.thermal_pipeline); p.set_bind_group(0, &gfx.thermal_bind_group, &[]); p.dispatch_workgroups(tw, th, 1); }
 
-        // Debug: copy one dye texel at cursor position for readback (native only — WASM can't sync poll)
-        #[cfg(not(target_arch = "wasm32"))]
+        // Debug: copy one dye texel at cursor position for readback
         if self.debug_mode {
             let (wx, wy) = self.hover_world;
             let dye_x = ((wx / GRID_W as f32) * FLUID_DYE_W as f32).clamp(0.0, (FLUID_DYE_W - 1) as f32) as u32;
@@ -2927,7 +2926,6 @@ impl App {
             gfx.queue.submit(std::iter::once(encoder.finish()));
 
             // Debug: read back the dye texel
-            #[cfg(not(target_arch = "wasm32"))]
             if self.debug_fluid_readback_pending {
                 self.debug_fluid_readback_pending = false;
                 let buffer_slice = gfx.debug_readback_buffer.slice(..);
@@ -3101,7 +3099,9 @@ impl ApplicationHandler for App {
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::Escape) => {
                             self.placing_pleb = false;
-                            if self.pleb_selected {
+                            if self.debug_mode {
+                                self.debug_mode = false;
+                            } else if self.pleb_selected {
                                 self.pleb_selected = false;
                             } else if self.build_tool != BuildTool::None {
                                 self.build_tool = BuildTool::None;
