@@ -1504,14 +1504,34 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                     }
                     // Small dot indicator at center
                     if cdist < 0.04 { color = vc; }
-                } else if btype == 19u {
-                    // Outlet: flared end, blue accent
-                    color = mix(color, vec3(0.35, 0.50, 0.70), 0.25);
-                } else if btype == 20u {
-                    // Inlet: orange accent (sucking in)
-                    color = mix(color, vec3(0.70, 0.50, 0.30), 0.25);
-                    let suck_pulse = sin(camera.time * 4.0 + cdist * 10.0) * 0.5 + 0.5;
-                    if pipe_dist < 0.4 { color += vec3(suck_pulse * 0.05, 0.0, 0.0); }
+                } else if btype == 19u || btype == 20u {
+                    // Outlet (19): blue, arrow pointing OUT (away from pipe network)
+                    // Inlet (20): orange, arrow pointing IN (toward pipe network)
+                    let is_outlet = btype == 19u;
+                    let accent = select(vec3(0.70, 0.50, 0.30), vec3(0.35, 0.50, 0.70), is_outlet);
+                    color = mix(color, accent, 0.25);
+
+                    // Direction from flags bits 3-4 (0=N, 1=E, 2=S, 3=W)
+                    let dir_bits = (bflags >> 3u) & 3u;
+                    var arrow_dir = vec2<f32>(0.0, -1.0); // default N
+                    if dir_bits == 1u { arrow_dir = vec2(1.0, 0.0); }
+                    else if dir_bits == 2u { arrow_dir = vec2(0.0, 1.0); }
+                    else if dir_bits == 3u { arrow_dir = vec2(-1.0, 0.0); }
+
+                    // Inlet arrow points inward (flip direction)
+                    if !is_outlet { arrow_dir = -arrow_dir; }
+
+                    // Animated arrow along pipe direction
+                    let along = cx * arrow_dir.x + cy * arrow_dir.y;
+                    let perp = abs(-cx * arrow_dir.y + cy * arrow_dir.x);
+                    let anim = fract(camera.time * 2.0 - along * 3.0);
+
+                    // Arrow chevrons
+                    let chevron_pos = fract(along * 4.0 + camera.time * 2.0);
+                    let on_chevron = chevron_pos < 0.3 && perp < pipe_r * (0.8 - chevron_pos);
+                    if on_chevron && pipe_dist < 0.7 {
+                        color = mix(color, accent * 1.5, 0.5);
+                    }
                 }
             } else {
                 color = ground;
