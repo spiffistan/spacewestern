@@ -16,6 +16,18 @@ pub enum BuildTool {
     Valve,
     Outlet,
     Inlet,
+    Destroy,
+    WoodWall,
+    SteelWall,
+    SandstoneWall,
+    GraniteWall,
+    LimestoneWall,
+    WoodFloor,
+    StoneFloor,
+    ConcreteFloor,
+    Roof,
+    Window,
+    Door,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

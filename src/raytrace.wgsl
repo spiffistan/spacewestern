@@ -86,11 +86,11 @@ struct GpuMaterial {
     ignition_temp: f32,
     walkable: f32,
     is_removable: f32,
-    _pad: f32,
+    shows_wall_face: f32,
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 20u)];
+    return materials[min(bt, 25u)];
 }
 
 // --- Sprite constants ---
@@ -1226,7 +1226,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let south_block = get_block(bx, by + 1);
     let south_h = block_height(south_block);
-    let is_exterior_south = bheight > south_h && btype != 8u
+    let mat = get_material(btype);
+    let is_exterior_south = bheight > south_h && mat.shows_wall_face > 0.5
         && !(is_door(block) && is_open(block));
 
     if is_exterior_south {

@@ -87,6 +87,7 @@ struct App {
     enable_temporal: bool,        // temporal reprojection (reuse previous frame)
     show_pipe_overlay: bool,       // draw pipe gas contents as egui overlay
     pipe_width: f32,               // pipe conductance multiplier (1=narrow, 10=wide)
+    drag_start: Option<(i32, i32)>, // grid coords where drag started (for shape building)
     selected_pump: Option<u32>,     // grid index of pump being adjusted
     selected_pump_world: (f32, f32), // world position for pump slider
     debug_fluid_density: [f32; 4], // last readback: RGBA from dye texture at cursor
@@ -263,6 +264,7 @@ impl App {
             enable_prox_glow: true,
             enable_dir_bleed: true,
             enable_temporal: true,
+            drag_start: None,
             show_pipe_overlay: false,
             pipe_width: 5.0,
             selected_pump: None,
@@ -400,6 +402,179 @@ impl App {
         }
     }
 
+    /// Compute tiles for a hollow rectangle (walls) between two corners.
+    fn hollow_rect_tiles(x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<(i32, i32)> {
+        let min_x = x0.min(x1);
+        let max_x = x0.max(x1);
+        let min_y = y0.min(y1);
+        let max_y = y0.max(y1);
+        let mut tiles = Vec::new();
+        for x in min_x..=max_x {
+            tiles.push((x, min_y));
+            if max_y != min_y { tiles.push((x, max_y)); }
+        }
+        for y in (min_y + 1)..max_y {
+            tiles.push((min_x, y));
+            if max_x != min_x { tiles.push((max_x, y)); }
+        }
+        tiles
+    }
+
+    /// Compute tiles for a line (pipes) snapped to dominant axis.
+    fn line_tiles(x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<(i32, i32)> {
+        let dx = (x1 - x0).abs();
+        let dy = (y1 - y0).abs();
+        let mut tiles = Vec::new();
+        if dx >= dy {
+            // Horizontal line
+            let min_x = x0.min(x1);
+            let max_x = x0.max(x1);
+            for x in min_x..=max_x { tiles.push((x, y0)); }
+        } else {
+            // Vertical line
+            let min_y = y0.min(y1);
+            let max_y = y0.max(y1);
+            for y in min_y..=max_y { tiles.push((x0, y)); }
+        }
+        tiles
+    }
+
+    /// Compute tiles for a filled rectangle (destroy).
+    fn filled_rect_tiles(x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<(i32, i32)> {
+        let min_x = x0.min(x1);
+        let max_x = x0.max(x1);
+        let min_y = y0.min(y1);
+        let max_y = y0.max(y1);
+        let mut tiles = Vec::new();
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                tiles.push((x, y));
+            }
+        }
+        tiles
+    }
+
+    /// Check if a tile can support a roof (wall within 6 Manhattan distance).
+    fn can_support_roof(grid: &[u32], x: i32, y: i32) -> bool {
+        let max_dist = 6i32;
+        for dy in -max_dist..=max_dist {
+            for dx in -max_dist..=max_dist {
+                if dx.abs() + dy.abs() > max_dist { continue; }
+                let nx = x + dx;
+                let ny = y + dy;
+                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                let b = grid[(ny as u32 * GRID_W + nx as u32) as usize];
+                let bt = b & 0xFF;
+                let bh = (b >> 8) & 0xFF;
+                if bh > 0 && matches!(bt, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Apply the drag shape when mouse is released.
+    fn apply_drag_shape(&mut self, sx: i32, sy: i32, ex: i32, ey: i32) {
+        // Roof tool: special handling — sets flag, doesn't change block type
+        if self.build_tool == BuildTool::Roof {
+            let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
+            for (tx, ty) in tiles {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                if Self::can_support_roof(&self.grid_data, tx, ty) {
+                    let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                    let block = self.grid_data[idx];
+                    let bh = (block >> 8) & 0xFF;
+                    if bh == 0 { // only floor-level tiles
+                        self.grid_data[idx] |= 2 << 16; // set roof flag (bit 1)
+                        self.grid_dirty = true;
+                    }
+                }
+            }
+            compute_roof_heights(&mut self.grid_data);
+            return;
+        }
+
+        let tiles = match self.build_tool {
+            BuildTool::Pipe => Self::line_tiles(sx, sy, ex, ey),
+            BuildTool::Destroy => Self::filled_rect_tiles(sx, sy, ex, ey),
+            BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor => {
+                Self::filled_rect_tiles(sx, sy, ex, ey)
+            }
+            BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall
+            | BuildTool::GraniteWall | BuildTool::LimestoneWall => {
+                Self::hollow_rect_tiles(sx, sy, ex, ey)
+            }
+            _ => return,
+        };
+
+        let block_type_id = match self.build_tool {
+            BuildTool::Pipe => 15u8,
+            BuildTool::WoodWall => 21,
+            BuildTool::SteelWall => 22,
+            BuildTool::SandstoneWall => 23,
+            BuildTool::GraniteWall => 24,
+            BuildTool::LimestoneWall => 25,
+            BuildTool::WoodFloor => 26,
+            BuildTool::StoneFloor => 27,
+            BuildTool::ConcreteFloor => 28,
+            _ => 0, // destroy doesn't place
+        };
+
+        for (tx, ty) in tiles {
+            if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+            if self.build_tool == BuildTool::Destroy {
+                self.destroy_block_at(tx, ty);
+            } else {
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                let block = self.grid_data[idx];
+                let bt = block_type_rs(block);
+                let bh = (block >> 8) & 0xFF;
+                if (bt == 0 || bt == 2) && bh == 0 {
+                    let roof_flag = block_flags_rs(block) & 2;
+                    let roof_h = block & 0xFF000000;
+                    let height = if block_type_id == 15 { 1u8 } else if block_type_id >= 26 { 0u8 } else { 3u8 };
+                    self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
+                    self.grid_dirty = true;
+                }
+            }
+        }
+    }
+
+    /// Destroy a placed block at grid position, reverting to ground or wall.
+    fn destroy_block_at(&mut self, bx: i32, by: i32) {
+        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return; }
+        let idx = (by as u32 * GRID_W + bx as u32) as usize;
+        let block = self.grid_data[idx];
+        let bt = block_type_rs(block);
+        let flags = block_flags_rs(block);
+        let roof_flag = flags & 2;
+        let roof_h = block & 0xFF000000;
+        let height = ((block >> 8) & 0xFF) as u8;
+
+        // If tile has a roof flag, remove the roof first before destroying the block
+        let has_roof = (flags & 2) != 0;
+        if has_roof {
+            self.grid_data[idx] &= !(2u32 << 16); // clear roof flag
+            self.grid_dirty = true;
+            compute_roof_heights(&mut self.grid_data);
+            return; // don't destroy the block itself
+        }
+
+        // Destroyable types: lights, furniture, pipes, fans, compost, placed walls, floors
+        let is_destroyable = matches!(bt, 6 | 7 | 10 | 11 | 12 | 13 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28);
+        if !is_destroyable { return; }
+
+        // Wall-mounted items (fan, inlet, outlet with height > 1): revert to stone wall
+        if (bt == 12 || bt == 19 || bt == 20) && height > 1 {
+            self.grid_data[idx] = make_block(1, height, roof_flag) | roof_h;
+        } else {
+            // Ground-placed: revert to dirt floor
+            self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
+        }
+        self.grid_dirty = true;
+    }
+
     /// Handle left-click: build tool placement, door toggle, or light toggle
     fn handle_click(&mut self, wx: f32, wy: f32) {
         let bx = wx.floor() as i32;
@@ -411,6 +586,12 @@ impl App {
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
         let flags = block_flags_rs(block);
+
+        // Destroy tool: single click destroys one block
+        if self.build_tool == BuildTool::Destroy {
+            self.destroy_block_at(bx, by);
+            return;
+        }
 
         // Placing pleb mode
         if self.placing_pleb {
@@ -485,10 +666,11 @@ impl App {
                     }
                 }
                 BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost
-                | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve => {
+                | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve
+                | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall | BuildTool::GraniteWall | BuildTool::LimestoneWall => {
                     if self.can_place_at(bx, by) {
                         let roof_flag = flags & 2;
-                        let rot_flags = (self.build_rotation as u8) << 3; // bits 3-4 = direction
+                        let rot_flags = (self.build_rotation as u8) << 3;
                         let new_block = match self.build_tool {
                             BuildTool::Fireplace => make_block(6, 1, roof_flag),
                             BuildTool::ElectricLight => make_block(7, 0, roof_flag),
@@ -497,7 +679,12 @@ impl App {
                             BuildTool::Pipe => make_block(15, 1, roof_flag),
                             BuildTool::Pump => make_block(16, 1, roof_flag | rot_flags),
                             BuildTool::Tank => make_block(17, 1, roof_flag),
-                            BuildTool::Valve => make_block(18, 1, roof_flag | 4), // start open (bit2)
+                            BuildTool::Valve => make_block(18, 1, roof_flag | 4),
+                            BuildTool::WoodWall => make_block(21, 3, roof_flag),
+                            BuildTool::SteelWall => make_block(22, 3, roof_flag),
+                            BuildTool::SandstoneWall => make_block(23, 3, roof_flag),
+                            BuildTool::GraniteWall => make_block(24, 3, roof_flag),
+                            BuildTool::LimestoneWall => make_block(25, 3, roof_flag),
                             _ => unreachable!(),
                         };
                         let roof_h = block & 0xFF000000;
@@ -552,7 +739,34 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
-                BuildTool::None => {}
+                BuildTool::Window => {
+                    // Window (glass): replaces wall blocks
+                    let wall_types = [1u32, 4, 14, 21, 22, 23, 24, 25];
+                    if wall_types.contains(&(bt as u32)) && (block >> 8) & 0xFF > 0 {
+                        let height = ((block >> 8) & 0xFF) as u8;
+                        let roof_flag = flags & 2;
+                        let roof_h = block & 0xFF000000;
+                        self.grid_data[idx] = make_block(5, height, roof_flag) | roof_h;
+                        self.grid_dirty = true;
+                        log::info!("Placed window at ({}, {})", bx, by);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::Door => {
+                    // Door: replaces wall blocks with door
+                    let wall_types = [1u32, 5, 14, 21, 22, 23, 24, 25];
+                    if wall_types.contains(&(bt as u32)) && (block >> 8) & 0xFF > 0 {
+                        let roof_h = block & 0xFF000000;
+                        // Door: height 1, flag bit0=is_door, starts closed (bit2=0)
+                        self.grid_data[idx] = make_block(4, 1, 1) | roof_h;
+                        self.grid_dirty = true;
+                        log::info!("Placed door at ({}, {})", bx, by);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::None | BuildTool::Destroy
+                | BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor
+                | BuildTool::Roof => {}
             }
             return;
         }
@@ -622,43 +836,7 @@ impl App {
             return;
         }
 
-        // Remove any placeable by clicking on it (replace with dirt floor)
-        if bt == 6 || bt == 7 || bt == 10 || bt == 11 || bt == 13 || bt == 15 || bt == 17 || bt == 18 {
-            let roof_flag = flags & 2;
-            let roof_h = block & 0xFF000000;
-            self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
-            self.grid_dirty = true;
-            let name = match bt { 6 => "Fireplace", 7 => "Electric light", 10 => "Floor lamp", 11 => "Table lamp", 13 => "Compost",
-                15 => "Pipe", 16 => "Pump", 17 => "Tank", 18 => "Valve", _ => "?" };
-            log::info!("Removed {} at ({}, {})", name, bx, by);
-        }
-
-        // Remove inlet/outlet: revert to wall if wall-mounted, dirt if ground
-        if bt == 19 || bt == 20 {
-            let roof_flag = flags & 2;
-            let roof_h = block & 0xFF000000;
-            let height = ((block >> 8) & 0xFF) as u8;
-            if height > 1 {
-                // Was wall-mounted: revert to stone wall
-                self.grid_data[idx] = make_block(1, height, roof_flag) | roof_h;
-            } else {
-                // Was ground-placed: revert to dirt
-                self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
-            }
-            self.grid_dirty = true;
-            let name = if bt == 19 { "Outlet" } else { "Inlet" };
-            log::info!("Removed {} at ({}, {})", name, bx, by);
-        }
-
-        // Remove fan: revert to stone wall
-        if bt == 12 {
-            let roof_flag = flags & 2;
-            let roof_h = block & 0xFF000000;
-            let height = ((block >> 8) & 0xFF) as u8;
-            self.grid_data[idx] = make_block(1, height, roof_flag) | roof_h;
-            self.grid_dirty = true;
-            log::info!("Removed fan at ({}, {})", bx, by);
-        }
+        // Removal is handled by the Destroy tool, not by clicking
     }
 
     async fn init_gfx_async(&mut self, window: Arc<Window>) {
@@ -2346,7 +2524,7 @@ impl App {
                 _ => vec![(hbx, hby)],
             };
             let on_furniture = self.build_tool == BuildTool::TableLamp;
-            let on_wall = self.build_tool == BuildTool::Fan;
+            let on_wall = matches!(self.build_tool, BuildTool::Fan | BuildTool::Window | BuildTool::Door);
             tiles.iter().map(|&(tx, ty)| {
                 if on_wall {
                     let valid = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
@@ -2354,7 +2532,13 @@ impl App {
                         let b = self.grid_data[bidx];
                         let bbt = b & 0xFF;
                         let bbh = (b >> 8) & 0xFF;
-                        (bbt == 1 || bbt == 4) && bbh > 0
+                        if self.build_tool == BuildTool::Window {
+                            matches!(bbt, 1 | 4 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
+                        } else if self.build_tool == BuildTool::Door {
+                            matches!(bbt, 1 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
+                        } else {
+                            (bbt == 1 || bbt == 4) && bbh > 0
+                        }
                     } else { false };
                     ((tx, ty), valid)
                 } else {
@@ -2587,6 +2771,23 @@ impl App {
                             }
                         };
                     }
+                    ui.label(egui::RichText::new("Walls").strong().size(s));
+                    btn!(BuildTool::WoodWall, "Wood");
+                    btn!(BuildTool::SteelWall, "Steel");
+                    btn!(BuildTool::SandstoneWall, "Sandstone");
+                    btn!(BuildTool::GraniteWall, "Granite");
+                    btn!(BuildTool::LimestoneWall, "Limestone");
+                    ui.separator();
+                    ui.label(egui::RichText::new("Floor").strong().size(s));
+                    btn!(BuildTool::WoodFloor, "Wood");
+                    btn!(BuildTool::StoneFloor, "Stone");
+                    btn!(BuildTool::ConcreteFloor, "Concrete");
+                    btn!(BuildTool::Roof, "Roof");
+                    ui.separator();
+                    ui.label(egui::RichText::new("Opening").strong().size(s));
+                    btn!(BuildTool::Window, "Window");
+                    btn!(BuildTool::Door, "Door");
+                    ui.separator();
                     ui.label(egui::RichText::new("Build").strong().size(s));
                     btn!(BuildTool::Fireplace, "Fire");
                     btn!(BuildTool::Bench, "Bench");
@@ -2603,6 +2804,8 @@ impl App {
                     btn!(BuildTool::Valve, "Valve");
                     btn!(BuildTool::Outlet, "Outlet");
                     btn!(BuildTool::Inlet, "Inlet");
+                    ui.separator();
+                    btn!(BuildTool::Destroy, "Destroy");
                     if *tool != BuildTool::None {
                         ui.separator();
                         let hint = match *tool {
@@ -2611,6 +2814,11 @@ impl App {
                             BuildTool::Fan => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}] wall", d) }
                             BuildTool::Pump => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}]", d) }
                             BuildTool::Inlet | BuildTool::Outlet => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}] ground/wall", d) }
+                            BuildTool::Destroy => "Click/drag to remove".to_string(),
+                            BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor => "Drag rect".to_string(),
+                            BuildTool::Roof => "Drag rect (needs wall)".to_string(),
+                            BuildTool::Window => "Click on wall".to_string(),
+                            BuildTool::Door => "Click on wall".to_string(),
                             _ => "Click place".to_string(),
                         };
                         ui.label(egui::RichText::new(hint).weak().size(9.0));
@@ -2753,8 +2961,12 @@ impl App {
                     0 => "air", 1 => "stone", 2 => "dirt", 3 => "water",
                     4 => "wall", 5 => "glass", 6 => "fire", 7 => "e-light",
                     8 => "tree", 9 => "bench", 10 => "floor-lamp", 11 => "table-lamp",
-                    12 => "fan", 13 => "compost", 15 => "pipe", 16 => "pump",
-                    17 => "tank", 18 => "valve", 19 => "outlet", 20 => "inlet",
+                    12 => "fan", 13 => "compost", 14 => "insulated",
+                    15 => "pipe", 16 => "pump", 17 => "tank", 18 => "valve",
+                    19 => "outlet", 20 => "inlet",
+                    21 => "wood-wall", 22 => "steel-wall", 23 => "sandstone",
+                    24 => "granite", 25 => "limestone",
+                    26 => "wood-floor", 27 => "stone-floor", 28 => "concrete",
                     _ => "?",
                 };
                 let roof = if flags & 2 != 0 { " R" } else { "" };
@@ -2806,6 +3018,59 @@ impl App {
                         ui.label(egui::RichText::new(tip).monospace().size(12.0));
                     });
                 });
+        }
+
+        // Drag shape preview (walls=hollow rect, pipes=line, destroy=filled rect)
+        if let Some((sx, sy)) = self.drag_start {
+            if self.mouse_dragged {
+                let (hwx, hwy) = self.hover_world;
+                let (ex, ey) = (hwx.floor() as i32, hwy.floor() as i32);
+                let tiles = match self.build_tool {
+                    BuildTool::Pipe => Self::line_tiles(sx, sy, ex, ey),
+                    BuildTool::Destroy => Self::filled_rect_tiles(sx, sy, ex, ey),
+                    BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor
+                    | BuildTool::Roof => {
+                        Self::filled_rect_tiles(sx, sy, ex, ey)
+                    }
+                    BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall
+                    | BuildTool::GraniteWall | BuildTool::LimestoneWall => {
+                        Self::hollow_rect_tiles(sx, sy, ex, ey)
+                    }
+                    _ => Vec::new(),
+                };
+                if !tiles.is_empty() {
+                    let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+                    let painter = egui_state.ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground, egui::Id::new("drag_preview"),
+                    ));
+                    let is_destroy = self.build_tool == BuildTool::Destroy;
+                    let is_roof = self.build_tool == BuildTool::Roof;
+                    for (tx, ty) in &tiles {
+                        let color = if is_destroy {
+                            egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
+                        } else if is_roof {
+                            // Roof preview: blue=valid support, red=no support
+                            if Self::can_support_roof(&self.grid_data, *tx, *ty) {
+                                egui::Color32::from_rgba_unmultiplied(100, 160, 255, 100)
+                            } else {
+                                egui::Color32::from_rgba_unmultiplied(255, 60, 60, 80)
+                            }
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80)
+                        };
+                        let wx0 = *tx as f32;
+                        let wy0 = *ty as f32;
+                        let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                        let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                        let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                        let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
+                            0.0, color,
+                        );
+                    }
+                }
+            }
         }
 
         // Blueprint preview — draw ghost overlay for placement
@@ -3354,7 +3619,11 @@ impl ApplicationHandler for App {
             let app_ptr = self as *mut App;
             wasm_bindgen_futures::spawn_local(async move {
                 let app = unsafe { &mut *app_ptr };
-                app.init_gfx_async(window_clone).await;
+                app.init_gfx_async(window_clone.clone()).await;
+                // Force a resize + redraw after GPU init to show content immediately
+                let size = window_clone.inner_size();
+                app.resize(size);
+                window_clone.request_redraw();
             });
         }
     }
@@ -3373,24 +3642,9 @@ impl ApplicationHandler for App {
                 if dx.abs() > 3.0 || dy.abs() > 3.0 {
                     self.mouse_dragged = true;
                 }
-                // Pipe drag-to-place: draw pipes along drag path instead of panning
-                if self.mouse_dragged && self.build_tool == BuildTool::Pipe {
-                    let (wx, wy) = self.screen_to_world(position.x, position.y);
-                    let bx = wx.floor() as i32;
-                    let by = wy.floor() as i32;
-                    if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
-                        let idx = (by as u32 * GRID_W + bx as u32) as usize;
-                        let block = self.grid_data[idx];
-                        let bt = block_type_rs(block);
-                        let bh = (block >> 8) & 0xFF;
-                        // Only place on empty ground
-                        if (bt == 0 || bt == 2) && bh == 0 {
-                            let roof_flag = block_flags_rs(block) & 2;
-                            let roof_h = block & 0xFF000000;
-                            self.grid_data[idx] = make_block(15, 1, roof_flag) | roof_h;
-                            self.grid_dirty = true;
-                        }
-                    }
+                // Shape-building tools: don't pan, just track drag
+                if self.mouse_dragged && self.drag_start.is_some() {
+                    // Preview is drawn in the egui section — just don't pan
                 } else if self.mouse_dragged {
                     self.camera.center_x -= dx as f32 * self.render_scale / self.camera.zoom;
                     self.camera.center_y -= dy as f32 * self.render_scale / self.camera.zoom;
@@ -3507,14 +3761,32 @@ impl ApplicationHandler for App {
                     if state.is_pressed() {
                         self.mouse_pressed = true;
                         self.mouse_dragged = false;
+                        // Start drag for shape-building tools
+                        let is_shape_tool = matches!(self.build_tool,
+                            BuildTool::Pipe | BuildTool::Destroy
+                            | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall
+                            | BuildTool::GraniteWall | BuildTool::LimestoneWall
+                            | BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor
+                            | BuildTool::Roof);
+                        if is_shape_tool {
+                            let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                            self.drag_start = Some((wx.floor() as i32, wy.floor() as i32));
+                        }
                     } else {
-                        // Mouse released — if we didn't drag, treat as a click
-                        if !self.mouse_dragged {
+                        // Mouse released
+                        if self.mouse_dragged && self.drag_start.is_some() {
+                            // Apply the drag shape
+                            let (sx, sy) = self.drag_start.unwrap();
+                            let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                            let (ex, ey) = (wx.floor() as i32, wy.floor() as i32);
+                            self.apply_drag_shape(sx, sy, ex, ey);
+                        } else if !self.mouse_dragged {
                             let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             self.handle_click(wx, wy);
                         }
                         self.mouse_pressed = false;
                         self.mouse_dragged = false;
+                        self.drag_start = None;
                     }
                 }
                 // Right-click: pick up / drop light sources

@@ -23,7 +23,7 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        if !is_door && (bh > 0 || (bt != 0 && bt != 2 && bt != 6 && bt != 7 && bt != 10 && bt != 13)) {
+        if !is_door && (bh > 0 || (bt != 0 && bt != 2 && bt != 6 && bt != 7 && bt != 10 && bt != 13 && bt != 26 && bt != 27 && bt != 28)) {
             return false;
         }
     }

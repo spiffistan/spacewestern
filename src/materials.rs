@@ -5,7 +5,7 @@
 
 use bytemuck::Zeroable;
 
-pub const NUM_MATERIALS: usize = 21;
+pub const NUM_MATERIALS: usize = 29;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]
@@ -43,7 +43,7 @@ pub struct GpuMaterial {
     pub ignition_temp: f32,
     pub walkable: f32,            // 1.0 = plebs can walk here
     pub is_removable: f32,        // 1.0 = player can click to remove
-    pub _pad: f32,
+    pub shows_wall_face: f32,     // 1.0 = shows oblique south face (walls only)
 }
 
 pub fn build_material_table() -> Vec<GpuMaterial> {
@@ -54,11 +54,12 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.color_r = 0.05; m.color_g = 0.05; m.color_b = 0.08;
         m.light_transmission = 1.0; m.walkable = 1.0;
     }
-    // 1: Stone
+    // 1: Stone wall
     { let m = &mut mats[1];
         m.color_r = 0.52; m.color_g = 0.50; m.color_b = 0.48;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
         m.heat_capacity = 4.0; m.conductivity = 0.002; m.solar_absorption = 0.7;
+        m.shows_wall_face = 1.0;
     }
     // 2: Dirt
     { let m = &mut mats[2];
@@ -72,11 +73,12 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.light_transmission = 0.8;
         m.heat_capacity = 8.0; m.conductivity = 0.01; m.solar_absorption = 0.3;
     }
-    // 4: Wall
+    // 4: Wall (generic)
     { let m = &mut mats[4];
         m.color_r = 0.58; m.color_g = 0.56; m.color_b = 0.52;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
         m.heat_capacity = 3.0; m.conductivity = 0.003; m.solar_absorption = 0.6;
+        m.shows_wall_face = 1.0;
     }
     // 5: Glass
     { let m = &mut mats[5];
@@ -84,6 +86,7 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.render_style = 1.0;
         m.light_transmission = 0.4; m.fluid_obstacle = 1.0; m.default_height = 3.0;
         m.heat_capacity = 1.5; m.conductivity = 0.02; m.solar_absorption = 0.1;
+        m.shows_wall_face = 1.0;
     }
     // 6: Fireplace
     { let m = &mut mats[6];
@@ -139,6 +142,7 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
         m.is_removable = 1.0;
         m.heat_capacity = 1.0; m.conductivity = 0.05; m.solar_absorption = 0.8;
+        m.shows_wall_face = 1.0;
     }
     // 13: Compost
     { let m = &mut mats[13];
@@ -153,6 +157,7 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.color_r = 0.90; m.color_g = 0.90; m.color_b = 0.92;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
         m.heat_capacity = 10.0; m.conductivity = 0.0; m.solar_absorption = 0.0;
+        m.shows_wall_face = 1.0;
     }
 
     // 15: Pipe
@@ -202,6 +207,62 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.is_solid = 1.0; m.fluid_obstacle = 1.0;
         m.is_removable = 1.0;
         m.heat_capacity = 1.0; m.conductivity = 0.03; m.solar_absorption = 0.5;
+    }
+
+    // 21: Wood wall — warm, flammable, moderate insulation
+    { let m = &mut mats[21];
+        m.color_r = 0.55; m.color_g = 0.38; m.color_b = 0.18;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
+        m.heat_capacity = 2.0; m.conductivity = 0.003; m.solar_absorption = 0.4;
+        m.is_flammable = 1.0; m.ignition_temp = 250.0;
+        m.shows_wall_face = 1.0;
+    }
+    // 22: Steel wall — strong, high conductivity, fireproof
+    { let m = &mut mats[22];
+        m.color_r = 0.60; m.color_g = 0.62; m.color_b = 0.65;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
+        m.heat_capacity = 1.0; m.conductivity = 0.08; m.solar_absorption = 0.9;
+        m.shows_wall_face = 1.0;
+    }
+    // 23: Sandstone wall — warm color, moderate properties
+    { let m = &mut mats[23];
+        m.color_r = 0.72; m.color_g = 0.60; m.color_b = 0.42;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
+        m.heat_capacity = 3.5; m.conductivity = 0.004; m.solar_absorption = 0.6;
+        m.shows_wall_face = 1.0;
+    }
+    // 24: Granite wall — very strong, dense, slow to heat
+    { let m = &mut mats[24];
+        m.color_r = 0.42; m.color_g = 0.40; m.color_b = 0.45;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
+        m.heat_capacity = 5.0; m.conductivity = 0.005; m.solar_absorption = 0.8;
+        m.shows_wall_face = 1.0;
+    }
+    // 25: Limestone wall — light color, porous, moderate insulation
+    { let m = &mut mats[25];
+        m.color_r = 0.82; m.color_g = 0.78; m.color_b = 0.70;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
+        m.heat_capacity = 3.0; m.conductivity = 0.003; m.solar_absorption = 0.5;
+        m.shows_wall_face = 1.0;
+    }
+
+    // 26: Wood floor — warm brown planks, good insulation
+    { let m = &mut mats[26];
+        m.color_r = 0.55; m.color_g = 0.42; m.color_b = 0.22;
+        m.light_transmission = 1.0; m.walkable = 1.0; m.is_removable = 1.0;
+        m.heat_capacity = 2.5; m.conductivity = 0.002; m.solar_absorption = 0.4;
+    }
+    // 27: Stone floor — gray tiles, cold, durable
+    { let m = &mut mats[27];
+        m.color_r = 0.50; m.color_g = 0.48; m.color_b = 0.45;
+        m.light_transmission = 1.0; m.walkable = 1.0; m.is_removable = 1.0;
+        m.heat_capacity = 4.0; m.conductivity = 0.006; m.solar_absorption = 0.5;
+    }
+    // 28: Concrete floor — flat gray, modern
+    { let m = &mut mats[28];
+        m.color_r = 0.58; m.color_g = 0.57; m.color_b = 0.55;
+        m.light_transmission = 1.0; m.walkable = 1.0; m.is_removable = 1.0;
+        m.heat_capacity = 3.5; m.conductivity = 0.005; m.solar_absorption = 0.5;
     }
 
     mats
