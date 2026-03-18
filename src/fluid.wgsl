@@ -18,6 +18,7 @@ struct FluidParams {
 @group(0) @binding(4) var obstacle_tex: texture_2d<f32>;
 @group(0) @binding(5) var<uniform> params: FluidParams;
 @group(0) @binding(6) var<storage, read> grid: array<u32>;
+@group(0) @binding(7) var dye_tex: texture_2d<f32>;  // for temperature readback (buoyancy)
 
 // --- Helpers ---
 fn in_bounds(pos: vec2<i32>) -> bool {
@@ -177,18 +178,46 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Velocity dissipation (slight damping)
     new_v *= 0.998;
 
-    // Fire source: inject outward velocity from fire blocks
+    // Temperature-driven buoyancy: hot air expands outward
+    // Sample temperature from dye texture (A channel, dye is 2x sim resolution)
+    let dye_pos = vec2<i32>(pos.x * 2 + 1, pos.y * 2 + 1);
+    let dye_val = textureLoad(dye_tex, dye_pos, 0);
+    let air_temp = dye_val.a;
+
+    // Ambient temperature (same formula as dye shader)
+    let day_frac = fract(params.time / 60.0);
+    let sun_t = clamp((day_frac - 0.15) / 0.7, 0.0, 1.0);
+    let ambient_temp = mix(5.0, 25.0, sin(sun_t * 3.14159));
+
+    let temp_delta = air_temp - ambient_temp;
+    if temp_delta > 1.0 {
+        // Hot air: radial expansion with turbulent wobble
+        let buoyancy_strength = clamp(temp_delta * 0.08, 0.0, 25.0);
+        let center = vec2<f32>(f32(pos.x) + 0.5, f32(pos.y) + 0.5);
+        let phase = fract(sin(dot(center, vec2(127.1, 311.7))) * 43758.5) * 6.28;
+        let wobble = vec2(
+            sin(params.time * 5.3 + phase) * 3.0,
+            cos(params.time * 4.1 + phase) * 3.0
+        );
+        // Upward bias (in top-down this manifests as slight northward drift)
+        new_v += (vec2(0.0, -buoyancy_strength) + wobble) * params.dt;
+    } else if temp_delta < -5.0 {
+        // Cold air: slight downward settling (southward in top-down)
+        let cold_sink = clamp(-temp_delta * 0.02, 0.0, 5.0);
+        new_v += vec2(0.0, cold_sink) * params.dt;
+    }
+
+    // Fire source: extra turbulent kick at fire blocks
     let block = grid[u32(pos.y) * u32(params.sim_w) + u32(pos.x)];
     let bt = block & 0xFFu;
     if bt == 6u {
-        // Fireplace: hot air expands outward with turbulent wobble
         let center = vec2<f32>(f32(pos.x) + 0.5, f32(pos.y) + 0.5);
         let phase = fract(sin(dot(center, vec2(127.1, 311.7))) * 43758.5) * 6.28;
         let wobble = vec2(
             sin(params.time * 5.3 + phase) * 4.0,
             cos(params.time * 4.1 + phase) * 4.0
         );
-        new_v += (vec2(0.0, -20.0) + wobble) * params.dt;
+        new_v += wobble * params.dt;
     }
 
     // Fan: force velocity in fan direction (overrides pressure correction)

@@ -1038,6 +1038,7 @@ impl App {
                 wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 7, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
             ],
         });
 
@@ -1138,6 +1139,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
                 wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
             ],
         });
         // vorticity: reads vel_A, curl → writes vel_B
@@ -1151,6 +1153,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
                 wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
             ],
         });
         // splat: reads vel_B → writes vel_A
@@ -1164,6 +1167,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
                 wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
             ],
         });
         // divergence: reads vel_A → writes div
@@ -1177,6 +1181,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
                 wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
             ],
         });
         // gradient: reads vel_A, pres_A → writes vel_B
@@ -1190,9 +1195,10 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
                 wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
             ],
         });
-        // advect_vel: reads vel_B → writes vel_A
+        // advect_vel: reads vel_B → writes vel_A (uses dye for buoyancy)
         let fluid_bg_advect_vel = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("fluid-bg-advect-vel"), layout: &fluid_sim_bgl,
             entries: &[
@@ -1203,6 +1209,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
                 wgpu::BindGroupEntry { binding: 5, resource: fluid_params_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
             ],
         });
 

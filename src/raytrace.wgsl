@@ -1635,6 +1635,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // CO2: slight darkening
         let co2 = clamp(smoke.b, 0.0, 1.0);
         color *= 1.0 - co2 * 0.15;
+
+        // Temperature effects: heat shimmer near fire, cold blue tint
+        let air_t = smoke.a;
+        if air_t > 80.0 {
+            // Heat shimmer: warm orange glow in very hot air
+            let heat = clamp((air_t - 80.0) / 300.0, 0.0, 0.5);
+            color = mix(color, vec3(1.0, 0.6, 0.2), heat * 0.3);
+        } else if air_t < 0.0 {
+            // Cold: blue tint
+            let cold = clamp(-air_t / 20.0, 0.0, 0.4);
+            color = mix(color, vec3(0.5, 0.6, 0.9), cold * 0.2);
+        }
     } else if camera.fluid_overlay < 1.5 {
         // Gases: all gases with distinct colors, composited together
         let bg = color * 0.25;
