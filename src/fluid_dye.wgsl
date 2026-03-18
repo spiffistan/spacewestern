@@ -90,10 +90,13 @@ fn bilinear_dye(pos: vec2<f32>) -> vec4<f32> {
     let obs01 = is_obstacle(vec2<i32>(vec2<f32>(p01) * scale));
     let obs11 = is_obstacle(vec2<i32>(vec2<f32>(p11) * scale));
 
-    if obs00 { d00 = vec4(0.0, 1.0, 0.0, 0.0); }
-    if obs10 { d10 = vec4(0.0, 1.0, 0.0, 0.0); }
-    if obs01 { d01 = vec4(0.0, 1.0, 0.0, 0.0); }
-    if obs11 { d11 = vec4(0.0, 1.0, 0.0, 0.0); }
+    // Obstacles: zero smoke, atmospheric O2, zero CO2, but preserve temperature (A)
+    // from the stored value (which is set to ambient by the main path).
+    // This prevents walls from acting as infinite cold sinks.
+    if obs00 { d00 = vec4(0.0, 1.0, 0.0, d00.a); }
+    if obs10 { d10 = vec4(0.0, 1.0, 0.0, d10.a); }
+    if obs01 { d01 = vec4(0.0, 1.0, 0.0, d01.a); }
+    if obs11 { d11 = vec4(0.0, 1.0, 0.0, d11.a); }
 
     return mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
 }
@@ -248,26 +251,27 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     let sun_curve = sin(sun_t * 3.14159);
     let ambient_temp = mix(5.0, 25.0, sun_curve); // 5°C night, 25°C midday
 
-    // Temperature dissipation (slight cooling toward ambient)
-    result.a += (ambient_temp - result.a) * 0.005;
+    // Temperature dissipation: very slow cooling toward ambient (insulated rooms retain heat)
+    result.a += (ambient_temp - result.a) * 0.001;
 
-    // Fire injects heat
+    // Fire injects heat continuously (not just max — builds up in enclosed spaces)
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block_t = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         if (block_t & 0xFFu) == 6u {
-            // Fire: inject ~300°C, scaled by O2 availability
             let fire_o2_t = clamp(result.g * 3.0 - 0.5, 0.0, 1.0);
-            result.a = max(result.a, 300.0 * fire_o2_t);
+            // Inject heat additively (builds up) + set minimum floor
+            result.a += 15.0 * fire_o2_t;
+            result.a = max(result.a, 200.0 * fire_o2_t);
         }
     }
 
-    // Outdoor cells: temperature trends toward ambient
+    // Outdoor cells: temperature trends toward ambient (faster than indoor)
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block_temp = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         let has_roof_t = ((block_temp >> 16u) & 2u) != 0u;
         let btype_t = block_temp & 0xFFu;
         if !has_roof_t && (btype_t == 0u || btype_t == 2u) {
-            result.a += (ambient_temp - result.a) * 0.02; // outdoor air resets faster
+            result.a += (ambient_temp - result.a) * 0.015;
         }
     }
 
