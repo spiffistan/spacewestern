@@ -1521,16 +1521,21 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                     // Inlet arrow points inward (flip direction)
                     if !is_outlet { arrow_dir = -arrow_dir; }
 
-                    // Animated arrow along pipe direction
+                    // Large animated chevron arrows
                     let along = cx * arrow_dir.x + cy * arrow_dir.y;
                     let perp = abs(-cx * arrow_dir.y + cy * arrow_dir.x);
-                    let anim = fract(camera.time * 2.0 - along * 3.0);
 
-                    // Arrow chevrons
-                    let chevron_pos = fract(along * 4.0 + camera.time * 2.0);
-                    let on_chevron = chevron_pos < 0.3 && perp < pipe_r * (0.8 - chevron_pos);
-                    if on_chevron && pipe_dist < 0.7 {
-                        color = mix(color, accent * 1.5, 0.5);
+                    // Two chevrons per block, animated
+                    let chevron_pos = fract(along * 2.0 + camera.time * 1.5);
+                    let chevron_width = 0.35 * (1.0 - chevron_pos); // V shape widens toward tail
+                    let on_chevron = chevron_pos < 0.5 && perp < chevron_width;
+                    // Second chevron offset
+                    let chev2_pos = fract(along * 2.0 + camera.time * 1.5 + 0.5);
+                    let chev2_width = 0.35 * (1.0 - chev2_pos);
+                    let on_chev2 = chev2_pos < 0.5 && perp < chev2_width;
+
+                    if (on_chevron || on_chev2) {
+                        color = mix(color, accent * 1.8, 0.7);
                     }
                 }
             } else {
