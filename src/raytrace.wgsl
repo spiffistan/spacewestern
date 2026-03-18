@@ -63,6 +63,35 @@ struct Camera {
 @group(0) @binding(8) var fluid_vel_tex: texture_2d<f32>;
 @group(0) @binding(9) var fluid_pres_tex: texture_2d<f32>;
 @group(0) @binding(10) var prev_output: texture_2d<f32>;
+@group(0) @binding(11) var<storage, read> materials: array<GpuMaterial>;
+
+// --- Material struct (must match Rust GpuMaterial layout exactly) ---
+struct GpuMaterial {
+    color_r: f32, color_g: f32, color_b: f32,
+    render_style: f32,
+    is_solid: f32,
+    light_transmission: f32,
+    fluid_obstacle: f32,
+    default_height: f32,
+    light_intensity: f32,
+    light_color_r: f32, light_color_g: f32, light_color_b: f32,
+    light_radius: f32,
+    light_height: f32,
+    is_emissive: f32,
+    is_furniture: f32,
+    heat_capacity: f32,
+    conductivity: f32,
+    solar_absorption: f32,
+    is_flammable: f32,
+    ignition_temp: f32,
+    walkable: f32,
+    is_removable: f32,
+    _pad: f32,
+};
+
+fn get_material(bt: u32) -> GpuMaterial {
+    return materials[min(bt, 13u)];
+}
 
 // --- Sprite constants ---
 const SPRITE_SIZE: u32 = 16u;
@@ -242,7 +271,7 @@ fn trace_interior_sun_ray(wx: f32, wy: f32, sun_dir: vec2<f32>) -> vec4<f32> {
         }
 
         // Light sources: interior fixtures, ray passes over them
-        if bt == 6u || bt == 7u || bt == 10u || bt == 11u {
+        if get_material(bt).is_emissive > 0.5 {
             continue;
         }
 
@@ -350,7 +379,7 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
         let sbh = block_height(sb);
 
         // Skip light source blocks
-        if sbt == 6u || sbt == 7u || sbt == 10u || sbt == 11u { continue; }
+        if get_material(sbt).light_intensity > 0.0 { continue; } // skip light sources
 
         if sbh == 0u { continue; } // open floor
 
@@ -401,7 +430,7 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             let bt = block_type(nb);
 
             // All light source types
-            if bt != 6u && bt != 7u && bt != 10u && bt != 11u {
+            if get_material(bt).light_intensity <= 0.0 {
                 continue;
             }
 
@@ -411,37 +440,20 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             let fdy = wy - lcy;
             let dist = sqrt(fdx * fdx + fdy * fdy);
 
-            // Per-type radius and intensity
-            var radius: f32;
-            var intensity: f32;
-            var light_col: vec3<f32>;
+            // Get material properties for this light source
+            let mat = get_material(bt);
+            var radius = mat.light_radius;
+            var intensity = mat.light_intensity;
+            var light_col = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
+            let light_h = mat.light_height;
 
-            // Per-type light height (for visibility over furniture)
-            var light_h = 0.0;
-
+            // Fireplace: apply flicker animation
             if bt == 6u {
-                radius = GLOW_RADIUS;
-                light_h = 1.0; // fireplace at floor level
                 let phase = fire_hash(vec2<f32>(lcx, lcy)) * 6.28;
                 let flicker = fire_flicker(time + phase);
-                intensity = FIRE_GLOW_INTENSITY * (0.7 + 0.3 * flicker);
+                intensity *= (0.7 + 0.3 * flicker);
                 let heat = clamp(1.0 - dist / 3.0, 0.0, 1.0);
-                light_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, heat * flicker);
-            } else if bt == 10u {
-                radius = STANDING_LAMP_GLOW_RADIUS;
-                light_h = 2.0; // standing lamp above benches
-                intensity = STANDING_LAMP_GLOW_INTENSITY;
-                light_col = STANDING_LAMP_COLOR;
-            } else if bt == 11u {
-                radius = TABLE_LAMP_GLOW_RADIUS;
-                light_h = 1.5; // table lamp slightly above bench height
-                intensity = TABLE_LAMP_GLOW_INTENSITY;
-                light_col = TABLE_LAMP_COLOR;
-            } else {
-                radius = GLOW_RADIUS;
-                light_h = 0.0; // ceiling light
-                intensity = ELIGHT_GLOW_INTENSITY;
-                light_col = ELIGHT_COLOR;
+                light_col = mix(light_col, FIRE_COLOR_HOT, heat * flicker);
             }
 
             if dist > radius { continue; }
@@ -1430,7 +1442,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    if btype == 6u || btype == 7u || btype == 10u || (btype == 11u && is_table_lamp_bulb) {
+    if get_material(btype).is_emissive > 0.5 && (btype != 11u || is_table_lamp_bulb) {
         // Emissive block (fireplace/electric light): not affected by shadow/lighting.
         // Just clamp and output directly.
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -1576,7 +1588,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Applies to indoor floors AND outdoor ground (for outdoor campfires etc).
     // Wall tops are excluded to prevent light bleed onto the roof surface.
     // Apply proximity glow to floors, outdoor ground, and furniture (benches)
-    let is_furniture = btype == 9u || (btype == 11u && !is_table_lamp_bulb);
+    let is_furniture = get_material(btype).is_furniture > 0.5 && !(btype == 11u && is_table_lamp_bulb);
     if camera.enable_prox_glow > 0.5 && (is_indoor || is_furniture || (!is_roofed_wall && effective_height == 0u)) {
         // Conditional glow: skip expensive 13x13 scan if lightmap shows no nearby light
         let lm_gate = sample_lightmap(world_x, world_y);

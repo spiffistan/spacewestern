@@ -1,4 +1,7 @@
 use std::sync::Arc;
+
+mod materials;
+use materials::{GpuMaterial, build_material_table};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -755,6 +758,7 @@ struct GfxState {
     camera_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
     sprite_buffer: wgpu::Buffer,
+    material_buffer: wgpu::Buffer,
     // Fluid simulation GPU resources
     fluid_params_buffer: wgpu::Buffer,
     fluid_vel: [wgpu::Texture; 2],
@@ -1312,6 +1316,16 @@ impl App {
         });
         queue.write_buffer(&sprite_buffer, 0, bytemuck::cast_slice(&sprite_data));
 
+        // Material table buffer
+        let material_data = build_material_table();
+        let material_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("material-buffer"),
+            size: (material_data.len() * std::mem::size_of::<GpuMaterial>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&material_buffer, 0, bytemuck::cast_slice(&material_data));
+
         // --- Lightmap textures (two for ping-pong, at LIGHTMAP_SCALE × grid resolution) ---
         let lightmap_desc = wgpu::TextureDescriptor {
             label: Some("lightmap-texture-a"),
@@ -1384,6 +1398,17 @@ impl App {
                     },
                     count: None,
                 },
+                // Material table
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1391,36 +1416,20 @@ impl App {
             label: Some("lightmap-seed-bg-a"),
             layout: &seed_bgl,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&lm_view_a),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: grid_buffer.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&lm_view_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: material_buffer.as_entire_binding() },
             ],
         });
         let lightmap_seed_bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lightmap-seed-bg-b"),
             layout: &seed_bgl,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&lm_view_b),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: grid_buffer.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&lm_view_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: material_buffer.as_entire_binding() },
             ],
         });
 
@@ -1490,6 +1499,17 @@ impl App {
                     },
                     count: None,
                 },
+                // binding 4: material table
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1502,6 +1522,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&lm_view_b) },
                 wgpu::BindGroupEntry { binding: 2, resource: camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: material_buffer.as_entire_binding() },
             ],
         });
 
@@ -1514,6 +1535,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&lm_view_a) },
                 wgpu::BindGroupEntry { binding: 2, resource: camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: material_buffer.as_entire_binding() },
             ],
         });
 
@@ -1981,6 +2003,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Material table (storage buffer, read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -2009,6 +2042,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -2026,6 +2060,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -2043,6 +2078,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -2060,6 +2096,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -2237,6 +2274,7 @@ impl App {
             camera_buffer,
             grid_buffer,
             sprite_buffer,
+            material_buffer,
             // Fluid simulation GPU resources
             fluid_params_buffer,
             fluid_vel: [fluid_vel_a, fluid_vel_b],
@@ -2360,6 +2398,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2377,6 +2416,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2394,6 +2434,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2411,6 +2452,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2779,7 +2821,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v40 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v41 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;

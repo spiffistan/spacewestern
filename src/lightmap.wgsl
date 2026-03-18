@@ -39,6 +39,18 @@ struct Camera {
 @group(0) @binding(0) var lightmap_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(1) var<uniform> camera: Camera;
 @group(0) @binding(2) var<storage, read> grid: array<u32>;
+@group(0) @binding(3) var<storage, read> materials: array<GpuMaterial>;
+
+struct GpuMaterial {
+    color_r: f32, color_g: f32, color_b: f32, render_style: f32,
+    is_solid: f32, light_transmission: f32, fluid_obstacle: f32, default_height: f32,
+    light_intensity: f32, light_color_r: f32, light_color_g: f32, light_color_b: f32,
+    light_radius: f32, light_height: f32, is_emissive: f32, is_furniture: f32,
+    heat_capacity: f32, conductivity: f32, solar_absorption: f32, is_flammable: f32,
+    ignition_temp: f32, walkable: f32, is_removable: f32, _pad: f32,
+};
+
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 13u)]; }
 
 // --- Block unpacking ---
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
@@ -98,24 +110,22 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var value = vec4<f32>(0.0);
 
-    if bt == 6u {
-        // Fireplace — use block coords for consistent flicker across all texels in block
-        let wx = f32(bx) + 0.5;
-        let wy = f32(by) + 0.5;
-        let phase = fire_hash(vec2<f32>(wx, wy)) * 6.28;
-        let flicker = fire_flicker(camera.time + phase);
-        let intensity = FIRE_BASE_INTENSITY + (flicker - 0.5) * 2.0 * FIRE_FLICKER_AMP;
-        let color = mix(FIRE_COLOR, FIRE_COLOR_HOT, flicker * 0.3);
+    let mat = get_material(bt);
+    if mat.light_intensity > 0.0 {
+        var intensity = mat.light_intensity;
+        var color = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
+
+        // Fireplace: apply flicker
+        if bt == 6u {
+            let wx = f32(bx) + 0.5;
+            let wy = f32(by) + 0.5;
+            let phase = fire_hash(vec2<f32>(wx, wy)) * 6.28;
+            let flicker = fire_flicker(camera.time + phase);
+            intensity = FIRE_BASE_INTENSITY + (flicker - 0.5) * 2.0 * FIRE_FLICKER_AMP;
+            color = mix(FIRE_COLOR, FIRE_COLOR_HOT, flicker * 0.3);
+        }
+
         value = vec4<f32>(color, intensity);
-    } else if bt == 7u {
-        // Electric light
-        value = vec4<f32>(ELIGHT_COLOR, ELIGHT_INTENSITY);
-    } else if bt == 10u {
-        // Standing lamp: large warm glow
-        value = vec4<f32>(0.95, 0.85, 0.60, 1.0);
-    } else if bt == 11u {
-        // Table lamp: smaller warm glow
-        value = vec4<f32>(0.95, 0.80, 0.50, 0.35);
     }
 
     textureStore(lightmap_out, vec2<u32>(gid.x, gid.y), value);
