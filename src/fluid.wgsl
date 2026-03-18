@@ -191,6 +191,11 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let temp_u = textureLoad(dye_tex, vec2<i32>(dye_cx, max(dye_cy - dye_scale, 0)), 0).a;
     let temp_d = textureLoad(dye_tex, vec2<i32>(dye_cx, min(dye_cy + dye_scale, i32(params.dye_h) - 1)), 0).a;
 
+    // Read smoke and CO2 density at this cell
+    let dye_c = textureLoad(dye_tex, vec2<i32>(dye_cx, dye_cy), 0);
+    let smoke_density = dye_c.r;
+    let co2_density = dye_c.b;
+
     // Temperature gradient (central differences)
     let grad_x = (temp_r - temp_l) * 0.5;
     let grad_y = (temp_d - temp_u) * 0.5;
@@ -201,22 +206,38 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ambient_temp = mix(5.0, 25.0, sin(sun_t * 3.14159));
     let temp_delta = temp_c - ambient_temp;
 
-    // Gradient buoyancy: velocity opposes temperature gradient (hot pushes outward)
+    // --- Buoyancy: thermal lift vs smoke/gas weight ---
+    // Hot air rises (negative gradient force = expansion from heat)
+    // Dense smoke and CO2 are heavier than clean air and settle downward
+    // The balance creates realistic turbulent plumes: hot smoke initially
+    // rises, then cools and sinks, creating rolling vortices.
+
+    // Thermal gradient force (radial expansion from heat sources)
     let grad_mag = length(vec2(grad_x, grad_y));
+    var buoyancy_force = vec2(0.0, 0.0);
     if grad_mag > 0.5 {
         let buoyancy_coeff = clamp(abs(temp_delta) * 0.10, 0.0, 25.0);
-        let grad_force = -vec2(grad_x, grad_y) / grad_mag * buoyancy_coeff;
-
-        // Add turbulent wobble for natural convection
-        let center = vec2<f32>(f32(pos.x) + 0.5, f32(pos.y) + 0.5);
-        let phase = fract(sin(dot(center, vec2(127.1, 311.7))) * 43758.5) * 6.28;
-        let wobble = vec2(
-            sin(params.time * 5.3 + phase) * 2.0,
-            cos(params.time * 4.1 + phase) * 2.0
-        );
-
-        new_v += (grad_force + wobble) * params.dt;
+        buoyancy_force = -vec2(grad_x, grad_y) / grad_mag * buoyancy_coeff;
     }
+
+    // Smoke weight: dense smoke sinks (in top-down: settles southward + spreads)
+    // CO2 is 1.5x heavier than air — also sinks
+    let smoke_weight = smoke_density * 3.0 + co2_density * 2.0;
+
+    // Net buoyancy: thermal lift minus particle/gas weight
+    // In top-down 2D, "sinking" manifests as slight southward drift + lateral spread
+    let net_buoyancy = buoyancy_force - vec2(0.0, smoke_weight * 0.5);
+
+    // Add turbulent wobble for natural convection (stronger with smoke for rolling effect)
+    let center = vec2<f32>(f32(pos.x) + 0.5, f32(pos.y) + 0.5);
+    let phase = fract(sin(dot(center, vec2(127.1, 311.7))) * 43758.5) * 6.28;
+    let wobble_strength = 2.0 + smoke_density * 1.5; // more turbulence in smoky air
+    let wobble = vec2(
+        sin(params.time * 5.3 + phase) * wobble_strength,
+        cos(params.time * 4.1 + phase) * wobble_strength
+    );
+
+    new_v += (net_buoyancy + wobble) * params.dt;
 
     // Fire source: extra turbulent kick at fire blocks
     let block = grid[u32(pos.y) * u32(params.sim_w) + u32(pos.x)];
