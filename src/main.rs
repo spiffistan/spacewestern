@@ -2335,10 +2335,10 @@ impl App {
                         .logarithmic(true));
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Night").clicked()  { time_val = DAY_DURATION * 0.0; paused = true; }
-                    if ui.button("Dawn").clicked()   { time_val = DAY_DURATION * 0.18; paused = true; }
-                    if ui.button("Day").clicked()    { time_val = DAY_DURATION * 0.5; paused = true; }
-                    if ui.button("Dusk").clicked()   { time_val = DAY_DURATION * 0.82; paused = true; }
+                    if ui.button("Night").clicked()  { time_val = DAY_DURATION * 0.0; paused = true; self.camera.force_refresh = 5.0; }
+                    if ui.button("Dawn").clicked()   { time_val = DAY_DURATION * 0.18; paused = true; self.camera.force_refresh = 5.0; }
+                    if ui.button("Day").clicked()    { time_val = DAY_DURATION * 0.5; paused = true; self.camera.force_refresh = 5.0; }
+                    if ui.button("Dusk").clicked()   { time_val = DAY_DURATION * 0.82; paused = true; self.camera.force_refresh = 5.0; }
                 });
 
                 ui.separator();
