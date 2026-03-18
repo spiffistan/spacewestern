@@ -28,6 +28,8 @@ pub enum BuildTool {
     Roof,
     Window,
     Door,
+    RemoveFloor,
+    RemoveRoof,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

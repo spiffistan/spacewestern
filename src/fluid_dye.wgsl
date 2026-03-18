@@ -190,10 +190,11 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block_full = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         let has_roof = ((block_full >> 16u) & 2u) != 0u;
-        let btype = block_full & 0xFFu;
-        if !has_roof && (btype == 0u || btype == 2u) {
-            result.g += (1.0 - result.g) * 0.008;  // O2 recovery toward 1.0
-            result.b *= 0.992;                       // CO2 dissipates outdoors
+        // Unroofed cells: gas can escape upward (smoke rises, CO2 dissipates)
+        if !has_roof {
+            result.g += (1.0 - result.g) * 0.005;  // O2 recovery
+            result.b *= 0.995;                       // CO2 escapes
+            result.r *= 0.999;                       // smoke escapes upward slowly
         }
     }
 

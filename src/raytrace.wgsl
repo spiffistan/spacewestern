@@ -1390,8 +1390,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color += vec3(0.05) * max(wisp, 0.0) * heap;
     } else if btype >= 15u && btype <= 20u {
         // Piping system: auto-connected thin pipe rendering
-        // Start with dirt floor as background (pipe sits on ground)
-        color = block_base_color(2u, 0u);
+        // Inlet/outlet on walls: use wall-like background. Ground pipes: use dirt.
+        if (btype == 19u || btype == 20u) && bheight > 1u {
+            color = block_base_color(1u, 0u); // stone wall background for wall-mounted
+        } else {
+            color = block_base_color(2u, 0u); // dirt floor for ground pipes
+        }
 
         let n_n = block_type(get_block(bx, by - 1));
         let n_s = block_type(get_block(bx, by + 1));
@@ -1405,7 +1409,26 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let cx = fx - 0.5;
         let cy = fy - 0.5;
 
-        if btype == 17u {
+        if btype == 16u {
+            // --- Pump: square block connected to pipes ---
+            let pump_r = 0.30;
+            let pipe_r = 0.10;
+            // Draw pipe stubs connecting to neighbors BEHIND the pump
+            if cn && abs(cx) < pipe_r && cy < -pump_r { color = vec3(0.50, 0.52, 0.55); }
+            if cs && abs(cx) < pipe_r && cy > pump_r { color = vec3(0.50, 0.52, 0.55); }
+            if ce && abs(cy) < pipe_r && cx > pump_r { color = vec3(0.50, 0.52, 0.55); }
+            if cw && abs(cy) < pipe_r && cx < -pump_r { color = vec3(0.50, 0.52, 0.55); }
+            // Pump body on top
+            if abs(cx) < pump_r && abs(cy) < pump_r {
+                let shade = 1.0 - max(abs(cx), abs(cy)) / pump_r * 0.3;
+                color = vec3(0.35, 0.52, 0.38) * shade;
+                let pulse = sin(camera.time * 6.0) * 0.5 + 0.5;
+                color += vec3(0.0, pulse * 0.08, 0.0);
+                if abs(cx) > pump_r - 0.03 || abs(cy) > pump_r - 0.03 {
+                    color = vec3(0.28, 0.35, 0.30);
+                }
+            }
+        } else if btype == 17u {
             // --- Tank: rounded cylinder with fill indicator ---
             let tank_rx = 0.42; // wider
             let tank_ry = 0.35;
@@ -1486,66 +1509,90 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let pipe_bright = vec3<f32>(0.62, 0.65, 0.70);
                 color = mix(pipe_base, pipe_bright, shade);
 
-                // Animated flow dashes (shows gas is moving)
-                let flow_phase = fract(camera.time * 1.5 + fx * 3.0 + fy * 3.0);
-                if flow_phase < 0.15 && pipe_dist < 0.5 {
-                    color = mix(color, vec3(0.7, 0.75, 0.8), 0.3);
+                // Traveling circles along pipes — visible gray dots moving with flow
+                let anim_speed = camera.time * 2.0;
+                let dot_r = pipe_r * 0.6; // radius of each traveling dot
+                // Horizontal pipe dots
+                if (ce || cw) && abs(cy) < pipe_r {
+                    // 3 dots spread across the tile, traveling east
+                    for (var di: i32 = 0; di < 3; di++) {
+                        let dot_x = fract(anim_speed + f32(di) * 0.333 + world_x * 0.1) - 0.5;
+                        let d = length(vec2(cx - dot_x, cy));
+                        if d < dot_r {
+                            color = mix(color, vec3(0.28, 0.30, 0.33), 0.7);
+                        }
+                    }
+                }
+                // Vertical pipe dots
+                if (cn || cs) && abs(cx) < pipe_r {
+                    for (var di: i32 = 0; di < 3; di++) {
+                        let dot_y = fract(anim_speed + f32(di) * 0.333 + world_y * 0.1) - 0.5;
+                        let d = length(vec2(cx, cy - dot_y));
+                        if d < dot_r {
+                            color = mix(color, vec3(0.28, 0.30, 0.33), 0.7);
+                        }
+                    }
                 }
 
-                // Type-specific overlays
-                if btype == 16u {
-                    // Pump: green tint with stronger animated flow
-                    color = mix(color, vec3(0.3, 0.55, 0.3), 0.25);
-                    let pump_pulse = sin(camera.time * 6.0) * 0.5 + 0.5;
-                    color += vec3(0.0, pump_pulse * 0.1, 0.0);
-                } else if btype == 18u {
-                    // Valve: handle bar, red/green indicator
+                // Valve overlay
+                if btype == 18u {
                     let valve_open = is_open(block);
                     let vc = select(vec3(0.65, 0.15, 0.15), vec3(0.15, 0.55, 0.15), valve_open);
-                    // Cross-bar handle
                     let bar_along = select(abs(cy), abs(cx), ce || cw);
                     let bar_perp = select(abs(cx), abs(cy), ce || cw);
                     if bar_along < pipe_r * 1.8 && bar_perp < 0.04 {
                         color = vc;
                     }
-                    // Small dot indicator at center
                     if cdist < 0.04 { color = vc; }
-                } else if btype == 19u || btype == 20u {
-                    // Outlet (19): blue, arrow pointing OUT (away from pipe network)
-                    // Inlet (20): orange, arrow pointing IN (toward pipe network)
-                    let is_outlet = btype == 19u;
-                    let accent = select(vec3(0.70, 0.50, 0.30), vec3(0.35, 0.50, 0.70), is_outlet);
-                    color = mix(color, accent, 0.25);
+                }
+            }
+            // Inlet/Outlet: rendered AFTER and ON TOP of everything (overlays wall sprite)
+            if btype == 19u || btype == 20u {
+                let is_outlet = btype == 19u;
+                let dir_bits = (bflags >> 3u) & 3u;
+                var fan_dx = 0.0;
+                var fan_dy = 0.0;
+                if dir_bits == 0u { fan_dy = -1.0; }
+                else if dir_bits == 1u { fan_dx = 1.0; }
+                else if dir_bits == 2u { fan_dy = 1.0; }
+                else { fan_dx = -1.0; }
+                // Inlet: flip direction (sucks IN)
+                if !is_outlet { fan_dx = -fan_dx; fan_dy = -fan_dy; }
 
-                    // Direction from flags bits 3-4 (0=N, 1=E, 2=S, 3=W)
-                    let dir_bits = (bflags >> 3u) & 3u;
-                    var arrow_dir = vec2<f32>(0.0, -1.0); // default N
-                    if dir_bits == 1u { arrow_dir = vec2(1.0, 0.0); }
-                    else if dir_bits == 2u { arrow_dir = vec2(0.0, 1.0); }
-                    else if dir_bits == 3u { arrow_dir = vec2(-1.0, 0.0); }
+                // Fan circle with radial blades
+                let fan_r = 0.32;
+                let fan_dist = length(vec2(cx, cy));
+                if fan_dist < fan_r {
+                    // Fan body
+                    let accent = select(vec3(0.65, 0.45, 0.25), vec3(0.30, 0.45, 0.65), is_outlet);
+                    let rim = smoothstep(fan_r, fan_r * 0.7, fan_dist);
+                    color = mix(accent * 0.6, accent, rim);
 
-                    // Inlet arrow points inward (flip direction)
-                    if !is_outlet { arrow_dir = -arrow_dir; }
+                    // Rotating blades (4 blades)
+                    let blade_angle = atan2(cy, cx) + camera.time * select(3.0, -3.0, is_outlet);
+                    let blade = abs(sin(blade_angle * 2.0));
+                    if blade > 0.7 && fan_dist > 0.05 {
+                        color = mix(color, accent * 1.4, 0.4);
+                    }
 
-                    // Large animated chevron arrows
-                    let along = cx * arrow_dir.x + cy * arrow_dir.y;
-                    let perp = abs(-cx * arrow_dir.y + cy * arrow_dir.x);
+                    // Center hub
+                    if fan_dist < 0.08 {
+                        color = vec3(0.35, 0.37, 0.40);
+                    }
 
-                    // Two chevrons per block, animated
-                    let chevron_pos = fract(along * 2.0 + camera.time * 1.5);
-                    let chevron_width = 0.35 * (1.0 - chevron_pos); // V shape widens toward tail
-                    let on_chevron = chevron_pos < 0.5 && perp < chevron_width;
-                    // Second chevron offset
-                    let chev2_pos = fract(along * 2.0 + camera.time * 1.5 + 0.5);
-                    let chev2_width = 0.35 * (1.0 - chev2_pos);
-                    let on_chev2 = chev2_pos < 0.5 && perp < chev2_width;
+                    // Border ring
+                    if fan_dist > fan_r - 0.03 {
+                        color = accent * 0.4;
+                    }
 
-                    if (on_chevron || on_chev2) {
-                        color = mix(color, accent * 1.8, 0.7);
+                    // Direction arrow (small, in center area)
+                    let along = cx * fan_dx + cy * fan_dy;
+                    let perp_d = abs(-cx * fan_dy + cy * fan_dx);
+                    if along > 0.0 && along < 0.15 && perp_d < 0.06 * (1.0 - along / 0.15) {
+                        color = vec3(0.9, 0.9, 0.95);
                     }
                 }
             }
-            // else: background (dirt floor) already set above
         }
     } else {
         color = block_base_color(btype, bflags);

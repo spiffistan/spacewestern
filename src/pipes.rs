@@ -21,7 +21,7 @@ impl Default for PipeCell {
             pressure: 0.0,
             gas: [0.0, 1.0, 0.0, 15.0],
             volume: 1.0,
-            pump_rate: 8.0, // default pump speed
+            pump_rate: 24.0, // default pump speed (3x previous)
         }
     }
 }
