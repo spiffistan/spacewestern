@@ -2040,6 +2040,7 @@ impl App {
             self.camera.ambient_b = night_amb[2] + (day_amb[2] - night_amb[2]) * intensity;
         }
 
+        let prev_overlay = self.camera.fluid_overlay;
         self.camera.fluid_overlay = match self.fluid_overlay {
             FluidOverlay::None => 0.0,
             FluidOverlay::Gases => 1.0,
@@ -2059,7 +2060,8 @@ impl App {
         // Force refresh when grid changes or render settings toggle
         // Persist for several frames so lightmap has time to propagate changes
         let settings_changed = (self.camera.enable_prox_glow - prev_glow).abs() > 0.5
-            || (self.camera.enable_dir_bleed - prev_bleed).abs() > 0.5;
+            || (self.camera.enable_dir_bleed - prev_bleed).abs() > 0.5
+            || (self.camera.fluid_overlay - prev_overlay).abs() > 0.5;
         // Detect large time jumps (time-of-day buttons, slider scrubbing)
         let time_jumped = (self.camera.time - self.prev_cam_time).abs() > 1.0;
         if self.grid_dirty || settings_changed || time_jumped {
