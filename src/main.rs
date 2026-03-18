@@ -2806,7 +2806,9 @@ impl App {
 
         // Lightmap: viewport-culled propagation at 2x resolution
         self.lightmap_frame += 1;
-        let need_lightmap = self.lightmap_frame >= LIGHTMAP_UPDATE_INTERVAL;
+        let need_lightmap = self.lightmap_frame >= LIGHTMAP_UPDATE_INTERVAL
+            || self.grid_dirty
+            || self.camera.force_refresh > 0.5;
         if need_lightmap {
             self.lightmap_frame = 0;
             let lm_wg_x = (LIGHTMAP_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
