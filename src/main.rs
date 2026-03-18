@@ -18,6 +18,11 @@ mod fluid;
 use build::{BuildTool, FluidOverlay};
 use camera::CameraUniform;
 use fluid::{FluidParams, FLUID_SIM_W, FLUID_SIM_H, FLUID_DYE_W, FLUID_DYE_H, FLUID_PRESSURE_ITERS, build_obstacle_field, smoothstep_f32, half_to_f32};
+
+#[path = "time.rs"]
+mod game_time;
+use game_time::Instant;
+
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -26,43 +31,6 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
-
-// --- Cross-platform time ---
-#[cfg(not(target_arch = "wasm32"))]
-mod time {
-    #[derive(Clone, Copy)]
-    pub struct Instant(std::time::Instant);
-
-    impl Instant {
-        pub fn now() -> Self {
-            Instant(std::time::Instant::now())
-        }
-        pub fn elapsed_secs_since(&self, earlier: &Instant) -> f32 {
-            (self.0 - earlier.0).as_secs_f32()
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod time {
-    #[derive(Clone, Copy)]
-    pub struct Instant(f64); // milliseconds from Performance.now()
-
-    impl Instant {
-        pub fn now() -> Self {
-            let perf = web_sys::window()
-                .expect("no window")
-                .performance()
-                .expect("no performance");
-            Instant(perf.now())
-        }
-        pub fn elapsed_secs_since(&self, earlier: &Instant) -> f32 {
-            ((self.0 - earlier.0) / 1000.0) as f32
-        }
-    }
-}
-
-use time::Instant;
 
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
@@ -2217,7 +2185,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v41 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v45 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
