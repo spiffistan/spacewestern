@@ -184,29 +184,72 @@ pub fn generate_test_grid() -> Vec<u32> {
     // Connect pipe to house 2
     for x in 20..35 { oset(&mut grid, x, 35, make_block(15, 1, 0)); }
 
-    // Trees and bushes
+    // Trees and bushes — clustered in small forests with outliers
+    // Simple 2D noise for clustering
+    let noise = |x: f32, y: f32| -> f32 {
+        let ix = x.floor() as i32;
+        let iy = y.floor() as i32;
+        let fx = x - x.floor();
+        let fy = y - y.floor();
+        let hash = |ix: i32, iy: i32| -> f32 {
+            let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
+                .wrapping_add(1013904223);
+            (h & 0xFFFF) as f32 / 65535.0
+        };
+        let a = hash(ix, iy);
+        let b = hash(ix + 1, iy);
+        let c = hash(ix, iy + 1);
+        let d = hash(ix + 1, iy + 1);
+        let sx = fx * fx * (3.0 - 2.0 * fx);
+        let sy = fy * fy * (3.0 - 2.0 * fy);
+        a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
+    };
+
     let is_bare = |grid: &Vec<u32>, x: u32, y: u32| -> bool {
         if x >= GRID_W || y >= GRID_H { return false; }
         grid[(y * w + x) as usize] == make_block(2, 0, 0)
     };
+
     for y in 0..GRID_H {
         for x in 0..GRID_W {
             let idx = (y * w + x) as usize;
             if grid[idx] != make_block(2, 0, 0) { continue; }
+
+            // Forest density from multi-octave noise (scale creates ~30-tile clusters)
+            let scale = 0.07;
+            let n1 = noise(x as f32 * scale, y as f32 * scale);
+            let n2 = noise(x as f32 * scale * 2.3 + 100.0, y as f32 * scale * 2.3 + 200.0) * 0.5;
+            let density = n1 + n2; // 0.0 - 1.5 range
+
+            // Per-tile random hash
             let h = ((x.wrapping_mul(374761393)) ^ (y.wrapping_mul(668265263))).wrapping_add(1013904223);
-            let r = (h >> 16) & 0xFFF;
-            if r < 30 {
-                if is_bare(&grid, x+1, y) && is_bare(&grid, x, y+1) && is_bare(&grid, x+1, y+1) {
-                    let tree_h = 4 + ((h >> 8) & 0x1) as u8;
-                    set(&mut grid, x, y, make_block(8, tree_h, 32 | 0));
-                    set(&mut grid, x+1, y, make_block(8, tree_h, 32 | 8));
-                    set(&mut grid, x, y+1, make_block(8, tree_h, 32 | 16));
-                    set(&mut grid, x+1, y+1, make_block(8, tree_h, 32 | 24));
+            let r = (h >> 16) & 0xFFF; // 0..4095
+
+            // Threshold based on density: dense areas have many trees
+            let tree_threshold = if density > 0.9 { 400 }  // dense forest
+                else if density > 0.7 { 150 }  // moderate forest
+                else if density > 0.5 { 40 }   // sparse
+                else { 8 };                     // rare outlier
+
+            if r < tree_threshold {
+                if r < tree_threshold / 5 {
+                    // Large 2x2 tree
+                    if is_bare(&grid, x+1, y) && is_bare(&grid, x, y+1) && is_bare(&grid, x+1, y+1) {
+                        let tree_h = 4 + ((h >> 8) & 0x1) as u8;
+                        set(&mut grid, x, y, make_block(8, tree_h, 32 | 0));
+                        set(&mut grid, x+1, y, make_block(8, tree_h, 32 | 8));
+                        set(&mut grid, x, y+1, make_block(8, tree_h, 32 | 16));
+                        set(&mut grid, x+1, y+1, make_block(8, tree_h, 32 | 24));
+                    }
+                } else if r < tree_threshold * 3 / 4 {
+                    // Medium tree
+                    let tree_h = 2 + ((h >> 8) & 0x3) as u8;
+                    grid[idx] = make_block(8, tree_h, 0);
+                } else {
+                    // Small bush
+                    let bush_h = 1 + ((h >> 8) & 0x1) as u8;
+                    grid[idx] = make_block(8, bush_h, 0);
                 }
-            } else if r < 90 {
-                grid[idx] = make_block(8, 2 + ((h >> 8) & 0x3) as u8, 0);
-            } else if r < 140 {
-                grid[idx] = make_block(8, 1 + ((h >> 8) & 0x1) as u8, 0);
             }
         }
     }

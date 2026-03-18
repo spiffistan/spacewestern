@@ -22,6 +22,9 @@ use fluid::{FluidParams, FLUID_SIM_W, FLUID_SIM_H, FLUID_DYE_W, FLUID_DYE_H, FLU
 mod pipes;
 use pipes::PipeNetwork;
 
+mod physics;
+use physics::{PhysicsBody, tick_bodies, pleb_body_collision, nearest_body};
+
 #[path = "time.rs"]
 mod game_time;
 use game_time::Instant;
@@ -90,6 +93,9 @@ struct App {
     drag_start: Option<(i32, i32)>, // grid coords where drag started (for shape building)
     selected_pump: Option<u32>,     // grid index of pump being adjusted
     selected_pump_world: (f32, f32), // world position for pump slider
+    selected_fan: Option<u32>,       // grid index of fan being adjusted
+    selected_fan_world: (f32, f32),  // world position for fan slider
+    build_category: Option<&'static str>, // selected build category, None = collapsed
     debug_fluid_density: [f32; 4], // last readback: RGBA from dye texture at cursor
     debug_fluid_readback_pending: bool,
     fluid_mouse_active: bool,  // middle mouse button held
@@ -101,6 +107,7 @@ struct App {
     show_pleb_help: bool,      // show controls modal
     pressed_keys: std::collections::HashSet<KeyCode>,
     auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
+    physics_bodies: Vec<PhysicsBody>,
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -269,6 +276,9 @@ impl App {
             pipe_width: 5.0,
             selected_pump: None,
             selected_pump_world: (0.0, 0.0),
+            selected_fan: None,
+            selected_fan_world: (0.0, 0.0),
+            build_category: None,
             debug_fluid_density: [0.0; 4],
             debug_fluid_readback_pending: false,
             fluid_dye_phase: 0,
@@ -285,6 +295,7 @@ impl App {
             show_pleb_help: false,
             pressed_keys: std::collections::HashSet::new(),
             auto_doors: Vec::new(),
+            physics_bodies: Vec::new(),
         }
     }
 
@@ -623,6 +634,11 @@ impl App {
 
         // Destroy tool: single click destroys one block
         if self.build_tool == BuildTool::Destroy {
+            // Check for physics bodies first
+            self.physics_bodies.retain(|b| {
+                let dist = ((wx - b.x).powi(2) + (wy - b.y).powi(2)).sqrt();
+                dist > 0.5 // keep if far from click
+            });
             self.destroy_block_at(bx, by);
             return;
         }
@@ -763,8 +779,11 @@ impl App {
                     }
                 }
                 BuildTool::Fan => {
-                    // Fan: must be placed on a wall (type 1 or 4 with height > 0)
-                    if (bt == 1 || bt == 4) && (block >> 8) & 0xFF > 0 {
+                    // Fan: can be placed on a wall OR on the ground
+                    let wall_types = [1i32, 4, 5, 14, 21, 22, 23, 24, 25];
+                    let on_wall = wall_types.contains(&(bt as i32)) && (block >> 8) & 0xFF > 0;
+                    let on_ground = self.can_place_at(bx, by);
+                    if on_wall {
                         let wall_h = ((block >> 8) & 0xFF) as u8;
                         let roof_flag = flags & 2;
                         let roof_h = block & 0xFF000000;
@@ -772,6 +791,14 @@ impl App {
                         self.grid_data[idx] = make_block(12, wall_h, dir_flags) | roof_h;
                         self.grid_dirty = true;
                         log::info!("Placed fan at ({}, {}) dir={}", bx, by, self.build_rotation);
+                        self.build_tool = BuildTool::None;
+                    } else if on_ground {
+                        let roof_flag = flags & 2;
+                        let dir_flags = (self.build_rotation as u8) << 3;
+                        let roof_h = block & 0xFF000000;
+                        self.grid_data[idx] = make_block(12, 1, roof_flag | dir_flags) | roof_h;
+                        self.grid_dirty = true;
+                        log::info!("Placed fan on ground at ({}, {}) dir={}", bx, by, self.build_rotation);
                         self.build_tool = BuildTool::None;
                     }
                 }
@@ -817,6 +844,11 @@ impl App {
                         self.grid_dirty = true;
                         compute_roof_heights(&mut self.grid_data);
                     }
+                }
+                BuildTool::WoodBox => {
+                    self.physics_bodies.push(PhysicsBody::new_wood_box(wx, wy));
+                    // Don't deselect — can place multiple
+                    return;
                 }
                 BuildTool::None | BuildTool::Destroy
                 | BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor
@@ -879,6 +911,14 @@ impl App {
             self.grid_dirty = true;
             let open = (new_flags & 4) != 0;
             log::info!("Valve at ({}, {}): {}", bx, by, if open { "open" } else { "closed" });
+            return;
+        }
+
+        // Click fan: show speed popup (similar to pump)
+        if bt == 12 && self.build_tool != BuildTool::Destroy {
+            let fidx = by as u32 * GRID_W + bx as u32;
+            self.selected_fan = if self.selected_fan == Some(fidx) { None } else { Some(fidx) };
+            self.selected_fan_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
 
@@ -2409,6 +2449,10 @@ impl App {
                     if is_walkable_pos(&self.grid_data, nx, ny) {
                         pleb.x = nx;
                         pleb.y = ny;
+                        // Collide with physics bodies (pushed away from boxes)
+                        let (cx, cy) = pleb_body_collision(&self.physics_bodies, pleb.x, pleb.y);
+                        pleb.x = cx;
+                        pleb.y = cy;
                     }
                     pleb.path.clear(); // cancel A* path
                     pleb.path_idx = 0;
@@ -2508,6 +2552,27 @@ impl App {
             }
         }
 
+        // --- Physics tick ---
+        {
+            let pleb_data = self.pleb.as_ref().map(|p| {
+                let pvx = if self.pressed_keys.contains(&KeyCode::KeyD) { 3.0 }
+                    else if self.pressed_keys.contains(&KeyCode::KeyA) { -3.0 }
+                    else { 0.0 };
+                let pvy = if self.pressed_keys.contains(&KeyCode::KeyS) { 3.0 }
+                    else if self.pressed_keys.contains(&KeyCode::KeyW) { -3.0 }
+                    else { 0.0 };
+                (p.x, p.y, pvx, pvy, p.angle)
+            });
+            tick_bodies(
+                &mut self.physics_bodies,
+                dt,
+                &self.grid_data,
+                self.fluid_params.wind_x,
+                self.fluid_params.wind_y,
+                pleb_data,
+            );
+        }
+
         let gfx = self.gfx.as_ref().unwrap();
 
         // Re-upload grid if dirty (door toggled etc.)
@@ -2578,9 +2643,13 @@ impl App {
                 _ => vec![(hbx, hby)],
             };
             let on_furniture = self.build_tool == BuildTool::TableLamp;
+            let is_physics = self.build_tool == BuildTool::WoodBox;
             let on_wall = matches!(self.build_tool, BuildTool::Fan | BuildTool::Window | BuildTool::Door | BuildTool::Outlet | BuildTool::Inlet);
             tiles.iter().map(|&(tx, ty)| {
-                if on_wall {
+                if is_physics {
+                    // Physics bodies can be placed anywhere
+                    ((tx, ty), true)
+                } else if on_wall {
                     let valid = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
                         let bidx = (ty as u32 * GRID_W + tx as u32) as usize;
                         let b = self.grid_data[bidx];
@@ -2592,12 +2661,14 @@ impl App {
                             matches!(bbt, 1 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
                         } else if matches!(self.build_tool, BuildTool::Outlet | BuildTool::Inlet) {
                             matches!(bbt, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
+                        } else if self.build_tool == BuildTool::Fan {
+                            matches!(bbt, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
                         } else {
                             (bbt == 1 || bbt == 4) && bbh > 0
                         }
                     } else { false };
-                    // Inlet/Outlet can also place on ground
-                    if !valid && matches!(self.build_tool, BuildTool::Outlet | BuildTool::Inlet) {
+                    // Inlet/Outlet/Fan can also place on ground
+                    if !valid && matches!(self.build_tool, BuildTool::Outlet | BuildTool::Inlet | BuildTool::Fan) {
                         ((tx, ty), self.can_place_on(tx, ty, false))
                     } else {
                         ((tx, ty), valid)
@@ -2764,37 +2835,6 @@ impl App {
         self.camera.foliage_variation = foliage_variation;
         self.camera.oblique_strength = oblique;
 
-        // --- Pleb menu (above build menu) ---
-        egui::Area::new(egui::Id::new("pleb_menu"))
-            .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -200.0])
-            .show(&egui_state.ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 1.0;
-                egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(80.0);
-                    ui.label(egui::RichText::new("Pleb").strong().size(11.0));
-                    if ui.selectable_label(self.placing_pleb, egui::RichText::new("Place Jeff").size(11.0)).clicked() {
-                        self.placing_pleb = !self.placing_pleb;
-                        if self.placing_pleb {
-                            self.build_tool = BuildTool::None; // cancel any build tool
-                        }
-                    }
-                    if self.placing_pleb {
-                        ui.label(egui::RichText::new("Click to place").size(9.0).weak());
-                    }
-                    if let Some(ref pleb) = self.pleb {
-                        ui.separator();
-                        ui.label(egui::RichText::new("Jeff").size(10.0));
-                        ui.label(egui::RichText::new(format!("Torch: {} | Lamp: {}",
-                            if pleb.torch_on { "ON" } else { "off" },
-                            if pleb.headlight_on { "ON" } else { "off" }
-                        )).size(9.0).weak());
-                    }
-                    if ui.small_button("?").clicked() {
-                        self.show_pleb_help = !self.show_pleb_help;
-                    }
-                });
-            });
-
         if self.show_pleb_help {
             egui::Window::new("Jeff Controls")
                 .collapsible(false)
@@ -2815,81 +2855,172 @@ impl App {
                 });
         }
 
-        // Build toolbar — floating bottom-center bar
-        // --- Build menu (left bottom, vertical multi-column like Rimworld) ---
-        egui::Area::new(egui::Id::new("build_menu"))
+        // --- Build categories (left bottom, Rimworld-style) ---
+        egui::Area::new(egui::Id::new("build_categories"))
             .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -20.0])
             .show(&egui_state.ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 1.0;
                 egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(80.0);
-                    let tool = &mut self.build_tool;
+                    ui.set_max_width(65.0);
                     let s = 11.0;
-                    macro_rules! btn {
-                        ($t:expr, $label:expr) => {
-                            if ui.selectable_label(*tool == $t, egui::RichText::new($label).size(s)).clicked() {
-                                *tool = if *tool == $t { BuildTool::None } else { $t };
+                    let categories = [
+                        ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
+                        ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Physics", "\u{1f4e6}"),
+                    ];
+                    for &(name, icon) in &categories {
+                        let selected = self.build_category == Some(name);
+                        let label = format!("{} {}", icon, name);
+                        if ui.selectable_label(selected, egui::RichText::new(label).size(s)).clicked() {
+                            if selected {
+                                self.build_category = None;
+                                self.build_tool = BuildTool::None;
+                            } else {
+                                self.build_category = Some(name);
                             }
-                        };
+                        }
                     }
-                    ui.label(egui::RichText::new("Walls").strong().size(s));
-                    btn!(BuildTool::WoodWall, "Wood");
-                    btn!(BuildTool::SteelWall, "Steel");
-                    btn!(BuildTool::SandstoneWall, "Sandstone");
-                    btn!(BuildTool::GraniteWall, "Granite");
-                    btn!(BuildTool::LimestoneWall, "Limestone");
                     ui.separator();
-                    ui.label(egui::RichText::new("Floor").strong().size(s));
-                    btn!(BuildTool::WoodFloor, "Wood");
-                    btn!(BuildTool::StoneFloor, "Stone");
-                    btn!(BuildTool::ConcreteFloor, "Concrete");
-                    btn!(BuildTool::Roof, "Roof");
-                    btn!(BuildTool::RemoveFloor, "Rm Floor");
-                    btn!(BuildTool::RemoveRoof, "Rm Roof");
-                    ui.separator();
-                    ui.label(egui::RichText::new("Opening").strong().size(s));
-                    btn!(BuildTool::Window, "Window");
-                    btn!(BuildTool::Door, "Door");
-                    ui.separator();
-                    ui.label(egui::RichText::new("Build").strong().size(s));
-                    btn!(BuildTool::Fireplace, "Fire");
-                    btn!(BuildTool::Bench, "Bench");
-                    btn!(BuildTool::Fan, "Fan");
-                    btn!(BuildTool::Compost, "Compost");
-                    btn!(BuildTool::ElectricLight, "Ceil Light");
-                    btn!(BuildTool::StandingLamp, "Floor Lamp");
-                    btn!(BuildTool::TableLamp, "Table Lamp");
-                    ui.separator();
-                    ui.label(egui::RichText::new("Piping").strong().size(s));
-                    btn!(BuildTool::Pipe, "Pipe");
-                    btn!(BuildTool::Pump, "Pump");
-                    btn!(BuildTool::Tank, "Tank");
-                    btn!(BuildTool::Valve, "Valve");
-                    btn!(BuildTool::Outlet, "Outlet");
-                    btn!(BuildTool::Inlet, "Inlet");
-                    ui.separator();
-                    btn!(BuildTool::Destroy, "Destroy");
-                    if *tool != BuildTool::None {
-                        ui.separator();
-                        let hint = match *tool {
-                            BuildTool::Bench => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
-                            BuildTool::TableLamp => "On bench".to_string(),
-                            BuildTool::Fan => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}] wall", d) }
-                            BuildTool::Pump => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}]", d) }
-                            BuildTool::Inlet | BuildTool::Outlet => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}] ground/wall", d) }
-                            BuildTool::RemoveFloor => "Click/drag to remove floor".to_string(),
-                            BuildTool::RemoveRoof => "Click/drag to remove roof".to_string(),
-                            BuildTool::Destroy => "Click/drag to remove".to_string(),
-                            BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor => "Drag rect".to_string(),
-                            BuildTool::Roof => "Drag rect (needs wall)".to_string(),
-                            BuildTool::Window => "Click on wall".to_string(),
-                            BuildTool::Door => "Click on wall".to_string(),
-                            _ => "Click place".to_string(),
-                        };
-                        ui.label(egui::RichText::new(hint).weak().size(9.0));
+                    let s2 = 10.0;
+                    if ui.selectable_label(self.build_tool == BuildTool::Destroy, egui::RichText::new("\u{274c} Destroy").size(s2)).clicked() {
+                        self.build_tool = if self.build_tool == BuildTool::Destroy { BuildTool::None } else { BuildTool::Destroy };
+                        self.build_category = None;
                     }
                 });
             });
+
+        // --- Build items panel (right of categories) ---
+        if let Some(cat) = self.build_category {
+            egui::Area::new(egui::Id::new("build_items"))
+                .anchor(egui::Align2::LEFT_BOTTOM, [90.0, -20.0])
+                .show(&egui_state.ctx, |ui| {
+                    egui::Frame::window(ui.style()).show(ui, |ui| {
+                        ui.set_max_width(90.0);
+                        let s = 11.0;
+                        let tool = &mut self.build_tool;
+                        macro_rules! btn {
+                            ($t:expr, $label:expr) => {
+                                if ui.selectable_label(*tool == $t, egui::RichText::new($label).size(s)).clicked() {
+                                    *tool = if *tool == $t { BuildTool::None } else { $t };
+                                }
+                            };
+                        }
+                        match cat {
+                            "Walls" => {
+                                btn!(BuildTool::WoodWall, "Wood");
+                                btn!(BuildTool::SteelWall, "Steel");
+                                btn!(BuildTool::SandstoneWall, "Sandstone");
+                                btn!(BuildTool::GraniteWall, "Granite");
+                                btn!(BuildTool::LimestoneWall, "Limestone");
+                            }
+                            "Floor" => {
+                                btn!(BuildTool::WoodFloor, "Wood Floor");
+                                btn!(BuildTool::StoneFloor, "Stone Floor");
+                                btn!(BuildTool::ConcreteFloor, "Concrete");
+                                btn!(BuildTool::Roof, "Add Roof");
+                                btn!(BuildTool::RemoveFloor, "Remove Floor");
+                                btn!(BuildTool::RemoveRoof, "Remove Roof");
+                            }
+                            "Build" => {
+                                btn!(BuildTool::Fireplace, "Fireplace");
+                                btn!(BuildTool::Bench, "Bench");
+                                btn!(BuildTool::Fan, "Fan");
+                                btn!(BuildTool::Compost, "Compost");
+                                btn!(BuildTool::ElectricLight, "Ceiling Light");
+                                btn!(BuildTool::StandingLamp, "Floor Lamp");
+                                btn!(BuildTool::TableLamp, "Table Lamp");
+                            }
+                            "Opening" => {
+                                btn!(BuildTool::Window, "Window");
+                                btn!(BuildTool::Door, "Door");
+                            }
+                            "Piping" => {
+                                btn!(BuildTool::Pipe, "Pipe");
+                                btn!(BuildTool::Pump, "Pump");
+                                btn!(BuildTool::Tank, "Tank");
+                                btn!(BuildTool::Valve, "Valve");
+                                btn!(BuildTool::Outlet, "Outlet");
+                                btn!(BuildTool::Inlet, "Inlet");
+                            }
+                            "Physics" => {
+                                btn!(BuildTool::WoodBox, "Wood Box");
+                                if ui.button(egui::RichText::new("Place Jeff").size(s)).clicked() {
+                                    self.placing_pleb = !self.placing_pleb;
+                                    if self.placing_pleb { *tool = BuildTool::None; }
+                                }
+                            }
+                            _ => {}
+                        }
+                        if *tool != BuildTool::None {
+                            ui.separator();
+                            let hint = match *tool {
+                                BuildTool::Bench => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
+                                BuildTool::TableLamp => "On bench".to_string(),
+                                BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet => {
+                                    let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" };
+                                    format!("Q/E [{}]", d)
+                                }
+                                BuildTool::Destroy | BuildTool::RemoveFloor | BuildTool::RemoveRoof => "Click/drag".to_string(),
+                                BuildTool::WoodBox => "Click to drop".to_string(),
+                                BuildTool::Window | BuildTool::Door => "Click wall".to_string(),
+                                BuildTool::Roof => "Drag (needs wall support)".to_string(),
+                                _ => "Click/drag to place".to_string(),
+                            };
+                            ui.label(egui::RichText::new(hint).weak().size(9.0));
+                        }
+                    });
+                });
+        }
+
+        // --- Colonist bar (bottom center, like Rimworld) ---
+        if self.pleb.is_some() {
+            egui::Area::new(egui::Id::new("colonist_bar"))
+                .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -10.0])
+                .show(&egui_state.ctx, |ui| {
+                    egui::Frame::window(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(48.0), egui::Sense::click());
+                            let painter = ui.painter_at(rect);
+                            let bg = if self.pleb_selected {
+                                egui::Color32::from_rgb(60, 100, 60)
+                            } else {
+                                egui::Color32::from_rgb(50, 55, 65)
+                            };
+                            painter.rect_filled(rect, 4.0, bg);
+                            let center = rect.center();
+                            painter.circle_filled(center + egui::Vec2::new(0.0, 4.0), 14.0, egui::Color32::from_rgb(50, 110, 180));
+                            painter.circle_filled(center + egui::Vec2::new(0.0, -6.0), 8.0, egui::Color32::from_rgb(215, 180, 140));
+                            painter.text(
+                                rect.center_bottom() + egui::Vec2::new(0.0, -2.0),
+                                egui::Align2::CENTER_BOTTOM,
+                                "Jeff",
+                                egui::FontId::proportional(9.0),
+                                egui::Color32::WHITE,
+                            );
+                            let bar_rect = egui::Rect::from_min_size(
+                                rect.left_bottom() + egui::Vec2::new(2.0, -6.0),
+                                egui::Vec2::new(rect.width() - 4.0, 3.0),
+                            );
+                            painter.rect_filled(bar_rect, 1.0, egui::Color32::from_rgb(40, 40, 40));
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(bar_rect.min, egui::Vec2::new(bar_rect.width() * 1.0, bar_rect.height())),
+                                1.0, egui::Color32::from_rgb(80, 200, 80),
+                            );
+                            if response.clicked() {
+                                self.pleb_selected = !self.pleb_selected;
+                            }
+                            let pleb = self.pleb.as_ref().unwrap();
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 1.0;
+                                ui.label(egui::RichText::new("Jeff").strong().size(11.0));
+                                let torch = if pleb.torch_on { "\u{1f525} On" } else { "\u{1f525} Off" };
+                                let lamp = if pleb.headlight_on { "\u{1f4a1} On" } else { "\u{1f4a1} Off" };
+                                ui.label(egui::RichText::new(torch).size(9.0));
+                                ui.label(egui::RichText::new(lamp).size(9.0));
+                                ui.label(egui::RichText::new("T/G toggle | WASD move").size(8.0).weak());
+                            });
+                        });
+                    });
+                });
+        }
 
         // --- Overlay bar (bottom-right) ---
         egui::Area::new(egui::Id::new("overlay_bar"))
@@ -3338,6 +3469,84 @@ impl App {
             }
         }
 
+        // Render physics bodies
+        if !self.physics_bodies.is_empty() {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let painter = egui_state.ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("physics_bodies"),
+            ));
+            let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                (sx, sy)
+            };
+            let tile_px = cam_zoom / self.render_scale / bp_ppp; // pixels per tile
+
+            for body in &self.physics_bodies {
+                let size = body.size;
+                // Height offset: box moves "up" on screen when z > 0 (parallax)
+                let z_offset = body.z * tile_px * 0.4; // scale z to screen pixels
+
+                // --- Shadow on ground (ellipse, darker when higher) ---
+                if body.z > 0.05 {
+                    let shadow_scale = 1.0 - (body.z * 0.1).min(0.5); // shadow shrinks when high
+                    let ss = size * shadow_scale;
+                    let (gx0, gy0) = to_screen(body.x - ss, body.y - ss * 0.6);
+                    let (gx1, gy1) = to_screen(body.x + ss, body.y + ss * 0.6);
+                    let shadow_alpha = (150.0 * (1.0 - body.z * 0.08).max(0.2)) as u8;
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(gx0, gy0), egui::pos2(gx1, gy1)),
+                        tile_px * 0.1,
+                        egui::Color32::from_rgba_unmultiplied(20, 20, 20, shadow_alpha),
+                    );
+                }
+
+                // --- Box with 3D rotation (offset upward by z) ---
+                let center = to_screen(body.x, body.y);
+                let center_s = egui::pos2(center.0, center.1 - z_offset);
+                let half = size * tile_px;
+
+                // Rotation: compute 4 corners of the rotated box
+                let cos_z = body.rot_z.cos();
+                let sin_z = body.rot_z.sin();
+                // Foreshortening from tilt (rot_x/rot_y compress one axis)
+                let scale_x = 1.0 - body.rot_y.sin().abs() * 0.3;
+                let scale_y = 1.0 - body.rot_x.sin().abs() * 0.3;
+                let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+                let rotated: Vec<egui::Pos2> = corners.iter().map(|&(cx, cy)| {
+                    let sx = cx * half * scale_x;
+                    let sy = cy * half * scale_y;
+                    let rx = sx * cos_z - sy * sin_z;
+                    let ry = sx * sin_z + sy * cos_z;
+                    center_s + egui::Vec2::new(rx, ry)
+                }).collect();
+
+                // Brighter when higher
+                let brightness = (160.0 + body.z * 15.0).min(200.0) as u8;
+                let gb = (120.0 + body.z * 10.0).min(160.0) as u8;
+                let fill_color = egui::Color32::from_rgb(brightness, gb, 60);
+                let stroke_color = egui::Color32::from_rgb(100, 75, 35);
+
+                // Draw rotated box as polygon
+                painter.add(egui::Shape::convex_polygon(
+                    rotated.clone(), fill_color, egui::Stroke::new(1.5, stroke_color),
+                ));
+                // Wood grain lines (rotated with the box)
+                for i in 0..3 {
+                    let t = 0.25 + i as f32 * 0.25;
+                    let lx = rotated[0].x + (rotated[3].x - rotated[0].x) * t;
+                    let ly = rotated[0].y + (rotated[3].y - rotated[0].y) * t;
+                    let rx = rotated[1].x + (rotated[2].x - rotated[1].x) * t;
+                    let ry = rotated[1].y + (rotated[2].y - rotated[1].y) * t;
+                    painter.line_segment(
+                        [egui::pos2(lx, ly), egui::pos2(rx, ry)],
+                        egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(90, 65, 30, 100)),
+                    );
+                }
+            }
+        }
+
         // Pump speed slider popup
         if let Some(pump_idx) = self.selected_pump {
             let (pwx, pwy) = self.selected_pump_world;
@@ -3364,6 +3573,31 @@ impl App {
                 });
             if !still_valid {
                 self.selected_pump = None;
+            }
+        }
+
+        // Fan speed slider popup
+        if let Some(_fan_idx) = self.selected_fan {
+            let (fwx, fwy) = self.selected_fan_world;
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let sx = ((fwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
+            let sy = ((fwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
+            let mut still_valid = true;
+            egui::Area::new(egui::Id::new("fan_slider"))
+                .fixed_pos(egui::pos2(sx, sy))
+                .show(&egui_state.ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.label(egui::RichText::new("Fan").strong().size(11.0));
+                        ui.add(egui::Slider::new(&mut self.fluid_params.fan_speed, 0.0..=80.0)
+                            .text("Speed")
+                            .step_by(1.0));
+                        if ui.small_button("Close").clicked() {
+                            still_valid = false;
+                        }
+                    });
+                });
+            if !still_valid {
+                self.selected_fan = None;
             }
         }
 
@@ -3847,6 +4081,20 @@ impl ApplicationHandler for App {
                             if let Some(ref mut pleb) = self.pleb {
                                 pleb.headlight_on = !pleb.headlight_on;
                                 log::info!("Headlight {}", if pleb.headlight_on { "ON" } else { "OFF" });
+                            }
+                        }
+                        PhysicalKey::Code(KeyCode::KeyF) => {
+                            // Throw nearest box in Jeff's facing direction
+                            if let Some(ref pleb) = self.pleb {
+                                let px = pleb.x;
+                                let py = pleb.y;
+                                let angle = pleb.angle;
+                                if let Some(idx) = nearest_body(&self.physics_bodies, px, py, 1.2) {
+                                    let dx = angle.cos();
+                                    let dy = angle.sin();
+                                    self.physics_bodies[idx].throw(dx, dy, 18.0);
+                                    log::info!("Jeff threw a box!");
+                                }
                             }
                         }
                         _ => {}

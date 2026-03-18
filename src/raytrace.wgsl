@@ -95,7 +95,7 @@ fn get_material(bt: u32) -> GpuMaterial {
 
 // --- Sprite constants ---
 const SPRITE_SIZE: u32 = 16u;
-const SPRITE_VARIANTS: u32 = 4u;
+const SPRITE_VARIANTS: u32 = 8u;
 
 // Sample a tree sprite. Returns vec4(r, g, b, height_normalized).
 // height_normalized: 0 = transparent (show ground), >0 = canopy/trunk.
@@ -804,25 +804,34 @@ fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32, flags: u32) -> v
     let id_hash = fract(sin(tree_id) * 43758.5453);
     let variant = u32(id_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
 
-    // Random 90° rotation (0, 90, 180, 270) via UV transform around center
+    // Full 360° continuous rotation
     let rot_hash = fract(sin(tree_id * 1.7 + 5.3) * 27183.6142);
-    let rotation = u32(rot_hash * 4.0) % 4u;
+    let angle = rot_hash * 6.2832; // full 360 degrees
     var ru = sprite_u - 0.5;
     var rv = sprite_v - 0.5;
-    switch rotation {
-        case 1u: { let tmp = ru; ru = -rv; rv = tmp; }   // 90°
-        case 2u: { ru = -ru; rv = -rv; }                  // 180°
-        case 3u: { let tmp = ru; ru = rv; rv = -tmp; }    // 270°
-        default: { }                                       // 0°
-    }
+    let cos_a = cos(angle);
+    let sin_a = sin(angle);
+    let rotated_u = ru * cos_a - rv * sin_a;
+    let rotated_v = ru * sin_a + rv * cos_a;
+    ru = rotated_u;
+    rv = rotated_v;
     let sprite = sample_sprite(variant, ru + 0.5, rv + 0.5);
 
     if sprite.w < 0.01 {
+        // Transparent: show ground
         return vec4<f32>(0.45, 0.35, 0.20, 0.0);
     }
 
+    // Trunk vs canopy: trunk pixels are low height (< 0.4), canopy is high (> 0.5)
+    let is_trunk = sprite.w < 0.4;
     let color = sprite.xyz * (0.85 + id_hash * 0.3);
-    return vec4<f32>(color, sprite.w);
+    if is_trunk {
+        // Trunk: darker, at ground level (low height doesn't cast shadows)
+        return vec4<f32>(color * 0.7, 0.05); // very low height = ground level
+    } else {
+        // Canopy: full color and height
+        return vec4<f32>(color, sprite.w);
+    }
 }
 
 fn compute_interior_light(wx: f32, wy: f32, sun_intensity: f32, sun_dir: vec2<f32>, window_amb: f32) -> vec4<f32> {
@@ -956,17 +965,17 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
             let tree_hash = fract(sin(tree_id) * 43758.5453);
             let variant = u32(tree_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
 
-            // Same rotation as rendering
+            // Same rotation as rendering (full 360°)
             let rot_hash = fract(sin(tree_id * 1.7 + 5.3) * 27183.6142);
-            let rotation = u32(rot_hash * 4.0) % 4u;
+            let angle = rot_hash * 6.2832;
             var ru = tree_fx - 0.5;
             var rv = tree_fy - 0.5;
-            switch rotation {
-                case 1u: { let tmp = ru; ru = -rv; rv = tmp; }
-                case 2u: { ru = -ru; rv = -rv; }
-                case 3u: { let tmp = ru; ru = rv; rv = -tmp; }
-                default: { }
-            }
+            let cos_a = cos(angle);
+            let sin_a = sin(angle);
+            let rotated_u = ru * cos_a - rv * sin_a;
+            let rotated_v = ru * sin_a + rv * cos_a;
+            ru = rotated_u;
+            rv = rotated_v;
             let sprite = sample_sprite(variant, ru + 0.5, rv + 0.5);
 
             if sprite.w > 0.01 {

@@ -1,0 +1,292 @@
+//! Physics bodies — moveable objects that interact with the fluid sim and plebs.
+
+use crate::grid::{GRID_W, GRID_H, block_type_rs};
+
+/// A physics body in the world (continuous position, not grid-aligned).
+#[derive(Clone, Debug)]
+pub struct PhysicsBody {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,            // height above ground (0 = on ground)
+    pub vx: f32,
+    pub vy: f32,
+    pub vz: f32,           // vertical velocity (positive = up)
+    pub rot_x: f32,        // rotation around X axis (radians, tilts forward/back)
+    pub rot_y: f32,        // rotation around Y axis (radians, tilts left/right)
+    pub rot_z: f32,        // rotation around Z axis (radians, spins flat)
+    pub spin_x: f32,       // angular velocity around X
+    pub spin_y: f32,       // angular velocity around Y
+    pub spin_z: f32,       // angular velocity around Z
+    pub mass: f32,
+    pub friction: f32,
+    pub bounce: f32,
+    pub size: f32,
+    pub render_height: f32,
+    pub body_type: BodyType,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BodyType {
+    WoodBox,
+}
+
+impl PhysicsBody {
+    pub fn new_wood_box(x: f32, y: f32) -> Self {
+        PhysicsBody {
+            x, y, z: 0.0,
+            vx: 0.0, vy: 0.0, vz: 0.0,
+            rot_x: 0.0, rot_y: 0.0, rot_z: 0.0,
+            spin_x: 0.0, spin_y: 0.0, spin_z: 0.0,
+            mass: 20.0,
+            friction: 0.85,
+            bounce: 0.3,
+            size: 0.45,
+            render_height: 1.5,
+            body_type: BodyType::WoodBox,
+        }
+    }
+
+    /// Is this body on the ground?
+    pub fn on_ground(&self) -> bool {
+        self.z < 0.01
+    }
+
+    /// Throw the body in a direction with upward arc
+    pub fn throw(&mut self, dx: f32, dy: f32, force: f32) {
+        let len = (dx * dx + dy * dy).sqrt().max(0.001);
+        self.vx = dx / len * force;
+        self.vy = dy / len * force;
+        self.vz = force * 0.5;
+        self.z = 0.1;
+        // Add tumbling spin proportional to force
+        self.spin_x = (dy / len) * force * 0.5;
+        self.spin_y = -(dx / len) * force * 0.5;
+        self.spin_z = force * 0.3;
+    }
+}
+
+/// Check if a physics body can occupy position (x, y) without overlapping walls.
+pub fn body_can_move(grid: &[u32], x: f32, y: f32, size: f32) -> bool {
+    // Check 4 corners of bounding box
+    for &(cx, cy) in &[(x - size, y - size), (x + size, y - size), (x - size, y + size), (x + size, y + size)] {
+        let bx = cx.floor() as i32;
+        let by = cy.floor() as i32;
+        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return false; }
+        let b = grid[(by as u32 * GRID_W + bx as u32) as usize];
+        let bt = block_type_rs(b);
+        let bh = (b >> 8) & 0xFF;
+        let is_door = (b >> 16) & 1 != 0;
+        let is_open = (b >> 16) & 4 != 0;
+        // Solid blocks that bodies can't pass through
+        if bh > 0 && !matches!(bt, 6 | 7 | 8 | 10 | 11 | 13 | 15 | 16 | 17 | 18) && !(is_door && is_open) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Check if a pleb at (px, py) would collide with any ground-level physics body.
+/// Returns adjusted position (pushed away from bodies).
+pub fn pleb_body_collision(bodies: &[PhysicsBody], px: f32, py: f32) -> (f32, f32) {
+    let pleb_r = 0.25;
+    let mut ax = px;
+    let mut ay = py;
+    for body in bodies {
+        if !body.on_ground() { continue; } // only collide with grounded boxes
+        let ddx = ax - body.x;
+        let ddy = ay - body.y;
+        let dist = (ddx * ddx + ddy * ddy).sqrt();
+        let min_dist = pleb_r + body.size;
+        if dist < min_dist && dist > 0.001 {
+            // Push pleb out
+            let overlap = min_dist - dist;
+            ax += (ddx / dist) * overlap;
+            ay += (ddy / dist) * overlap;
+        }
+    }
+    (ax, ay)
+}
+
+/// Find the nearest ground-level body within range of position.
+pub fn nearest_body(bodies: &[PhysicsBody], x: f32, y: f32, range: f32) -> Option<usize> {
+    let mut best = None;
+    let mut best_dist = range;
+    for (i, body) in bodies.iter().enumerate() {
+        if !body.on_ground() { continue; }
+        let dist = ((x - body.x).powi(2) + (y - body.y).powi(2)).sqrt();
+        if dist < best_dist {
+            best_dist = dist;
+            best = Some(i);
+        }
+    }
+    best
+}
+
+/// Tick all physics bodies.
+pub fn tick_bodies(
+    bodies: &mut Vec<PhysicsBody>,
+    dt: f32,
+    grid: &[u32],
+    wind_x: f32,
+    wind_y: f32,
+    pleb: Option<(f32, f32, f32, f32, f32)>, // (pleb_x, pleb_y, pleb_vx, pleb_vy, pleb_angle)
+) {
+    let wind_threshold = 5.0; // minimum wind speed to push a box
+
+    for body in bodies.iter_mut() {
+        // --- Wind force ---
+        // Use global wind as approximation (actual fluid velocity sampling would need GPU readback)
+        let wind_speed = (wind_x * wind_x + wind_y * wind_y).sqrt();
+        if wind_speed > wind_threshold {
+            let wind_force = (wind_speed - wind_threshold) * 0.02 / body.mass;
+            body.vx += wind_x * wind_force * dt;
+            body.vy += wind_y * wind_force * dt;
+        }
+
+        // --- Fan force ---
+        // Check adjacent grid cells for fans (type 12) and apply their force
+        let bx = body.x.floor() as i32;
+        let by = body.y.floor() as i32;
+        for dy in -2i32..=2 {
+            for dx in -2i32..=2 {
+                let nx = bx + dx;
+                let ny = by + dy;
+                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                let b = grid[(ny as u32 * GRID_W + nx as u32) as usize];
+                let bt = block_type_rs(b);
+                if bt == 12 { // fan
+                    let dist = ((nx as f32 + 0.5 - body.x).powi(2) + (ny as f32 + 0.5 - body.y).powi(2)).sqrt();
+                    if dist < 2.5 {
+                        let dir_bits = ((b >> 16) >> 3) & 3;
+                        let (fdx, fdy) = match dir_bits {
+                            0 => (0.0f32, -1.0f32),
+                            1 => (1.0, 0.0),
+                            2 => (0.0, 1.0),
+                            _ => (-1.0, 0.0),
+                        };
+                        let force = 15.0 / (1.0 + dist * 2.0) / body.mass;
+                        body.vx += fdx * force * dt;
+                        body.vy += fdy * force * dt;
+                    }
+                }
+            }
+        }
+
+        // --- Pleb pushing (hard push in Jeff's facing direction) ---
+        if let Some((px, py, pvx, pvy, pangle)) = pleb {
+            let ddx = body.x - px;
+            let ddy = body.y - py;
+            let dist = (ddx * ddx + ddy * ddy).sqrt();
+            let push_range = 0.75;
+            if dist < push_range && dist > 0.01 && body.on_ground() {
+                let pleb_speed = (pvx * pvx + pvy * pvy).sqrt();
+                if pleb_speed > 0.1 {
+                    let face_x = pangle.cos();
+                    let face_y = pangle.sin();
+                    let push_force = 8.0;
+                    body.vx += face_x * push_force * dt;
+                    body.vy += face_y * push_force * dt;
+                    // Add slight spin from push
+                    body.spin_z += push_force * 0.1 * dt;
+                    body.spin_x += face_y * push_force * 0.05 * dt;
+                    body.spin_y -= face_x * push_force * 0.05 * dt;
+                }
+                // Separation force (prevent overlap)
+                let overlap = push_range - dist;
+                if overlap > 0.0 {
+                    body.vx += (ddx / dist) * overlap * 8.0 * dt;
+                    body.vy += (ddy / dist) * overlap * 8.0 * dt;
+                }
+            }
+        }
+
+        // --- Body-body collision ---
+        // TODO: O(n²) check for now, fine for small counts
+
+        // --- Rotation update ---
+        body.rot_x += body.spin_x * dt;
+        body.rot_y += body.spin_y * dt;
+        body.rot_z += body.spin_z * dt;
+
+        // Angular friction (spin slows down)
+        if body.on_ground() {
+            body.spin_x *= 1.0 - body.friction * dt * 4.0;
+            body.spin_y *= 1.0 - body.friction * dt * 4.0;
+            body.spin_z *= 1.0 - body.friction * dt * 4.0;
+            // Snap rotation to nearest 90° when nearly stopped and on ground
+            let spin_total = body.spin_x.abs() + body.spin_y.abs() + body.spin_z.abs();
+            if spin_total < 0.1 {
+                body.spin_x = 0.0; body.spin_y = 0.0; body.spin_z = 0.0;
+            }
+        } else {
+            // Air: very light spin damping
+            body.spin_x *= 1.0 - 0.05 * dt;
+            body.spin_y *= 1.0 - 0.05 * dt;
+            body.spin_z *= 1.0 - 0.05 * dt;
+        }
+
+        // --- Gravity (Z axis) ---
+        let gravity = 25.0; // tiles/sec² downward
+        body.vz -= gravity * dt;
+        body.z += body.vz * dt;
+
+        // --- Bounce when hitting ground ---
+        if body.z <= 0.0 {
+            body.z = 0.0;
+            if body.vz < -1.0 {
+                body.vz = -body.vz * body.bounce;
+                body.vx *= 0.8;
+                body.vy *= 0.8;
+                // Impact adds tumble spin from horizontal velocity
+                body.spin_x += body.vy * 0.3;
+                body.spin_y -= body.vx * 0.3;
+            } else {
+                body.vz = 0.0;
+            }
+        }
+
+        // --- Friction (only when on ground) ---
+        if body.on_ground() {
+            body.vx *= 1.0 - body.friction * dt * 3.0;
+            body.vy *= 1.0 - body.friction * dt * 3.0;
+        } else {
+            // Air resistance (much less)
+            body.vx *= 1.0 - 0.1 * dt;
+            body.vy *= 1.0 - 0.1 * dt;
+        }
+
+        // --- Velocity cap ---
+        let speed = (body.vx * body.vx + body.vy * body.vy).sqrt();
+        if speed > 30.0 {
+            body.vx *= 30.0 / speed;
+            body.vy *= 30.0 / speed;
+        }
+
+        // --- Move with collision (only collide with walls when on/near ground) ---
+        let nx = body.x + body.vx * dt;
+        let ny = body.y + body.vy * dt;
+
+        if body.z < 2.0 { // below wall height — collide
+            if body_can_move(grid, nx, body.y, body.size) {
+                body.x = nx;
+            } else {
+                body.vx *= -body.bounce; // bounce off wall
+            }
+            if body_can_move(grid, body.x, ny, body.size) {
+                body.y = ny;
+            } else {
+                body.vy *= -body.bounce; // bounce off wall
+            }
+        } else {
+            // Airborne above walls — no collision
+            body.x = nx;
+            body.y = ny;
+        }
+
+        // Stop if very slow and on ground
+        if body.on_ground() && speed < 0.01 {
+            body.vx = 0.0;
+            body.vy = 0.0;
+        }
+    }
+}
