@@ -1950,6 +1950,7 @@ impl App {
             FluidOverlay::Pressure => 4.0,
             FluidOverlay::O2 => 5.0,
             FluidOverlay::CO2 => 6.0,
+            FluidOverlay::Temp => 7.0,
         };
         let prev_glow = self.camera.enable_prox_glow;
         let prev_bleed = self.camera.enable_dir_bleed;
@@ -2433,6 +2434,9 @@ impl App {
                         }
                         if ui.selectable_label(*ov == FluidOverlay::CO2, "CO2").clicked() {
                             *ov = if *ov == FluidOverlay::CO2 { FluidOverlay::None } else { FluidOverlay::CO2 };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::Temp, "Temp").clicked() {
+                            *ov = if *ov == FluidOverlay::Temp { FluidOverlay::None } else { FluidOverlay::Temp };
                         }
                         ui.separator();
                         if ui.selectable_label(*ov == FluidOverlay::Velocity, "Vel").clicked() {

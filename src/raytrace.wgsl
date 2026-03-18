@@ -1742,11 +1742,32 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let o2 = clamp(smoke.g, 0.0, 1.0);
         let o2_color = mix(vec3(0.9, 0.1, 0.0), vec3(0.1, 0.4, 1.0), o2);
         color = mix(color * 0.3, o2_color, 0.7);
-    } else {
+    } else if camera.fluid_overlay < 6.5 {
         // CO2: dark (none) to yellow-green (high)
         let co2 = clamp(smoke.b * 3.0, 0.0, 1.0);
         let co2_color = mix(vec3(0.05, 0.1, 0.05), vec3(0.85, 0.9, 0.2), co2);
         color = mix(color * 0.3, co2_color, clamp(co2 + 0.1, 0.0, 0.8));
+    } else {
+        // Temperature: blue (cold) → white (ambient) → red (hot) → yellow (very hot)
+        let temp = smoke.a;
+        let temp_norm = clamp((temp + 20.0) / 520.0, 0.0, 1.0); // -20°C..500°C → 0..1
+        var temp_color: vec3<f32>;
+        if temp_norm < 0.05 {
+            temp_color = vec3(0.0, 0.0, 0.8);  // very cold: blue
+        } else if temp_norm < 0.1 {
+            let t = (temp_norm - 0.05) / 0.05;
+            temp_color = mix(vec3(0.0, 0.0, 0.8), vec3(0.7, 0.7, 0.9), t); // cold → cool
+        } else if temp_norm < 0.15 {
+            let t = (temp_norm - 0.1) / 0.05;
+            temp_color = mix(vec3(0.7, 0.7, 0.9), vec3(0.9, 0.9, 0.9), t); // cool → white (ambient)
+        } else if temp_norm < 0.4 {
+            let t = (temp_norm - 0.15) / 0.25;
+            temp_color = mix(vec3(0.9, 0.9, 0.9), vec3(1.0, 0.3, 0.0), t); // ambient → hot red
+        } else {
+            let t = (temp_norm - 0.4) / 0.6;
+            temp_color = mix(vec3(1.0, 0.3, 0.0), vec3(1.0, 1.0, 0.3), t); // hot → very hot yellow
+        }
+        color = mix(color * 0.3, temp_color, 0.7);
     }
 
     // Final fog overlay: covers EVERYTHING (terrain + gas) in the border zone

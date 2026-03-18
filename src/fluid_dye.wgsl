@@ -113,10 +113,13 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     let scale = dye_to_sim();
     let inv_scale = sim_to_dye();
 
-    // Check if this dye texel is inside an obstacle — walls have no smoke, atmospheric O2
+    // Check if this dye texel is inside an obstacle — walls have no smoke, atmospheric O2, ambient temp
     let sim_cell = vec2<i32>(vec2<f32>(gid.xy) * scale);
     if is_obstacle(sim_cell) {
-        textureStore(dye_out, gid.xy, vec4(0.0, 1.0, 0.0, 0.0));
+        let day_frac_obs = fract(params.time / 60.0);
+        let sun_obs = sin(clamp((day_frac_obs - 0.15) / 0.7, 0.0, 1.0) * 3.14159);
+        let amb_temp_obs = mix(5.0, 25.0, sun_obs);
+        textureStore(dye_out, gid.xy, vec4(0.0, 1.0, 0.0, amb_temp_obs));
         return;
     }
 
@@ -237,7 +240,47 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     result.r = clamp(result.r, 0.0, 2.0);   // smoke
     result.g = clamp(result.g, 0.0, 1.0);   // O2
     result.b = clamp(result.b, 0.0, 1.5);   // CO2
-    result.a = 0.0;                           // unused
+    // --- Temperature (A channel, in Celsius) ---
+    // Ambient temperature varies with time of day (approx from sun intensity)
+    // params.time cycles 0..60. Dawn=0.15*60=9, dusk=0.85*60=51
+    let day_frac = fract(params.time / 60.0);
+    let sun_t = clamp((day_frac - 0.15) / 0.7, 0.0, 1.0); // 0 at night, 1 at peak day
+    let sun_curve = sin(sun_t * 3.14159);
+    let ambient_temp = mix(5.0, 25.0, sun_curve); // 5°C night, 25°C midday
+
+    // Temperature dissipation (slight cooling toward ambient)
+    result.a += (ambient_temp - result.a) * 0.005;
+
+    // Fire injects heat
+    if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
+        let block_t = grid[u32(by) * u32(params.sim_w) + u32(bx)];
+        if (block_t & 0xFFu) == 6u {
+            // Fire: inject ~300°C, scaled by O2 availability
+            let fire_o2_t = clamp(result.g * 3.0 - 0.5, 0.0, 1.0);
+            result.a = max(result.a, 300.0 * fire_o2_t);
+        }
+    }
+
+    // Outdoor cells: temperature trends toward ambient
+    if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
+        let block_temp = grid[u32(by) * u32(params.sim_w) + u32(bx)];
+        let has_roof_t = ((block_temp >> 16u) & 2u) != 0u;
+        let btype_t = block_temp & 0xFFu;
+        if !has_roof_t && (btype_t == 0u || btype_t == 2u) {
+            result.a += (ambient_temp - result.a) * 0.02; // outdoor air resets faster
+        }
+    }
+
+    // Edge zone: temperature resets to ambient
+    if edge_dist < 20.0 {
+        let edge_t = 1.0 - clamp(edge_dist / 20.0, 0.0, 1.0);
+        result.a += (ambient_temp - result.a) * edge_t * 0.05;
+    }
+
+    // Temperature diffusion (heat spreads through air)
+    result.a += (avg_neighbors.a - result.a) * 0.08;
+
+    result.a = clamp(result.a, -20.0, 500.0);
 
     textureStore(dye_out, gid.xy, result);
 }
