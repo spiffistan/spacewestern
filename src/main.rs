@@ -546,12 +546,14 @@ impl App {
                 }
                 let mag = (push_dir.0 * push_dir.0 + push_dir.1 * push_dir.1).sqrt();
                 if mag > 0.1 {
-                    // Inject a strong outward splat at the door position
-                    self.fluid_params.splat_x = fx;
-                    self.fluid_params.splat_y = fy;
-                    self.fluid_params.splat_vx = push_dir.0 / mag * 800.0;
-                    self.fluid_params.splat_vy = push_dir.1 / mag * 800.0;
-                    self.fluid_params.splat_radius = 2.0;
+                    let norm_x = push_dir.0 / mag;
+                    let norm_y = push_dir.1 / mag;
+                    // Inject outward velocity slightly inside the room (behind the door)
+                    self.fluid_params.splat_x = fx - norm_x * 1.5;
+                    self.fluid_params.splat_y = fy - norm_y * 1.5;
+                    self.fluid_params.splat_vx = norm_x * 60.0;
+                    self.fluid_params.splat_vy = norm_y * 60.0;
+                    self.fluid_params.splat_radius = 3.0;
                     self.fluid_params.splat_active = 1.0;
                 }
             }
