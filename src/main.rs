@@ -2608,10 +2608,10 @@ impl App {
                 block_info = format!("{}(h{}){}{}", type_name, bh, roof, door);
             }
 
-            let [smoke_r, o2, co2, _unused] = self.debug_fluid_density;
+            let [smoke_r, o2, co2, temp] = self.debug_fluid_density;
             let tip = format!(
-                "({:.1}, {:.1})\n{}\nSmoke: {:.3}\nO2: {:.3}\nCO2: {:.3}",
-                wx, wy, block_info, smoke_r, o2, co2
+                "({:.1}, {:.1})\n{}\nSmoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C",
+                wx, wy, block_info, smoke_r, o2, co2, temp
             );
 
             // Position tooltip near cursor
@@ -2925,17 +2925,23 @@ impl App {
             if self.debug_fluid_readback_pending {
                 self.debug_fluid_readback_pending = false;
                 let buffer_slice = gfx.debug_readback_buffer.slice(..);
-                buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+                let mapped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let mapped_clone = mapped.clone();
+                buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+                    if result.is_ok() {
+                        mapped_clone.store(true, std::sync::atomic::Ordering::Release);
+                    }
+                });
                 gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-                {
+                if mapped.load(std::sync::atomic::Ordering::Acquire) {
                     let data = buffer_slice.get_mapped_range();
                     let f16_data: &[u16] = bytemuck::cast_slice(&data);
-                    // Convert f16 to f32 manually (half-float format)
                     for i in 0..4 {
                         self.debug_fluid_density[i] = half_to_f32(f16_data[i]);
                     }
+                    drop(data);
+                    gfx.debug_readback_buffer.unmap();
                 }
-                gfx.debug_readback_buffer.unmap();
             }
 
             let mut egui_encoder = gfx

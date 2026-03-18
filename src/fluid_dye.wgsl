@@ -196,14 +196,22 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         result.r += factor * 0.5;
     }
 
-    // --- Diffusion: smoke spreads to adjacent cells (physical mixing in still air) ---
-    // Strong enough to fill a 15-block room in ~3 seconds via spread alone
+    // --- Diffusion: per-channel rates (physical mixing in still air) ---
     let d_l = bilinear_dye(dye_pos + vec2(-1.0, 0.0));
     let d_r = bilinear_dye(dye_pos + vec2( 1.0, 0.0));
     let d_u = bilinear_dye(dye_pos + vec2( 0.0,-1.0));
     let d_d = bilinear_dye(dye_pos + vec2( 0.0, 1.0));
     let avg_neighbors = (d_l + d_r + d_u + d_d) * 0.25;
-    result += (avg_neighbors - result) * 0.1;
+    let diff = avg_neighbors - result;
+    // Smoke (R): high diffusion to fill rooms quickly
+    result.r += diff.r * 0.1;
+    // O2 (G): moderate diffusion
+    result.g += diff.g * 0.08;
+    // CO2 (B): moderate diffusion
+    result.b += diff.b * 0.08;
+    // Temperature (A): very low diffusion — air is a poor conductor, heat
+    // spreads mainly via advection (convection), not direct diffusion
+    result.a += diff.a * 0.02;
 
     // --- Accumulation: smoke gains density only when smoke_rate > 0 ---
     if params.smoke_rate > 0.01 && result.r > 0.05 {
@@ -281,8 +289,7 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         result.a += (ambient_temp - result.a) * edge_t * 0.05;
     }
 
-    // Temperature diffusion (heat spreads through air)
-    result.a += (avg_neighbors.a - result.a) * 0.08;
+    // (Temperature diffusion is handled in the per-channel diffusion block above)
 
     result.a = clamp(result.a, -20.0, 500.0);
 
