@@ -80,6 +80,7 @@ struct App {
     debug_mode: bool,             // show debug tooltip at cursor
     enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
     enable_dir_bleed: bool,       // directional light bleed (expensive)
+    enable_temporal: bool,        // temporal reprojection (reuse previous frame)
     debug_fluid_density: [f32; 4], // last readback: RGBA from dye texture at cursor
     debug_fluid_readback_pending: bool,
     fluid_mouse_active: bool,  // middle mouse button held
@@ -252,6 +253,7 @@ impl App {
             debug_mode: false,
             enable_prox_glow: true,
             enable_dir_bleed: true,
+            enable_temporal: true,
             debug_fluid_density: [0.0; 4],
             debug_fluid_readback_pending: false,
             fluid_dye_phase: 0,
@@ -2064,8 +2066,14 @@ impl App {
             || (self.camera.fluid_overlay - prev_overlay).abs() > 0.5;
         // Detect large time jumps (time-of-day buttons, slider scrubbing)
         let time_jumped = (self.camera.time - self.prev_cam_time).abs() > 1.0;
-        if self.grid_dirty || settings_changed || time_jumped {
-            self.camera.force_refresh = 5.0; // refresh for 5 frames
+        if !self.enable_temporal {
+            self.camera.force_refresh = 1.0; // always force refresh when temporal is disabled
+        } else if self.grid_dirty || settings_changed || time_jumped {
+            self.camera.force_refresh = 10.0;
+            // Nudge prev camera to invalidate ALL reprojection checks
+            // (some GPU drivers/WGSL compilers may not honor force_refresh alone)
+            self.prev_cam_x += 100.0;
+            self.prev_cam_y += 100.0;
         } else if self.camera.force_refresh > 0.5 {
             self.camera.force_refresh -= 1.0;
         }
@@ -2562,6 +2570,10 @@ impl App {
                         }
                         if ui.selectable_label(self.enable_dir_bleed, "Bleed").clicked() {
                             self.enable_dir_bleed = !self.enable_dir_bleed;
+                        }
+                        if ui.selectable_label(self.enable_temporal, "Temporal").clicked() {
+                            self.enable_temporal = !self.enable_temporal;
+                            self.camera.force_refresh = 10.0;
                         }
                     });
                 });
