@@ -2060,7 +2060,9 @@ impl App {
         // Persist for several frames so lightmap has time to propagate changes
         let settings_changed = (self.camera.enable_prox_glow - prev_glow).abs() > 0.5
             || (self.camera.enable_dir_bleed - prev_bleed).abs() > 0.5;
-        if self.grid_dirty || settings_changed {
+        // Detect large time jumps (time-of-day buttons, slider scrubbing)
+        let time_jumped = (self.camera.time - self.prev_cam_time).abs() > 1.0;
+        if self.grid_dirty || settings_changed || time_jumped {
             self.camera.force_refresh = 5.0; // refresh for 5 frames
         } else if self.camera.force_refresh > 0.5 {
             self.camera.force_refresh -= 1.0;
