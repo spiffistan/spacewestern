@@ -477,7 +477,7 @@ impl App {
                     }
                 }
                 BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost
-                | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve | BuildTool::Outlet => {
+                | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve | BuildTool::Outlet | BuildTool::Inlet => {
                     if self.can_place_at(bx, by) {
                         let roof_flag = flags & 2;
                         let rot_flags = (self.build_rotation as u8) << 3; // bits 3-4 = direction
@@ -491,6 +491,7 @@ impl App {
                             BuildTool::Tank => make_block(17, 1, roof_flag),
                             BuildTool::Valve => make_block(18, 1, roof_flag | 4), // start open (bit2)
                             BuildTool::Outlet => make_block(19, 1, roof_flag | rot_flags),
+                            BuildTool::Inlet => make_block(20, 1, roof_flag | rot_flags),
                             _ => unreachable!(),
                         };
                         let roof_h = block & 0xFF000000;
@@ -588,7 +589,7 @@ impl App {
         }
 
         // Remove any placeable by clicking on it (replace with dirt floor)
-        if bt == 6 || bt == 7 || bt == 10 || bt == 11 || bt == 13 || (bt >= 15 && bt <= 19) {
+        if bt == 6 || bt == 7 || bt == 10 || bt == 11 || bt == 13 || (bt >= 15 && bt <= 20) {
             let roof_flag = flags & 2;
             let roof_h = block & 0xFF000000;
             self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
@@ -2547,6 +2548,7 @@ impl App {
                     btn!(BuildTool::Tank, "Tank");
                     btn!(BuildTool::Valve, "Valve");
                     btn!(BuildTool::Outlet, "Outlet");
+                    btn!(BuildTool::Inlet, "Inlet");
                     if *tool != BuildTool::None {
                         ui.separator();
                         let hint = match *tool {

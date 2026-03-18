@@ -47,7 +47,7 @@ impl PipeConnections {
 
 /// Check if a block type is part of the pipe network.
 pub fn is_pipe_component(bt: u8) -> bool {
-    bt >= 15 && bt <= 19
+    bt >= 15 && bt <= 20
 }
 
 /// Compute connections for a pipe block at (x, y) by checking neighbors.

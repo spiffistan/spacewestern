@@ -15,6 +15,7 @@ pub enum BuildTool {
     Tank,
     Valve,
     Outlet,
+    Inlet,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
