@@ -1759,7 +1759,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let co2 = clamp(smoke.b * 3.0, 0.0, 1.0);
         let co2_color = mix(vec3(0.05, 0.1, 0.05), vec3(0.85, 0.9, 0.2), co2);
         color = mix(color * 0.3, co2_color, clamp(co2 + 0.1, 0.0, 0.8));
-    } else {
+    } else if camera.fluid_overlay < 7.5 {
         // Temperature: blue (cold) → white (ambient) → red (hot) → yellow (very hot)
         let temp = smoke.a;
         let temp_norm = clamp((temp + 20.0) / 520.0, 0.0, 1.0); // -20°C..500°C → 0..1
@@ -1780,6 +1780,42 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             temp_color = mix(vec3(1.0, 0.3, 0.0), vec3(1.0, 1.0, 0.3), t); // hot → very hot yellow
         }
         color = mix(color * 0.3, temp_color, 0.7);
+    } else {
+        // Heat Flow: velocity magnitude colored by temperature (convection patterns)
+        let hf_vel_cell = vec2<i32>(i32(world_x), i32(world_y));
+        let vel_raw = textureLoad(fluid_vel_tex, hf_vel_cell, 0).xy;
+        let vel_mag = length(vel_raw);
+        let temp_hf = smoke.a;
+        let temp_delta_hf = temp_hf - 15.0; // delta from ~ambient
+
+        // Background: dim terrain
+        var hf_color = color * 0.2;
+
+        if vel_mag > 0.5 {
+            // Direction as hue, temperature as saturation, magnitude as brightness
+            let dir_angle = atan2(vel_raw.y, vel_raw.x);
+            let hue = (dir_angle / 6.283 + 0.5); // 0..1
+
+            // Temperature coloring: cool flow = blue, warm flow = orange/red
+            var flow_color: vec3<f32>;
+            if temp_delta_hf > 5.0 {
+                // Hot convection: orange → yellow
+                let heat = clamp(temp_delta_hf / 200.0, 0.0, 1.0);
+                flow_color = mix(vec3(1.0, 0.5, 0.1), vec3(1.0, 1.0, 0.3), heat);
+            } else if temp_delta_hf < -3.0 {
+                // Cold flow: blue → cyan
+                let cold = clamp(-temp_delta_hf / 20.0, 0.0, 1.0);
+                flow_color = mix(vec3(0.3, 0.5, 1.0), vec3(0.1, 0.8, 1.0), cold);
+            } else {
+                // Neutral flow: white/gray
+                flow_color = vec3(0.7, 0.7, 0.7);
+            }
+
+            let brightness = clamp(vel_mag * 0.03, 0.0, 1.0);
+            hf_color = mix(hf_color, flow_color, brightness);
+        }
+
+        color = hf_color;
     }
 
     // Final fog overlay: covers EVERYTHING (terrain + gas) in the border zone

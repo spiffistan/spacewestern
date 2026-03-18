@@ -209,9 +209,13 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     result.g += diff.g * 0.08;
     // CO2 (B): moderate diffusion
     result.b += diff.b * 0.08;
-    // Temperature (A): very low diffusion — air is a poor conductor, heat
-    // spreads mainly via advection (convection), not direct diffusion
-    result.a += diff.a * 0.02;
+    // Temperature (A): very low diffusion, and only if no adjacent walls
+    // (prevents heat leaking through walls via bilinear sampling across boundaries)
+    let has_adj_wall = is_obstacle(sim_cell + vec2(1, 0)) || is_obstacle(sim_cell + vec2(-1, 0))
+                    || is_obstacle(sim_cell + vec2(0, 1)) || is_obstacle(sim_cell + vec2(0, -1));
+    if !has_adj_wall {
+        result.a += diff.a * 0.02;
+    }
 
     // --- Accumulation: smoke gains density only when smoke_rate > 0 ---
     if params.smoke_rate > 0.01 && result.r > 0.05 {

@@ -2014,6 +2014,7 @@ impl App {
             FluidOverlay::O2 => 5.0,
             FluidOverlay::CO2 => 6.0,
             FluidOverlay::Temp => 7.0,
+            FluidOverlay::HeatFlow => 8.0,
         };
         let prev_glow = self.camera.enable_prox_glow;
         let prev_bleed = self.camera.enable_dir_bleed;
@@ -2501,6 +2502,9 @@ impl App {
                         if ui.selectable_label(*ov == FluidOverlay::Temp, "Temp").clicked() {
                             *ov = if *ov == FluidOverlay::Temp { FluidOverlay::None } else { FluidOverlay::Temp };
                         }
+                        if ui.selectable_label(*ov == FluidOverlay::HeatFlow, "Heat").clicked() {
+                            *ov = if *ov == FluidOverlay::HeatFlow { FluidOverlay::None } else { FluidOverlay::HeatFlow };
+                        }
                         ui.separator();
                         if ui.selectable_label(*ov == FluidOverlay::Velocity, "Vel").clicked() {
                             *ov = if *ov == FluidOverlay::Velocity { FluidOverlay::None } else { FluidOverlay::Velocity };
@@ -2839,7 +2843,8 @@ impl App {
           let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
           p.set_pipeline(&gfx.thermal_pipeline); p.set_bind_group(0, &gfx.thermal_bind_group, &[]); p.dispatch_workgroups(tw, th, 1); }
 
-        // Debug: copy one dye texel at cursor position for readback
+        // Debug: copy one dye texel at cursor position for readback (native only — WASM can't sync poll)
+        #[cfg(not(target_arch = "wasm32"))]
         if self.debug_mode {
             let (wx, wy) = self.hover_world;
             let dye_x = ((wx / GRID_W as f32) * FLUID_DYE_W as f32).clamp(0.0, (FLUID_DYE_W - 1) as f32) as u32;
@@ -2922,26 +2927,20 @@ impl App {
             gfx.queue.submit(std::iter::once(encoder.finish()));
 
             // Debug: read back the dye texel
+            #[cfg(not(target_arch = "wasm32"))]
             if self.debug_fluid_readback_pending {
                 self.debug_fluid_readback_pending = false;
                 let buffer_slice = gfx.debug_readback_buffer.slice(..);
-                let mapped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                let mapped_clone = mapped.clone();
-                buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-                    if result.is_ok() {
-                        mapped_clone.store(true, std::sync::atomic::Ordering::Release);
-                    }
-                });
+                buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
                 gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
-                if mapped.load(std::sync::atomic::Ordering::Acquire) {
+                {
                     let data = buffer_slice.get_mapped_range();
                     let f16_data: &[u16] = bytemuck::cast_slice(&data);
                     for i in 0..4 {
                         self.debug_fluid_density[i] = half_to_f32(f16_data[i]);
                     }
-                    drop(data);
-                    gfx.debug_readback_buffer.unmap();
                 }
+                gfx.debug_readback_buffer.unmap();
             }
 
             let mut egui_encoder = gfx
