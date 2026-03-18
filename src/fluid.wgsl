@@ -178,33 +178,44 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Velocity dissipation (slight damping)
     new_v *= 0.998;
 
-    // Temperature-driven buoyancy: hot air expands outward
-    // Sample temperature from dye texture (A channel, dye is 2x sim resolution)
-    let dye_pos = vec2<i32>(pos.x * 2 + 1, pos.y * 2 + 1);
-    let dye_val = textureLoad(dye_tex, dye_pos, 0);
-    let air_temp = dye_val.a;
+    // Temperature-driven buoyancy via gradient method.
+    // Compute temperature gradient from neighbors — velocity flows from hot to cold,
+    // naturally creating radial expansion from heat sources in all directions.
+    let dye_scale = i32(params.dye_w / params.sim_w); // dye texels per sim cell
+    let dye_cx = pos.x * dye_scale + dye_scale / 2;
+    let dye_cy = pos.y * dye_scale + dye_scale / 2;
 
-    // Ambient temperature (same formula as dye shader)
+    let temp_c = textureLoad(dye_tex, vec2<i32>(dye_cx, dye_cy), 0).a;
+    let temp_l = textureLoad(dye_tex, vec2<i32>(max(dye_cx - dye_scale, 0), dye_cy), 0).a;
+    let temp_r = textureLoad(dye_tex, vec2<i32>(min(dye_cx + dye_scale, i32(params.dye_w) - 1), dye_cy), 0).a;
+    let temp_u = textureLoad(dye_tex, vec2<i32>(dye_cx, max(dye_cy - dye_scale, 0)), 0).a;
+    let temp_d = textureLoad(dye_tex, vec2<i32>(dye_cx, min(dye_cy + dye_scale, i32(params.dye_h) - 1)), 0).a;
+
+    // Temperature gradient (central differences)
+    let grad_x = (temp_r - temp_l) * 0.5;
+    let grad_y = (temp_d - temp_u) * 0.5;
+
+    // Ambient temperature
     let day_frac = fract(params.time / 60.0);
     let sun_t = clamp((day_frac - 0.15) / 0.7, 0.0, 1.0);
     let ambient_temp = mix(5.0, 25.0, sin(sun_t * 3.14159));
+    let temp_delta = temp_c - ambient_temp;
 
-    let temp_delta = air_temp - ambient_temp;
-    if temp_delta > 1.0 {
-        // Hot air: radial expansion with turbulent wobble
-        let buoyancy_strength = clamp(temp_delta * 0.08, 0.0, 25.0);
+    // Gradient buoyancy: velocity opposes temperature gradient (hot pushes outward)
+    let grad_mag = length(vec2(grad_x, grad_y));
+    if grad_mag > 0.5 {
+        let buoyancy_coeff = clamp(abs(temp_delta) * 0.06, 0.0, 15.0);
+        let grad_force = -vec2(grad_x, grad_y) / grad_mag * buoyancy_coeff;
+
+        // Add turbulent wobble for natural convection
         let center = vec2<f32>(f32(pos.x) + 0.5, f32(pos.y) + 0.5);
         let phase = fract(sin(dot(center, vec2(127.1, 311.7))) * 43758.5) * 6.28;
         let wobble = vec2(
-            sin(params.time * 5.3 + phase) * 3.0,
-            cos(params.time * 4.1 + phase) * 3.0
+            sin(params.time * 5.3 + phase) * 2.0,
+            cos(params.time * 4.1 + phase) * 2.0
         );
-        // Upward bias (in top-down this manifests as slight northward drift)
-        new_v += (vec2(0.0, -buoyancy_strength) + wobble) * params.dt;
-    } else if temp_delta < -5.0 {
-        // Cold air: slight downward settling (southward in top-down)
-        let cold_sink = clamp(-temp_delta * 0.02, 0.0, 5.0);
-        new_v += vec2(0.0, cold_sink) * params.dt;
+
+        new_v += (grad_force + wobble) * params.dt;
     }
 
     // Fire source: extra turbulent kick at fire blocks

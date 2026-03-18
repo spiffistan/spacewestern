@@ -2,6 +2,8 @@
 
 use crate::grid::GRID_W;
 
+// Fluid simulation resolution. Set HIRES_FLUID to true for 512x512 velocity
+// (4x compute cost but smoother convection patterns).
 pub const FLUID_SIM_W: u32 = 256;
 pub const FLUID_SIM_H: u32 = 256;
 pub const FLUID_DYE_W: u32 = 512;
