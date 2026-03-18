@@ -123,6 +123,9 @@ struct GfxState {
     grid_buffer: wgpu::Buffer,
     sprite_buffer: wgpu::Buffer,
     material_buffer: wgpu::Buffer,
+    block_temp_buffer: wgpu::Buffer,
+    thermal_pipeline: wgpu::ComputePipeline,
+    thermal_bind_group: wgpu::BindGroup,
     // Fluid simulation GPU resources
     fluid_params_buffer: wgpu::Buffer,
     fluid_vel: [wgpu::Texture; 2],
@@ -689,6 +692,16 @@ impl App {
             mapped_at_creation: false,
         });
         queue.write_buffer(&material_buffer, 0, bytemuck::cast_slice(&material_data));
+
+        // Block temperature buffer (256x256 f32, initialized to 15°C ambient)
+        let block_temp_data = vec![15.0f32; (GRID_W * GRID_H) as usize];
+        let block_temp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("block-temp-buffer"),
+            size: (block_temp_data.len() * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&block_temp_buffer, 0, bytemuck::cast_slice(&block_temp_data));
 
         // --- Lightmap textures (two for ping-pong, at LIGHTMAP_SCALE × grid resolution) ---
         let lightmap_desc = wgpu::TextureDescriptor {
@@ -1619,6 +1632,46 @@ impl App {
             renderer: egui_renderer,
         });
 
+        // --- Thermal exchange pipeline ---
+        let thermal_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("thermal-compute"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("thermal.wgsl").into()),
+        });
+        let thermal_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("thermal-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+            ],
+        });
+        // Use dye texture A for temperature readback (current frame's dye)
+        let thermal_bind_group_val = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("thermal-bg"),
+            layout: &thermal_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: block_temp_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: material_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+            ],
+        });
+        let thermal_pipeline_val = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("thermal-pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("thermal-pl"),
+                bind_group_layouts: &[&thermal_bgl],
+                push_constant_ranges: &[],
+            })),
+            module: &thermal_shader,
+            entry_point: Some("main_thermal"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         self.gfx = Some(GfxState {
             surface,
             device,
@@ -1669,6 +1722,9 @@ impl App {
             fluid_bg_pressure_clear,
             fluid_bg_advect_dye: [fluid_bg_advect_dye_0, fluid_bg_advect_dye_1],
             debug_readback_buffer,
+            block_temp_buffer,
+            thermal_pipeline: thermal_pipeline_val,
+            thermal_bind_group: thermal_bind_group_val,
         });
 
         self.window = Some(window);
@@ -2770,6 +2826,11 @@ impl App {
           p.set_pipeline(&gfx.fluid_p_advect_dye); p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]); p.dispatch_workgroups(dye_wg, dye_wg, 1); }
         // Flip dye phase for next frame
         self.fluid_dye_phase = 1 - self.fluid_dye_phase;
+
+        // 10. Thermal exchange (256x256)
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("thermal"), timestamp_writes: None });
+          let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
+          p.set_pipeline(&gfx.thermal_pipeline); p.set_bind_group(0, &gfx.thermal_bind_group, &[]); p.dispatch_workgroups(tw, th, 1); }
 
         // Debug: copy one dye texel at cursor position for readback
         if self.debug_mode {
