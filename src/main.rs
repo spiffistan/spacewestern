@@ -523,6 +523,39 @@ impl App {
             self.grid_data[idx] = new_block;
             self.grid_dirty = true;
             let open = (new_flags & 4) != 0;
+
+            // When opening a door: inject outward velocity burst (pressure release)
+            // Detect which side is inside (roofed) and push air outward from there
+            if open {
+                let fx = bx as f32 + 0.5;
+                let fy = by as f32 + 0.5;
+                // Check neighbors for roofed tiles (inside) vs outdoor
+                let mut push_dir = (0.0f32, 0.0f32);
+                for &(dx, dy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
+                    let nx = bx + dx;
+                    let ny = by + dy;
+                    if nx >= 0 && ny >= 0 && nx < GRID_W as i32 && ny < GRID_H as i32 {
+                        let nb = self.grid_data[(ny as u32 * GRID_W + nx as u32) as usize];
+                        let has_roof = ((nb >> 16) & 2) != 0;
+                        if has_roof {
+                            // This neighbor is inside — push AWAY from it
+                            push_dir.0 -= dx as f32;
+                            push_dir.1 -= dy as f32;
+                        }
+                    }
+                }
+                let mag = (push_dir.0 * push_dir.0 + push_dir.1 * push_dir.1).sqrt();
+                if mag > 0.1 {
+                    // Inject a strong outward splat at the door position
+                    self.fluid_params.splat_x = fx;
+                    self.fluid_params.splat_y = fy;
+                    self.fluid_params.splat_vx = push_dir.0 / mag * 800.0;
+                    self.fluid_params.splat_vy = push_dir.1 / mag * 800.0;
+                    self.fluid_params.splat_radius = 2.0;
+                    self.fluid_params.splat_active = 1.0;
+                }
+            }
+
             log::info!("Door at ({}, {}): {}", bx, by, if open { "opened" } else { "closed" });
             return;
         }

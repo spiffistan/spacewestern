@@ -204,7 +204,7 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Gradient buoyancy: velocity opposes temperature gradient (hot pushes outward)
     let grad_mag = length(vec2(grad_x, grad_y));
     if grad_mag > 0.5 {
-        let buoyancy_coeff = clamp(abs(temp_delta) * 0.06, 0.0, 15.0);
+        let buoyancy_coeff = clamp(abs(temp_delta) * 0.10, 0.0, 25.0);
         let grad_force = -vec2(grad_x, grad_y) / grad_mag * buoyancy_coeff;
 
         // Add turbulent wobble for natural convection
