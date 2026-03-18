@@ -212,14 +212,57 @@ Each gas type can optionally run at a different resolution from the velocity sim
 
 #### Temperature and Buoyancy
 
-Temperature is a scalar field advected by velocity. It drives buoyancy forces: hot cells push velocity upward (in the top-down view this manifests as outward expansion from heat sources), cold cells push downward. Combined with vorticity confinement, this creates natural convection — rising plumes that curl and eddy.
+Temperature is stored in the dye texture A channel (Rgba16Float, actual Celsius values). It is advected by velocity, diffuses through air, and is blocked by walls. Fire injects ~300°C; outdoor ambient varies with time of day (5°C night, 25°C midday).
+
+Temperature drives buoyancy: hot cells expand outward (in the top-down view), creating convection currents. Combined with vorticity confinement, this produces natural plume behavior.
 
 ```wgsl
 let temp_delta = temperature[pos] - ambient_temp;
 let buoyancy = temp_delta * buoyancy_coefficient;
-let smoke_weight = density_smoke[pos] * smoke_weight_coefficient;
-velocity[pos].y += (buoyancy - smoke_weight) * dt;
+velocity[pos].y += buoyancy * dt;
 ```
+
+#### Multi-Gas Architecture
+
+Gas species are packed into RGBA16Float textures, 4 species per texture. All textures share the same velocity field and are advected independently. Adding new species costs one advection dispatch per 4 gases.
+
+**Gas Texture 1** (dye, 512x512 — visual + core gameplay):
+- R: smoke density (visual haze particles)
+- G: O2 (oxygen, atmospheric = 1.0)
+- B: CO2 (carbon dioxide)
+- A: air temperature (°C)
+
+**Gas Texture 2** (256x256 — extended chemistry):
+- R: H2O vapor (steam, humidity)
+- G: CH4 (methane — flammable)
+- B: CO (carbon monoxide — toxic, flammable)
+- A: H2 (hydrogen — explosive)
+
+**Gas Texture 3+** (future, same pattern):
+- SO2, NH3, noble gases, biological agents, etc.
+
+Each gas has independent:
+- **Dissipation**: smoke fades fast, CO2 lingers, O2/N2 are conserved
+- **Sources/sinks**: fire → CO2 + H2O + heat; plebs → CO2; plants → O2; decay → CH4
+- **Density**: affects buoyancy (CO2 sinks, H2 rises, steam rises)
+- **Toxicity**: CO and CO2 at high concentration damage plebs
+- **Flammability**: CH4, H2, CO ignite above threshold temperatures
+
+#### Chemical Reactions
+
+A post-advection compute pass checks reaction conditions per cell and applies mass-action kinetics. Reactions consume reactants, produce products, and inject/absorb heat.
+
+| Reaction | Equation | Ignition Temp | Heat |
+|----------|----------|---------------|------|
+| Methane combustion | CH4 + 2O2 → CO2 + 2H2O | >580°C | Exothermic |
+| CO combustion | 2CO + O2 → 2CO2 | >600°C | Exothermic |
+| Hydrogen combustion | 2H2 + O2 → 2H2O | >500°C | Very exothermic |
+| Wood/coal burning | (block) + O2 → CO2 + smoke + heat | >250°C | Exothermic |
+| Water gas-shift | CO + H2O ⇌ CO2 + H2 | >400°C | Mildly exo |
+
+Reaction rate: `rate = k * [A] * [B] * dt` where k = 0 below ignition temperature, proportional to temperature above it (simplified Arrhenius).
+
+Exothermic reactions inject heat into the temperature field (dye.a). Endothermic reactions absorb heat. Chain reactions emerge naturally: a methane leak near a fire ignites, producing heat that ignites more methane → explosion propagates through the gas cloud.
 
 #### Sim / Render Resolution Decoupling
 
@@ -335,17 +378,139 @@ This is NOT a general rigid body engine. Keep scope tight.
 - Scripting layer (Lua or WASI-based) for behavior modification
 - Not in prototype scope, but data-driven design from day one makes this easier later
 
+### Thermodynamics System (P0 - Required for Prototype)
+
+Two-domain temperature model: air temperature (fluid-carried) and block temperature (material-stored).
+
+#### Air Temperature
+
+Stored in the dye texture A channel (Rgba16Float, actual Celsius values). Advected by velocity, diffuses through air, blocked by walls.
+
+- **Sources**: fire (~300°C), hot blocks radiating
+- **Sinks**: cold outdoor ambient, ice, cold blocks absorbing
+- **Ambient**: varies with time of day (5°C night, 25°C midday)
+- **Visualization**: temperature overlay (blue=cold, white=mild, red=hot)
+- **Buoyancy**: hot air creates outward expansion (velocity force proportional to temperature delta)
+
+#### Block Temperature & Thermal Mass
+
+Each block material has thermal properties:
+
+| Material | Heat Capacity | Conductivity | Notes |
+|----------|--------------|--------------|-------|
+| Air | ~0 (uses fluid) | N/A | Temperature carried by wind |
+| Stone/Wall | 4.0 | 0.002 | Slow to heat, slow to cool |
+| Water | 8.0 | 0.01 | Huge thermal buffer |
+| Ice | 4.0 | 0.01 | Melts at 0°C |
+| Wood/Dirt | 2.0 | 0.003 | Moderate storage |
+| Glass | 1.5 | 0.02 | Conducts heat fast |
+| Metal (fan) | 1.0 | 0.05 | Conducts quickly |
+
+Blocks exchange heat with adjacent air cells per frame. Heat conducts slowly through solid walls.
+
+#### Phase Transitions
+
+| Transition | Trigger | Result |
+|------------|---------|--------|
+| Water → Ice | block temp < 0°C | Becomes solid obstacle, light blue visual |
+| Ice → Water | block temp > 0°C | Becomes liquid, fluid-passable |
+| Water → Steam | block temp > 100°C | Block loses mass, steam injected into fluid |
+| Steam → Water | air temp < 100°C + high humidity | Condensation deposits water |
+| Dry Ice → CO2 | block temp > -78°C | Solid CO2 sublimes to gas |
+| CO2 → Dry Ice | air temp < -78°C + high CO2 | Reverse sublimation |
+
+Phase transitions run on CPU (scan affected blocks each frame, check temperatures).
+
+---
+
+## Implementation Status (v38)
+
+### Completed
+
+**Phase 0: Foundation** ✅
+- [x] Rust project with wgpu, winit, egui
+- [x] 256x256 block grid with terrain types
+- [x] Compute shader raytracer (top-down, per-pixel)
+- [x] Camera pan/zoom controls
+- [x] WASM build target (Trunk)
+
+**Phase 1: World & Lighting** ✅
+- [x] Block types: stone, dirt, water, wall, glass, door, tree, bench, lamps
+- [x] Block height and oblique south-face projection
+- [x] Directional sun with shadow ray marching
+- [x] Point lights: fireplace, electric light, standing lamp, table lamp
+- [x] Day/night cycle with dawn/dusk color transitions
+- [x] GPU lightmap: 512x512 (2x res) with flood-fill propagation (26 iterations)
+- [x] Viewport-culled lightmap for performance
+- [x] Proximity glow with line-of-sight tracing
+- [x] Directional light bleed through windows/doors
+- [x] Tree sprites (4 variants, procedural scattering)
+- [x] Build menu: place/remove fireplaces, lamps, benches, fans
+- [x] Door toggling (open/close affects fluid + light)
+
+**Phase 2a: Core Fluid Solver** ✅
+- [x] GPU Navier-Stokes (Stable Fluids) at 256x256
+- [x] Curl, vorticity confinement, divergence, Jacobi pressure (35 iterations)
+- [x] Gradient subtract, semi-Lagrangian advection
+- [x] Neumann BCs at walls for pressure buildup
+- [x] Dye field at 512x512 with obstacle-aware bilinear sampling
+- [x] Mouse splat injection (velocity + dye)
+
+**Phase 2b: World Integration** ✅
+- [x] Obstacle field derived from block grid (walls, glass block; doors dynamic)
+- [x] Fire blocks inject velocity (upward + turbulent wobble) and smoke
+- [x] Multi-gas: O2 (atmospheric, depleted by fire), CO2 (produced by fire), smoke
+- [x] Fire depends on O2 — dies without oxygen in sealed rooms
+- [x] Outdoor O2 replenishment, CO2 dissipation
+- [x] Windward edge fresh air injection
+- [x] Wall fan (type 12): forced directional airflow through walls, one-way valve
+- [x] Global wind vector with UI sliders
+- [x] Smoke diffusion + accumulation for room filling
+
+**Phase 2c: Rendering & Debug** ✅
+- [x] Smoke overlay (white-gray haze, alpha-blended)
+- [x] O2 depletion visual (darkening + blue tint)
+- [x] CO2 visual (slight darkening)
+- [x] Debug overlays: Smoke, Velocity (with per-block arrows), Pressure (ROYGBIV), O2, CO2
+- [x] Debug tooltip (GPU readback of smoke/O2/CO2 at cursor)
+- [x] Wind compass indicator
+- [x] 20-tile border fog-of-war with gas dissipation
+
+**Performance Optimizations** ✅
+- [x] Half-resolution rendering with bilinear upscale
+- [x] Adjustable render quality slider (0.15-1.0)
+- [x] Precomputed sun (trig moved from GPU to CPU)
+- [x] Conditional proximity glow (lightmap gate skips 80-95% of scans)
+- [x] Toggleable glow/bleed (skip expensive per-pixel scans)
+- [x] Temporal reprojection (reuse previous frame when static)
+- [x] Lightmap update throttling (every 2 frames)
+- [x] Force-refresh on grid changes (persists 5 frames for lightmap propagation)
+
+### Not Yet Started
+
+**Phase 2 remaining:**
+- [ ] Temperature field (air temperature in dye.a channel)
+- [ ] Buoyancy (temperature-driven velocity forces)
+- [ ] Block thermal mass and heat exchange
+- [ ] Water phase transitions (freeze/evaporate)
+- [ ] Bloom on emissive surfaces
+
+**Phase 3: Plebs** — not started
+**Phase 4: Resources & Building** — partially started (build menu exists, no resource gathering)
+**Phase 5: Weather & Survival** — not started (wind exists, no weather events)
+**Phase 6: Polish & Ship** — not started
+
+---
+
 ## Open Questions
 
-1. **Camera perspective**: Exactly how much perspective / fisheye? Needs prototyping to find what feels right.
-2. **Fluid sim resolution vs block grid**: 1:1? 0.5:1? The sim grid should probably be coarser than the block grid (e.g., 128x128 sim for a 256x256 block world). Needs benchmarking.
-3. **Density render resolution**: How high can we push the density/dye textures while maintaining 60fps? PavelDoGreat runs dye at 1024x1024 on WebGL — we should be able to match or exceed this on WebGPU compute.
-4. **Jacobi iteration count**: 20 is a good default. Trade-off between visual quality of incompressibility and GPU cost. Should be tunable at runtime (settings menu).
-5. **Vorticity strength**: Default ~30. Too low = blobby smoke. Too high = unrealistic turbulence. Needs visual tuning per gas type.
-6. **3D fluid sim feasibility**: At what Z-layer count does the pressure solve become too expensive for 60 ticks/sec? Needs benchmarking. Multigrid solver may be needed for 16+ layers.
-7. **ECS choice**: Custom ECS vs hecs vs bevy_ecs? Prototype with hecs, migrate if needed.
-8. **WebGPU readiness**: Browser support for WebGPU compute shaders is still rolling out. Fallback: WebGL2 fragment-shader-based fluid sim (like PavelDoGreat's approach — proven to work).
-9. **Art style**: How stylized? Rimworld is flat/simple. Raytracing + volumetric fluid enables much richer visuals — where's the line?
-10. **Hybrid MPM timing**: When to add particle-based fluids (water, lava)? Needs the Eulerian grid working and stable first.
-11. **Sub-block resolution**: Is 4x4 sufficient or do we need 8x8? Depends on visual fidelity testing.
-12. **Fluid save strategy**: Full state serialization vs re-equilibration on load?
+1. ~~**Fluid sim resolution vs block grid**~~: Resolved — 1:1 at 256x256, dye at 512x512.
+2. ~~**Jacobi iteration count**~~: Resolved — 35 iterations, Neumann BCs, 0.6 temporal damping.
+3. ~~**Vorticity strength**~~: Resolved — 35.0 default.
+4. **3D fluid sim feasibility**: Not yet tested. Future scope.
+5. **ECS choice**: Not yet needed. Single-file architecture for now.
+6. **WebGPU readiness**: Builds with Trunk for WASM. Testing needed.
+7. **Art style**: Evolving. Raytraced with procedural materials, top-down oblique.
+8. **Hybrid MPM timing**: After temperature/phase transitions are working.
+9. **Block temperature storage**: Use separate CPU array or GPU buffer? Bits 24-31 of grid are used for roof height.
+10. **Phase transition performance**: CPU-side block scanning each frame — acceptable at 256x256?

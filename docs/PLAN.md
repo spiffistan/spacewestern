@@ -106,47 +106,109 @@ This is the most technically ambitious phase and the core differentiator of the 
 - Light a fire in an enclosed room → hot smoke rises and swirls, filling the room
 - Open a door to a smoky room → smoke pours out, fresh air flows in, visible vortices at the doorframe
 
-### Phase 2c: Multi-Gas & Rendering (Weeks 9-10)
+### Phase 2c: Multi-Gas & Rendering ✅ COMPLETE
 
-**Goal:** Multiple gas types, volumetric rendering, overlays.
+**Status:** All acceptance criteria met at v38.
 
-- [ ] Multi-gas density fields: O2, CO2, smoke — each advected independently through shared velocity field
-- [ ] Per-gas dissipation rates: smoke fades faster than CO2
-- [ ] Sources/sinks: fire (produces CO2 + smoke, consumes O2), plebs (consume O2, produce CO2), plants (consume CO2, produce O2)
-- [ ] Separate sim vs density resolution: sim at 128x128, visual density (smoke) at 512x512+
-- [ ] Volumetric raytracer integration: ray march samples smoke density field for attenuation/scattering
-- [ ] Post-processing: bloom on emissive surfaces (fire), inspired by PavelDoGreat's bloom pipeline
-- [ ] Debug overlays: velocity field (arrow/streamline visualization), temperature heatmap, O2/CO2/smoke concentration, pressure field
-- [ ] Performance profiling: identify bottleneck (likely pressure solve), establish baseline ticks/sec
+- [x] Multi-gas: O2, CO2, smoke in dye RGBA channels
+- [x] Per-gas dissipation (smoke fades, O2/CO2 conserved)
+- [x] Sources/sinks: fire consumes O2, produces CO2 + smoke; outdoor O2 replenishment
+- [x] Sim at 256x256, dye at 512x512
+- [x] Smoke overlay (white-gray haze), O2 depletion visual, CO2 darkening
+- [x] Debug overlays: Smoke, Velocity (with arrows), Pressure (ROYGBIV), O2, CO2
+- [x] Wall fan (type 12) with forced directional airflow
+- [x] Global wind, windward O2 injection, edge dissipation
+- [x] Performance: conditional glow, temporal reprojection, render scale slider
 
-### Acceptance Criteria (2c)
+### Phase 2d: Temperature & Thermodynamics
 
-- Fire produces visible smoke AND invisible CO2 spread. O2 depletes in enclosed space. Fire extinguishes when O2 drops below threshold.
-- Smoke is volumetrically visible in the raytraced view as haze/fog
-- Debug overlays clearly show all fluid fields
-- 60+ ticks/sec at 128x128 sim resolution on integrated GPU
-- Visual smoke at 512x512 density resolution looks smooth and detailed
+**Goal:** Temperature as a physical field. Heat drives convection. Materials store and conduct heat.
 
-### Technical Reference
+- [ ] Air temperature in dye.a channel (actual Celsius, f16 range)
+- [ ] Initialize to 20°C (room temp), fire injects ~300°C
+- [ ] Outdoor ambient varies with time of day (5°C night, 25°C midday)
+- [ ] Temperature diffuses through air (existing diffusion handles this)
+- [ ] Buoyancy: temperature delta → velocity force (hot expands outward)
+- [ ] Temperature overlay (blue=cold, white=mild, red=hot)
+- [ ] Visual: warm areas shimmer, cold darkens scene
+- [ ] Block thermal mass: per-block temperature + heat capacity on CPU
+- [ ] Heat exchange: blocks ↔ adjacent air cells per frame
+- [ ] Heat conducts through walls slowly (stone=slow, glass=fast, metal=very fast)
 
-The fluid sim pipeline per tick (in dispatch order):
+### Acceptance Criteria (2d)
+
+- Fire heats the air visibly (temperature overlay shows red near fire)
+- Hot air from fire creates convection (buoyancy drives flow without manual velocity injection)
+- Sealed room with fire gets hot over time
+- Opening a door lets hot air out, cold air in
+- Night is visibly colder than day (outdoor temperature drops)
+
+### Phase 2e: Extended Gas System & Chemistry
+
+**Goal:** Support 8+ gas species with chemical reactions between them.
+
+- [ ] Gas Texture 2 (RGBA16Float 256x256): H2O vapor, CH4, CO, H2
+- [ ] Advection pass for Gas Texture 2 (reuses same velocity field)
+- [ ] Per-gas properties: dissipation, density (buoyancy), toxicity, flammability
+- [ ] Chemical reaction pass (post-advection):
+  - CH4 + 2O2 → CO2 + 2H2O + heat (methane combustion, >580°C)
+  - 2CO + O2 → 2CO2 + heat (>600°C)
+  - 2H2 + O2 → 2H2O + heat (>500°C, very exothermic)
+  - Wood + O2 → CO2 + smoke + heat (existing fire behavior, formalized)
+- [ ] Reaction rate: k * [A] * [B] * dt, k=0 below ignition temp
+- [ ] Exothermic reactions inject heat into temperature field
+- [ ] Chain reaction propagation: gas cloud + spark → explosion wave
+- [ ] Gas sources: methane from decay/swamps, H2 from electrolysis, CO from incomplete combustion
+- [ ] Debug overlay for each new gas species
+
+### Acceptance Criteria (2e)
+
+- Methane leak near fire ignites → explosion propagates through gas cloud
+- H2 + O2 combustion produces visible steam (H2O vapor)
+- CO produced from smothered fires (low O2 combustion)
+- Reaction heat feeds back into temperature → can trigger further reactions
+
+### Phase 2f: Phase Transitions
+
+**Goal:** Materials change state based on temperature. Water freezes, evaporates, sublimes.
+
+- [ ] Ice block type (13): light blue, solid obstacle
+- [ ] Water (3) → Ice (13) when adjacent air temp < 0°C (CPU-side scan)
+- [ ] Ice (13) → Water (3) when adjacent air temp > 0°C
+- [ ] Water → Steam: block temp > 100°C → inject H2O vapor + consume water block
+- [ ] Steam → Water: H2O vapor condenses when air temp < 100°C (deposits water blocks)
+- [ ] Dry ice block (14): solid CO2, sublimes at > -78°C → CO2 gas
+- [ ] CO2 deposition: very cold + high CO2 → dry ice
+- [ ] Evaporation rate proportional to temperature above boiling point
+- [ ] Visual: ice = light blue/white, steam = white translucent gas
+
+### Acceptance Criteria (2f)
+
+- Water pool near fire: water at edge evaporates into steam → visible steam cloud
+- Night cold snap: outdoor water pools freeze into ice blocks
+- Day warmth: ice melts back to water
+- Dry ice placed in room: CO2 cloud spreads along floor (CO2 is heavier than air)
+- Steam from boiling water rises, condenses on cold ceiling/walls
+
+### Technical Reference: Updated Pipeline
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │ 1. Compute curl of velocity                         │ ← 1 dispatch
 │ 2. Apply vorticity confinement                      │ ← 1 dispatch
-│ 3. Compute divergence                               │ ← 1 dispatch
-│ 4. Clear/damp pressure                              │ ← 1 dispatch
-│ 5. Jacobi pressure solve                            │ ← 20 dispatches (!)
-│ 6. Subtract pressure gradient                       │ ← 1 dispatch
-│ 7. Advect velocity through itself                   │ ← 1 dispatch
-│ 8. Advect temperature                               │ ← 1 dispatch
-│ 9. Advect density fields (smoke, O2, CO2, etc.)     │ ← N dispatches (1 per gas)
-│ 10. Apply buoyancy                                  │ ← 1 dispatch
-│ 11. Apply external forces (fire, wind, etc.)        │ ← 1 dispatch
-│ 12. Enforce boundary conditions                     │ ← 1 dispatch
+│ 3. External forces (splat, wind, fan)               │ ← 1 dispatch
+│ 4. Compute divergence                               │ ← 1 dispatch
+│ 5. Clear/damp pressure                              │ ← 1 dispatch
+│ 6. Jacobi pressure solve                            │ ← 35 dispatches
+│ 7. Subtract pressure gradient                       │ ← 1 dispatch
+│ 8. Advect velocity (+ fire/fan sources)             │ ← 1 dispatch
+│ 9. Advect Gas Texture 1 (smoke, O2, CO2, temp)      │ ← 1 dispatch
+│ 10. Advect Gas Texture 2 (H2O, CH4, CO, H2)         │ ← 1 dispatch
+│ 11. Chemical reactions (read all gas textures)       │ ← 1 dispatch
+│ 12. Apply buoyancy (from temperature field)          │ ← 1 dispatch
+│ 13. Phase transitions (CPU-side block scan)          │ ← CPU
 └─────────────────────────────────────────────────────┘
-Total: ~30+ dispatches per tick at 128x128 = trivially fast on GPU
+Total: ~46 dispatches per tick at 256x256
 ```
 
 Key tuning parameters (defaults from PavelDoGreat, will need game-specific tuning):

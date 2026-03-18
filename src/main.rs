@@ -53,7 +53,7 @@ const DAY_DURATION: f32 = 60.0; // must match shader
 
 // --- Block representation on GPU ---
 // Each block is a u32 packed as: [type:8 | height:8 | flags:8 | reserved:8]
-// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp, 12=fan
+// type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp, 12=fan, 13=compost
 // height: 0-255
 // flags: bit0=is_door, bit1=has_roof, bit2=is_open
 fn smoothstep_f32(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -520,8 +520,12 @@ struct CameraUniform {
     enable_prox_glow: f32,   // 1.0 = on, 0.0 = off
     enable_dir_bleed: f32,   // 1.0 = on, 0.0 = off
     force_refresh: f32,      // 1.0 = skip reprojection this frame (grid changed)
-    _pad3: f32,
-    _pad4: f32,
+    pleb_x: f32,             // pleb world X (0 = no pleb)
+    pleb_y: f32,             // pleb world Y
+    pleb_angle: f32,         // pleb facing direction
+    pleb_selected: f32,      // 1.0 = show selection ring
+    pleb_torch: f32,         // 1.0 = torch on
+    pleb_headlight: f32,     // 1.0 = headlight on
     prev_center_x: f32,
     prev_center_y: f32,
     prev_zoom: f32,
@@ -552,8 +556,93 @@ fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
         let is_door = (b >> 16) & 1 != 0;
         let is_open = (b >> 16) & 4 != 0;
         // Walls and glass block fluid. Trees, open doors, and light sources don't.
-        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 11 && bt != 12 && !(is_door && is_open) { 255 } else { 0 }
+        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 11 && bt != 12 && bt != 13 && !(is_door && is_open) { 255 } else { 0 }
     }).collect()
+}
+
+fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
+    let r = 0.25;
+    for &(cx, cy) in &[(x - r, y - r), (x + r, y - r), (x - r, y + r), (x + r, y + r)] {
+        let bx = cx.floor() as i32;
+        let by = cy.floor() as i32;
+        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return false; }
+        let b = grid[(by as u32 * GRID_W + bx as u32) as usize];
+        let bt = b & 0xFF;
+        let bh = (b >> 8) & 0xFF;
+        let is_door = (b >> 16) & 1 != 0;
+        if !is_door && (bh > 0 || (bt != 0 && bt != 2 && bt != 6 && bt != 7 && bt != 10 && bt != 13)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
+    use std::collections::{BinaryHeap, HashMap};
+    use std::cmp::Reverse;
+
+    if start == goal { return vec![goal]; }
+
+    let is_walk = |x: i32, y: i32| -> bool {
+        if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 { return false; }
+        let b = grid[(y as u32 * GRID_W + x as u32) as usize];
+        let bt = b & 0xFF;
+        let bh = (b >> 8) & 0xFF;
+        let is_door = (b >> 16) & 1 != 0;
+        is_door || (bh == 0 && (bt == 0 || bt == 2 || bt == 6 || bt == 7 || bt == 10 || bt == 13))
+    };
+
+    if !is_walk(goal.0, goal.1) { return vec![]; }
+
+    let heuristic = |a: (i32, i32)| -> i32 {
+        (a.0 - goal.0).abs() + (a.1 - goal.1).abs()
+    };
+
+    let mut open = BinaryHeap::new();
+    let mut came_from: HashMap<(i32, i32), (i32, i32)> = HashMap::new();
+    let mut g_score: HashMap<(i32, i32), i32> = HashMap::new();
+
+    g_score.insert(start, 0);
+    open.push(Reverse((heuristic(start), start)));
+
+    while let Some(Reverse((_, current))) = open.pop() {
+        if current == goal {
+            let mut path = vec![current];
+            let mut node = current;
+            while let Some(&prev) = came_from.get(&node) {
+                path.push(prev);
+                node = prev;
+            }
+            path.reverse();
+            return path;
+        }
+
+        let g = *g_score.get(&current).unwrap_or(&i32::MAX);
+
+        for &(ndx, ndy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
+            let next = (current.0 + ndx, current.1 + ndy);
+            if !is_walk(next.0, next.1) { continue; }
+
+            let ng = g + 1;
+            if ng < *g_score.get(&next).unwrap_or(&i32::MAX) {
+                g_score.insert(next, ng);
+                came_from.insert(next, current);
+                open.push(Reverse((ng + heuristic(next), next)));
+            }
+        }
+    }
+
+    vec![]
+}
+
+struct Pleb {
+    x: f32,
+    y: f32,
+    angle: f32,         // facing direction in radians
+    path: Vec<(i32, i32)>,  // A* path waypoints
+    path_idx: usize,
+    torch_on: bool,     // fire torch (T to toggle)
+    headlight_on: bool, // directional headlamp (G to toggle)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -565,11 +654,13 @@ enum BuildTool {
     StandingLamp,
     TableLamp,
     Fan,
+    Compost,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum FluidOverlay {
     None,
+    Gases,     // all gases with distinct colors
     Smoke,     // show dye density as colored overlay
     Velocity,  // show velocity magnitude as heatmap
     Pressure,  // show pressure field
@@ -626,6 +717,13 @@ struct App {
     debug_fluid_readback_pending: bool,
     fluid_mouse_active: bool,  // middle mouse button held
     fluid_mouse_prev: Option<(f32, f32)>, // previous world position for velocity calc
+    // Pleb (character)
+    pleb: Option<Pleb>,
+    pleb_selected: bool,
+    placing_pleb: bool,        // blueprint mode for placing Jeff
+    show_pleb_help: bool,      // show controls modal
+    pressed_keys: std::collections::HashSet<KeyCode>,
+    auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -732,7 +830,8 @@ impl App {
                 ambient_r: 0.0, ambient_g: 0.0, ambient_b: 0.0,
                 enable_prox_glow: 1.0,
                 enable_dir_bleed: 1.0,
-                force_refresh: 1.0, _pad3: 0.0, _pad4: 0.0,
+                force_refresh: 1.0,
+                pleb_x: 0.0, pleb_y: 0.0, pleb_angle: 0.0, pleb_selected: 0.0, pleb_torch: 0.0, pleb_headlight: 0.0,
                 prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
@@ -792,6 +891,12 @@ impl App {
             prev_cam_time: 0.0,
             fluid_mouse_active: false,
             fluid_mouse_prev: None,
+            pleb: None,
+            pleb_selected: false,
+            placing_pleb: false,
+            show_pleb_help: false,
+            pressed_keys: std::collections::HashSet::new(),
+            auto_doors: Vec::new(),
         }
     }
 
@@ -921,6 +1026,57 @@ impl App {
         let bt = block_type_rs(block);
         let flags = block_flags_rs(block);
 
+        // Placing pleb mode
+        if self.placing_pleb {
+            let (wx, wy) = (wx, wy);  // already computed
+            if is_walkable_pos(&self.grid_data, wx, wy) {
+                if self.pleb.is_some() {
+                    let p = self.pleb.as_mut().unwrap();
+                    p.x = wx;
+                    p.y = wy;
+                    p.path.clear();
+                    p.path_idx = 0;
+                } else {
+                    self.pleb = Some(Pleb {
+                        x: wx, y: wy,
+                        angle: 0.0,
+                        path: Vec::new(),
+                        path_idx: 0,
+                        torch_on: false,
+                        headlight_on: true,
+                    });
+                }
+                self.pleb_selected = true;
+                self.placing_pleb = false;
+                self.show_pleb_help = true; // show help on first placement
+            }
+            return;
+        }
+
+        // Pleb interaction (before build tools)
+        if self.build_tool == BuildTool::None {
+            let pleb_click = self.pleb.as_ref().map(|p| {
+                ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt() < 0.5
+            }).unwrap_or(false);
+
+            if pleb_click {
+                self.pleb_selected = true;
+                return;
+            }
+
+            if self.pleb_selected && self.pleb.is_some() {
+                let start_x = self.pleb.as_ref().unwrap().x.floor() as i32;
+                let start_y = self.pleb.as_ref().unwrap().y.floor() as i32;
+                let path = astar_path(&self.grid_data, (start_x, start_y), (bx, by));
+                if !path.is_empty() {
+                    let p = self.pleb.as_mut().unwrap();
+                    p.path = path;
+                    p.path_idx = 1;
+                }
+                return;
+            }
+        }
+
         // Build tool placement
         if self.build_tool != BuildTool::None {
             match self.build_tool {
@@ -942,13 +1098,14 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
-                BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp => {
+                BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost => {
                     if self.can_place_at(bx, by) {
                         let roof_flag = flags & 2;
                         let new_block = match self.build_tool {
                             BuildTool::Fireplace => make_block(6, 1, roof_flag),
                             BuildTool::ElectricLight => make_block(7, 0, roof_flag),
-                            BuildTool::StandingLamp => make_block(10, 2, roof_flag), // height 2: above bench, below ceiling
+                            BuildTool::StandingLamp => make_block(10, 2, roof_flag),
+                            BuildTool::Compost => make_block(13, 1, roof_flag),
                             _ => unreachable!(),
                         };
                         let roof_h = block & 0xFF000000;
@@ -999,13 +1156,13 @@ impl App {
             return;
         }
 
-        // Remove any light source by clicking on it (replace with dirt floor)
-        if bt == 6 || bt == 7 || bt == 10 || bt == 11 {
+        // Remove any placeable by clicking on it (replace with dirt floor)
+        if bt == 6 || bt == 7 || bt == 10 || bt == 11 || bt == 13 {
             let roof_flag = flags & 2;
             let roof_h = block & 0xFF000000;
             self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
             self.grid_dirty = true;
-            let name = match bt { 6 => "Fireplace", 7 => "Electric light", 10 => "Floor lamp", 11 => "Table lamp", _ => "Light" };
+            let name = match bt { 6 => "Fireplace", 7 => "Electric light", 10 => "Floor lamp", 11 => "Table lamp", 13 => "Compost", _ => "?" };
             log::info!("Removed {} at ({}, {})", name, bx, by);
         }
 
@@ -2381,11 +2538,12 @@ impl App {
 
         self.camera.fluid_overlay = match self.fluid_overlay {
             FluidOverlay::None => 0.0,
-            FluidOverlay::Smoke => 1.0,
-            FluidOverlay::Velocity => 2.0,
-            FluidOverlay::Pressure => 3.0,
-            FluidOverlay::O2 => 4.0,
-            FluidOverlay::CO2 => 5.0,
+            FluidOverlay::Gases => 1.0,
+            FluidOverlay::Smoke => 2.0,
+            FluidOverlay::Velocity => 3.0,
+            FluidOverlay::Pressure => 4.0,
+            FluidOverlay::O2 => 5.0,
+            FluidOverlay::CO2 => 6.0,
         };
         let prev_glow = self.camera.enable_prox_glow;
         let prev_bleed = self.camera.enable_dir_bleed;
@@ -2400,6 +2558,127 @@ impl App {
             self.camera.force_refresh = 5.0; // refresh for 5 frames
         } else if self.camera.force_refresh > 0.5 {
             self.camera.force_refresh -= 1.0;
+        }
+
+        // --- Pleb update ---
+        if let Some(ref mut pleb) = self.pleb {
+            let move_speed = 3.0f32;
+
+            // WASD direct movement (always active when pleb exists)
+            {
+                let mut dx = 0.0f32;
+                let mut dy = 0.0f32;
+                if self.pressed_keys.contains(&KeyCode::KeyW) { dy -= 1.0; }
+                if self.pressed_keys.contains(&KeyCode::KeyS) { dy += 1.0; }
+                if self.pressed_keys.contains(&KeyCode::KeyA) { dx -= 1.0; }
+                if self.pressed_keys.contains(&KeyCode::KeyD) { dx += 1.0; }
+
+                if dx != 0.0 || dy != 0.0 {
+                    let len = (dx * dx + dy * dy).sqrt();
+                    dx /= len; dy /= len;
+                    pleb.angle = dy.atan2(dx);
+                    let nx = pleb.x + dx * move_speed * dt;
+                    let ny = pleb.y + dy * move_speed * dt;
+                    if is_walkable_pos(&self.grid_data, nx, ny) {
+                        pleb.x = nx;
+                        pleb.y = ny;
+                    }
+                    pleb.path.clear(); // cancel A* path
+                    pleb.path_idx = 0;
+                }
+            }
+
+            // Q/E rotation (when selected)
+            if self.pleb_selected {
+                if self.pressed_keys.contains(&KeyCode::KeyQ) { pleb.angle -= 2.0 * dt; }
+                if self.pressed_keys.contains(&KeyCode::KeyE) { pleb.angle += 2.0 * dt; }
+            }
+
+            // A* path following
+            if pleb.path_idx < pleb.path.len() {
+                let (tx, ty) = pleb.path[pleb.path_idx];
+                let target_x = tx as f32 + 0.5;
+                let target_y = ty as f32 + 0.5;
+                let ddx = target_x - pleb.x;
+                let ddy = target_y - pleb.y;
+                let dist = (ddx * ddx + ddy * ddy).sqrt();
+                if dist < 0.2 {
+                    pleb.path_idx += 1;
+                } else {
+                    let ndx = ddx / dist;
+                    let ndy = ddy / dist;
+                    pleb.angle = ndy.atan2(ndx);
+                    let nx = pleb.x + ndx * move_speed * dt;
+                    let ny = pleb.y + ndy * move_speed * dt;
+                    if is_walkable_pos(&self.grid_data, nx, ny) {
+                        pleb.x = nx;
+                        pleb.y = ny;
+                    }
+                }
+            }
+
+            // Auto-open doors near pleb
+            let pbx = pleb.x.floor() as i32;
+            let pby = pleb.y.floor() as i32;
+            for ddy in -1..=1 {
+                for ddx in -1..=1 {
+                    let door_x = pbx + ddx;
+                    let door_y = pby + ddy;
+                    if door_x >= 0 && door_y >= 0 && door_x < GRID_W as i32 && door_y < GRID_H as i32 {
+                        let didx = (door_y as u32 * GRID_W + door_x as u32) as usize;
+                        let db = self.grid_data[didx];
+                        if is_door_rs(db) && (block_flags_rs(db) & 4) == 0 {
+                            let dist = ((door_x as f32 + 0.5 - pleb.x).powi(2) + (door_y as f32 + 0.5 - pleb.y).powi(2)).sqrt();
+                            if dist < 1.2 {
+                                self.grid_data[didx] = (db & 0xFF00FFFF) | (((block_flags_rs(db) ^ 4) as u32) << 16);
+                                self.grid_dirty = true;
+                                self.auto_doors.push((door_x, door_y, self.time_of_day));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update camera uniform with pleb position
+            self.camera.pleb_x = pleb.x;
+            self.camera.pleb_y = pleb.y;
+            self.camera.pleb_angle = pleb.angle;
+            self.camera.pleb_selected = if self.pleb_selected { 1.0 } else { 0.0 };
+            self.camera.pleb_torch = if pleb.torch_on { 1.0 } else { 0.0 };
+            self.camera.pleb_headlight = if pleb.headlight_on { 1.0 } else { 0.0 };
+        } else {
+            self.camera.pleb_x = 0.0;
+            self.camera.pleb_y = 0.0;
+            self.camera.pleb_torch = 0.0;
+            self.camera.pleb_headlight = 0.0;
+        }
+
+        // Auto-close doors after 2 seconds
+        {
+            let current_time = self.time_of_day;
+            let pleb_pos = self.pleb.as_ref().map(|p| (p.x, p.y));
+            let mut doors_to_close = Vec::new();
+            self.auto_doors.retain(|&(dx, dy, opened_time)| {
+                let elapsed = (current_time - opened_time).abs();
+                let should_close = elapsed > 2.0;
+                let pleb_nearby = pleb_pos.map_or(false, |(px, py)| {
+                    ((dx as f32 + 0.5 - px).powi(2) + (dy as f32 + 0.5 - py).powi(2)).sqrt() < 1.5
+                });
+                if should_close && !pleb_nearby {
+                    doors_to_close.push((dx, dy));
+                    false
+                } else {
+                    true
+                }
+            });
+            for (dx, dy) in doors_to_close {
+                let didx = (dy as u32 * GRID_W + dx as u32) as usize;
+                let db = self.grid_data[didx];
+                if is_door_rs(db) && (block_flags_rs(db) & 4) != 0 {
+                    self.grid_data[didx] = (db & 0xFF00FFFF) | ((((db >> 16) & 0xFF) ^ 4) << 16);
+                    self.grid_dirty = true;
+                }
+            }
         }
 
         let gfx = self.gfx.as_ref().unwrap();
@@ -2500,7 +2779,7 @@ impl App {
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .show(&egui_state.ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v38 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v39 | {:.0} fps", self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -2514,7 +2793,7 @@ impl App {
         let mut foliage_variation = self.camera.foliage_variation;
         let mut oblique = self.camera.oblique_strength;
                 let base_zoom = (self.camera.screen_w / 32.0).min(self.camera.screen_h / 32.0);
-        egui::Window::new("Time Control")
+        egui::Window::new("Controls")
             .default_pos([10.0, 10.0])
             .default_width(300.0)
             .resizable(false)
@@ -2638,71 +2917,110 @@ impl App {
         self.camera.foliage_variation = foliage_variation;
         self.camera.oblique_strength = oblique;
 
-        // Build toolbar — floating bottom-center bar
-        egui::Area::new(egui::Id::new("build_bar"))
-            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -20.0])
+        // --- Pleb menu (above build menu) ---
+        egui::Area::new(egui::Id::new("pleb_menu"))
+            .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -200.0])
             .show(&egui_state.ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
                 egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Build:");
-                        let tool = &mut self.build_tool;
-                        if ui.selectable_label(*tool == BuildTool::Fireplace, "Fireplace").clicked() {
-                            *tool = if *tool == BuildTool::Fireplace { BuildTool::None } else { BuildTool::Fireplace };
+                    ui.set_max_width(80.0);
+                    ui.label(egui::RichText::new("Pleb").strong().size(11.0));
+                    if ui.selectable_label(self.placing_pleb, egui::RichText::new("Place Jeff").size(11.0)).clicked() {
+                        self.placing_pleb = !self.placing_pleb;
+                        if self.placing_pleb {
+                            self.build_tool = BuildTool::None; // cancel any build tool
                         }
-                        if ui.selectable_label(*tool == BuildTool::ElectricLight, "Electric Light").clicked() {
-                            *tool = if *tool == BuildTool::ElectricLight { BuildTool::None } else { BuildTool::ElectricLight };
-                        }
-                        if ui.selectable_label(*tool == BuildTool::Bench, "Bench").clicked() {
-                            *tool = if *tool == BuildTool::Bench { BuildTool::None } else { BuildTool::Bench };
-                        }
-                        if ui.selectable_label(*tool == BuildTool::StandingLamp, "Floor Lamp").clicked() {
-                            *tool = if *tool == BuildTool::StandingLamp { BuildTool::None } else { BuildTool::StandingLamp };
-                        }
-                        if ui.selectable_label(*tool == BuildTool::TableLamp, "Table Lamp").clicked() {
-                            *tool = if *tool == BuildTool::TableLamp { BuildTool::None } else { BuildTool::TableLamp };
-                        }
-                        if ui.selectable_label(*tool == BuildTool::Fan, "Fan").clicked() {
-                            *tool = if *tool == BuildTool::Fan { BuildTool::None } else { BuildTool::Fan };
-                        }
-                        if *tool != BuildTool::None {
-                            ui.separator();
-                            let hint = match *tool {
-                                BuildTool::Bench => {
-                                    let rot_label = if self.build_rotation == 0 { "H" } else { "V" };
-                                    format!("Click to place | Q/E rotate [{}]", rot_label)
-                                }
-                                BuildTool::TableLamp => "Click on a bench to place".to_string(),
-                                BuildTool::Fan => {
-                                    let dir = match self.build_rotation { 0 => "N", 1 => "E", 2 => "S", _ => "W" };
-                                    format!("Click wall to place | Q/E rotate [{}]", dir)
-                                }
-                                _ => "Click to place".to_string(),
-                            };
-                            ui.label(hint);
-                        }
-                    });
+                    }
+                    if self.placing_pleb {
+                        ui.label(egui::RichText::new("Click to place").size(9.0).weak());
+                    }
+                    if let Some(ref pleb) = self.pleb {
+                        ui.separator();
+                        ui.label(egui::RichText::new("Jeff").size(10.0));
+                        ui.label(egui::RichText::new(format!("Torch: {} | Lamp: {}",
+                            if pleb.torch_on { "ON" } else { "off" },
+                            if pleb.headlight_on { "ON" } else { "off" }
+                        )).size(9.0).weak());
+                    }
+                    if ui.small_button("?").clicked() {
+                        self.show_pleb_help = !self.show_pleb_help;
+                    }
                 });
             });
 
-        // --- Overlay toggle bar (bottom-right) ---
+        if self.show_pleb_help {
+            egui::Window::new("Jeff Controls")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(&egui_state.ctx, |ui| {
+                    ui.label("WASD - Move Jeff");
+                    ui.label("Q/E - Rotate (when selected)");
+                    ui.label("Click Jeff - Select");
+                    ui.label("Click ground - Move to (A*)");
+                    ui.label("T - Toggle torch (fire)");
+                    ui.label("G - Toggle headlamp");
+                    ui.label("Escape - Deselect");
+                    ui.add_space(5.0);
+                    if ui.button("Got it!").clicked() {
+                        self.show_pleb_help = false;
+                    }
+                });
+        }
+
+        // Build toolbar — floating bottom-center bar
+        // --- Build menu (left bottom, vertical multi-column like Rimworld) ---
+        egui::Area::new(egui::Id::new("build_menu"))
+            .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -20.0])
+            .show(&egui_state.ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(80.0);
+                    let tool = &mut self.build_tool;
+                    let s = 11.0;
+                    macro_rules! btn {
+                        ($t:expr, $label:expr) => {
+                            if ui.selectable_label(*tool == $t, egui::RichText::new($label).size(s)).clicked() {
+                                *tool = if *tool == $t { BuildTool::None } else { $t };
+                            }
+                        };
+                    }
+                    ui.label(egui::RichText::new("Build").strong().size(s));
+                    btn!(BuildTool::Fireplace, "Fire");
+                    btn!(BuildTool::Bench, "Bench");
+                    btn!(BuildTool::Fan, "Fan");
+                    btn!(BuildTool::Compost, "Compost");
+                    btn!(BuildTool::ElectricLight, "Ceil Light");
+                    btn!(BuildTool::StandingLamp, "Floor Lamp");
+                    btn!(BuildTool::TableLamp, "Table Lamp");
+                    if *tool != BuildTool::None {
+                        ui.separator();
+                        let hint = match *tool {
+                            BuildTool::Bench => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
+                            BuildTool::TableLamp => "On bench".to_string(),
+                            BuildTool::Fan => { let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" }; format!("Q/E [{}] wall", d) }
+                            _ => "Click place".to_string(),
+                        };
+                        ui.label(egui::RichText::new(hint).weak().size(9.0));
+                    }
+                });
+            });
+
+        // --- Overlay bar (bottom-right) ---
         egui::Area::new(egui::Id::new("overlay_bar"))
             .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -20.0])
             .show(&egui_state.ctx, |ui| {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Overlay:");
                         let ov = &mut self.fluid_overlay;
                         if ui.selectable_label(*ov == FluidOverlay::None, "Off").clicked() {
                             *ov = FluidOverlay::None;
                         }
+                        if ui.selectable_label(*ov == FluidOverlay::Gases, "Gases").clicked() {
+                            *ov = if *ov == FluidOverlay::Gases { FluidOverlay::None } else { FluidOverlay::Gases };
+                        }
                         if ui.selectable_label(*ov == FluidOverlay::Smoke, "Smoke").clicked() {
                             *ov = if *ov == FluidOverlay::Smoke { FluidOverlay::None } else { FluidOverlay::Smoke };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::Velocity, "Velocity").clicked() {
-                            *ov = if *ov == FluidOverlay::Velocity { FluidOverlay::None } else { FluidOverlay::Velocity };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::Pressure, "Pressure").clicked() {
-                            *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
                         }
                         if ui.selectable_label(*ov == FluidOverlay::O2, "O2").clicked() {
                             *ov = if *ov == FluidOverlay::O2 { FluidOverlay::None } else { FluidOverlay::O2 };
@@ -2711,12 +3029,18 @@ impl App {
                             *ov = if *ov == FluidOverlay::CO2 { FluidOverlay::None } else { FluidOverlay::CO2 };
                         }
                         ui.separator();
+                        if ui.selectable_label(*ov == FluidOverlay::Velocity, "Vel").clicked() {
+                            *ov = if *ov == FluidOverlay::Velocity { FluidOverlay::None } else { FluidOverlay::Velocity };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::Pressure, "Pres").clicked() {
+                            *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
+                        }
+                        ui.separator();
                         let mut debug = self.debug_mode;
                         if ui.selectable_label(debug, "Debug").clicked() {
                             debug = !debug;
                         }
                         self.debug_mode = debug;
-                        ui.separator();
                         if ui.selectable_label(self.enable_prox_glow, "Glow").clicked() {
                             self.enable_prox_glow = !self.enable_prox_glow;
                         }
@@ -2726,6 +3050,29 @@ impl App {
                     });
                 });
             });
+
+        // Gas legend (shown when a gas overlay is active)
+        if matches!(self.fluid_overlay, FluidOverlay::Gases | FluidOverlay::Smoke | FluidOverlay::O2 | FluidOverlay::CO2) {
+            egui::Area::new(egui::Id::new("gas_legend"))
+                .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -55.0])
+                .interactable(false)
+                .show(&egui_state.ctx, |ui| {
+                    egui::Frame::window(ui.style()).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        let s = 10.0;
+                        let dot = |ui: &mut egui::Ui, col: egui::Color32, label: &str| {
+                            ui.horizontal(|ui| {
+                                let (r, p) = ui.allocate_painter(egui::Vec2::splat(s), egui::Sense::hover());
+                                p.rect_filled(r.rect, 2.0, col);
+                                ui.label(egui::RichText::new(label).size(10.0));
+                            });
+                        };
+                        dot(ui, egui::Color32::from_rgb(230, 230, 235), "Smoke");
+                        dot(ui, egui::Color32::from_rgb(50, 100, 255), "O\u{2082} deficit");
+                        dot(ui, egui::Color32::from_rgb(180, 200, 25), "CO\u{2082}");
+                    });
+                });
+        }
 
         // Wind direction compass (bottom-right, above overlay bar)
         {
@@ -2859,6 +3206,57 @@ impl App {
                         egui::Color32::WHITE, egui::Stroke::NONE,
                     ));
                 }
+            }
+        }
+
+        // Pleb placement ghost
+        if self.placing_pleb {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let painter = egui_state.ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("pleb_ghost"),
+            ));
+            let (hwx, hwy) = self.hover_world;
+            let valid = is_walkable_pos(&self.grid_data, hwx, hwy);
+            let color = if valid {
+                egui::Color32::from_rgba_unmultiplied(80, 200, 255, 120)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(255, 60, 60, 120)
+            };
+            let center_sx = ((hwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+            let center_sy = ((hwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+            let radius = 0.4 * cam_zoom / self.render_scale / bp_ppp;
+            painter.circle_filled(egui::pos2(center_sx, center_sy), radius, color);
+        }
+
+        // Draw pleb A* path line
+        if let Some(ref pleb) = self.pleb {
+            if pleb.path_idx < pleb.path.len() {
+                let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+                let painter = egui_state.ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("pleb_path"),
+                ));
+                let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    egui::pos2(sx, sy)
+                };
+                // Draw from pleb's current position through remaining path
+                let mut prev = to_screen(pleb.x, pleb.y);
+                for i in pleb.path_idx..pleb.path.len() {
+                    let (px, py) = pleb.path[i];
+                    let next = to_screen(px as f32 + 0.5, py as f32 + 0.5);
+                    painter.line_segment(
+                        [prev, next],
+                        egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)),
+                    );
+                    prev = next;
+                }
+                // Draw target marker at end
+                let last = pleb.path.last().unwrap();
+                let end = to_screen(last.0 as f32 + 0.5, last.1 as f32 + 0.5);
+                painter.circle_stroke(end, 4.0, egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(100, 255, 100, 200)));
             }
         }
 
@@ -3109,9 +3507,20 @@ impl ApplicationHandler for App {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        let attrs = Window::default_attributes()
-            .with_title("Spacewestern")
-            .with_inner_size(PhysicalSize::new(1920u32, 1920u32));
+        let attrs = {
+            // 50% larger than default, matching monitor aspect ratio
+            let monitor = event_loop.primary_monitor()
+                .or_else(|| event_loop.available_monitors().next());
+            let (w, h) = if let Some(m) = monitor {
+                let size = m.size();
+                ((size.width as f32 * 0.75) as u32, (size.height as f32 * 0.75) as u32)
+            } else {
+                (1440, 900)
+            };
+            Window::default_attributes()
+                .with_title("Rayworld")
+                .with_inner_size(PhysicalSize::new(w, h))
+        };
 
         #[cfg(target_arch = "wasm32")]
         let attrs = {
@@ -3197,10 +3606,21 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput { event, .. } => {
+                // Track pressed keys for pleb WASD movement
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    if event.state.is_pressed() {
+                        self.pressed_keys.insert(code);
+                    } else {
+                        self.pressed_keys.remove(&code);
+                    }
+                }
                 if event.state.is_pressed() {
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::Escape) => {
-                            if self.build_tool != BuildTool::None {
+                            self.placing_pleb = false;
+                            if self.pleb_selected {
+                                self.pleb_selected = false;
+                            } else if self.build_tool != BuildTool::None {
                                 self.build_tool = BuildTool::None;
                             } else {
                                 event_loop.exit();
@@ -3221,17 +3641,33 @@ impl ApplicationHandler for App {
                             log::info!("Time: {}", if self.time_paused { "paused" } else { "playing" });
                         }
                         PhysicalKey::Code(KeyCode::KeyQ) => {
-                            if self.build_tool == BuildTool::Fan {
-                                self.build_rotation = (self.build_rotation + 3) % 4;
-                            } else {
-                                self.build_rotation = (self.build_rotation + 1) % 2;
+                            if !self.pleb_selected {
+                                if self.build_tool == BuildTool::Fan {
+                                    self.build_rotation = (self.build_rotation + 3) % 4;
+                                } else {
+                                    self.build_rotation = (self.build_rotation + 1) % 2;
+                                }
                             }
                         }
                         PhysicalKey::Code(KeyCode::KeyE) => {
-                            if self.build_tool == BuildTool::Fan {
-                                self.build_rotation = (self.build_rotation + 1) % 4;
-                            } else {
-                                self.build_rotation = (self.build_rotation + 1) % 2;
+                            if !self.pleb_selected {
+                                if self.build_tool == BuildTool::Fan {
+                                    self.build_rotation = (self.build_rotation + 1) % 4;
+                                } else {
+                                    self.build_rotation = (self.build_rotation + 1) % 2;
+                                }
+                            }
+                        }
+                        PhysicalKey::Code(KeyCode::KeyT) => {
+                            if let Some(ref mut pleb) = self.pleb {
+                                pleb.torch_on = !pleb.torch_on;
+                                log::info!("Torch {}", if pleb.torch_on { "ON" } else { "OFF" });
+                            }
+                        }
+                        PhysicalKey::Code(KeyCode::KeyG) => {
+                            if let Some(ref mut pleb) = self.pleb {
+                                pleb.headlight_on = !pleb.headlight_on;
+                                log::info!("Headlight {}", if pleb.headlight_on { "ON" } else { "OFF" });
                             }
                         }
                         _ => {}

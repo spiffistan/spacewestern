@@ -159,6 +159,15 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // Compost: anaerobic decomposition produces CO2 without consuming O2
+    if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
+        let block_c = grid[u32(by) * u32(params.sim_w) + u32(bx)];
+        if (block_c & 0xFFu) == 13u {
+            result.b += 0.05;  // steady CO2 output
+            result.r += 0.005; // trace haze (decomposition gases)
+        }
+    }
+
     // Outdoor cells: fresh air exchange (O2 recovers, CO2 dissipates)
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block_full = grid[u32(by) * u32(params.sim_w) + u32(bx)];

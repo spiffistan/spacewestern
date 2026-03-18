@@ -29,7 +29,9 @@ struct Camera {
     sun_intensity: f32, sun_color_r: f32, sun_color_g: f32, sun_color_b: f32,
     ambient_r: f32, ambient_g: f32, ambient_b: f32,
     enable_prox_glow: f32, enable_dir_bleed: f32,
-    force_refresh: f32, _pad3: f32, _pad4: f32,
+    force_refresh: f32,
+    pleb_x: f32, pleb_y: f32, pleb_angle: f32, pleb_selected: f32,
+    pleb_torch: f32, pleb_headlight: f32,
     prev_center_x: f32, prev_center_y: f32, prev_zoom: f32, prev_time: f32,
 };
 

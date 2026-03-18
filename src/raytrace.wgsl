@@ -40,8 +40,12 @@ struct Camera {
     enable_prox_glow: f32,
     enable_dir_bleed: f32,
     force_refresh: f32,
-    _pad3: f32,
-    _pad4: f32,
+    pleb_x: f32,
+    pleb_y: f32,
+    pleb_angle: f32,
+    pleb_selected: f32,
+    pleb_torch: f32,
+    pleb_headlight: f32,
     prev_center_x: f32,
     prev_center_y: f32,
     prev_zoom: f32,
@@ -1357,6 +1361,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if on_shaft || on_head {
             color = vec3(0.85, 0.88, 0.92); // bright white-silver arrow
         }
+    } else if btype == 13u {
+        // Compost: brown-green organic heap with texture
+        let noise = fract(sin(world_x * 13.7 + world_y * 7.3) * 43758.5);
+        let heap = smoothstep(0.45, 0.2, length(vec2(fx - 0.5, fy - 0.5)));
+        color = mix(vec3(0.30, 0.22, 0.12), vec3(0.25, 0.32, 0.10), noise * 0.5) * (0.7 + heap * 0.3);
+        // Slight steam wisps
+        let wisp = sin(world_x * 31.0 + camera.time * 2.0) * sin(world_y * 29.0 + camera.time * 1.7);
+        color += vec3(0.05) * max(wisp, 0.0) * heap;
     } else {
         color = block_base_color(btype, bflags);
     }
@@ -1499,6 +1511,67 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = mix(color, color * vec3<f32>(0.85, 0.88, 0.95), 0.3);
     }
 
+    // --- Pleb rendering ---
+    if camera.pleb_x > 0.5 {
+        let pdx = world_x - camera.pleb_x;
+        let pdy = world_y - camera.pleb_y;
+        let pdist = length(vec2(pdx, pdy));
+
+        // Torch: warm point light with wall occlusion
+        if camera.pleb_torch > 0.5 && pdist < 6.0 {
+            let vis = trace_glow_visibility(world_x, world_y, camera.pleb_x, camera.pleb_y, 1.0);
+            if vis > 0.01 {
+                let torch_atten = 1.0 / (1.0 + pdist * 0.4 + pdist * pdist * 0.08);
+                let flicker = sin(camera.time * 8.3) * 0.15 + sin(camera.time * 13.1) * 0.1 + 0.85;
+                color += vec3(1.0, 0.55, 0.15) * torch_atten * 0.5 * flicker * vis;
+            }
+        }
+
+        // Headlight: directional cone with wall occlusion
+        if camera.pleb_headlight > 0.5 && pdist > 0.5 && pdist < 10.0 {
+            let vis = trace_glow_visibility(world_x, world_y, camera.pleb_x, camera.pleb_y, 1.5);
+            if vis > 0.01 {
+                let to_pixel = normalize(vec2(pdx, pdy));
+                let light_dir = vec2(cos(camera.pleb_angle), sin(camera.pleb_angle));
+                let cone = smoothstep(0.4, 0.85, dot(to_pixel, light_dir));
+                let dist_atten = 1.0 / (1.0 + pdist * 0.2 + pdist * pdist * 0.04);
+                color += vec3(0.85, 0.9, 1.0) * cone * dist_atten * 0.6 * vis;
+            }
+        }
+
+        // Body rendering (close range)
+        if pdist < 0.45 {
+            // Selection ring (pulsing)
+            if camera.pleb_selected > 0.5 {
+                let ring_inner = 0.38;
+                let ring_outer = 0.44;
+                if pdist > ring_inner && pdist < ring_outer {
+                    let pulse = sin(camera.time * 4.0) * 0.3 + 0.7;
+                    color = mix(color, vec3(0.3, 0.9, 0.3), pulse);
+                }
+            }
+
+            // Body: blue circle
+            if pdist < 0.35 {
+                let body_shade = 1.0 - pdist / 0.35 * 0.3;
+                color = vec3(0.2, 0.45, 0.75) * body_shade;
+            }
+
+            // Head: skin-colored circle
+            if pdist < 0.15 {
+                color = vec3(0.85, 0.70, 0.55);
+            }
+
+            // Direction indicator: white dot in front
+            let front_x = camera.pleb_x + cos(camera.pleb_angle) * 0.28;
+            let front_y = camera.pleb_y + sin(camera.pleb_angle) * 0.28;
+            let front_dist = length(vec2(world_x - front_x, world_y - front_y));
+            if front_dist < 0.07 {
+                color = vec3(0.95, 0.95, 1.0);
+            }
+        }
+    }
+
     // Per-pixel proximity glow for floor tiles near light sources.
     // Applies to indoor floors AND outdoor ground (for outdoor campfires etc).
     // Wall tops are excluded to prevent light bleed onto the roof surface.
@@ -1551,6 +1624,27 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let co2 = clamp(smoke.b, 0.0, 1.0);
         color *= 1.0 - co2 * 0.15;
     } else if camera.fluid_overlay < 1.5 {
+        // Gases: all gases with distinct colors, composited together
+        let bg = color * 0.25;
+        var gas_color = vec3(0.0);
+        var gas_alpha = 0.0;
+        // Smoke: white
+        let s = clamp(smoke.r * 0.5, 0.0, 1.0);
+        gas_color += vec3(0.9, 0.9, 0.92) * s;
+        gas_alpha = max(gas_alpha, s);
+        // O2 deficit: blue (shows where O2 is low)
+        let o2d = clamp((1.0 - smoke.g) * 2.0, 0.0, 1.0);
+        gas_color += vec3(0.2, 0.4, 1.0) * o2d;
+        gas_alpha = max(gas_alpha, o2d);
+        // CO2: yellow-green
+        let co2 = clamp(smoke.b * 2.0, 0.0, 1.0);
+        gas_color += vec3(0.7, 0.8, 0.1) * co2;
+        gas_alpha = max(gas_alpha, co2);
+        // Normalize and blend
+        let total = s + o2d + co2 + 0.001;
+        gas_color /= total;
+        color = mix(bg, gas_color, clamp(gas_alpha, 0.0, 0.9));
+    } else if camera.fluid_overlay < 2.5 {
         // Smoke overlay: R channel density as heat map
         let density = clamp(smoke.r, 0.0, 1.0);
         let heat = vec3(
@@ -1559,7 +1653,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             clamp(density * 3.0 - 2.0, 0.0, 1.0)
         );
         color = mix(color * 0.3, heat, clamp(density * 2.0, 0.0, 0.9));
-    } else if camera.fluid_overlay < 2.5 {
+    } else if camera.fluid_overlay < 3.5 {
         // Velocity: hue = direction, brightness = magnitude, with per-block arrows
         let sim_pos = vec2<i32>(vec2<f32>(world_x, world_y));
         let sim_clamped = clamp(sim_pos, vec2(0), vec2(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1));
@@ -1592,7 +1686,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 color = mix(color, vec3(1.0), 0.8);
             }
         }
-    } else if camera.fluid_overlay < 3.5 {
+    } else if camera.fluid_overlay < 4.5 {
         // Pressure: absolute pressure with ROYGBIV colormap (violet=low, red=high)
         // Bilinear interpolation for smooth display
         let fp = vec2<f32>(world_x, world_y) - 0.5;
@@ -1631,7 +1725,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         color = mix(color * 0.25, pcolor, clamp(abs_p * 2.5 + 0.1, 0.0, 0.9));
-    } else if camera.fluid_overlay < 4.5 {
+    } else if camera.fluid_overlay < 5.5 {
         // O2: blue (high/atmospheric) to red (depleted)
         let o2 = clamp(smoke.g, 0.0, 1.0);
         let o2_color = mix(vec3(0.9, 0.1, 0.0), vec3(0.1, 0.4, 1.0), o2);
