@@ -90,13 +90,23 @@ fn bilinear_dye(pos: vec2<f32>) -> vec4<f32> {
     let obs01 = is_obstacle(vec2<i32>(vec2<f32>(p01) * scale));
     let obs11 = is_obstacle(vec2<i32>(vec2<f32>(p11) * scale));
 
-    // Obstacles: zero smoke, atmospheric O2, zero CO2, but preserve temperature (A)
-    // from the stored value (which is set to ambient by the main path).
-    // This prevents walls from acting as infinite cold sinks.
-    if obs00 { d00 = vec4(0.0, 1.0, 0.0, d00.a); }
-    if obs10 { d10 = vec4(0.0, 1.0, 0.0, d10.a); }
-    if obs01 { d01 = vec4(0.0, 1.0, 0.0, d01.a); }
-    if obs11 { d11 = vec4(0.0, 1.0, 0.0, d11.a); }
+    // Compute average temperature of non-obstacle samples (Neumann BC).
+    // Wall cells use this average instead of their stored ambient value,
+    // preventing walls from acting as infinite heat sinks during advection.
+    var air_temp_sum = 0.0;
+    var air_temp_count = 0.0;
+    if !obs00 { air_temp_sum += d00.a; air_temp_count += 1.0; }
+    if !obs10 { air_temp_sum += d10.a; air_temp_count += 1.0; }
+    if !obs01 { air_temp_sum += d01.a; air_temp_count += 1.0; }
+    if !obs11 { air_temp_sum += d11.a; air_temp_count += 1.0; }
+    let wall_temp = select(0.0, air_temp_sum / air_temp_count, air_temp_count > 0.0);
+
+    // Obstacles: zero smoke, atmospheric O2, zero CO2.
+    // Temperature: use average of non-wall neighbors (Neumann BC — zero gradient at walls)
+    if obs00 { d00 = vec4(0.0, 1.0, 0.0, wall_temp); }
+    if obs10 { d10 = vec4(0.0, 1.0, 0.0, wall_temp); }
+    if obs01 { d01 = vec4(0.0, 1.0, 0.0, wall_temp); }
+    if obs11 { d11 = vec4(0.0, 1.0, 0.0, wall_temp); }
 
     return mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
 }
@@ -116,13 +126,12 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     let scale = dye_to_sim();
     let inv_scale = sim_to_dye();
 
-    // Check if this dye texel is inside an obstacle — walls have no smoke, atmospheric O2, ambient temp
+    // Check if this dye texel is inside an obstacle — walls have no smoke, atmospheric O2
+    // Temperature: preserve previous frame's value (walls don't reset to ambient)
     let sim_cell = vec2<i32>(vec2<f32>(gid.xy) * scale);
     if is_obstacle(sim_cell) {
-        let day_frac_obs = fract(params.time / 60.0);
-        let sun_obs = sin(clamp((day_frac_obs - 0.15) / 0.7, 0.0, 1.0) * 3.14159);
-        let amb_temp_obs = mix(5.0, 25.0, sun_obs);
-        textureStore(dye_out, gid.xy, vec4(0.0, 1.0, 0.0, amb_temp_obs));
+        let prev_temp = textureLoad(dye_in, vec2<i32>(gid.xy), 0).a;
+        textureStore(dye_out, gid.xy, vec4(0.0, 1.0, 0.0, prev_temp));
         return;
     }
 
