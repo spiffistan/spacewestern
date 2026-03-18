@@ -5,7 +5,7 @@
 
 use bytemuck::Zeroable;
 
-pub const NUM_MATERIALS: usize = 15;
+pub const NUM_MATERIALS: usize = 20;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]
@@ -153,6 +153,47 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.color_r = 0.90; m.color_g = 0.90; m.color_b = 0.92;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
         m.heat_capacity = 10.0; m.conductivity = 0.0; m.solar_absorption = 0.0;
+    }
+
+    // 15: Pipe
+    { let m = &mut mats[15];
+        m.color_r = 0.50; m.color_g = 0.52; m.color_b = 0.55;
+        m.render_style = 10.0;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0;
+        m.is_removable = 1.0;
+        m.heat_capacity = 1.0; m.conductivity = 0.03; m.solar_absorption = 0.5;
+    }
+    // 16: Pump
+    { let m = &mut mats[16];
+        m.color_r = 0.45; m.color_g = 0.55; m.color_b = 0.45;
+        m.render_style = 11.0;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0;
+        m.is_removable = 1.0;
+        m.heat_capacity = 1.5; m.conductivity = 0.02; m.solar_absorption = 0.4;
+    }
+    // 17: Tank
+    { let m = &mut mats[17];
+        m.color_r = 0.55; m.color_g = 0.55; m.color_b = 0.60;
+        m.render_style = 12.0;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0;
+        m.is_removable = 1.0;
+        m.heat_capacity = 3.0; m.conductivity = 0.01; m.solar_absorption = 0.3;
+    }
+    // 18: Valve
+    { let m = &mut mats[18];
+        m.color_r = 0.60; m.color_g = 0.45; m.color_b = 0.40;
+        m.render_style = 13.0;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0;
+        m.is_removable = 1.0;
+        m.heat_capacity = 1.0; m.conductivity = 0.03; m.solar_absorption = 0.5;
+    }
+    // 19: Outlet
+    { let m = &mut mats[19];
+        m.color_r = 0.50; m.color_g = 0.52; m.color_b = 0.55;
+        m.render_style = 14.0;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0;
+        m.is_removable = 1.0;
+        m.heat_capacity = 1.0; m.conductivity = 0.03; m.solar_absorption = 0.5;
     }
 
     mats

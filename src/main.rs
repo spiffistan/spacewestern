@@ -19,6 +19,9 @@ use build::{BuildTool, FluidOverlay};
 use camera::CameraUniform;
 use fluid::{FluidParams, FLUID_SIM_W, FLUID_SIM_H, FLUID_DYE_W, FLUID_DYE_H, FLUID_PRESSURE_ITERS, build_obstacle_field, smoothstep_f32, half_to_f32};
 
+mod pipes;
+use pipes::PipeNetwork;
+
 #[path = "time.rs"]
 mod game_time;
 use game_time::Instant;
@@ -76,6 +79,7 @@ struct App {
     prev_cam_zoom: f32,
     prev_cam_time: f32,
     fluid_overlay: FluidOverlay,
+    pipe_network: PipeNetwork,
     fluid_speed: f32,             // fluid simulation speed multiplier
     debug_mode: bool,             // show debug tooltip at cursor
     enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
@@ -249,6 +253,7 @@ impl App {
                 _pad3: 0.0,
             },
             fluid_overlay: FluidOverlay::None,
+            pipe_network: PipeNetwork::new(),
             fluid_speed: 1.0,
             debug_mode: false,
             enable_prox_glow: true,
@@ -471,14 +476,21 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
-                BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost => {
+                BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost
+                | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve | BuildTool::Outlet => {
                     if self.can_place_at(bx, by) {
                         let roof_flag = flags & 2;
+                        let rot_flags = (self.build_rotation as u8) << 3; // bits 3-4 = direction
                         let new_block = match self.build_tool {
                             BuildTool::Fireplace => make_block(6, 1, roof_flag),
                             BuildTool::ElectricLight => make_block(7, 0, roof_flag),
                             BuildTool::StandingLamp => make_block(10, 2, roof_flag),
                             BuildTool::Compost => make_block(13, 1, roof_flag),
+                            BuildTool::Pipe => make_block(15, 1, roof_flag),
+                            BuildTool::Pump => make_block(16, 1, roof_flag | rot_flags),
+                            BuildTool::Tank => make_block(17, 1, roof_flag),
+                            BuildTool::Valve => make_block(18, 1, roof_flag | 4), // start open (bit2)
+                            BuildTool::Outlet => make_block(19, 1, roof_flag | rot_flags),
                             _ => unreachable!(),
                         };
                         let roof_h = block & 0xFF000000;
@@ -564,8 +576,19 @@ impl App {
             return;
         }
 
+        // Toggle valve open/closed
+        if bt == 18 {
+            let new_flags = flags ^ 4; // toggle bit2 (is_open)
+            let new_block = (block & 0xFF00FFFF) | ((new_flags as u32) << 16);
+            self.grid_data[idx] = new_block;
+            self.grid_dirty = true;
+            let open = (new_flags & 4) != 0;
+            log::info!("Valve at ({}, {}): {}", bx, by, if open { "open" } else { "closed" });
+            return;
+        }
+
         // Remove any placeable by clicking on it (replace with dirt floor)
-        if bt == 6 || bt == 7 || bt == 10 || bt == 11 || bt == 13 {
+        if bt == 6 || bt == 7 || bt == 10 || bt == 11 || bt == 13 || (bt >= 15 && bt <= 19) {
             let roof_flag = flags & 2;
             let roof_h = block & 0xFF000000;
             self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
@@ -702,6 +725,7 @@ impl App {
         // Grid storage buffer
         self.grid_data = generate_test_grid();
         compute_roof_heights(&mut self.grid_data);
+        self.pipe_network.rebuild(&self.grid_data);
         let grid_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grid-buffer"),
             size: (self.grid_data.len() * std::mem::size_of::<u32>()) as u64,
@@ -2217,7 +2241,12 @@ impl App {
                 wgpu::Extent3d { width: FLUID_SIM_W, height: FLUID_SIM_H, depth_or_array_layers: 1 },
             );
             self.grid_dirty = false;
+            self.pipe_network.rebuild(&self.grid_data);
         }
+
+        // Tick pipe network simulation
+        let _pipe_injections = self.pipe_network.tick(dt, &self.grid_data);
+        // TODO: apply outlet injections to fluid dye texture
 
         // Upload fluid params
         self.fluid_params.time = self.time_of_day;
@@ -2511,6 +2540,13 @@ impl App {
                     btn!(BuildTool::ElectricLight, "Ceil Light");
                     btn!(BuildTool::StandingLamp, "Floor Lamp");
                     btn!(BuildTool::TableLamp, "Table Lamp");
+                    ui.separator();
+                    ui.label(egui::RichText::new("Piping").strong().size(s));
+                    btn!(BuildTool::Pipe, "Pipe");
+                    btn!(BuildTool::Pump, "Pump");
+                    btn!(BuildTool::Tank, "Tank");
+                    btn!(BuildTool::Valve, "Valve");
+                    btn!(BuildTool::Outlet, "Outlet");
                     if *tool != BuildTool::None {
                         ui.separator();
                         let hint = match *tool {

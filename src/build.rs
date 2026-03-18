@@ -10,6 +10,11 @@ pub enum BuildTool {
     TableLamp,
     Fan,
     Compost,
+    Pipe,
+    Pump,
+    Tank,
+    Valve,
+    Outlet,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

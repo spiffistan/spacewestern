@@ -90,7 +90,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 14u)];
+    return materials[min(bt, 19u)];
 }
 
 // --- Sprite constants ---
@@ -1383,6 +1383,81 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Slight steam wisps
         let wisp = sin(world_x * 31.0 + camera.time * 2.0) * sin(world_y * 29.0 + camera.time * 1.7);
         color += vec3(0.05) * max(wisp, 0.0) * heap;
+    } else if btype >= 15u && btype <= 19u {
+        // Piping system: auto-connected pipe rendering
+        // Check 4 neighbors for other pipe components (types 15-19)
+        let n_n = block_type(get_block(bx, by - 1));
+        let n_s = block_type(get_block(bx, by + 1));
+        let n_e = block_type(get_block(bx + 1, by));
+        let n_w = block_type(get_block(bx - 1, by));
+        let cn = n_n >= 15u && n_n <= 19u;
+        let cs = n_s >= 15u && n_s <= 19u;
+        let ce = n_e >= 15u && n_e <= 19u;
+        let cw = n_w >= 15u && n_w <= 19u;
+
+        // Ground beneath pipe
+        let ground = vec3<f32>(0.45, 0.35, 0.20);
+        let pipe_color = vec3<f32>(0.50, 0.52, 0.55); // metallic gray
+        let pipe_dark = vec3<f32>(0.35, 0.37, 0.40);
+
+        // Pipe rendering: draw connected segments as thick lines through block center
+        let pipe_w = 0.18; // half-width of pipe
+        let cx = fx - 0.5;
+        let cy = fy - 0.5;
+        var on_pipe = false;
+
+        // Horizontal segment (E-W)
+        if (ce || cw) && abs(cy) < pipe_w {
+            let x_min = select(-0.5, -pipe_w, !cw); // extend to edge if connected
+            let x_max = select(0.5, pipe_w, !ce);
+            if cx >= x_min && cx <= x_max { on_pipe = true; }
+        }
+        // Vertical segment (N-S)
+        if (cn || cs) && abs(cx) < pipe_w {
+            let y_min = select(-0.5, -pipe_w, !cn);
+            let y_max = select(0.5, pipe_w, !cs);
+            if cy >= y_min && cy <= y_max { on_pipe = true; }
+        }
+        // Center junction (always filled if any connection)
+        if (cn || cs || ce || cw) && abs(cx) < pipe_w && abs(cy) < pipe_w {
+            on_pipe = true;
+        }
+        // Isolated pipe: draw a cap
+        if !cn && !cs && !ce && !cw {
+            let dist = length(vec2(cx, cy));
+            on_pipe = dist < pipe_w;
+        }
+
+        if on_pipe {
+            // Pipe surface with highlight
+            let edge = max(abs(cx), abs(cy));
+            let highlight = smoothstep(pipe_w, pipe_w * 0.3, edge);
+            color = mix(pipe_dark, pipe_color, highlight);
+
+            // Type-specific coloring
+            if btype == 16u {
+                // Pump: green tint
+                color = mix(color, vec3(0.3, 0.6, 0.3), 0.3);
+                // Animated arrows
+                let arrow_phase = fract(camera.time * 2.0 + fx);
+                if abs(cy) < 0.06 && arrow_phase < 0.3 { color = vec3(0.2, 0.8, 0.2); }
+            } else if btype == 17u {
+                // Tank: wider, darker, with pressure gauge
+                color = mix(color, vec3(0.4, 0.4, 0.5), 0.2);
+            } else if btype == 18u {
+                // Valve: red when closed, green when open
+                let valve_open = is_open(block);
+                let valve_color = select(vec3(0.7, 0.2, 0.2), vec3(0.2, 0.7, 0.2), valve_open);
+                // Handle bar across the pipe
+                let on_handle = abs(cx) < 0.08 && abs(cy) < pipe_w * 1.3;
+                if on_handle { color = valve_color; }
+            } else if btype == 19u {
+                // Outlet: flared end with blue tint
+                color = mix(color, vec3(0.4, 0.5, 0.7), 0.2);
+            }
+        } else {
+            color = ground;
+        }
     } else {
         color = block_base_color(btype, bflags);
     }
