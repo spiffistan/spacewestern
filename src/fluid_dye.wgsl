@@ -263,27 +263,28 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     let sun_curve = sin(sun_t * 3.14159);
     let ambient_temp = mix(5.0, 25.0, sun_curve); // 5°C night, 25°C midday
 
-    // Temperature dissipation: very slow cooling toward ambient (insulated rooms retain heat)
-    result.a += (ambient_temp - result.a) * 0.001;
+    // Temperature: read block info for indoor/outdoor determination
+    var is_indoor_cell = false;
+    if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
+        let block_temp = grid[u32(by) * u32(params.sim_w) + u32(bx)];
+        let has_roof_t = ((block_temp >> 16u) & 2u) != 0u;
+        is_indoor_cell = has_roof_t;
+    }
 
-    // Fire injects heat continuously (not just max — builds up in enclosed spaces)
+    // Temperature dissipation: only outdoor cells cool toward ambient.
+    // Indoor cells retain heat (insulated by roof) — heat only escapes
+    // through doors/windows via advection, not via magic dissipation.
+    if !is_indoor_cell {
+        result.a += (ambient_temp - result.a) * 0.015;
+    }
+
+    // Fire injects heat continuously (builds up in enclosed spaces)
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block_t = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         if (block_t & 0xFFu) == 6u {
             let fire_o2_t = clamp(result.g * 3.0 - 0.5, 0.0, 1.0);
-            // Inject heat additively (builds up) + set minimum floor
             result.a += 15.0 * fire_o2_t;
             result.a = max(result.a, 200.0 * fire_o2_t);
-        }
-    }
-
-    // Outdoor cells: temperature trends toward ambient (faster than indoor)
-    if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
-        let block_temp = grid[u32(by) * u32(params.sim_w) + u32(bx)];
-        let has_roof_t = ((block_temp >> 16u) & 2u) != 0u;
-        let btype_t = block_temp & 0xFFu;
-        if !has_roof_t && (btype_t == 0u || btype_t == 2u) {
-            result.a += (ambient_temp - result.a) * 0.015;
         }
     }
 
