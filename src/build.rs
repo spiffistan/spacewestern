@@ -3,40 +3,15 @@
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BuildTool {
     None,
-    Fireplace,
-    ElectricLight,
-    Bench,
-    StandingLamp,
-    TableLamp,
-    Fan,
-    Compost,
-    Pipe,
-    Pump,
-    Tank,
-    Valve,
-    Outlet,
-    Inlet,
+    Place(u8),    // block ID — replaces all material-specific variants
     Destroy,
-    WoodWall,
-    SteelWall,
-    SandstoneWall,
-    GraniteWall,
-    LimestoneWall,
-    WoodFloor,
-    StoneFloor,
-    ConcreteFloor,
     Roof,
-    Window,
-    Door,
     RemoveFloor,
     RemoveRoof,
-    WoodBox,
-    Cannon,
-    Bed,
-    BerryBush,
     Dig,
-    StorageCrate,
-    MudWall,
+    Door,         // special: placed on existing walls, toggles door flag
+    Window,       // special: placed on existing walls, replaces with glass
+    WoodBox,      // special: spawns physics body, not grid block
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

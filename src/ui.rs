@@ -378,33 +378,33 @@ impl App {
                             ui.spacing_mut().item_spacing = egui::Vec2::new(4.0, 4.0);
                             match cat {
                                 "Walls" => {
-                                    icon_btn(ui, BuildTool::WoodWall, "\u{1fab5}", "Wood");
-                                    icon_btn(ui, BuildTool::SteelWall, "\u{2699}", "Steel");
-                                    icon_btn(ui, BuildTool::SandstoneWall, "\u{1faa8}", "Sandstone");
-                                    icon_btn(ui, BuildTool::GraniteWall, "\u{26f0}", "Granite");
-                                    icon_btn(ui, BuildTool::LimestoneWall, "\u{1f532}", "Limestone");
-                                    icon_btn(ui, BuildTool::MudWall, "\u{1f3da}", "Mud");
+                                    icon_btn(ui, BuildTool::Place(21), "\u{1fab5}", "Wood");
+                                    icon_btn(ui, BuildTool::Place(22), "\u{2699}", "Steel");
+                                    icon_btn(ui, BuildTool::Place(23), "\u{1faa8}", "Sandstone");
+                                    icon_btn(ui, BuildTool::Place(24), "\u{26f0}", "Granite");
+                                    icon_btn(ui, BuildTool::Place(25), "\u{1f532}", "Limestone");
+                                    icon_btn(ui, BuildTool::Place(35), "\u{1f3da}", "Mud");
                                 }
                                 "Floor" => {
-                                    icon_btn(ui, BuildTool::WoodFloor, "\u{1fab5}", "Wood");
-                                    icon_btn(ui, BuildTool::StoneFloor, "\u{2b1b}", "Stone");
-                                    icon_btn(ui, BuildTool::ConcreteFloor, "\u{2b1c}", "Concrete");
+                                    icon_btn(ui, BuildTool::Place(26), "\u{1fab5}", "Wood");
+                                    icon_btn(ui, BuildTool::Place(27), "\u{2b1b}", "Stone");
+                                    icon_btn(ui, BuildTool::Place(28), "\u{2b1c}", "Concrete");
                                     icon_btn(ui, BuildTool::Roof, "\u{1f3e0}", "Roof");
                                     icon_btn(ui, BuildTool::RemoveFloor, "\u{274c}", "Rm Floor");
                                     icon_btn(ui, BuildTool::RemoveRoof, "\u{274c}", "Rm Roof");
                                 }
                                 "Build" => {
-                                    icon_btn(ui, BuildTool::Fireplace, "\u{1f525}", "Fire");
-                                    icon_btn(ui, BuildTool::Bench, "\u{1fa91}", "Bench");
-                                    icon_btn(ui, BuildTool::Bed, "\u{1f6cf}", "Bed");
-                                    icon_btn(ui, BuildTool::StorageCrate, "\u{1f4e6}", "Crate");
-                                    icon_btn(ui, BuildTool::Fan, "\u{1f4a8}", "Fan");
-                                    icon_btn(ui, BuildTool::Compost, "\u{267b}", "Compost");
-                                    icon_btn(ui, BuildTool::BerryBush, "\u{1fad0}", "Berries");
-                                    icon_btn(ui, BuildTool::Cannon, "\u{1f4a5}", "Cannon");
-                                    icon_btn(ui, BuildTool::ElectricLight, "\u{1f4a1}", "Ceiling");
-                                    icon_btn(ui, BuildTool::StandingLamp, "\u{1f9f4}", "Floor Lamp");
-                                    icon_btn(ui, BuildTool::TableLamp, "\u{1f4a1}", "Table");
+                                    icon_btn(ui, BuildTool::Place(6), "\u{1f525}", "Fire");
+                                    icon_btn(ui, BuildTool::Place(9), "\u{1fa91}", "Bench");
+                                    icon_btn(ui, BuildTool::Place(30), "\u{1f6cf}", "Bed");
+                                    icon_btn(ui, BuildTool::Place(33), "\u{1f4e6}", "Crate");
+                                    icon_btn(ui, BuildTool::Place(12), "\u{1f4a8}", "Fan");
+                                    icon_btn(ui, BuildTool::Place(13), "\u{267b}", "Compost");
+                                    icon_btn(ui, BuildTool::Place(31), "\u{1fad0}", "Berries");
+                                    icon_btn(ui, BuildTool::Place(29), "\u{1f4a5}", "Cannon");
+                                    icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
+                                    icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
+                                    icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table");
                                     icon_btn(ui, BuildTool::Dig, "\u{26cf}", "Dig");
                                 }
                                 "Opening" => {
@@ -412,12 +412,12 @@ impl App {
                                     icon_btn(ui, BuildTool::Door, "\u{1f6aa}", "Door");
                                 }
                                 "Piping" => {
-                                    icon_btn(ui, BuildTool::Pipe, "\u{1f4a7}", "Pipe");
-                                    icon_btn(ui, BuildTool::Pump, "\u{2699}", "Pump");
-                                    icon_btn(ui, BuildTool::Tank, "\u{1f6e2}", "Tank");
-                                    icon_btn(ui, BuildTool::Valve, "\u{1f504}", "Valve");
-                                    icon_btn(ui, BuildTool::Outlet, "\u{27a1}", "Outlet");
-                                    icon_btn(ui, BuildTool::Inlet, "\u{2b05}", "Inlet");
+                                    icon_btn(ui, BuildTool::Place(15), "\u{1f4a7}", "Pipe");
+                                    icon_btn(ui, BuildTool::Place(16), "\u{2699}", "Pump");
+                                    icon_btn(ui, BuildTool::Place(17), "\u{1f6e2}", "Tank");
+                                    icon_btn(ui, BuildTool::Place(18), "\u{1f504}", "Valve");
+                                    icon_btn(ui, BuildTool::Place(19), "\u{27a1}", "Outlet");
+                                    icon_btn(ui, BuildTool::Place(20), "\u{2b05}", "Inlet");
                                 }
                                 "Physics" => {
                                     icon_btn(ui, BuildTool::WoodBox, "\u{1f4e6}", "Box");
@@ -430,9 +430,9 @@ impl App {
                         if *tool != BuildTool::None {
                             ui.separator();
                             let hint = match tool {
-                                BuildTool::Bench | BuildTool::Bed => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
-                                BuildTool::TableLamp => "On bench".to_string(),
-                                BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet | BuildTool::Cannon => {
+                                BuildTool::Place(9) | BuildTool::Place(30) => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
+                                BuildTool::Place(11) => "On bench".to_string(),
+                                BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19) | BuildTool::Place(29) => {
                                     let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" };
                                     format!("Q/E [{}]", d)
                                 }
@@ -1122,20 +1122,8 @@ impl App {
                 let bt = block & 0xFF;
                 let bh = (block >> 8) & 0xFF;
                 let flags = (block >> 16) & 0xFF;
-                let type_name = match bt {
-                    0 => "Air", 1 => "Stone Wall", 2 => "Dirt", 3 => "Water",
-                    4 => "Wall", 5 => "Glass", 6 => "Fireplace", 7 => "Ceiling Light",
-                    8 => "Tree", 9 => "Bench", 10 => "Floor Lamp", 11 => "Table Lamp",
-                    12 => "Fan", 13 => "Compost", 14 => "Insulated Wall",
-                    15 => "Pipe", 16 => "Pump", 17 => "Tank", 18 => "Valve",
-                    19 => "Outlet", 20 => "Inlet",
-                    21 => "Wood Wall", 22 => "Steel Wall", 23 => "Sandstone Wall",
-                    24 => "Granite Wall", 25 => "Limestone Wall",
-                    26 => "Wood Floor", 27 => "Stone Floor", 28 => "Concrete Floor",
-                    29 => "Cannon", 30 => "Bed", 31 => "Berry Bush",
-                    32 => "Dug Ground", 33 => "Storage Crate", 34 => "Rock", 35 => "Mud Wall",
-                    _ => "Unknown",
-                };
+                let reg = block_defs::BlockRegistry::load();
+                let type_name = reg.name(bt as u8);
                 let mut tags = String::new();
                 if flags & 2 != 0 { tags.push_str(" [Roofed]"); }
                 if flags & 1 != 0 { tags.push_str(if flags & 4 != 0 { " [Door:Open]" } else { " [Door:Closed]" }); }
@@ -1223,15 +1211,18 @@ impl App {
                 let (hwx, hwy) = self.hover_world;
                 let (ex, ey) = (hwx.floor() as i32, hwy.floor() as i32);
                 let tiles = match self.build_tool {
-                    BuildTool::Pipe => Self::line_tiles(sx, sy, ex, ey),
-                    BuildTool::Destroy => Self::filled_rect_tiles(sx, sy, ex, ey),
-                    BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor
-                    | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof => {
+                    BuildTool::Destroy | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof => {
                         Self::filled_rect_tiles(sx, sy, ex, ey)
                     }
-                    BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall
-                    | BuildTool::GraniteWall | BuildTool::LimestoneWall | BuildTool::MudWall => {
-                        Self::hollow_rect_tiles(sx, sy, ex, ey)
+                    BuildTool::Place(id) => {
+                        let reg = crate::block_defs::BlockRegistry::load();
+                        let shape = reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref());
+                        match shape {
+                            Some(crate::block_defs::DragShape::Line) => Self::line_tiles(sx, sy, ex, ey),
+                            Some(crate::block_defs::DragShape::FilledRect) => Self::filled_rect_tiles(sx, sy, ex, ey),
+                            Some(crate::block_defs::DragShape::HollowRect) => Self::hollow_rect_tiles(sx, sy, ex, ey),
+                            _ => Vec::new(),
+                        }
                     }
                     _ => Vec::new(),
                 };
@@ -1344,7 +1335,7 @@ impl App {
                 );
 
                 // Direction arrow for fan, pump, inlet, outlet
-                if matches!(self.build_tool, BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet) {
+                if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
                     let center = egui::pos2((sx0 + sx1) / 2.0, (sy0 + sy1) / 2.0);
                     let tile_size = (sx1 - sx0).max(1.0);
                     let (adx, ady) = match self.build_rotation {

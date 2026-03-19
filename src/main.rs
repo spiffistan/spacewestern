@@ -642,31 +642,20 @@ impl App {
             return;
         }
 
-        let tiles = match self.build_tool {
-            BuildTool::Pipe => Self::line_tiles(sx, sy, ex, ey),
-            BuildTool::Destroy => Self::filled_rect_tiles(sx, sy, ex, ey),
-            BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor => {
-                Self::filled_rect_tiles(sx, sy, ex, ey)
-            }
-            BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall
-            | BuildTool::GraniteWall | BuildTool::LimestoneWall | BuildTool::MudWall => {
-                Self::hollow_rect_tiles(sx, sy, ex, ey)
+        let reg = block_defs::BlockRegistry::load();
+        let (block_type_id, tiles) = match self.build_tool {
+            BuildTool::Destroy => (0u8, Self::filled_rect_tiles(sx, sy, ex, ey)),
+            BuildTool::Place(id) => {
+                let shape = reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref());
+                let t = match shape {
+                    Some(block_defs::DragShape::Line) => Self::line_tiles(sx, sy, ex, ey),
+                    Some(block_defs::DragShape::FilledRect) => Self::filled_rect_tiles(sx, sy, ex, ey),
+                    Some(block_defs::DragShape::HollowRect) => Self::hollow_rect_tiles(sx, sy, ex, ey),
+                    _ => return,
+                };
+                (id, t)
             }
             _ => return,
-        };
-
-        let block_type_id = match self.build_tool {
-            BuildTool::Pipe => 15u8,
-            BuildTool::WoodWall => 21,
-            BuildTool::SteelWall => 22,
-            BuildTool::SandstoneWall => 23,
-            BuildTool::GraniteWall => 24,
-            BuildTool::LimestoneWall => 25,
-            BuildTool::MudWall => 35,
-            BuildTool::WoodFloor => 26,
-            BuildTool::StoneFloor => 27,
-            BuildTool::ConcreteFloor => 28,
-            _ => 0, // destroy doesn't place
         };
 
         for (tx, ty) in tiles {
@@ -681,9 +670,7 @@ impl App {
                 if (bt == 0 || bt == 2) && bh == 0 {
                     let roof_flag = block_flags_rs(block) & 2;
                     let roof_h = block & 0xFF000000;
-                    let height = if block_type_id == 15 { 1u8 }
-                        else if block_type_id >= 26 && block_type_id <= 28 { 0u8 } // floors have no height
-                        else { 3u8 }; // walls default to height 3
+                    let height = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(3);
                     self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
                     self.grid_dirty = true;
                 }
@@ -843,7 +830,8 @@ impl App {
         // Build tool placement
         if self.build_tool != BuildTool::None {
             match self.build_tool {
-                BuildTool::Bench => {
+                BuildTool::Place(9) => {
+                    // Bench: multi-tile placement
                     let tiles = self.bench_tiles(bx, by, self.build_rotation);
                     let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
                     if all_valid {
@@ -861,7 +849,8 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
-                BuildTool::Bed => {
+                BuildTool::Place(30) => {
+                    // Bed: multi-tile placement
                     let tiles = self.bed_tiles(bx, by, self.build_rotation);
                     let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
                     if all_valid {
@@ -878,76 +867,9 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
-                BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost
-                | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve
-                | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall | BuildTool::GraniteWall | BuildTool::LimestoneWall | BuildTool::MudWall
-                | BuildTool::Cannon | BuildTool::BerryBush => {
-                    let can_place = self.can_place_at(bx, by)
-                        || (self.build_tool == BuildTool::Pump && bt == 15); // pump on pipe
-                    if can_place {
-                        let roof_flag = flags & 2;
-                        let rot_flags = (self.build_rotation as u8) << 3;
-                        let new_block = match self.build_tool {
-                            BuildTool::Fireplace => make_block(6, 1, roof_flag),
-                            BuildTool::ElectricLight => make_block(7, 0, roof_flag),
-                            BuildTool::StandingLamp => make_block(10, 2, roof_flag),
-                            BuildTool::Compost => make_block(13, 1, roof_flag),
-                            BuildTool::Pipe => make_block(15, 1, roof_flag),
-                            BuildTool::Pump => make_block(16, 1, roof_flag | rot_flags),
-                            BuildTool::Tank => make_block(17, 1, roof_flag),
-                            BuildTool::Valve => make_block(18, 1, roof_flag | 4),
-                            BuildTool::WoodWall => make_block(21, 3, roof_flag),
-                            BuildTool::SteelWall => make_block(22, 3, roof_flag),
-                            BuildTool::SandstoneWall => make_block(23, 3, roof_flag),
-                            BuildTool::GraniteWall => make_block(24, 3, roof_flag),
-                            BuildTool::LimestoneWall => make_block(25, 3, roof_flag),
-                            BuildTool::MudWall => make_block(35, 3, roof_flag),
-                            BuildTool::Cannon => make_block(29, 2, roof_flag | rot_flags),
-                            BuildTool::BerryBush => make_block(31, 1, 0),
-                            _ => unreachable!(),
-                        };
-                        let roof_h = block & 0xFF000000;
-                        self.grid_data[idx] = new_block | roof_h;
-                        self.grid_dirty = true;
-                        compute_roof_heights(&mut self.grid_data);
-                        // Initialize cannon angle from build rotation
-                        if self.build_tool == BuildTool::Cannon {
-                            let angle = match self.build_rotation {
-                                0 => -std::f32::consts::FRAC_PI_2, // north
-                                1 => 0.0,                           // east
-                                2 => std::f32::consts::FRAC_PI_2,  // south
-                                _ => std::f32::consts::PI,          // west
-                            };
-                            self.cannon_angles.insert(idx as u32, angle);
-                        }
-                        log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
-                        // Pipe stays selected for drag-to-place; others deselect
-                        if self.build_tool != BuildTool::Pipe {
-                            self.build_tool = BuildTool::None;
-                        }
-                    }
-                }
-                BuildTool::Outlet | BuildTool::Inlet => {
-                    // Can place on ground OR on walls (like fans)
-                    let on_ground = self.can_place_at(bx, by);
-                    let bt_at = block_type_rs(block);
-                    let on_wall = matches!(bt_at, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && (block >> 8) & 0xFF > 0;
-                    if on_ground || on_wall {
-                        let height = if on_wall { ((block >> 8) & 0xFF) as u8 } else { 1 };
-                        let roof_flag = flags & 2;
-                        let rot_flags = (self.build_rotation as u8) << 3;
-                        let bt_new = if self.build_tool == BuildTool::Outlet { 19 } else { 20 };
-                        let roof_h = block & 0xFF000000;
-                        self.grid_data[idx] = make_block(bt_new, height, roof_flag | rot_flags) | roof_h;
-                        self.grid_dirty = true;
-                        log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
-                        self.build_tool = BuildTool::None;
-                    }
-                }
-                BuildTool::TableLamp => {
-                    // Table lamp can only be placed on benches (type 9)
+                BuildTool::Place(11) => {
+                    // Table lamp: can only be placed on benches (type 9)
                     if bt == 9 {
-                        // Replace the bench tile with a table lamp, keeping bench flags
                         let roof_h = block & 0xFF000000;
                         let roof_flag = flags & 2;
                         self.grid_data[idx] = make_block(11, 1, roof_flag) | roof_h;
@@ -956,7 +878,7 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
-                BuildTool::Fan => {
+                BuildTool::Place(12) => {
                     // Fan: can be placed on a wall OR on the ground
                     let wall_types = [1i32, 4, 5, 14, 21, 22, 23, 24, 25];
                     let on_wall = wall_types.contains(&(bt as i32)) && (block >> 8) & 0xFF > 0;
@@ -978,6 +900,58 @@ impl App {
                         self.grid_dirty = true;
                         log::info!("Placed fan on ground at ({}, {}) dir={}", bx, by, self.build_rotation);
                         self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::Place(19) | BuildTool::Place(20) => {
+                    // Outlet/Inlet: can place on ground OR on walls
+                    let on_ground = self.can_place_at(bx, by);
+                    let bt_at = block_type_rs(block);
+                    let on_wall = matches!(bt_at, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && (block >> 8) & 0xFF > 0;
+                    if on_ground || on_wall {
+                        let height = if on_wall { ((block >> 8) & 0xFF) as u8 } else { 1 };
+                        let roof_flag = flags & 2;
+                        let rot_flags = (self.build_rotation as u8) << 3;
+                        let bt_new = if self.build_tool == BuildTool::Place(19) { 19 } else { 20 };
+                        let roof_h = block & 0xFF000000;
+                        self.grid_data[idx] = make_block(bt_new, height, roof_flag | rot_flags) | roof_h;
+                        self.grid_dirty = true;
+                        log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::Place(id) => {
+                    // Generic Place: use registry for place_height and flags
+                    let reg = block_defs::BlockRegistry::load();
+                    let placement = reg.get(id).and_then(|d| d.placement.as_ref());
+                    let place_height = placement.map(|p| p.place_height).unwrap_or(1);
+                    let extra_flags = placement.map(|p| p.extra_flags).unwrap_or(0);
+                    let stays_selected = placement.map(|p| p.stays_selected).unwrap_or(false);
+                    let click_mode = placement.map(|p| p.click.clone()).unwrap_or(block_defs::ClickMode::Simple);
+
+                    let can_place = self.can_place_at(bx, by)
+                        || (id == 16 && bt == 15); // pump on pipe
+                    if can_place && click_mode != block_defs::ClickMode::None {
+                        let roof_flag = flags & 2;
+                        let rot_flags = (self.build_rotation as u8) << 3;
+                        let combined_flags = roof_flag | rot_flags | extra_flags;
+                        let roof_h = block & 0xFF000000;
+                        self.grid_data[idx] = make_block(id, place_height, combined_flags) | roof_h;
+                        self.grid_dirty = true;
+                        compute_roof_heights(&mut self.grid_data);
+                        // Initialize cannon angle from build rotation
+                        if id == 29 {
+                            let angle = match self.build_rotation {
+                                0 => -std::f32::consts::FRAC_PI_2, // north
+                                1 => 0.0,                           // east
+                                2 => std::f32::consts::FRAC_PI_2,  // south
+                                _ => std::f32::consts::PI,          // west
+                            };
+                            self.cannon_angles.insert(idx as u32, angle);
+                        }
+                        log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
+                        if !stays_selected {
+                            self.build_tool = BuildTool::None;
+                        }
                     }
                 }
                 BuildTool::Window => {
@@ -1047,17 +1021,7 @@ impl App {
                         }
                     }
                 }
-                BuildTool::StorageCrate => {
-                    if self.can_place_at(bx, by) {
-                        let roof_flag = flags & 2;
-                        let roof_h = block & 0xFF000000;
-                        self.grid_data[idx] = make_block(33, 0, roof_flag) | roof_h;
-                        self.grid_dirty = true;
-                        self.build_tool = BuildTool::None;
-                    }
-                }
                 BuildTool::None | BuildTool::Destroy
-                | BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor
                 | BuildTool::Roof => {}
             }
             return;
@@ -1444,13 +1408,13 @@ impl App {
             let hbx = hwx.floor() as i32;
             let hby = hwy.floor() as i32;
             let tiles: Vec<(i32, i32)> = match self.build_tool {
-                BuildTool::Bench => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
-                BuildTool::Bed => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
+                BuildTool::Place(9) => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
+                BuildTool::Place(30) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
                 _ => vec![(hbx, hby)],
             };
-            let on_furniture = self.build_tool == BuildTool::TableLamp;
+            let on_furniture = self.build_tool == BuildTool::Place(11);
             let is_physics = self.build_tool == BuildTool::WoodBox;
-            let on_wall = matches!(self.build_tool, BuildTool::Fan | BuildTool::Window | BuildTool::Door | BuildTool::Outlet | BuildTool::Inlet);
+            let on_wall = matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Window | BuildTool::Door | BuildTool::Place(19) | BuildTool::Place(20));
             tiles.iter().map(|&(tx, ty)| {
                 if is_physics {
                     // Physics bodies can be placed anywhere
@@ -1465,16 +1429,16 @@ impl App {
                             matches!(bbt, 1 | 4 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
                         } else if self.build_tool == BuildTool::Door {
                             matches!(bbt, 1 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
-                        } else if matches!(self.build_tool, BuildTool::Outlet | BuildTool::Inlet) {
+                        } else if matches!(self.build_tool, BuildTool::Place(19) | BuildTool::Place(20)) {
                             matches!(bbt, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
-                        } else if self.build_tool == BuildTool::Fan {
+                        } else if self.build_tool == BuildTool::Place(12) {
                             matches!(bbt, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
                         } else {
                             (bbt == 1 || bbt == 4) && bbh > 0
                         }
                     } else { false };
                     // Inlet/Outlet/Fan can also place on ground
-                    if !valid && matches!(self.build_tool, BuildTool::Outlet | BuildTool::Inlet | BuildTool::Fan) {
+                    if !valid && matches!(self.build_tool, BuildTool::Place(19) | BuildTool::Place(20) | BuildTool::Place(12)) {
                         ((tx, ty), self.can_place_on(tx, ty, false))
                     } else {
                         ((tx, ty), valid)
@@ -2045,7 +2009,7 @@ impl ApplicationHandler for App {
                         }
                         PhysicalKey::Code(KeyCode::KeyQ) => {
                             if !self.selected_pleb.is_some() {
-                                if matches!(self.build_tool, BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet) {
+                                if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
                                     self.build_rotation = (self.build_rotation + 3) % 4;
                                 } else {
                                     self.build_rotation = (self.build_rotation + 1) % 2;
@@ -2054,7 +2018,7 @@ impl ApplicationHandler for App {
                         }
                         PhysicalKey::Code(KeyCode::KeyE) => {
                             if !self.selected_pleb.is_some() {
-                                if matches!(self.build_tool, BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet) {
+                                if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
                                     self.build_rotation = (self.build_rotation + 1) % 4;
                                 } else {
                                     self.build_rotation = (self.build_rotation + 1) % 2;
@@ -2120,12 +2084,15 @@ impl ApplicationHandler for App {
                         self.mouse_pressed = true;
                         self.mouse_dragged = false;
                         // Start drag for shape-building tools
-                        let is_shape_tool = matches!(self.build_tool,
-                            BuildTool::Pipe | BuildTool::Destroy
-                            | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall
-                            | BuildTool::GraniteWall | BuildTool::LimestoneWall | BuildTool::MudWall
-                            | BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor
-                            | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof);
+                        let is_shape_tool = match self.build_tool {
+                            BuildTool::Destroy | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof => true,
+                            BuildTool::Place(id) => {
+                                let reg = block_defs::BlockRegistry::load();
+                                reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref())
+                                    .map(|s| *s != block_defs::DragShape::None).unwrap_or(false)
+                            }
+                            _ => false,
+                        };
                         if is_shape_tool {
                             let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             self.drag_start = Some((wx.floor() as i32, wy.floor() as i32));
