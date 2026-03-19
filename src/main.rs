@@ -13,7 +13,7 @@ mod pleb;
 use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, random_name, MAX_PLEBS, PlebActivity};
 
 mod needs;
-use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, BERRY_HUNGER_RESTORE};
+use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, find_cool_tile, BERRY_HUNGER_RESTORE, HEAT_CRISIS_TEMP};
 
 mod build;
 mod camera;
@@ -315,9 +315,13 @@ impl App {
             prev_cam_time: 0.0,
             fluid_mouse_active: false,
             fluid_mouse_prev: None,
-            plebs: Vec::new(),
-            selected_pleb: None,
-            next_pleb_id: 0,
+            plebs: {
+                let mut p = Pleb::new(0, "Jeff".to_string(), 102.5, 100.5, 42);
+                p.headlight_on = true;
+                vec![p]
+            },
+            selected_pleb: Some(0),
+            next_pleb_id: 1,
             placing_pleb: false,
             cannon_angles: std::collections::HashMap::new(),
             selected_cannon: None,

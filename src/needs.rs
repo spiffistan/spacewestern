@@ -207,6 +207,11 @@ pub const BERRY_HUNGER_RESTORE: f32 = 0.20;
 const STARVE_DAMAGE: f32 = 0.008;      // ~2 min to die from starvation
 const FREEZE_DAMAGE: f32 = 0.012;      // ~1.3 min to die from cold
 const FIRE_DAMAGE: f32 = 0.04;         // ~25s to die in fire
+const HEAT_DAMAGE: f32 = 0.015;        // ~1 min to die from extreme heat
+/// Temperature above which colonists take heat damage
+const HEAT_DANGER_TEMP: f32 = 50.0;
+/// Temperature above which colonists flee (crisis)
+pub const HEAT_CRISIS_TEMP: f32 = 45.0;
 
 /// Determine whether air is breathable at the pleb's position.
 fn air_breathable(o2: f32, co2: f32) -> bool {
@@ -362,6 +367,10 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
     if needs.breathing_state != BreathingState::Normal {
         safety_target -= 0.4;
     }
+    // High temperature reduces safety
+    if needs.air_temp > HEAT_CRISIS_TEMP {
+        safety_target -= 0.5 * ((needs.air_temp - HEAT_CRISIS_TEMP) / 30.0).min(1.0);
+    }
     safety_target = safety_target.max(0.0);
     needs.safety += (safety_target - needs.safety) * 0.4 * t;
     needs.safety = needs.safety.clamp(0.0, 1.0);
@@ -395,6 +404,11 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
 
     if needs.warmth < 0.15 {
         damage += FREEZE_DAMAGE * (1.0 - needs.warmth / 0.15);
+    }
+    // Heat damage: scales with temperature above danger threshold
+    if needs.air_temp > HEAT_DANGER_TEMP {
+        let heat_severity = ((needs.air_temp - HEAT_DANGER_TEMP) / 50.0).min(1.0);
+        damage += HEAT_DAMAGE * heat_severity;
     }
     if env.fire_dist < 1.0 {
         damage += FIRE_DAMAGE;
@@ -452,6 +466,32 @@ pub fn breathing_label(state: &BreathingState) -> &'static str {
         BreathingState::HoldingBreath => "Holding breath",
         BreathingState::Gasping => "GASPING!",
     }
+}
+
+/// Find the nearest tile that is cooler (outdoors / no roof = likely cooler).
+/// Used for heat crisis flee behavior.
+pub fn find_cool_tile(grid: &[u32], bx: i32, by: i32, max_radius: i32) -> Option<(i32, i32)> {
+    for r in 1..=max_radius {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx.abs() != r && dy.abs() != r { continue; }
+                let sx = bx + dx;
+                let sy = by + dy;
+                if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+
+                let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
+                // Outdoors (no roof) = likely cooler, and walkable
+                if roof_height_rs(b) == 0 && is_walkable_pos(grid, sx as f32 + 0.5, sy as f32 + 0.5) {
+                    // Also check no fire nearby
+                    let bt = block_type_rs(b);
+                    if bt != 6 { // not a fireplace
+                        return Some((sx, sy));
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Find the nearest tile with breathable air by scanning outward from (bx, by).

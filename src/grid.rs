@@ -176,6 +176,9 @@ pub fn generate_test_grid() -> Vec<u32> {
     oset(&mut grid, 19, 21, make_block(6, 1, roof_flag));
     oset(&mut grid, 40, 15, make_block(6, 1, 0));
     oset(&mut grid, 15, 14, make_block(7, 0, roof_flag));
+    // Default bed for Jeff (horizontal, in upper room)
+    oset(&mut grid, 12, 13, make_block(30, 0, roof_flag));
+    oset(&mut grid, 13, 13, make_block(30, 0, roof_flag));
 
     // === House 2: Tall building ===
     let h2_h = 5u8;

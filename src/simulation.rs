@@ -323,6 +323,21 @@ impl App {
                         pleb.path_idx = 0;
                     }
                 }
+                // CRISIS: Overheating — flee to cooler area
+                else if pleb.needs.air_temp > HEAT_CRISIS_TEMP && is_idle_or_walk && !pleb.activity.is_crisis() {
+                    let bx = pleb.x.floor() as i32;
+                    let by = pleb.y.floor() as i32;
+                    if let Some(target) = find_cool_tile(&self.grid_data, bx, by, 20) {
+                        let start = (bx, by);
+                        let path = astar_path(&self.grid_data, start, target);
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 0;
+                            pleb.activity = PlebActivity::Crisis(
+                                Box::new(PlebActivity::Walking), "Overheating!");
+                        }
+                    }
+                }
                 // Non-crisis auto-behaviors (player can override)
                 else if !pleb.activity.is_crisis() {
                     if pleb.activity == PlebActivity::Idle || pleb.activity == PlebActivity::Walking {

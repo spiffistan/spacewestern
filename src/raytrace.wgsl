@@ -1994,6 +1994,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             water_color = mix(water_color, vec3<f32>(0.30, 0.28, 0.22), shore * 0.5);
         }
 
+        // Apply ambient + sun lighting (so water darkens at night)
+        let water_ambient = 0.08 + camera.sun_intensity * 0.12;
+        water_color = water_color * (water_ambient + light_factor * 0.8);
         color = water_color;
     }
 
