@@ -6,57 +6,68 @@ use crate::*;
 impl App {
     pub fn draw_ui(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: Vec<((i32,i32), bool)>, dt: f32) {
         let bp_ppp = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
-        // --- Layers menu (top-right) ---
+        // --- Layers bar (top-right, horizontal groups with labels above) ---
         egui::Area::new(egui::Id::new("layers_menu"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 32.0])
             .show(ctx, |ui| {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(160.0);
-                    ui.label(egui::RichText::new("Layers").strong().size(12.0));
-                    ui.separator();
-                    let ov = &mut self.fluid_overlay;
-                    // Atmosphere
-                    ui.label(egui::RichText::new("Atmosphere").size(9.0).weak());
                     ui.horizontal(|ui| {
-                        if ui.selectable_label(*ov == FluidOverlay::Gases, "All").clicked() {
-                            *ov = if *ov == FluidOverlay::Gases { FluidOverlay::None } else { FluidOverlay::Gases };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::Smoke, "Smoke").clicked() {
-                            *ov = if *ov == FluidOverlay::Smoke { FluidOverlay::None } else { FluidOverlay::Smoke };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::O2, "O\u{2082}").clicked() {
-                            *ov = if *ov == FluidOverlay::O2 { FluidOverlay::None } else { FluidOverlay::O2 };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::CO2, "CO\u{2082}").clicked() {
-                            *ov = if *ov == FluidOverlay::CO2 { FluidOverlay::None } else { FluidOverlay::CO2 };
-                        }
-                    });
-                    // Thermal
-                    ui.label(egui::RichText::new("Thermal").size(9.0).weak());
-                    ui.horizontal(|ui| {
-                        if ui.selectable_label(*ov == FluidOverlay::Temp, "Temp").clicked() {
-                            *ov = if *ov == FluidOverlay::Temp { FluidOverlay::None } else { FluidOverlay::Temp };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::HeatFlow, "Convection").clicked() {
-                            *ov = if *ov == FluidOverlay::HeatFlow { FluidOverlay::None } else { FluidOverlay::HeatFlow };
-                        }
-                    });
-                    // Physics
-                    ui.label(egui::RichText::new("Physics").size(9.0).weak());
-                    ui.horizontal(|ui| {
-                        if ui.selectable_label(*ov == FluidOverlay::Velocity, "Velocity").clicked() {
-                            *ov = if *ov == FluidOverlay::Velocity { FluidOverlay::None } else { FluidOverlay::Velocity };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::Pressure, "Pressure").clicked() {
-                            *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
-                        }
-                    });
-                    // Infrastructure
-                    ui.label(egui::RichText::new("Infrastructure").size(9.0).weak());
-                    ui.horizontal(|ui| {
-                        if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
-                            self.show_pipe_overlay = !self.show_pipe_overlay;
-                        }
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        let ov = &mut self.fluid_overlay;
+                        // Atmosphere group
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Atmosphere").size(9.0).weak());
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(*ov == FluidOverlay::Gases, "Gases").clicked() {
+                                    *ov = if *ov == FluidOverlay::Gases { FluidOverlay::None } else { FluidOverlay::Gases };
+                                }
+                                if ui.selectable_label(*ov == FluidOverlay::Smoke, "Smoke").clicked() {
+                                    *ov = if *ov == FluidOverlay::Smoke { FluidOverlay::None } else { FluidOverlay::Smoke };
+                                }
+                                if ui.selectable_label(*ov == FluidOverlay::O2, "O\u{2082}").clicked() {
+                                    *ov = if *ov == FluidOverlay::O2 { FluidOverlay::None } else { FluidOverlay::O2 };
+                                }
+                                if ui.selectable_label(*ov == FluidOverlay::CO2, "CO\u{2082}").clicked() {
+                                    *ov = if *ov == FluidOverlay::CO2 { FluidOverlay::None } else { FluidOverlay::CO2 };
+                                }
+                            });
+                        });
+                        ui.separator();
+                        // Thermal group
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Thermal").size(9.0).weak());
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(*ov == FluidOverlay::Temp, "Temp").clicked() {
+                                    *ov = if *ov == FluidOverlay::Temp { FluidOverlay::None } else { FluidOverlay::Temp };
+                                }
+                                if ui.selectable_label(*ov == FluidOverlay::HeatFlow, "Heat").clicked() {
+                                    *ov = if *ov == FluidOverlay::HeatFlow { FluidOverlay::None } else { FluidOverlay::HeatFlow };
+                                }
+                            });
+                        });
+                        ui.separator();
+                        // Physics group
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Physics").size(9.0).weak());
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(*ov == FluidOverlay::Velocity, "Vel").clicked() {
+                                    *ov = if *ov == FluidOverlay::Velocity { FluidOverlay::None } else { FluidOverlay::Velocity };
+                                }
+                                if ui.selectable_label(*ov == FluidOverlay::Pressure, "Pres").clicked() {
+                                    *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
+                                }
+                            });
+                        });
+                        ui.separator();
+                        // Infrastructure
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Infra").size(9.0).weak());
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
+                                    self.show_pipe_overlay = !self.show_pipe_overlay;
+                                }
+                            });
+                        });
                     });
                 });
             });
@@ -76,19 +87,27 @@ impl App {
                     dot(ui, col, label);
                 }
             };
-            let show_legend = self.fluid_overlay != FluidOverlay::None;
+            let show_legend = self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay;
             if show_legend {
                 egui::Area::new(egui::Id::new("layer_legend"))
-                    .anchor(egui::Align2::RIGHT_TOP, [-10.0, 260.0])
+                    .anchor(egui::Align2::RIGHT_TOP, [-10.0, 80.0])
                     .interactable(false)
                     .show(ctx, |ui| {
                         egui::Frame::window(ui.style()).show(ui, |ui| {
                             ui.spacing_mut().item_spacing.y = 2.0;
                             match self.fluid_overlay {
-                                FluidOverlay::Gases | FluidOverlay::Smoke => {
-                                    dot(ui, egui::Color32::from_rgb(230, 230, 235), "Smoke");
-                                    dot(ui, egui::Color32::from_rgb(50, 100, 255), "O\u{2082} deficit");
-                                    dot(ui, egui::Color32::from_rgb(180, 200, 25), "CO\u{2082}");
+                                FluidOverlay::Gases => {
+                                    dot(ui, egui::Color32::from_rgb(230, 230, 235), "Smoke (white)");
+                                    dot(ui, egui::Color32::from_rgb(50, 100, 255), "O\u{2082} deficit (blue)");
+                                    dot(ui, egui::Color32::from_rgb(180, 200, 25), "CO\u{2082} (yellow-green)");
+                                }
+                                FluidOverlay::Smoke => {
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(0, 0, 0), "None"),
+                                        (egui::Color32::from_rgb(200, 50, 0), "Low density"),
+                                        (egui::Color32::from_rgb(255, 200, 0), "Medium"),
+                                        (egui::Color32::from_rgb(255, 255, 255), "High density"),
+                                    ]);
                                 }
                                 FluidOverlay::O2 => {
                                     dot(ui, egui::Color32::from_rgb(25, 100, 255), "High O\u{2082}");
@@ -130,6 +149,18 @@ impl App {
                                     ]);
                                 }
                                 _ => {}
+                            }
+                            // Pipe overlay legend (can be active alongside fluid overlays)
+                            if self.show_pipe_overlay {
+                                if self.fluid_overlay != FluidOverlay::None {
+                                    ui.separator();
+                                }
+                                ui.label(egui::RichText::new("Pipes").strong().size(10.0));
+                                dot(ui, egui::Color32::from_rgb(50, 100, 230), "O\u{2082} rich");
+                                dot(ui, egui::Color32::from_rgb(200, 180, 25), "CO\u{2082}");
+                                dot(ui, egui::Color32::from_rgb(128, 128, 128), "Smoke");
+                                dot(ui, egui::Color32::from_rgb(230, 50, 30), "Hot gas");
+                                ui.label(egui::RichText::new("Brighter = more pressure").size(9.0).weak());
                             }
                         });
                     });
