@@ -1,3 +1,4 @@
+use bytemuck::Zeroable;
 use std::sync::Arc;
 
 mod materials;
@@ -9,7 +10,7 @@ use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_door_rs
 use sprites::generate_tree_sprites;
 
 mod pleb;
-use pleb::{Pleb, is_walkable_pos, astar_path};
+use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, random_name, MAX_PLEBS};
 
 mod build;
 mod camera;
@@ -101,9 +102,10 @@ struct App {
     fluid_mouse_active: bool,  // middle mouse button held
     fluid_mouse_prev: Option<(f32, f32)>, // previous world position for velocity calc
     // Pleb (character)
-    pleb: Option<Pleb>,
-    pleb_selected: bool,
-    placing_pleb: bool,        // blueprint mode for placing Jeff
+    plebs: Vec<Pleb>,
+    selected_pleb: Option<usize>,  // index into plebs vec
+    placing_pleb: bool,
+    next_pleb_id: usize,
     show_pleb_help: bool,      // show controls modal
     pressed_keys: std::collections::HashSet<KeyCode>,
     auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
@@ -140,6 +142,7 @@ struct GfxState {
     grid_buffer: wgpu::Buffer,
     sprite_buffer: wgpu::Buffer,
     material_buffer: wgpu::Buffer,
+    pleb_buffer: wgpu::Buffer,
     block_temp_buffer: wgpu::Buffer,
     thermal_pipeline: wgpu::ComputePipeline,
     thermal_bind_group: wgpu::BindGroup,
@@ -289,8 +292,9 @@ impl App {
             prev_cam_time: 0.0,
             fluid_mouse_active: false,
             fluid_mouse_prev: None,
-            pleb: None,
-            pleb_selected: false,
+            plebs: Vec::new(),
+            selected_pleb: None,
+            next_pleb_id: 0,
             placing_pleb: false,
             show_pleb_help: false,
             pressed_keys: std::collections::HashSet::new(),
@@ -645,52 +649,49 @@ impl App {
 
         // Placing pleb mode
         if self.placing_pleb {
-            let (wx, wy) = (wx, wy);  // already computed
-            if is_walkable_pos(&self.grid_data, wx, wy) {
-                if self.pleb.is_some() {
-                    let p = self.pleb.as_mut().unwrap();
-                    p.x = wx;
-                    p.y = wy;
-                    p.path.clear();
-                    p.path_idx = 0;
-                } else {
-                    self.pleb = Some(Pleb {
-                        x: wx, y: wy,
-                        angle: 0.0,
-                        path: Vec::new(),
-                        path_idx: 0,
-                        torch_on: false,
-                        headlight_on: true,
-                    });
-                }
-                self.pleb_selected = true;
+            if is_walkable_pos(&self.grid_data, wx, wy) && self.plebs.len() < MAX_PLEBS {
+                let id = self.next_pleb_id;
+                self.next_pleb_id += 1;
+                let name = random_name(id as u32);
+                let mut p = Pleb::new(id, name, wx, wy, id as u32 * 7919 + 42);
+                p.headlight_on = true;
+                self.plebs.push(p);
+                self.selected_pleb = Some(self.plebs.len() - 1);
                 self.placing_pleb = false;
-                self.show_pleb_help = true; // show help on first placement
+                self.show_pleb_help = self.plebs.len() == 1; // show help on first ever
             }
             return;
         }
 
         // Pleb interaction (before build tools)
         if self.build_tool == BuildTool::None {
-            let pleb_click = self.pleb.as_ref().map(|p| {
-                ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt() < 0.5
-            }).unwrap_or(false);
+            // Check if clicking on any pleb
+            let mut clicked_pleb = None;
+            for (i, p) in self.plebs.iter().enumerate() {
+                if ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt() < 0.5 {
+                    clicked_pleb = Some(i);
+                    break;
+                }
+            }
 
-            if pleb_click {
-                self.pleb_selected = true;
+            if let Some(idx) = clicked_pleb {
+                self.selected_pleb = Some(idx);
                 return;
             }
 
-            if self.pleb_selected && self.pleb.is_some() {
-                let start_x = self.pleb.as_ref().unwrap().x.floor() as i32;
-                let start_y = self.pleb.as_ref().unwrap().y.floor() as i32;
-                let path = astar_path(&self.grid_data, (start_x, start_y), (bx, by));
-                if !path.is_empty() {
-                    let p = self.pleb.as_mut().unwrap();
-                    p.path = path;
-                    p.path_idx = 1;
+            // Click-to-move for selected pleb
+            if let Some(sel) = self.selected_pleb {
+                if sel < self.plebs.len() {
+                    let p = &self.plebs[sel];
+                    let start_x = p.x.floor() as i32;
+                    let start_y = p.y.floor() as i32;
+                    let path = astar_path(&self.grid_data, (start_x, start_y), (bx, by));
+                    if !path.is_empty() {
+                        self.plebs[sel].path = path;
+                        self.plebs[sel].path_idx = 1;
+                    }
+                    return;
                 }
-                return;
             }
         }
 
@@ -1078,6 +1079,14 @@ impl App {
             mapped_at_creation: false,
         });
         queue.write_buffer(&material_buffer, 0, bytemuck::cast_slice(&material_data));
+
+        // Pleb storage buffer (up to MAX_PLEBS, updated each frame)
+        let pleb_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pleb-buffer"),
+            size: (MAX_PLEBS * std::mem::size_of::<GpuPleb>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         // Block temperature buffer (256x256 f32, initialized to 15°C ambient)
         let block_temp_data = vec![15.0f32; (GRID_W * GRID_H) as usize];
@@ -1784,6 +1793,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Pleb data buffer (storage buffer, read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1813,6 +1833,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1831,6 +1852,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1849,6 +1871,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1867,6 +1890,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -2085,6 +2109,7 @@ impl App {
             grid_buffer,
             sprite_buffer,
             material_buffer,
+            pleb_buffer,
             // Fluid simulation GPU resources
             fluid_params_buffer,
             fluid_vel: [fluid_vel_a, fluid_vel_b],
@@ -2212,6 +2237,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2230,6 +2256,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2248,6 +2275,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2266,6 +2294,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2428,11 +2457,15 @@ impl App {
         }
 
         // --- Pleb update ---
-        if let Some(ref mut pleb) = self.pleb {
-            let move_speed = 3.0f32;
+        // --- Update all plebs ---
+        let move_speed = 3.0f32;
+        let sel = self.selected_pleb;
 
-            // WASD direct movement (always active when pleb exists)
-            {
+        for (i, pleb) in self.plebs.iter_mut().enumerate() {
+            let is_selected = sel == Some(i);
+
+            // WASD direct movement (only for selected pleb)
+            if is_selected {
                 let mut dx = 0.0f32;
                 let mut dy = 0.0f32;
                 if self.pressed_keys.contains(&KeyCode::KeyW) { dy -= 1.0; }
@@ -2449,23 +2482,20 @@ impl App {
                     if is_walkable_pos(&self.grid_data, nx, ny) {
                         pleb.x = nx;
                         pleb.y = ny;
-                        // Collide with physics bodies (pushed away from boxes)
                         let (cx, cy) = pleb_body_collision(&self.physics_bodies, pleb.x, pleb.y);
                         pleb.x = cx;
                         pleb.y = cy;
                     }
-                    pleb.path.clear(); // cancel A* path
+                    pleb.path.clear();
                     pleb.path_idx = 0;
                 }
-            }
 
-            // Q/E rotation (when selected)
-            if self.pleb_selected {
+                // Q/E rotation
                 if self.pressed_keys.contains(&KeyCode::KeyQ) { pleb.angle -= 2.0 * dt; }
                 if self.pressed_keys.contains(&KeyCode::KeyE) { pleb.angle += 2.0 * dt; }
             }
 
-            // A* path following
+            // A* path following (all plebs)
             if pleb.path_idx < pleb.path.len() {
                 let (tx, ty) = pleb.path[pleb.path_idx];
                 let target_x = tx as f32 + 0.5;
@@ -2487,8 +2517,10 @@ impl App {
                     }
                 }
             }
+        }
 
-            // Auto-open doors near pleb
+        // Auto-open doors near ANY pleb
+        for pleb in &self.plebs {
             let pbx = pleb.x.floor() as i32;
             let pby = pleb.y.floor() as i32;
             for ddy in -1..=1 {
@@ -2509,12 +2541,25 @@ impl App {
                     }
                 }
             }
+        }
 
-            // Update camera uniform with pleb position
+        // Update camera uniform with selected pleb (for backward compat with single-pleb shader)
+        // TODO: replace with pleb buffer for multi-pleb rendering
+        if let Some(sel_idx) = self.selected_pleb {
+            if let Some(pleb) = self.plebs.get(sel_idx) {
+                self.camera.pleb_x = pleb.x;
+                self.camera.pleb_y = pleb.y;
+                self.camera.pleb_angle = pleb.angle;
+                self.camera.pleb_selected = 1.0;
+                self.camera.pleb_torch = if pleb.torch_on { 1.0 } else { 0.0 };
+                self.camera.pleb_headlight = if pleb.headlight_on { 1.0 } else { 0.0 };
+            }
+        } else if let Some(pleb) = self.plebs.first() {
+            // Show first pleb even if not selected (for lighting)
             self.camera.pleb_x = pleb.x;
             self.camera.pleb_y = pleb.y;
             self.camera.pleb_angle = pleb.angle;
-            self.camera.pleb_selected = if self.pleb_selected { 1.0 } else { 0.0 };
+            self.camera.pleb_selected = 0.0;
             self.camera.pleb_torch = if pleb.torch_on { 1.0 } else { 0.0 };
             self.camera.pleb_headlight = if pleb.headlight_on { 1.0 } else { 0.0 };
         } else {
@@ -2527,12 +2572,13 @@ impl App {
         // Auto-close doors after 2 seconds
         {
             let current_time = self.time_of_day;
-            let pleb_pos = self.pleb.as_ref().map(|p| (p.x, p.y));
+            // Check if any pleb is near auto-doors
+            let pleb_positions: Vec<(f32, f32)> = self.plebs.iter().map(|p| (p.x, p.y)).collect();
             let mut doors_to_close = Vec::new();
             self.auto_doors.retain(|&(dx, dy, opened_time)| {
                 let elapsed = (current_time - opened_time).abs();
                 let should_close = elapsed > 2.0;
-                let pleb_nearby = pleb_pos.map_or(false, |(px, py)| {
+                let pleb_nearby = pleb_positions.iter().any(|&(px, py)| {
                     ((dx as f32 + 0.5 - px).powi(2) + (dy as f32 + 0.5 - py).powi(2)).sqrt() < 1.5
                 });
                 if should_close && !pleb_nearby {
@@ -2554,7 +2600,8 @@ impl App {
 
         // --- Physics tick ---
         {
-            let pleb_data = self.pleb.as_ref().map(|p| {
+            let sel_pleb = self.selected_pleb.and_then(|i| self.plebs.get(i));
+            let pleb_data = sel_pleb.map(|p| {
                 let pvx = if self.pressed_keys.contains(&KeyCode::KeyD) { 3.0 }
                     else if self.pressed_keys.contains(&KeyCode::KeyA) { -3.0 }
                     else { 0.0 };
@@ -2615,6 +2662,15 @@ impl App {
         // Update camera uniform
         gfx.queue
             .write_buffer(&gfx.camera_buffer, 0, bytemuck::bytes_of(&self.camera));
+
+        // Upload pleb data to GPU buffer
+        {
+            let mut gpu_plebs = [GpuPleb::zeroed(); MAX_PLEBS];
+            for (i, p) in self.plebs.iter().enumerate().take(MAX_PLEBS) {
+                gpu_plebs[i] = p.to_gpu(self.selected_pleb == Some(i));
+            }
+            gfx.queue.write_buffer(&gfx.pleb_buffer, 0, bytemuck::cast_slice(&gpu_plebs));
+        }
 
         let frame = match gfx.surface.get_current_texture() {
             Ok(frame) => frame,
@@ -2942,7 +2998,8 @@ impl App {
                             }
                             "Physics" => {
                                 btn!(BuildTool::WoodBox, "Wood Box");
-                                if ui.button(egui::RichText::new("Place Jeff").size(s)).clicked() {
+                                let pleb_label = format!("Add Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
+                                if ui.button(egui::RichText::new(pleb_label).size(s)).clicked() {
                                     self.placing_pleb = !self.placing_pleb;
                                     if self.placing_pleb { *tool = BuildTool::None; }
                                 }
@@ -2971,52 +3028,75 @@ impl App {
         }
 
         // --- Colonist bar (bottom center, like Rimworld) ---
-        if self.pleb.is_some() {
+        if !self.plebs.is_empty() {
+            // Collect pleb data for display (avoid borrow issues)
+            let pleb_display: Vec<(usize, String, [f32;3], [f32;3], [f32;3], bool, bool)> = self.plebs.iter().enumerate().map(|(i, p)| {
+                let a = &p.appearance;
+                (i, p.name.clone(),
+                 [a.shirt_r, a.shirt_g, a.shirt_b],
+                 [a.skin_r, a.skin_g, a.skin_b],
+                 [a.hair_r, a.hair_g, a.hair_b],
+                 p.torch_on, p.headlight_on)
+            }).collect();
+
             egui::Area::new(egui::Id::new("colonist_bar"))
                 .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -10.0])
                 .show(&egui_state.ctx, |ui| {
                     egui::Frame::window(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(48.0), egui::Sense::click());
-                            let painter = ui.painter_at(rect);
-                            let bg = if self.pleb_selected {
-                                egui::Color32::from_rgb(60, 100, 60)
-                            } else {
-                                egui::Color32::from_rgb(50, 55, 65)
-                            };
-                            painter.rect_filled(rect, 4.0, bg);
-                            let center = rect.center();
-                            painter.circle_filled(center + egui::Vec2::new(0.0, 4.0), 14.0, egui::Color32::from_rgb(50, 110, 180));
-                            painter.circle_filled(center + egui::Vec2::new(0.0, -6.0), 8.0, egui::Color32::from_rgb(215, 180, 140));
-                            painter.text(
-                                rect.center_bottom() + egui::Vec2::new(0.0, -2.0),
-                                egui::Align2::CENTER_BOTTOM,
-                                "Jeff",
-                                egui::FontId::proportional(9.0),
-                                egui::Color32::WHITE,
-                            );
-                            let bar_rect = egui::Rect::from_min_size(
-                                rect.left_bottom() + egui::Vec2::new(2.0, -6.0),
-                                egui::Vec2::new(rect.width() - 4.0, 3.0),
-                            );
-                            painter.rect_filled(bar_rect, 1.0, egui::Color32::from_rgb(40, 40, 40));
-                            painter.rect_filled(
-                                egui::Rect::from_min_size(bar_rect.min, egui::Vec2::new(bar_rect.width() * 1.0, bar_rect.height())),
-                                1.0, egui::Color32::from_rgb(80, 200, 80),
-                            );
-                            if response.clicked() {
-                                self.pleb_selected = !self.pleb_selected;
+                            for &(idx, ref name, shirt, skin, hair, torch, headlight) in &pleb_display {
+                                let is_sel = self.selected_pleb == Some(idx);
+                                let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(48.0, 56.0), egui::Sense::click());
+                                let painter = ui.painter_at(rect);
+
+                                // Background
+                                let bg = if is_sel {
+                                    egui::Color32::from_rgb(60, 100, 60)
+                                } else {
+                                    egui::Color32::from_rgb(50, 55, 65)
+                                };
+                                painter.rect_filled(rect, 4.0, bg);
+
+                                // Body (shirt color)
+                                let center = rect.center();
+                                let shirt_c = egui::Color32::from_rgb(
+                                    (shirt[0] * 255.0) as u8, (shirt[1] * 255.0) as u8, (shirt[2] * 255.0) as u8);
+                                painter.circle_filled(center + egui::Vec2::new(0.0, 4.0), 12.0, shirt_c);
+
+                                // Head (skin color)
+                                let skin_c = egui::Color32::from_rgb(
+                                    (skin[0] * 255.0) as u8, (skin[1] * 255.0) as u8, (skin[2] * 255.0) as u8);
+                                painter.circle_filled(center + egui::Vec2::new(0.0, -6.0), 7.0, skin_c);
+
+                                // Hair (on top of head)
+                                let hair_c = egui::Color32::from_rgb(
+                                    (hair[0] * 255.0) as u8, (hair[1] * 255.0) as u8, (hair[2] * 255.0) as u8);
+                                painter.circle_filled(center + egui::Vec2::new(0.0, -10.0), 5.0, hair_c);
+
+                                // Name
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -2.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    name,
+                                    egui::FontId::proportional(8.0),
+                                    egui::Color32::WHITE,
+                                );
+
+                                // Health bar (placeholder: full green)
+                                let bar_rect = egui::Rect::from_min_size(
+                                    rect.left_bottom() + egui::Vec2::new(2.0, -5.0),
+                                    egui::Vec2::new(rect.width() - 4.0, 2.0),
+                                );
+                                painter.rect_filled(bar_rect, 1.0, egui::Color32::from_rgb(40, 40, 40));
+                                painter.rect_filled(
+                                    egui::Rect::from_min_size(bar_rect.min, egui::Vec2::new(bar_rect.width(), bar_rect.height())),
+                                    1.0, egui::Color32::from_rgb(80, 200, 80),
+                                );
+
+                                if response.clicked() {
+                                    self.selected_pleb = if is_sel { None } else { Some(idx) };
+                                }
                             }
-                            let pleb = self.pleb.as_ref().unwrap();
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 1.0;
-                                ui.label(egui::RichText::new("Jeff").strong().size(11.0));
-                                let torch = if pleb.torch_on { "\u{1f525} On" } else { "\u{1f525} Off" };
-                                let lamp = if pleb.headlight_on { "\u{1f4a1} On" } else { "\u{1f4a1} Off" };
-                                ui.label(egui::RichText::new(torch).size(9.0));
-                                ui.label(egui::RichText::new(lamp).size(9.0));
-                                ui.label(egui::RichText::new("T/G toggle | WASD move").size(8.0).weak());
-                            });
                         });
                     });
                 });
@@ -3388,8 +3468,9 @@ impl App {
             painter.circle_filled(egui::pos2(center_sx, center_sy), radius, color);
         }
 
-        // Draw pleb A* path line
-        if let Some(ref pleb) = self.pleb {
+        // Draw selected pleb A* path line
+        let sel_pleb_ref = self.selected_pleb.and_then(|i| self.plebs.get(i));
+        if let Some(pleb) = sel_pleb_ref {
             if pleb.path_idx < pleb.path.len() {
                 let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
                 let painter = egui_state.ctx.layer_painter(egui::LayerId::new(
@@ -4032,8 +4113,8 @@ impl ApplicationHandler for App {
                             self.placing_pleb = false;
                             if self.debug_mode {
                                 self.debug_mode = false;
-                            } else if self.pleb_selected {
-                                self.pleb_selected = false;
+                            } else if self.selected_pleb.is_some() {
+                                self.selected_pleb = None;
                             } else if self.build_tool != BuildTool::None {
                                 self.build_tool = BuildTool::None;
                             }
@@ -4054,7 +4135,7 @@ impl ApplicationHandler for App {
                             log::info!("Time: {}", if self.time_paused { "paused" } else { "playing" });
                         }
                         PhysicalKey::Code(KeyCode::KeyQ) => {
-                            if !self.pleb_selected {
+                            if !self.selected_pleb.is_some() {
                                 if matches!(self.build_tool, BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet) {
                                     self.build_rotation = (self.build_rotation + 3) % 4;
                                 } else {
@@ -4063,7 +4144,7 @@ impl ApplicationHandler for App {
                             }
                         }
                         PhysicalKey::Code(KeyCode::KeyE) => {
-                            if !self.pleb_selected {
+                            if !self.selected_pleb.is_some() {
                                 if matches!(self.build_tool, BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet) {
                                     self.build_rotation = (self.build_rotation + 1) % 4;
                                 } else {
@@ -4072,20 +4153,24 @@ impl ApplicationHandler for App {
                             }
                         }
                         PhysicalKey::Code(KeyCode::KeyT) => {
-                            if let Some(ref mut pleb) = self.pleb {
-                                pleb.torch_on = !pleb.torch_on;
-                                log::info!("Torch {}", if pleb.torch_on { "ON" } else { "OFF" });
+                            if let Some(idx) = self.selected_pleb {
+                                if let Some(pleb) = self.plebs.get_mut(idx) {
+                                    pleb.torch_on = !pleb.torch_on;
+                                    log::info!("{} torch {}", pleb.name, if pleb.torch_on { "ON" } else { "OFF" });
+                                }
                             }
                         }
                         PhysicalKey::Code(KeyCode::KeyG) => {
-                            if let Some(ref mut pleb) = self.pleb {
-                                pleb.headlight_on = !pleb.headlight_on;
-                                log::info!("Headlight {}", if pleb.headlight_on { "ON" } else { "OFF" });
+                            if let Some(idx) = self.selected_pleb {
+                                if let Some(pleb) = self.plebs.get_mut(idx) {
+                                    pleb.headlight_on = !pleb.headlight_on;
+                                    log::info!("{} headlight {}", pleb.name, if pleb.headlight_on { "ON" } else { "OFF" });
+                                }
                             }
                         }
                         PhysicalKey::Code(KeyCode::KeyF) => {
-                            // Throw nearest box in Jeff's facing direction
-                            if let Some(ref pleb) = self.pleb {
+                            // Throw nearest box in selected pleb's facing direction
+                            if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
                                 let px = pleb.x;
                                 let py = pleb.y;
                                 let angle = pleb.angle;

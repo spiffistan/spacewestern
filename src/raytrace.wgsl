@@ -64,6 +64,19 @@ struct Camera {
 @group(0) @binding(9) var fluid_pres_tex: texture_2d<f32>;
 @group(0) @binding(10) var prev_output: texture_2d<f32>;
 @group(0) @binding(11) var<storage, read> materials: array<GpuMaterial>;
+@group(0) @binding(12) var<storage, read> plebs: array<GpuPleb>;
+
+// --- Pleb struct (must match Rust GpuPleb layout exactly) ---
+struct GpuPleb {
+    x: f32, y: f32, angle: f32, selected: f32,
+    torch: f32, headlight: f32, _pad0: f32, _pad1: f32,
+    skin_r: f32, skin_g: f32, skin_b: f32, hair_style: f32,
+    hair_r: f32, hair_g: f32, hair_b: f32, _pad2: f32,
+    shirt_r: f32, shirt_g: f32, shirt_b: f32, _pad3: f32,
+    pants_r: f32, pants_g: f32, pants_b: f32, _pad4: f32,
+};
+
+const MAX_PLEBS: u32 = 16u;
 
 // --- Material struct (must match Rust GpuMaterial layout exactly) ---
 struct GpuMaterial {
@@ -1746,38 +1759,41 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = mix(color, color * vec3<f32>(0.85, 0.88, 0.95), 0.3);
     }
 
-    // --- Pleb rendering ---
-    if camera.pleb_x > 0.5 {
-        let pdx = world_x - camera.pleb_x;
-        let pdy = world_y - camera.pleb_y;
+    // --- Pleb rendering (all plebs from buffer) ---
+    for (var pi: u32 = 0u; pi < MAX_PLEBS; pi++) {
+        let p = plebs[pi];
+        if p.x < 0.5 && p.y < 0.5 { continue; } // empty slot
+
+        let pdx = world_x - p.x;
+        let pdy = world_y - p.y;
         let pdist = length(vec2(pdx, pdy));
 
         // Torch: warm point light with wall occlusion
-        if camera.pleb_torch > 0.5 && pdist < 6.0 {
-            let vis = trace_glow_visibility(world_x, world_y, camera.pleb_x, camera.pleb_y, 1.0);
+        if p.torch > 0.5 && pdist < 6.0 {
+            let vis = trace_glow_visibility(world_x, world_y, p.x, p.y, 1.0);
             if vis > 0.01 {
                 let torch_atten = 1.0 / (1.0 + pdist * 0.4 + pdist * pdist * 0.08);
-                let flicker = sin(camera.time * 8.3) * 0.15 + sin(camera.time * 13.1) * 0.1 + 0.85;
+                let flicker = sin(camera.time * 8.3 + f32(pi) * 2.0) * 0.15 + sin(camera.time * 13.1) * 0.1 + 0.85;
                 color += vec3(1.0, 0.55, 0.15) * torch_atten * 0.5 * flicker * vis;
             }
         }
 
         // Headlight: directional cone with wall occlusion
-        if camera.pleb_headlight > 0.5 && pdist > 0.5 && pdist < 10.0 {
-            let vis = trace_glow_visibility(world_x, world_y, camera.pleb_x, camera.pleb_y, 1.5);
+        if p.headlight > 0.5 && pdist > 0.5 && pdist < 10.0 {
+            let vis = trace_glow_visibility(world_x, world_y, p.x, p.y, 1.5);
             if vis > 0.01 {
                 let to_pixel = normalize(vec2(pdx, pdy));
-                let light_dir = vec2(cos(camera.pleb_angle), sin(camera.pleb_angle));
+                let light_dir = vec2(cos(p.angle), sin(p.angle));
                 let cone = smoothstep(0.4, 0.85, dot(to_pixel, light_dir));
                 let dist_atten = 1.0 / (1.0 + pdist * 0.2 + pdist * pdist * 0.04);
                 color += vec3(0.85, 0.9, 1.0) * cone * dist_atten * 0.6 * vis;
             }
         }
 
-        // Body rendering (close range)
+        // Body rendering — matches portrait (shirt body, skin head, hair)
         if pdist < 0.45 {
-            // Selection ring (pulsing)
-            if camera.pleb_selected > 0.5 {
+            // Selection ring (pulsing green)
+            if p.selected > 0.5 {
                 let ring_inner = 0.38;
                 let ring_outer = 0.44;
                 if pdist > ring_inner && pdist < ring_outer {
@@ -1786,22 +1802,39 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
 
-            // Body: blue circle
-            if pdist < 0.35 {
-                let body_shade = 1.0 - pdist / 0.35 * 0.3;
-                color = vec3(0.2, 0.45, 0.75) * body_shade;
+            // Pants (lower body) — outer ring
+            if pdist < 0.35 && pdist > 0.20 {
+                let shade = 1.0 - (pdist - 0.20) / 0.15 * 0.3;
+                color = vec3(p.pants_r, p.pants_g, p.pants_b) * shade;
             }
 
-            // Head: skin-colored circle
-            if pdist < 0.15 {
-                color = vec3(0.85, 0.70, 0.55);
+            // Shirt (upper body) — middle area
+            if pdist < 0.28 {
+                let shade = 1.0 - pdist / 0.28 * 0.2;
+                color = vec3(p.shirt_r, p.shirt_g, p.shirt_b) * shade;
             }
 
-            // Direction indicator: white dot in front
-            let front_x = camera.pleb_x + cos(camera.pleb_angle) * 0.28;
-            let front_y = camera.pleb_y + sin(camera.pleb_angle) * 0.28;
+            // Head (skin) — offset slightly north (toward facing direction)
+            let head_offset = vec2(cos(p.angle) * 0.08, sin(p.angle) * 0.08);
+            let head_dist = length(vec2(pdx - head_offset.x, pdy - head_offset.y));
+            if head_dist < 0.14 {
+                let head_shade = 1.0 - head_dist / 0.14 * 0.15;
+                color = vec3(p.skin_r, p.skin_g, p.skin_b) * head_shade;
+            }
+
+            // Hair (on top of head, offset further in facing direction)
+            let hair_offset = vec2(cos(p.angle) * 0.14, sin(p.angle) * 0.14);
+            let hair_dist = length(vec2(pdx - hair_offset.x, pdy - hair_offset.y));
+            let hair_r = select(0.08, 0.12, p.hair_style > 1.5); // longer hair = bigger
+            if hair_dist < hair_r {
+                color = vec3(p.hair_r, p.hair_g, p.hair_b);
+            }
+
+            // Direction indicator: small bright dot at front edge
+            let front_x = p.x + cos(p.angle) * 0.30;
+            let front_y = p.y + sin(p.angle) * 0.30;
             let front_dist = length(vec2(world_x - front_x, world_y - front_y));
-            if front_dist < 0.07 {
+            if front_dist < 0.05 {
                 color = vec3(0.95, 0.95, 1.0);
             }
         }

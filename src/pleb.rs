@@ -1,15 +1,145 @@
-//! Pleb (colonist) — struct, movement, and A* pathfinding.
+//! Pleb (colonist) — struct, appearance, movement, and A* pathfinding.
 
 use crate::grid::{GRID_W, GRID_H};
 
+/// Appearance data for rendering a pleb (Rimworld-style).
+#[derive(Clone, Debug)]
+pub struct PlebAppearance {
+    pub skin_r: f32, pub skin_g: f32, pub skin_b: f32,
+    pub hair_r: f32, pub hair_g: f32, pub hair_b: f32,
+    pub shirt_r: f32, pub shirt_g: f32, pub shirt_b: f32,
+    pub pants_r: f32, pub pants_g: f32, pub pants_b: f32,
+    pub hair_style: u32,  // 0=bald, 1=short, 2=medium, 3=long
+}
+
+impl PlebAppearance {
+    /// Generate random appearance from a seed.
+    pub fn random(seed: u32) -> Self {
+        let hash = |i: u32| -> f32 {
+            let h = seed.wrapping_mul(2654435761).wrapping_add(i.wrapping_mul(1013904223));
+            (h & 0xFFFF) as f32 / 65535.0
+        };
+
+        // Skin tone range (warm tones)
+        let skin_base = hash(0);
+        let skin_r = 0.65 + skin_base * 0.30;
+        let skin_g = 0.50 + skin_base * 0.25;
+        let skin_b = 0.35 + skin_base * 0.20;
+
+        // Hair color
+        let hair_base = hash(1);
+        let (hair_r, hair_g, hair_b) = if hair_base < 0.3 {
+            (0.15 + hash(2) * 0.15, 0.10 + hash(2) * 0.10, 0.05) // dark brown/black
+        } else if hair_base < 0.6 {
+            (0.45 + hash(2) * 0.15, 0.30 + hash(2) * 0.10, 0.15) // brown
+        } else if hair_base < 0.8 {
+            (0.70 + hash(2) * 0.20, 0.55 + hash(2) * 0.15, 0.20) // blonde
+        } else {
+            (0.55 + hash(2) * 0.15, 0.15, 0.10) // red
+        };
+
+        // Shirt color (varied)
+        let shirt_hue = hash(3);
+        let (shirt_r, shirt_g, shirt_b) = if shirt_hue < 0.2 {
+            (0.25, 0.40, 0.65) // blue
+        } else if shirt_hue < 0.4 {
+            (0.55, 0.30, 0.25) // red/brown
+        } else if shirt_hue < 0.6 {
+            (0.30, 0.50, 0.30) // green
+        } else if shirt_hue < 0.8 {
+            (0.55, 0.55, 0.50) // gray
+        } else {
+            (0.60, 0.50, 0.30) // tan
+        };
+
+        // Pants color (muted)
+        let pants_hue = hash(4);
+        let (pants_r, pants_g, pants_b) = if pants_hue < 0.4 {
+            (0.25, 0.25, 0.35) // dark blue/gray
+        } else if pants_hue < 0.7 {
+            (0.35, 0.30, 0.20) // brown
+        } else {
+            (0.30, 0.30, 0.30) // dark gray
+        };
+
+        let hair_style = (hash(5) * 4.0) as u32;
+
+        PlebAppearance {
+            skin_r, skin_g, skin_b,
+            hair_r, hair_g, hair_b,
+            shirt_r, shirt_g, shirt_b,
+            pants_r, pants_g, pants_b,
+            hair_style,
+        }
+    }
+}
+
+/// GPU-side pleb data for rendering (packed for storage buffer).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuPleb {
+    pub x: f32, pub y: f32, pub angle: f32, pub selected: f32,
+    pub torch: f32, pub headlight: f32, pub _pad0: f32, pub _pad1: f32,
+    pub skin_r: f32, pub skin_g: f32, pub skin_b: f32, pub hair_style: f32,
+    pub hair_r: f32, pub hair_g: f32, pub hair_b: f32, pub _pad2: f32,
+    pub shirt_r: f32, pub shirt_g: f32, pub shirt_b: f32, pub _pad3: f32,
+    pub pants_r: f32, pub pants_g: f32, pub pants_b: f32, pub _pad4: f32,
+}
+
 pub struct Pleb {
+    pub id: usize,
+    pub name: String,
     pub x: f32,
     pub y: f32,
-    pub angle: f32,         // facing direction in radians
-    pub path: Vec<(i32, i32)>,  // A* path waypoints
+    pub angle: f32,
+    pub path: Vec<(i32, i32)>,
     pub path_idx: usize,
-    pub torch_on: bool,     // fire torch (T to toggle)
-    pub headlight_on: bool, // directional headlamp (G to toggle)
+    pub torch_on: bool,
+    pub headlight_on: bool,
+    pub appearance: PlebAppearance,
+}
+
+impl Pleb {
+    pub fn new(id: usize, name: String, x: f32, y: f32, seed: u32) -> Self {
+        Pleb {
+            id, name, x, y,
+            angle: 0.0,
+            path: Vec::new(),
+            path_idx: 0,
+            torch_on: false,
+            headlight_on: false,
+            appearance: PlebAppearance::random(seed),
+        }
+    }
+
+    pub fn to_gpu(&self, selected: bool) -> GpuPleb {
+        let a = &self.appearance;
+        GpuPleb {
+            x: self.x, y: self.y, angle: self.angle,
+            selected: if selected { 1.0 } else { 0.0 },
+            torch: if self.torch_on { 1.0 } else { 0.0 },
+            headlight: if self.headlight_on { 1.0 } else { 0.0 },
+            _pad0: 0.0, _pad1: 0.0,
+            skin_r: a.skin_r, skin_g: a.skin_g, skin_b: a.skin_b,
+            hair_style: a.hair_style as f32,
+            hair_r: a.hair_r, hair_g: a.hair_g, hair_b: a.hair_b, _pad2: 0.0,
+            shirt_r: a.shirt_r, shirt_g: a.shirt_g, shirt_b: a.shirt_b, _pad3: 0.0,
+            pants_r: a.pants_r, pants_g: a.pants_g, pants_b: a.pants_b, _pad4: 0.0,
+        }
+    }
+}
+
+pub const MAX_PLEBS: usize = 16;
+
+/// Names pool for random pleb names.
+const NAMES: &[&str] = &[
+    "Jeff", "Sarah", "Marcus", "Elena", "Dmitri", "Yuki", "Carlos", "Amara",
+    "Olaf", "Priya", "Liam", "Zara", "Kento", "Ingrid", "Rashid", "Mei",
+];
+
+pub fn random_name(seed: u32) -> String {
+    let idx = (seed.wrapping_mul(2654435761) >> 16) as usize % NAMES.len();
+    NAMES[idx].to_string()
 }
 
 /// Check if a pleb can stand at continuous position (x, y) using 4-corner bounding box.
