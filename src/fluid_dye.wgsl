@@ -305,7 +305,7 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         let this_block = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         let this_bt = this_block & 0xFFu;
         let this_solid = this_bt == 1u || this_bt == 4u || this_bt == 14u
-            || (this_bt >= 21u && this_bt <= 25u); // all wall types
+            || (this_bt >= 21u && this_bt <= 25u) || this_bt == 35u; // all wall types
         let this_pipe = this_bt >= 15u && this_bt <= 20u;
         if !this_solid && !this_pipe {
             // This is an air cell — check if adjacent to hot walls or pipes
@@ -320,7 +320,7 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let nb = grid[u32(ny) * gw + u32(nx)];
                 let nbt = nb & 0xFFu;
                 let n_solid = nbt == 1u || nbt == 4u || nbt == 14u
-                    || (nbt >= 21u && nbt <= 25u);
+                    || (nbt >= 21u && nbt <= 25u) || nbt == 35u;
                 let n_pipe = nbt >= 15u && nbt <= 20u;
 
                 if n_pipe {
@@ -347,6 +347,7 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
                     else if nbt == 23u { conductivity = 0.010; } // sandstone
                     else if nbt == 24u { conductivity = 0.015; } // granite
                     else if nbt == 25u { conductivity = 0.008; } // limestone
+                    else if nbt == 35u { conductivity = 0.004; } // mud wall
                     let diff = opp_temp - result.a;
                     result.a += diff * conductivity * 0.5;
                 }

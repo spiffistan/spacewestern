@@ -36,6 +36,7 @@ pub enum BuildTool {
     BerryBush,
     Dig,
     StorageCrate,
+    MudWall,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

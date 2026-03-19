@@ -1507,6 +1507,46 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
             }
         }
 
+        // Insulated wall face: show insulation core between outer panels
+        if btype == 14u {
+            let core_top = 0.2;
+            let core_bot = 0.85;
+            let in_core_face = wall_face_t > core_top && wall_face_t < core_bot;
+            if in_core_face {
+                let ft = (wall_face_t - core_top) / (core_bot - core_top);
+                let fiber = fract(sin(fx * 47.3 + ft * 89.1) * 43758.5);
+                face_color = vec3<f32>(0.85, 0.72, 0.52);
+                if fiber > 0.5 {
+                    face_color = mix(face_color, vec3<f32>(0.88, 0.62, 0.58), 0.3);
+                }
+                // Panel divider lines
+                if abs(ft - 0.5) < 0.02 { face_color -= vec3<f32>(0.06); }
+            } else {
+                face_color = vec3<f32>(0.86, 0.86, 0.88);
+            }
+        }
+
+        // Mud wall face: rounded profile, craggy with straw
+        if btype == 35u {
+            // Rounded profile: bulges out in the middle
+            let bulge = sin(wall_face_t * 3.14159) * 0.12;
+            let mud_v = fract(sin(fx * 37.1 + wall_face_t * 73.7) * 43758.5) * 0.06 - 0.03;
+            face_color = vec3<f32>(0.50 + mud_v, 0.38 + mud_v * 0.8, 0.24 + mud_v * 0.5);
+            // Brightness from bulge (center of face is closer to viewer = brighter)
+            face_color *= 0.85 + bulge;
+            // Craggy cracks
+            let fc = abs(fract(fx * 4.0 + wall_face_t * 0.5 + mud_v * 3.0) - 0.5);
+            if fc < 0.05 { face_color *= 0.8; }
+            // Straw fiber
+            let fs = fract(sin(fx * 211.1 + wall_face_t * 137.3) * 43758.5);
+            if fs > 0.93 { face_color = mix(face_color, vec3<f32>(0.62, 0.55, 0.33), 0.4); }
+            // Rounded top: taper at the top of the wall
+            if wall_face_t < 0.08 {
+                let top_round = wall_face_t / 0.08;
+                face_color *= 0.7 + top_round * 0.3;
+            }
+        }
+
         // South face is always mostly in shade (sun stays north in our model).
         // Slight indirect bounce: south face catches a tiny bit of reflected ground light.
         let indirect = sun_color * camera.sun_intensity * 0.12;
@@ -1927,6 +1967,64 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
             }
         } else {
             color = ground;
+        }
+    } else if btype == 14u {
+        // Insulated wall: outer shell with fiberglass insulation core
+        let edge = 0.15; // outer shell thickness
+        let in_core = fx > edge && fx < (1.0 - edge) && fy > edge && fy < (1.0 - edge);
+        if in_core {
+            // Insulation core: pink/yellow fiberglass with fibrous texture
+            let fiber1 = fract(sin(world_x * 47.3 + world_y * 89.1) * 43758.5);
+            let fiber2 = fract(sin(world_x * 131.7 + world_y * 53.9) * 27183.6);
+            let fiber_line = abs(fract(fx * 8.0 + fiber1 * 0.3) - 0.5) +
+                             abs(fract(fy * 6.0 + fiber2 * 0.3) - 0.5);
+            let fiber_shade = smoothstep(0.3, 0.7, fiber_line) * 0.08;
+            color = vec3<f32>(0.88, 0.75, 0.55) + vec3<f32>(fiber_shade, -fiber_shade * 0.5, -fiber_shade);
+            // Pink tint patches
+            let pink = fract(sin(world_x * 23.1 + world_y * 67.3) * 31415.9);
+            if pink > 0.6 {
+                color = mix(color, vec3<f32>(0.90, 0.65, 0.60), 0.3);
+            }
+        } else {
+            // Outer shell: light gray with subtle panel lines
+            color = vec3<f32>(0.88, 0.88, 0.90);
+            let panel_x = abs(fract(fx * 2.0) - 0.5);
+            let panel_y = abs(fract(fy * 2.0) - 0.5);
+            if panel_x < 0.03 || panel_y < 0.03 {
+                color -= vec3<f32>(0.05);
+            }
+        }
+    } else if btype == 35u {
+        // Mud wall: organic rounded shape with craggy surface texture
+        let cx = fx - 0.5;
+        let cy = fy - 0.5;
+        // Rounded shape — distance from center with noise for cragginess
+        let crag1 = fract(sin(world_x * 37.1 + world_y * 73.7) * 43758.5) * 0.06;
+        let crag2 = fract(sin(world_x * 91.3 + world_y * 29.1) * 27183.6) * 0.04;
+        let crag3 = fract(sin(world_x * 17.9 - world_y * 113.3) * 61283.1) * 0.03;
+        let dist = length(vec2<f32>(cx, cy)) + crag1 + crag2 - 0.05;
+        // Rounded top: center is highest, edges are lower
+        let height_fade = 1.0 - smoothstep(0.2, 0.45, dist);
+        // Base mud color with variation
+        let mud_var = (crag1 - 0.03) * 3.0;
+        color = vec3<f32>(0.52 + mud_var, 0.40 + mud_var * 0.8, 0.25 + mud_var * 0.5);
+        // Craggy surface: darker cracks
+        let crack1 = abs(fract(fx * 5.0 + crag2 * 4.0 + fy * 0.5) - 0.5);
+        let crack2 = abs(fract(fy * 4.0 + crag1 * 3.0 + fx * 0.3) - 0.5);
+        let crack = min(crack1, crack2);
+        if crack < 0.06 {
+            color *= 0.82;
+        }
+        // Subtle straw/fiber inclusions
+        let straw = fract(sin(world_x * 211.1 + world_y * 137.3) * 43758.5);
+        if straw > 0.92 {
+            color = mix(color, vec3<f32>(0.65, 0.58, 0.35), 0.4);
+        }
+        // Rounded brightness (center brighter, edges darker)
+        color *= 0.85 + height_fade * 0.15;
+        // Edge darkening
+        if dist > 0.38 {
+            color *= 0.7;
         }
     } else {
         color = block_base_color(btype, bflags);
@@ -2430,7 +2528,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         let bt_for_temp = btype;
         let bh_for_temp = bheight;
         let is_solid_block = bh_for_temp > 0u && (bt_for_temp == 1u || bt_for_temp == 4u || bt_for_temp == 5u
-            || bt_for_temp == 14u || (bt_for_temp >= 21u && bt_for_temp <= 25u));
+            || bt_for_temp == 14u || (bt_for_temp >= 21u && bt_for_temp <= 25u) || bt_for_temp == 35u);
         let is_pipe_block_t = bt_for_temp >= 15u && bt_for_temp <= 20u;
         let temp = select(smoke.a, block_temps[grid_idx], is_solid_block || is_pipe_block_t);
         // Remap: -30→0, 0→0.15, 15→0.30, 25→0.40, 40→0.55, 60→0.70, 100→0.85, 500→1.0

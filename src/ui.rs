@@ -383,6 +383,7 @@ impl App {
                                     icon_btn(ui, BuildTool::SandstoneWall, "\u{1faa8}", "Sandstone");
                                     icon_btn(ui, BuildTool::GraniteWall, "\u{26f0}", "Granite");
                                     icon_btn(ui, BuildTool::LimestoneWall, "\u{1f532}", "Limestone");
+                                    icon_btn(ui, BuildTool::MudWall, "\u{1f3da}", "Mud");
                                 }
                                 "Floor" => {
                                     icon_btn(ui, BuildTool::WoodFloor, "\u{1fab5}", "Wood");
@@ -1132,7 +1133,7 @@ impl App {
                     24 => "Granite Wall", 25 => "Limestone Wall",
                     26 => "Wood Floor", 27 => "Stone Floor", 28 => "Concrete Floor",
                     29 => "Cannon", 30 => "Bed", 31 => "Berry Bush",
-                    32 => "Dug Ground", 33 => "Storage Crate", 34 => "Rock",
+                    32 => "Dug Ground", 33 => "Storage Crate", 34 => "Rock", 35 => "Mud Wall",
                     _ => "Unknown",
                 };
                 let mut tags = String::new();
@@ -1150,7 +1151,7 @@ impl App {
                     let ib = self.grid_data[(by as u32 * GRID_W + bx as u32) as usize];
                     let ibt = ib & 0xFF;
                     let ibh = (ib >> 8) & 0xFF;
-                    let solid = ibh > 0 && (ibt == 1 || ibt == 4 || ibt == 5 || ibt == 14 || (ibt >= 21 && ibt <= 25));
+                    let solid = ibh > 0 && (ibt == 1 || ibt == 4 || ibt == 5 || ibt == 14 || (ibt >= 21 && ibt <= 25) || ibt == 35);
                     let pipe = ibt >= 15 && ibt <= 20;
                     (solid, pipe)
                 } else { (false, false) };

@@ -315,6 +315,14 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.heat_capacity = 2.0; m.conductivity = 0.002; m.solar_absorption = 0.4;
     }
 
+    // 35: Mud wall — organic, rounded, good insulation, moderate thermal mass
+    { let m = &mut mats[35];
+        m.color_r = 0.52; m.color_g = 0.40; m.color_b = 0.25;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
+        m.heat_capacity = 5.0; m.conductivity = 0.004; m.solar_absorption = 0.5;
+        m.shows_wall_face = 1.0;
+    }
+
     // 34: Rock — natural stone that can be picked up and hauled
     { let m = &mut mats[34];
         m.color_r = 0.50; m.color_g = 0.48; m.color_b = 0.44;

@@ -647,7 +647,7 @@ impl App {
                 Self::filled_rect_tiles(sx, sy, ex, ey)
             }
             BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall
-            | BuildTool::GraniteWall | BuildTool::LimestoneWall => {
+            | BuildTool::GraniteWall | BuildTool::LimestoneWall | BuildTool::MudWall => {
                 Self::hollow_rect_tiles(sx, sy, ex, ey)
             }
             _ => return,
@@ -660,6 +660,7 @@ impl App {
             BuildTool::SandstoneWall => 23,
             BuildTool::GraniteWall => 24,
             BuildTool::LimestoneWall => 25,
+            BuildTool::MudWall => 35,
             BuildTool::WoodFloor => 26,
             BuildTool::StoneFloor => 27,
             BuildTool::ConcreteFloor => 28,
@@ -871,7 +872,7 @@ impl App {
                 }
                 BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost
                 | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve
-                | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall | BuildTool::GraniteWall | BuildTool::LimestoneWall
+                | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall | BuildTool::GraniteWall | BuildTool::LimestoneWall | BuildTool::MudWall
                 | BuildTool::Cannon | BuildTool::BerryBush => {
                     let can_place = self.can_place_at(bx, by)
                         || (self.build_tool == BuildTool::Pump && bt == 15); // pump on pipe
@@ -892,6 +893,7 @@ impl App {
                             BuildTool::SandstoneWall => make_block(23, 3, roof_flag),
                             BuildTool::GraniteWall => make_block(24, 3, roof_flag),
                             BuildTool::LimestoneWall => make_block(25, 3, roof_flag),
+                            BuildTool::MudWall => make_block(35, 3, roof_flag),
                             BuildTool::Cannon => make_block(29, 2, roof_flag | rot_flags),
                             BuildTool::BerryBush => make_block(31, 1, 0),
                             _ => unreachable!(),
@@ -2112,7 +2114,7 @@ impl ApplicationHandler for App {
                         let is_shape_tool = matches!(self.build_tool,
                             BuildTool::Pipe | BuildTool::Destroy
                             | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall
-                            | BuildTool::GraniteWall | BuildTool::LimestoneWall
+                            | BuildTool::GraniteWall | BuildTool::LimestoneWall | BuildTool::MudWall
                             | BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor
                             | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof);
                         if is_shape_tool {
