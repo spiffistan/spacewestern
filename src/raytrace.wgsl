@@ -1978,16 +1978,19 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         // Wall under a roof: no sun, no shadow ray. Just ambient + interior indirect.
         light_factor = INTERIOR_INDIRECT;
     } else {
-        // Outdoor pixel: single shadow ray with per-frame temporal jitter.
-        // Each frame offsets the ray origin slightly (varies with time).
-        // Temporal blending at the end of the shader accumulates these into
-        // smooth shadows over 2-3 frames — TAA-style, zero extra ray cost.
-        let jt = camera.time * 5.3; // faster variation = quicker convergence
-        let jh1 = fract(sin(world_x * 127.1 + world_y * 311.7 + jt) * 43758.5);
-        let jh2 = fract(sin(world_x * 269.5 + world_y * 183.3 + jt * 1.3) * 23421.6);
+        // Outdoor pixel: single shadow ray with interleaved gradient noise jitter.
+        // IGN has blue-noise-like spectral properties — distributes error evenly
+        // across the image with no clumping or visible patterns. Much smoother
+        // than white noise (fract(sin(...))), combined with temporal accumulation.
+        // Reference: Jorge Jimenez, "Next Generation Post Processing in Call of Duty"
+        let frame_offset = fract(camera.time * 5.3) * 5.0; // temporal variation
+        let ign_x = f32(px) + frame_offset;
+        let ign_y = f32(py) + frame_offset * 0.7;
+        let ign1 = fract(52.9829189 * fract(0.06711056 * ign_x + 0.00583715 * ign_y));
+        let ign2 = fract(52.9829189 * fract(0.00583715 * ign_x + 0.06711056 * ign_y));
         let shadow_result = trace_shadow_ray(
-            world_x + (jh1 - 0.5) * 0.18,
-            world_y + (jh2 - 0.5) * 0.18,
+            world_x + (ign1 - 0.5) * 0.18,
+            world_y + (ign2 - 0.5) * 0.18,
             effective_fheight, sun_dir, sun_elev);
         shadow_tint = shadow_result.xyz;
         light_factor = shadow_result.w;
