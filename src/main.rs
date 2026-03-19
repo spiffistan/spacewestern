@@ -333,6 +333,14 @@ impl App {
     }
 
     /// Get the tiles a bench would occupy at (bx, by) with given rotation
+    fn bed_tiles(&self, bx: i32, by: i32, rotation: u32) -> [(i32, i32); 2] {
+        if rotation == 0 {
+            [(bx, by), (bx + 1, by)]
+        } else {
+            [(bx, by), (bx, by + 1)]
+        }
+    }
+
     fn bench_tiles(&self, bx: i32, by: i32, rotation: u32) -> [(i32, i32); 3] {
         if rotation == 0 {
             // Horizontal: extends east
@@ -779,10 +787,27 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
+                BuildTool::Bed => {
+                    let tiles = self.bed_tiles(bx, by, self.build_rotation);
+                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
+                    if all_valid {
+                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tblock = self.grid_data[tidx];
+                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
+                            let roof_h = tblock & 0xFF000000;
+                            // flags: bit3 = segment (0=head, 1=foot), bit5-6 = rotation
+                            let seg_flags = roof_flag | ((i as u8) << 3) | ((self.build_rotation as u8) << 5);
+                            self.grid_data[tidx] = make_block(30, 0, seg_flags) | roof_h;
+                        }
+                        self.grid_dirty = true;
+                        self.build_tool = BuildTool::None;
+                    }
+                }
                 BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost
                 | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve
                 | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall | BuildTool::GraniteWall | BuildTool::LimestoneWall
-                | BuildTool::Cannon | BuildTool::Bed | BuildTool::BerryBush => {
+                | BuildTool::Cannon | BuildTool::BerryBush => {
                     let can_place = self.can_place_at(bx, by)
                         || (self.build_tool == BuildTool::Pump && bt == 15); // pump on pipe
                     if can_place {
@@ -803,8 +828,7 @@ impl App {
                             BuildTool::GraniteWall => make_block(24, 3, roof_flag),
                             BuildTool::LimestoneWall => make_block(25, 3, roof_flag),
                             BuildTool::Cannon => make_block(29, 2, roof_flag | rot_flags),
-                            BuildTool::Bed => make_block(30, 0, roof_flag),
-                            BuildTool::BerryBush => make_block(31, 0, 0),
+                            BuildTool::BerryBush => make_block(31, 1, 0),
                             _ => unreachable!(),
                         };
                         let roof_h = block & 0xFF000000;

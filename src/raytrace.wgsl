@@ -741,6 +741,156 @@ fn render_bench(fx: f32, fy: f32, flags: u32) -> vec3<f32> {
     return color;
 }
 
+// Render bed from top-down: 2-tile piece with pillow (head) and blanket (foot)
+// segment 0 = head (pillow end), segment 1 = foot (blanket end)
+fn render_bed(fx: f32, fy: f32, flags: u32) -> vec3<f32> {
+    let segment = (flags >> 3u) & 1u;  // 0=head, 1=foot
+    let rotation = (flags >> 5u) & 3u; // 0=horizontal, 1=vertical
+
+    // Transform local coords based on rotation
+    var lx = fx; // along bed length
+    var ly = fy; // across bed width
+    if rotation == 1u {
+        lx = fy;
+        ly = fx;
+    }
+
+    let frame_color = vec3<f32>(0.42, 0.30, 0.16);  // dark wood frame
+    let sheet_color = vec3<f32>(0.82, 0.80, 0.75);   // white-ish sheets
+    let blanket_color = vec3<f32>(0.28, 0.22, 0.48); // purple blanket
+    let pillow_color = vec3<f32>(0.90, 0.88, 0.82);  // off-white pillow
+    let ground = vec3<f32>(0.45, 0.35, 0.20);
+
+    // Bed frame: 0.08 border on sides, 0.12 at head/foot ends
+    let frame_side = 0.08;
+    let frame_end = 0.12;
+    let on_frame_side = ly < frame_side || ly > (1.0 - frame_side);
+    let on_frame_head = segment == 0u && lx < frame_end;
+    let on_frame_foot = segment == 1u && lx > (1.0 - frame_end);
+
+    if on_frame_side || on_frame_head || on_frame_foot {
+        // Frame with wood grain
+        let grain = fract(lx * 8.0);
+        let grain_var = f32(grain < 0.06) * 0.03;
+        return frame_color - vec3<f32>(grain_var);
+    }
+
+    // Interior: sheets and pillow/blanket
+    if segment == 0u {
+        // Head segment: pillow + upper sheet
+        // Pillow: plump rounded rectangle in the first 0.45 of the segment
+        let pillow_end = 0.50;
+        if lx < pillow_end {
+            let px = (lx - pillow_end * 0.5) / (pillow_end * 0.5);
+            let py = (ly - 0.5) / 0.42;
+            let pdist = px * px + py * py;
+            if pdist < 1.0 {
+                // Pillow: soft rounded shape with subtle crease
+                let puff = 1.0 - pdist;
+                let crease = abs(py) < 0.15 && px > -0.3 && px < 0.3;
+                var pc = pillow_color * (0.92 + puff * 0.08);
+                if crease {
+                    pc *= 0.96; // subtle indent
+                }
+                return pc;
+            }
+        }
+        // Sheet area (rest of head segment)
+        let wrinkle = sin(lx * 15.0 + ly * 3.0) * 0.015;
+        return sheet_color + vec3<f32>(wrinkle);
+    } else {
+        // Foot segment: blanket with folds
+        let fold1 = sin(lx * 6.0 + 0.5) * 0.02;
+        let fold2 = sin(ly * 8.0 + lx * 4.0) * 0.015;
+        let edge_fade = smoothstep(0.0, 0.15, lx); // blanket starts folded at the join
+        var bc = mix(sheet_color, blanket_color, edge_fade);
+        bc += vec3<f32>(fold1 + fold2);
+        // Subtle stitch pattern along blanket
+        let stitch_x = fract(lx * 12.0);
+        let stitch_y = fract(ly * 12.0);
+        if stitch_x < 0.06 || stitch_y < 0.06 {
+            bc *= 0.97;
+        }
+        return bc;
+    }
+}
+
+// Render berry bush from top-down: leafy green mound with red berry dots
+fn render_berry_bush(fx: f32, fy: f32, world_x: f32, world_y: f32, time: f32) -> vec4<f32> {
+    let cx = fx - 0.5;
+    let cy = fy - 0.5;
+    let dist = sqrt(cx * cx + cy * cy);
+    let ground = vec3<f32>(0.45, 0.35, 0.20);
+
+    // Bush is a circular mound, radius ~0.42
+    let bush_r = 0.42;
+    if dist > bush_r {
+        return vec4<f32>(ground, 0.0); // ground beneath, no canopy
+    }
+
+    // Leafy base color with variation
+    let leaf_dark = vec3<f32>(0.15, 0.32, 0.10);
+    let leaf_light = vec3<f32>(0.28, 0.48, 0.18);
+    let noise1 = fract(sin(world_x * 17.3 + world_y * 23.1) * 43758.5);
+    let noise2 = fract(sin(fx * 31.0 + fy * 47.0 + world_x * 7.0) * 27183.6);
+    let leaf_mix = noise1 * 0.5 + noise2 * 0.5;
+    var color = mix(leaf_dark, leaf_light, leaf_mix);
+
+    // Rounded mound shading (brighter at center, darker at edges)
+    let height_factor = 1.0 - (dist / bush_r);
+    color *= (0.75 + height_factor * 0.25);
+
+    // Leaf texture: small irregular patches
+    let leaf_cell = fract(vec2(fx * 5.0, fy * 5.0));
+    let leaf_edge = min(leaf_cell.x, min(leaf_cell.y, min(1.0 - leaf_cell.x, 1.0 - leaf_cell.y)));
+    if leaf_edge < 0.08 {
+        color *= 0.88; // dark gaps between leaf clusters
+    }
+
+    // Berries: scattered red dots
+    // Use world position hash for stable placement
+    let berry_hash1 = fract(sin(world_x * 127.1 + world_y * 311.7) * 43758.5);
+    let berry_hash2 = fract(sin(world_x * 269.5 + world_y * 183.3) * 27183.6);
+    let berry_hash3 = fract(sin(world_x * 419.2 + world_y * 97.4) * 31415.9);
+
+    // 4-5 berry positions per bush tile
+    let berry_positions = array<vec2<f32>, 5>(
+        vec2(0.3, 0.35),
+        vec2(0.65, 0.3),
+        vec2(0.45, 0.6),
+        vec2(0.25, 0.55),
+        vec2(0.6, 0.65)
+    );
+    let berry_r = 0.04;
+    let berry_color = vec3<f32>(0.75, 0.12, 0.15); // deep red
+    let berry_highlight = vec3<f32>(0.90, 0.35, 0.25); // bright spot
+
+    for (var b = 0u; b < 5u; b++) {
+        // Offset each berry slightly by world hash for variety
+        let bp = berry_positions[b] + vec2(
+            fract(sin(f32(b) * 73.0 + berry_hash1 * 100.0) * 438.5) * 0.08 - 0.04,
+            fract(sin(f32(b) * 91.0 + berry_hash2 * 100.0) * 271.8) * 0.08 - 0.04
+        );
+        let bdist = length(vec2(fx, fy) - bp);
+        if bdist < berry_r {
+            // Berry with highlight
+            let bt = bdist / berry_r;
+            color = mix(berry_highlight, berry_color, bt);
+            // Tiny specular dot
+            if bdist < berry_r * 0.3 {
+                color = mix(vec3(1.0, 0.9, 0.8), color, bdist / (berry_r * 0.3));
+            }
+        }
+    }
+
+    // Subtle wind sway
+    let sway = sin(world_x * 3.0 + time * 1.5) * sin(world_y * 2.7 + time * 1.2) * 0.02;
+    color += vec3<f32>(sway, sway * 0.5, 0.0);
+
+    // Return with height for shadow casting (low bush, ~0.4 height equivalent)
+    return vec4<f32>(color, 0.3);
+}
+
 // Render standing lamp from top-down: thin pole with circular shade
 fn render_standing_lamp(fx: f32, fy: f32, time: f32) -> vec3<f32> {
     let cx = fx - 0.5;
@@ -1616,6 +1766,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
         }
+    } else if btype == 30u {
+        // Bed: 2-tile piece
+        color = render_bed(fx, fy, bflags);
+    } else if btype == 31u {
+        // Berry bush: leafy mound with berries
+        let bush_result = render_berry_bush(fx, fy, world_x, world_y, camera.time);
+        color = bush_result.xyz;
+        is_tree_pixel = bush_result.w > 0.01; // treat canopy like tree for shadow/height
     } else {
         color = block_base_color(btype, bflags);
     }
@@ -1623,7 +1781,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Open door: treat as floor-level opening (overrides wall type)
     let door_is_open = is_door(block) && is_open(block);
     // Trees: transparent sprite pixels are ground-level; canopy keeps height for shadows
-    let is_tree_ground = btype == 8u && !is_tree_pixel;
+    let is_tree_ground = (btype == 8u || btype == 31u) && !is_tree_pixel;
     let is_pipe = btype >= 15u && btype <= 20u;
     let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe);
     let effective_fheight = f32(effective_height);
