@@ -66,6 +66,9 @@ impl App {
                                 if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
                                     self.show_pipe_overlay = !self.show_pipe_overlay;
                                 }
+                                if ui.selectable_label(*ov == FluidOverlay::Power, "Power").clicked() {
+                                    *ov = if *ov == FluidOverlay::Power { FluidOverlay::None } else { FluidOverlay::Power };
+                                }
                             });
                         });
                     });
@@ -146,6 +149,14 @@ impl App {
                                         (egui::Color32::from_rgb(38, 64, 204), "Negative"),
                                         (egui::Color32::from_rgb(128, 128, 140), "Neutral"),
                                         (egui::Color32::from_rgb(217, 51, 38), "Positive"),
+                                    ]);
+                                }
+                                FluidOverlay::Power => {
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(25, 76, 25), "Low voltage"),
+                                        (egui::Color32::from_rgb(50, 200, 50), "Normal"),
+                                        (egui::Color32::from_rgb(230, 200, 25), "High load"),
+                                        (egui::Color32::from_rgb(255, 50, 25), "Overload"),
                                     ]);
                                 }
                                 _ => {}
@@ -491,7 +502,7 @@ impl App {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         let categories = [
                             ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
-                            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Physics", "\u{1f4e6}"),
+                            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Power", "\u{26a1}"), ("Physics", "\u{1f4e6}"),
                         ];
                         for &(name, icon) in &categories {
                             let selected = self.build_category == Some(name);

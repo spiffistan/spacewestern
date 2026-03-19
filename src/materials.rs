@@ -333,6 +333,28 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.heat_capacity = 3.0; m.conductivity = 0.02; m.solar_absorption = 0.6;
     }
 
+    // 36: Wire
+    { let m = &mut mats[36];
+        m.color_r = 0.45; m.color_g = 0.42; m.color_b = 0.35;
+        m.render_style = 22.0;
+        m.walkable = 1.0; m.is_removable = 1.0; m.light_transmission = 1.0;
+        m.heat_capacity = 0.5; m.conductivity = 0.04; m.solar_absorption = 0.3;
+    }
+    // 37: Solar Panel
+    { let m = &mut mats[37];
+        m.color_r = 0.15; m.color_g = 0.18; m.color_b = 0.35;
+        m.render_style = 23.0;
+        m.is_removable = 1.0; m.light_transmission = 0.3;
+        m.heat_capacity = 1.0; m.conductivity = 0.02; m.solar_absorption = 0.9;
+    }
+    // 38: Battery
+    { let m = &mut mats[38];
+        m.color_r = 0.35; m.color_g = 0.45; m.color_b = 0.30;
+        m.render_style = 24.0;
+        m.is_removable = 1.0; m.is_furniture = 1.0; m.light_transmission = 1.0;
+        m.heat_capacity = 2.0; m.conductivity = 0.01; m.solar_absorption = 0.3;
+    }
+
     mats
 }
 

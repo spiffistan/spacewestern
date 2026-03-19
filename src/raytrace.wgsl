@@ -70,6 +70,7 @@ struct Camera {
 @group(0) @binding(11) var<storage, read> materials: array<GpuMaterial>;
 @group(0) @binding(12) var<storage, read> plebs: array<GpuPleb>;
 @group(0) @binding(13) var<storage, read> block_temps: array<f32>;
+@group(0) @binding(14) var<storage, read> voltage: array<f32>;
 
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
@@ -1968,6 +1969,84 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         } else {
             color = ground;
         }
+    } else if btype == 36u {
+        // Wire: thin conductor line on dirt, glows when carrying voltage
+        let ground = vec3<f32>(0.42, 0.35, 0.22);
+        // Wire runs as a thin line (detect horizontal vs vertical from neighbors)
+        let n_w = block_type(get_block(bx - 1, by));
+        let n_e = block_type(get_block(bx + 1, by));
+        let n_n = block_type(get_block(bx, by - 1));
+        let n_s = block_type(get_block(bx, by + 1));
+        let h_conn = (n_w == 36u || n_w == 37u || n_w == 38u || n_w == 7u || n_w == 12u)
+                  || (n_e == 36u || n_e == 37u || n_e == 38u || n_e == 7u || n_e == 12u);
+        let v_conn = (n_n == 36u || n_n == 37u || n_n == 38u || n_n == 7u || n_n == 12u)
+                  || (n_s == 36u || n_s == 37u || n_s == 38u || n_s == 7u || n_s == 12u);
+        let wire_w = 0.08;
+        var on_wire = false;
+        if h_conn { on_wire = on_wire || abs(fy - 0.5) < wire_w; }
+        if v_conn { on_wire = on_wire || abs(fx - 0.5) < wire_w; }
+        // Center junction dot
+        let cdist = length(vec2<f32>(fx - 0.5, fy - 0.5));
+        on_wire = on_wire || cdist < 0.12;
+        if on_wire {
+            // Base copper color
+            var wire_col = vec3<f32>(0.55, 0.40, 0.25);
+            // Glow based on voltage
+            let v = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+            let glow_intensity = clamp(v / 12.0, 0.0, 1.0);
+            wire_col = mix(wire_col, vec3<f32>(1.0, 0.85, 0.3), glow_intensity * 0.6);
+            // Animated pulse showing current flow direction
+            let pulse = sin(world_x * 4.0 + world_y * 4.0 - camera.time * 8.0) * 0.5 + 0.5;
+            wire_col += vec3<f32>(0.1, 0.08, 0.02) * pulse * glow_intensity;
+            color = wire_col;
+        } else {
+            color = ground;
+        }
+    } else if btype == 37u {
+        // Solar panel: dark blue cells with grid lines
+        let cell_x = fract(fx * 4.0);
+        let cell_y = fract(fy * 4.0);
+        let grid_line = f32(cell_x < 0.06 || cell_y < 0.06) * 0.08;
+        // Dark blue silicon with slight variation
+        let sv = fract(sin(floor(fx * 4.0) * 17.1 + floor(fy * 4.0) * 31.7) * 43758.5) * 0.03;
+        color = vec3<f32>(0.10 + sv, 0.14 + sv, 0.30 + sv);
+        // Grid lines (silver)
+        if cell_x < 0.06 || cell_y < 0.06 {
+            color = vec3<f32>(0.55, 0.55, 0.60);
+        }
+        // Slight reflective sheen based on sun
+        color += vec3<f32>(0.03, 0.03, 0.05) * camera.sun_intensity;
+        // Voltage-based glow at edges (power output indicator)
+        let v = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+        if v > 0.5 {
+            let edge_glow = smoothstep(0.4, 0.5, max(abs(fx - 0.5), abs(fy - 0.5)));
+            color += vec3<f32>(0.1, 0.15, 0.02) * edge_glow * clamp(v / 12.0, 0.0, 1.0);
+        }
+    } else if btype == 38u {
+        // Battery: green casing with charge indicator
+        let margin = 0.12;
+        let on_case = fx > margin && fx < (1.0 - margin) && fy > margin && fy < (1.0 - margin);
+        if on_case {
+            color = vec3<f32>(0.28, 0.40, 0.25);
+            // Terminal bumps at top
+            if fy < margin + 0.12 && (abs(fx - 0.35) < 0.06 || abs(fx - 0.65) < 0.06) {
+                color = vec3<f32>(0.50, 0.50, 0.55); // metal terminals
+            }
+            // Charge level bar
+            let v = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+            let charge = clamp(v / 12.0, 0.0, 1.0);
+            let bar_y = (fy - margin - 0.15) / 0.55;
+            if bar_y > 0.0 && bar_y < 1.0 && fx > 0.3 && fx < 0.7 {
+                if bar_y < charge {
+                    let g = mix(vec3<f32>(0.8, 0.2, 0.1), vec3<f32>(0.2, 0.8, 0.2), charge);
+                    color = g;
+                } else {
+                    color = vec3<f32>(0.15, 0.15, 0.15);
+                }
+            }
+        } else {
+            color = vec3<f32>(0.42, 0.35, 0.22); // ground
+        }
     } else if btype == 14u {
         // Insulated wall: outer shell with fiberglass insulation core
         let edge = 0.15; // outer shell thickness
@@ -2580,6 +2659,27 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
             temp_color = mix(vec3(0.85, 0.1, 0.1), vec3(1.0, 1.0, 0.6), t);
         }
         color = mix(color * 0.3, temp_color, 0.7);
+    } else if camera.fluid_overlay < 9.5 {
+        // Power overlay: show voltage in the grid
+        let grid_idx_p = u32(by) * u32(camera.grid_w) + u32(bx);
+        let v = voltage[grid_idx_p];
+        let norm_v = clamp(v / 12.0, 0.0, 1.0);
+        if norm_v > 0.01 {
+            var pwr_color: vec3<f32>;
+            if norm_v < 0.5 {
+                let t = norm_v / 0.5;
+                pwr_color = mix(vec3<f32>(0.1, 0.3, 0.1), vec3<f32>(0.2, 0.8, 0.2), t);
+            } else if norm_v < 0.8 {
+                let t = (norm_v - 0.5) / 0.3;
+                pwr_color = mix(vec3<f32>(0.2, 0.8, 0.2), vec3<f32>(0.9, 0.8, 0.1), t);
+            } else {
+                let t = (norm_v - 0.8) / 0.2;
+                pwr_color = mix(vec3<f32>(0.9, 0.8, 0.1), vec3<f32>(1.0, 0.2, 0.1), t);
+            }
+            color = mix(color * 0.3, pwr_color, 0.7);
+        } else {
+            color *= 0.5;
+        }
     } else {
         // Heat Flow: velocity magnitude colored by temperature (convection patterns)
         let hf_vel_cell = vec2<i32>(i32(world_x), i32(world_y));

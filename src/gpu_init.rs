@@ -163,6 +163,15 @@ impl App {
         });
 
         // Block temperature buffer (256x256 f32, initialized to 15°C ambient)
+        let voltage_data = vec![0.0f32; (GRID_W * GRID_H) as usize];
+        let voltage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("voltage-buffer"),
+            size: (voltage_data.len() * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&voltage_buffer, 0, bytemuck::cast_slice(&voltage_data));
+
         let block_temp_data = vec![15.0f32; (GRID_W * GRID_H) as usize];
         let block_temp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("block-temp-buffer"),
@@ -892,6 +901,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Voltage buffer (storage buffer, read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -923,6 +943,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -943,6 +964,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -963,6 +985,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -983,6 +1006,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1195,6 +1219,43 @@ impl App {
             cache: None,
         });
 
+        // --- Power grid pipeline ---
+        let power_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("power-compute"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("power.wgsl").into()),
+        });
+        let power_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("power-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+        let power_bind_group_val = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("power-bg"),
+            layout: &power_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: voltage_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: block_temp_buffer.as_entire_binding() },
+            ],
+        });
+        let power_pipeline_val = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("power-pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("power-pl"),
+                bind_group_layouts: &[&power_bgl],
+                push_constant_ranges: &[],
+            })),
+            module: &power_shader,
+            entry_point: Some("main_power"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         self.gfx = Some(GfxState {
             surface,
             device,
@@ -1251,6 +1312,9 @@ impl App {
             block_temp_buffer,
             thermal_pipeline: thermal_pipeline_val,
             thermal_bind_group: thermal_bind_group_val,
+            voltage_buffer,
+            power_pipeline: power_pipeline_val,
+            power_bind_group: power_bind_group_val,
         });
 
         self.window = Some(window);

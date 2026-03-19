@@ -195,6 +195,10 @@ struct GfxState {
     block_temp_buffer: wgpu::Buffer,
     thermal_pipeline: wgpu::ComputePipeline,
     thermal_bind_group: wgpu::BindGroup,
+    // Power grid
+    voltage_buffer: wgpu::Buffer,
+    power_pipeline: wgpu::ComputePipeline,
+    power_bind_group: wgpu::BindGroup,
     // Fluid simulation GPU resources
     fluid_params_buffer: wgpu::Buffer,
     fluid_vel: [wgpu::Texture; 2],
@@ -1195,6 +1199,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1215,6 +1220,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1235,6 +1241,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1255,6 +1262,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1563,6 +1571,11 @@ impl App {
         { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("thermal"), timestamp_writes: None });
           let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
           p.set_pipeline(&gfx.thermal_pipeline); p.set_bind_group(0, &gfx.thermal_bind_group, &[]); p.dispatch_workgroups(tw, th, 1); }
+
+        // 11. Power grid voltage relaxation (256x256)
+        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("power"), timestamp_writes: None });
+          let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
+          p.set_pipeline(&gfx.power_pipeline); p.set_bind_group(0, &gfx.power_bind_group, &[]); p.dispatch_workgroups(tw, th, 1); }
 
         // Debug: copy one dye texel at cursor position for readback
         let shift_for_debug = self.pressed_keys.contains(&KeyCode::ShiftLeft)

@@ -544,3 +544,54 @@ label = "Mud"
 click = "simple"
 place_height = 3
 drag = "hollow_rect"
+
+[[block]]
+id = 36
+name = "Wire"
+color = [0.45, 0.42, 0.35]
+render_style = 22.0
+walkable = true
+is_removable = true
+light_transmission = 1.0
+thermal = { heat_capacity = 0.5, conductivity = 0.04, solar_absorption = 0.3 }
+[block.placement]
+category = "Power"
+icon = "⚡"
+label = "Wire"
+click = "simple"
+place_height = 0
+stays_selected = true
+drag = "line"
+
+[[block]]
+id = 37
+name = "Solar Panel"
+color = [0.15, 0.18, 0.35]
+render_style = 23.0
+walkable = false
+is_removable = true
+light_transmission = 0.3
+thermal = { heat_capacity = 1.0, conductivity = 0.02, solar_absorption = 0.9 }
+[block.placement]
+category = "Power"
+icon = "☀"
+label = "Solar"
+click = "simple"
+place_height = 0
+
+[[block]]
+id = 38
+name = "Battery"
+color = [0.35, 0.45, 0.30]
+render_style = 24.0
+walkable = false
+is_removable = true
+is_furniture = true
+light_transmission = 1.0
+thermal = { heat_capacity = 2.0, conductivity = 0.01, solar_absorption = 0.3 }
+[block.placement]
+category = "Power"
+icon = "🔋"
+label = "Battery"
+click = "simple"
+place_height = 1
