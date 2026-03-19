@@ -106,6 +106,8 @@ struct App {
     selected_pleb: Option<usize>,  // index into plebs vec
     placing_pleb: bool,
     next_pleb_id: usize,
+    cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
+    selected_cannon: Option<u32>, // grid_idx of selected cannon for rotation
     show_pleb_help: bool,      // show controls modal
     pressed_keys: std::collections::HashSet<KeyCode>,
     auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
@@ -296,6 +298,8 @@ impl App {
             selected_pleb: None,
             next_pleb_id: 0,
             placing_pleb: false,
+            cannon_angles: std::collections::HashMap::new(),
+            selected_cannon: None,
             show_pleb_help: false,
             pressed_keys: std::collections::HashSet::new(),
             auto_doors: Vec::new(),
@@ -647,28 +651,46 @@ impl App {
             return;
         }
 
-        // Click cannon to fire
+        // Click cannon: select for rotation, or fire if already selected
         if bt == 29 && self.build_tool == BuildTool::None {
-            let dir_bits = (flags >> 3) & 3;
-            let (dir_x, dir_y) = match dir_bits {
-                0 => (0.0f32, -1.0f32), // north
-                1 => (1.0, 0.0),         // east
-                2 => (0.0, 1.0),         // south
-                _ => (-1.0, 0.0),        // west
-            };
-            // Spawn cannonball in front of cannon barrel
-            let spawn_x = bx as f32 + 0.5 + dir_x * 0.8;
-            let spawn_y = by as f32 + 0.5 + dir_y * 0.8;
-            self.physics_bodies.push(PhysicsBody::new_cannonball(spawn_x, spawn_y, dir_x, dir_y));
-            // Muzzle smoke + recoil blast
-            self.fluid_params.splat_x = bx as f32 + 0.5;
-            self.fluid_params.splat_y = by as f32 + 0.5;
-            self.fluid_params.splat_vx = -dir_x * 30.0;
-            self.fluid_params.splat_vy = -dir_y * 30.0;
-            self.fluid_params.splat_radius = 1.5;
-            self.fluid_params.splat_active = 1.0;
-            log::info!("Cannon fired at ({}, {})", bx, by);
+            let cannon_idx = by as u32 * GRID_W + bx as u32;
+            if self.selected_cannon == Some(cannon_idx) {
+                // Already selected — fire!
+                let angle = *self.cannon_angles.get(&cannon_idx).unwrap_or(&0.0);
+                let dir_x = angle.cos();
+                let dir_y = angle.sin();
+                let spawn_x = bx as f32 + 0.5 + dir_x * 0.8;
+                let spawn_y = by as f32 + 0.5 + dir_y * 0.8;
+                self.physics_bodies.push(PhysicsBody::new_cannonball(spawn_x, spawn_y, dir_x, dir_y));
+                // Muzzle smoke + recoil blast
+                self.fluid_params.splat_x = bx as f32 + 0.5;
+                self.fluid_params.splat_y = by as f32 + 0.5;
+                self.fluid_params.splat_vx = -dir_x * 30.0;
+                self.fluid_params.splat_vy = -dir_y * 30.0;
+                self.fluid_params.splat_radius = 1.5;
+                self.fluid_params.splat_active = 1.0;
+                log::info!("Cannon fired at ({}, {})", bx, by);
+            } else {
+                // Select this cannon (deselect pleb)
+                self.selected_cannon = Some(cannon_idx);
+                self.selected_pleb = None;
+                // Initialize angle from block direction bits if not yet set
+                if !self.cannon_angles.contains_key(&cannon_idx) {
+                    let dir_bits = (flags >> 3) & 3;
+                    let angle = match dir_bits {
+                        0 => -std::f32::consts::FRAC_PI_2, // north
+                        1 => 0.0,                           // east
+                        2 => std::f32::consts::FRAC_PI_2,  // south
+                        _ => std::f32::consts::PI,          // west
+                    };
+                    self.cannon_angles.insert(cannon_idx, angle);
+                }
+                log::info!("Selected cannon at ({}, {})", bx, by);
+            }
             return;
+        } else if self.selected_cannon.is_some() && bt != 29 {
+            // Clicked away from cannon — deselect
+            self.selected_cannon = None;
         }
 
         // Placing pleb mode
@@ -769,6 +791,16 @@ impl App {
                         let roof_h = block & 0xFF000000;
                         self.grid_data[idx] = new_block | roof_h;
                         self.grid_dirty = true;
+                        // Initialize cannon angle from build rotation
+                        if self.build_tool == BuildTool::Cannon {
+                            let angle = match self.build_rotation {
+                                0 => -std::f32::consts::FRAC_PI_2, // north
+                                1 => 0.0,                           // east
+                                2 => std::f32::consts::FRAC_PI_2,  // south
+                                _ => std::f32::consts::PI,          // west
+                            };
+                            self.cannon_angles.insert(idx as u32, angle);
+                        }
                         log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
                         // Pipe stays selected for drag-to-place; others deselect
                         if self.build_tool != BuildTool::Pipe {
@@ -2483,6 +2515,17 @@ impl App {
         }
 
         // --- Pleb update ---
+        // --- Cannon rotation (Q/E when cannon is selected) ---
+        if let Some(cannon_idx) = self.selected_cannon {
+            let rot_speed = 1.5f32; // radians per second
+            if self.pressed_keys.contains(&KeyCode::KeyQ) {
+                *self.cannon_angles.entry(cannon_idx).or_insert(0.0) -= rot_speed * dt;
+            }
+            if self.pressed_keys.contains(&KeyCode::KeyE) {
+                *self.cannon_angles.entry(cannon_idx).or_insert(0.0) += rot_speed * dt;
+            }
+        }
+
         // --- Update all plebs ---
         let move_speed = 3.0f32;
         let sel = self.selected_pleb;
@@ -3593,6 +3636,41 @@ impl App {
             }
         }
 
+        // Render cannon barrel direction overlays
+        {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            let cannon_painter = egui_state.ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground, egui::Id::new("cannons"),
+            ));
+            for (&cannon_idx, &angle) in &self.cannon_angles {
+                let cx = (cannon_idx % GRID_W) as f32 + 0.5;
+                let cy = (cannon_idx / GRID_W) as f32 + 0.5;
+                let sx = ((cx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((cy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let barrel_len = 0.55 * tile_px;
+                let barrel_w = 0.10 * tile_px;
+                let end_x = sx + angle.cos() * barrel_len;
+                let end_y = sy + angle.sin() * barrel_len;
+                let is_selected = self.selected_cannon == Some(cannon_idx);
+                let barrel_color = if is_selected {
+                    egui::Color32::from_rgb(80, 75, 65)
+                } else {
+                    egui::Color32::from_rgb(55, 52, 48)
+                };
+                cannon_painter.line_segment(
+                    [egui::pos2(sx, sy), egui::pos2(end_x, end_y)],
+                    egui::Stroke::new(barrel_w, barrel_color),
+                );
+                cannon_painter.circle_filled(egui::pos2(end_x, end_y), barrel_w * 0.5, egui::Color32::from_rgb(40, 38, 35));
+                cannon_painter.circle_filled(egui::pos2(sx, sy), barrel_w * 0.7, egui::Color32::from_rgb(50, 48, 42));
+                if is_selected {
+                    cannon_painter.circle_stroke(egui::pos2(sx, sy), barrel_len * 1.1,
+                        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)));
+                }
+            }
+        }
+
         // Render physics bodies
         if !self.physics_bodies.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
@@ -3609,64 +3687,90 @@ impl App {
 
             for body in &self.physics_bodies {
                 let size = body.size;
-                // Height offset: box moves "up" on screen when z > 0 (parallax)
-                let z_offset = body.z * tile_px * 0.4; // scale z to screen pixels
+                let z_offset = body.z * tile_px * 0.4;
 
-                // --- Shadow on ground (ellipse, darker when higher) ---
-                if body.z > 0.05 {
-                    let shadow_scale = 1.0 - (body.z * 0.1).min(0.5); // shadow shrinks when high
-                    let ss = size * shadow_scale;
-                    let (gx0, gy0) = to_screen(body.x - ss, body.y - ss * 0.6);
-                    let (gx1, gy1) = to_screen(body.x + ss, body.y + ss * 0.6);
-                    let shadow_alpha = (150.0 * (1.0 - body.z * 0.08).max(0.2)) as u8;
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(egui::pos2(gx0, gy0), egui::pos2(gx1, gy1)),
-                        tile_px * 0.1,
-                        egui::Color32::from_rgba_unmultiplied(20, 20, 20, shadow_alpha),
-                    );
-                }
+                match body.body_type {
+                    physics::BodyType::Cannonball => {
+                        // --- Cannonball shadow (circle on ground, scales with height) ---
+                        let shadow_scale = (1.0 - body.z * 0.15).max(0.2);
+                        let shadow_r = 0.12 * shadow_scale * tile_px;
+                        let (gx, gy) = to_screen(body.x, body.y);
+                        let shadow_alpha = (180.0 * (1.0 - body.z * 0.06).max(0.15)) as u8;
+                        painter.circle_filled(
+                            egui::pos2(gx, gy),
+                            shadow_r,
+                            egui::Color32::from_rgba_unmultiplied(15, 15, 15, shadow_alpha),
+                        );
+                        // Trajectory guide: dotted line from shadow to ball showing height
+                        if body.z > 0.3 {
+                            let ball_screen = egui::pos2(gx, gy - z_offset);
+                            painter.line_segment(
+                                [egui::pos2(gx, gy), ball_screen],
+                                egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(100, 100, 100, 80)),
+                            );
+                        }
 
-                // --- Box with 3D rotation (offset upward by z) ---
-                let center = to_screen(body.x, body.y);
-                let center_s = egui::pos2(center.0, center.1 - z_offset);
-                let half = size * tile_px;
+                        // --- Cannonball (dark sphere with highlight) ---
+                        let ball_r = 0.10 * tile_px;
+                        let ball_pos = egui::pos2(gx, gy - z_offset);
+                        painter.circle_filled(ball_pos, ball_r, egui::Color32::from_rgb(40, 38, 35));
+                        // Specular highlight
+                        painter.circle_filled(
+                            ball_pos + egui::Vec2::new(-ball_r * 0.3, -ball_r * 0.3),
+                            ball_r * 0.35,
+                            egui::Color32::from_rgb(90, 88, 82),
+                        );
+                    }
+                    physics::BodyType::WoodBox => {
+                        // --- Shadow ---
+                        if body.z > 0.05 {
+                            let shadow_scale = 1.0 - (body.z * 0.1).min(0.5);
+                            let ss = size * shadow_scale;
+                            let (gx0, gy0) = to_screen(body.x - ss, body.y - ss * 0.6);
+                            let (gx1, gy1) = to_screen(body.x + ss, body.y + ss * 0.6);
+                            let shadow_alpha = (150.0 * (1.0 - body.z * 0.08).max(0.2)) as u8;
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(egui::pos2(gx0, gy0), egui::pos2(gx1, gy1)),
+                                tile_px * 0.1,
+                                egui::Color32::from_rgba_unmultiplied(20, 20, 20, shadow_alpha),
+                            );
+                        }
 
-                // Rotation: compute 4 corners of the rotated box
-                let cos_z = body.rot_z.cos();
-                let sin_z = body.rot_z.sin();
-                // Foreshortening from tilt (rot_x/rot_y compress one axis)
-                let scale_x = 1.0 - body.rot_y.sin().abs() * 0.3;
-                let scale_y = 1.0 - body.rot_x.sin().abs() * 0.3;
-                let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
-                let rotated: Vec<egui::Pos2> = corners.iter().map(|&(cx, cy)| {
-                    let sx = cx * half * scale_x;
-                    let sy = cy * half * scale_y;
-                    let rx = sx * cos_z - sy * sin_z;
-                    let ry = sx * sin_z + sy * cos_z;
-                    center_s + egui::Vec2::new(rx, ry)
-                }).collect();
-
-                // Brighter when higher
-                let brightness = (160.0 + body.z * 15.0).min(200.0) as u8;
-                let gb = (120.0 + body.z * 10.0).min(160.0) as u8;
-                let fill_color = egui::Color32::from_rgb(brightness, gb, 60);
-                let stroke_color = egui::Color32::from_rgb(100, 75, 35);
-
-                // Draw rotated box as polygon
-                painter.add(egui::Shape::convex_polygon(
-                    rotated.clone(), fill_color, egui::Stroke::new(1.5, stroke_color),
-                ));
-                // Wood grain lines (rotated with the box)
-                for i in 0..3 {
-                    let t = 0.25 + i as f32 * 0.25;
-                    let lx = rotated[0].x + (rotated[3].x - rotated[0].x) * t;
-                    let ly = rotated[0].y + (rotated[3].y - rotated[0].y) * t;
-                    let rx = rotated[1].x + (rotated[2].x - rotated[1].x) * t;
-                    let ry = rotated[1].y + (rotated[2].y - rotated[1].y) * t;
-                    painter.line_segment(
-                        [egui::pos2(lx, ly), egui::pos2(rx, ry)],
-                        egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(90, 65, 30, 100)),
-                    );
+                        // --- Rotated box ---
+                        let center = to_screen(body.x, body.y);
+                        let center_s = egui::pos2(center.0, center.1 - z_offset);
+                        let half = size * tile_px;
+                        let cos_z = body.rot_z.cos();
+                        let sin_z = body.rot_z.sin();
+                        let scale_x = 1.0 - body.rot_y.sin().abs() * 0.3;
+                        let scale_y = 1.0 - body.rot_x.sin().abs() * 0.3;
+                        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+                        let rotated: Vec<egui::Pos2> = corners.iter().map(|&(cx, cy)| {
+                            let sx = cx * half * scale_x;
+                            let sy = cy * half * scale_y;
+                            let rx = sx * cos_z - sy * sin_z;
+                            let ry = sx * sin_z + sy * cos_z;
+                            center_s + egui::Vec2::new(rx, ry)
+                        }).collect();
+                        let brightness = (160.0 + body.z * 15.0).min(200.0) as u8;
+                        let gb = (120.0 + body.z * 10.0).min(160.0) as u8;
+                        let fill_color = egui::Color32::from_rgb(brightness, gb, 60);
+                        let stroke_color = egui::Color32::from_rgb(100, 75, 35);
+                        painter.add(egui::Shape::convex_polygon(
+                            rotated.clone(), fill_color, egui::Stroke::new(1.5, stroke_color),
+                        ));
+                        for i in 0..3 {
+                            let t = 0.25 + i as f32 * 0.25;
+                            let lx = rotated[0].x + (rotated[3].x - rotated[0].x) * t;
+                            let ly = rotated[0].y + (rotated[3].y - rotated[0].y) * t;
+                            let rx = rotated[1].x + (rotated[2].x - rotated[1].x) * t;
+                            let ry = rotated[1].y + (rotated[2].y - rotated[1].y) * t;
+                            painter.line_segment(
+                                [egui::pos2(lx, ly), egui::pos2(rx, ry)],
+                                egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(90, 65, 30, 100)),
+                            );
+                        }
+                    }
                 }
             }
         }
