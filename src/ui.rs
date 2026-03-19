@@ -238,8 +238,10 @@ impl App {
                             "Build" => {
                                 btn!(BuildTool::Fireplace, "Fireplace");
                                 btn!(BuildTool::Bench, "Bench");
+                                btn!(BuildTool::Bed, "Bed");
                                 btn!(BuildTool::Fan, "Fan");
                                 btn!(BuildTool::Compost, "Compost");
+                                btn!(BuildTool::BerryBush, "Berry Bush");
                                 btn!(BuildTool::Cannon, "Cannon");
                                 btn!(BuildTool::ElectricLight, "Ceiling Light");
                                 btn!(BuildTool::StandingLamp, "Floor Lamp");
@@ -309,6 +311,8 @@ impl App {
                 breathing_state: BreathingState,
                 air_o2: f32,
                 air_co2: f32,
+                activity: String,
+                berries: u32,
             }
             let pleb_display: Vec<PlebDisplay> = self.plebs.iter().enumerate().map(|(i, p)| {
                 let a = &p.appearance;
@@ -330,6 +334,14 @@ impl App {
                     breathing_state: p.needs.breathing_state.clone(),
                     air_o2: p.needs.air_o2,
                     air_co2: p.needs.air_co2,
+                    activity: format!("{}", match &p.activity {
+                        PlebActivity::Idle => "Idle".to_string(),
+                        PlebActivity::Walking => "Walking".to_string(),
+                        PlebActivity::Sleeping => "Sleeping".to_string(),
+                        PlebActivity::Harvesting(p) => format!("Harvesting {:.0}%", p * 100.0),
+                        PlebActivity::Eating => "Eating".to_string(),
+                    }),
+                    berries: p.inventory.berries,
                 }
             }).collect();
 
@@ -469,14 +481,19 @@ impl App {
                                         breath_color,
                                     );
 
-                                    // Air quality readout
-                                    let air_y = breath_y + 9.0;
+                                    // Activity + inventory line
+                                    let info_y = breath_y + 9.0;
+                                    let berry_str = if pd.berries > 0 {
+                                        format!("{} | {}x Berry", pd.activity, pd.berries)
+                                    } else {
+                                        pd.activity.clone()
+                                    };
                                     painter.text(
-                                        egui::Pos2::new(needs_x, air_y),
+                                        egui::Pos2::new(needs_x, info_y),
                                         egui::Align2::LEFT_TOP,
-                                        &format!("O2:{:.0}% CO2:{:.0}%", pd.air_o2 * 100.0, pd.air_co2 * 100.0),
+                                        &berry_str,
                                         egui::FontId::proportional(6.5),
-                                        egui::Color32::from_rgb(140, 140, 140),
+                                        egui::Color32::from_rgb(160, 160, 140),
                                     );
 
                                     // Mood label at bottom-right of card
@@ -503,6 +520,116 @@ impl App {
                         });
                     });
                 });
+        }
+
+        // --- Context menu (right-click on selected pleb) ---
+        if let Some((mx, my)) = self.context_menu {
+            if let Some(sel_idx) = self.selected_pleb {
+                if let Some(pleb) = self.plebs.get(sel_idx) {
+                    let has_berries = pleb.inventory.berries > 0;
+                    let is_sleeping = pleb.activity == PlebActivity::Sleeping;
+                    let hunger = pleb.needs.hunger;
+                    let rest = pleb.needs.rest;
+                    let pleb_name = pleb.name.clone();
+
+                    let mut close_menu = false;
+                    egui::Area::new(egui::Id::new("pleb_context_menu"))
+                        .fixed_pos(egui::Pos2::new(mx / bp_ppp, my / bp_ppp))
+                        .show(ctx, |ui| {
+                            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                                ui.label(egui::RichText::new(&pleb_name).strong().size(11.0));
+                                ui.separator();
+
+                                if has_berries {
+                                    let label = format!("Eat Berry ({:.0}% hunger)", hunger * 100.0);
+                                    if ui.button(egui::RichText::new(label).size(10.0)).clicked() {
+                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
+                                            p.activity = PlebActivity::Eating;
+                                        }
+                                        close_menu = true;
+                                    }
+                                } else {
+                                    ui.label(egui::RichText::new("No food").size(10.0).color(egui::Color32::GRAY));
+                                }
+
+                                ui.separator();
+
+                                if is_sleeping {
+                                    if ui.button(egui::RichText::new("Wake up").size(10.0)).clicked() {
+                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
+                                            p.activity = PlebActivity::Idle;
+                                        }
+                                        close_menu = true;
+                                    }
+                                } else {
+                                    let sleep_label = format!("Sleep ({:.0}% rest)", rest * 100.0);
+                                    if ui.button(egui::RichText::new(sleep_label).size(10.0)).clicked() {
+                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
+                                            // Check if near bed
+                                            let day_frac = self.time_of_day / DAY_DURATION;
+                                            let env = sample_environment(&self.grid_data, p.x, p.y, day_frac);
+                                            if env.near_bed {
+                                                p.activity = PlebActivity::Sleeping;
+                                                p.path.clear();
+                                                p.path_idx = 0;
+                                            } else if let Some((bx, by)) = env.nearest_bed {
+                                                let start = (p.x.floor() as i32, p.y.floor() as i32);
+                                                let path = astar_path(&self.grid_data, start, (bx, by));
+                                                if !path.is_empty() {
+                                                    p.path = path;
+                                                    p.path_idx = 0;
+                                                    p.activity = PlebActivity::Walking;
+                                                }
+                                            }
+                                        }
+                                        close_menu = true;
+                                    }
+                                }
+
+                                if ui.button(egui::RichText::new("Harvest berries").size(10.0)).clicked() {
+                                    if let Some(p) = self.plebs.get_mut(sel_idx) {
+                                        let day_frac = self.time_of_day / DAY_DURATION;
+                                        let env = sample_environment(&self.grid_data, p.x, p.y, day_frac);
+                                        if env.near_berry_bush {
+                                            if let Some((bx, by)) = env.nearest_berry_bush {
+                                                p.harvest_target = Some((bx, by));
+                                                p.activity = PlebActivity::Harvesting(0.0);
+                                                p.path.clear();
+                                                p.path_idx = 0;
+                                            }
+                                        } else if let Some((bx, by)) = env.nearest_berry_bush {
+                                            let start = (p.x.floor() as i32, p.y.floor() as i32);
+                                            let path = astar_path(&self.grid_data, start, (bx, by));
+                                            if !path.is_empty() {
+                                                p.path = path;
+                                                p.path_idx = 0;
+                                                p.activity = PlebActivity::Walking;
+                                            }
+                                        }
+                                    }
+                                    close_menu = true;
+                                }
+
+                                ui.separator();
+                                if ui.button(egui::RichText::new("Cancel").size(10.0)).clicked() {
+                                    close_menu = true;
+                                }
+                            });
+                        });
+                    if close_menu {
+                        self.context_menu = None;
+                    }
+                } else {
+                    self.context_menu = None;
+                }
+            } else {
+                self.context_menu = None;
+            }
+        }
+
+        // Close context menu on left click elsewhere
+        if self.mouse_pressed && self.context_menu.is_some() {
+            self.context_menu = None;
         }
 
         // --- Overlay bar (bottom-right) ---

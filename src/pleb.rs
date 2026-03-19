@@ -1,7 +1,23 @@
-//! Pleb (colonist) — struct, appearance, movement, and A* pathfinding.
+//! Pleb (colonist) — struct, appearance, movement, A* pathfinding, activity.
 
 use crate::grid::{GRID_W, GRID_H};
 use crate::needs::PlebNeeds;
+
+/// What the pleb is currently doing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlebActivity {
+    Idle,
+    Walking,          // following a path
+    Sleeping,         // in bed, recovering rest
+    Harvesting(f32),  // progress 0-1, harvesting a berry bush at nearby tile
+    Eating,           // consuming food (quick action)
+}
+
+/// Simple inventory: resource name → count.
+#[derive(Clone, Debug, Default)]
+pub struct PlebInventory {
+    pub berries: u32,
+}
 
 /// Appearance data for rendering a pleb (Rimworld-style).
 #[derive(Clone, Debug)]
@@ -101,6 +117,9 @@ pub struct Pleb {
     pub needs: PlebNeeds,
     pub prev_x: f32, // previous frame position (for detecting movement)
     pub prev_y: f32,
+    pub activity: PlebActivity,
+    pub inventory: PlebInventory,
+    pub harvest_target: Option<(i32, i32)>, // grid coords of bush being harvested
 }
 
 impl Pleb {
@@ -116,6 +135,9 @@ impl Pleb {
             needs: PlebNeeds::default(),
             prev_x: x,
             prev_y: y,
+            activity: PlebActivity::Idle,
+            inventory: PlebInventory::default(),
+            harvest_target: None,
         }
     }
 
@@ -160,7 +182,7 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        if !is_door && (bh > 0 || (bt != 0 && bt != 2 && bt != 6 && bt != 7 && bt != 10 && bt != 13 && bt != 15 && bt != 16 && bt != 17 && bt != 18 && bt != 26 && bt != 27 && bt != 28)) {
+        if !is_door && (bh > 0 || (bt != 0 && bt != 2 && bt != 6 && bt != 7 && bt != 10 && bt != 13 && bt != 15 && bt != 16 && bt != 17 && bt != 18 && bt != 26 && bt != 27 && bt != 28 && bt != 30 && bt != 31)) {
             return false;
         }
     }
@@ -180,7 +202,7 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        is_door || (bh == 0 && (bt == 0 || bt == 2 || bt == 6 || bt == 7 || bt == 10 || bt == 13))
+        is_door || (bh == 0 && (bt == 0 || bt == 2 || bt == 6 || bt == 7 || bt == 10 || bt == 13 || bt == 26 || bt == 27 || bt == 28 || bt == 30 || bt == 31))
     };
 
     if !is_walk(goal.0, goal.1) { return vec![]; }

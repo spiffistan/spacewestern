@@ -178,7 +178,7 @@ impl App {
             }
         }
 
-        // --- Update pleb needs ---
+        // --- Update pleb needs and auto-behaviors ---
         {
             let day_frac = self.time_of_day / DAY_DURATION;
             for (i, pleb) in self.plebs.iter_mut().enumerate() {
@@ -187,7 +187,100 @@ impl App {
                 let is_moving = (dx * dx + dy * dy) > 0.0001;
                 let env = sample_environment(&self.grid_data, pleb.x, pleb.y, day_frac);
                 let air = self.pleb_air_data.get(i);
-                tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving, air);
+                let is_sleeping = pleb.activity == PlebActivity::Sleeping;
+                tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving, is_sleeping, air);
+
+                // --- Activity state machine ---
+                match &pleb.activity {
+                    PlebActivity::Sleeping => {
+                        // Wake up when rest is full, or when a crisis happens
+                        if pleb.needs.rest > 0.95
+                            || pleb.needs.breathing_state != BreathingState::Normal
+                            || pleb.needs.hunger < 0.1
+                        {
+                            pleb.activity = PlebActivity::Idle;
+                        }
+                    }
+                    PlebActivity::Harvesting(progress) => {
+                        let new_progress = progress + dt * self.time_speed * 0.5; // ~2 game seconds to harvest
+                        if new_progress >= 1.0 {
+                            // Harvest complete — add berries to inventory
+                            pleb.inventory.berries += 3;
+                            pleb.activity = PlebActivity::Idle;
+                            pleb.harvest_target = None;
+                            log::info!("{} harvested 3 berries (total: {})", pleb.name, pleb.inventory.berries);
+                        } else {
+                            pleb.activity = PlebActivity::Harvesting(new_progress);
+                        }
+                    }
+                    PlebActivity::Eating => {
+                        // Instant — eat one berry
+                        if pleb.inventory.berries > 0 {
+                            pleb.inventory.berries -= 1;
+                            pleb.needs.hunger = (pleb.needs.hunger + BERRY_HUNGER_RESTORE).min(1.0);
+                            log::info!("{} ate a berry (hunger: {:.0}%, berries left: {})",
+                                pleb.name, pleb.needs.hunger * 100.0, pleb.inventory.berries);
+                        }
+                        pleb.activity = PlebActivity::Idle;
+                    }
+                    _ => {}
+                }
+
+                // --- Auto-behaviors (only when idle or walking) ---
+                if pleb.activity == PlebActivity::Idle || pleb.activity == PlebActivity::Walking {
+                    // CRITICAL: auto-eat when starving and have berries
+                    if pleb.needs.hunger < 0.15 && pleb.inventory.berries > 0 {
+                        pleb.activity = PlebActivity::Eating;
+                    }
+                    // Auto-sleep: seek bed when very tired and it's nighttime (or exhausted any time)
+                    else if (pleb.needs.rest < 0.2 || (pleb.needs.rest < 0.4 && env.is_night))
+                        && pleb.activity != PlebActivity::Sleeping
+                    {
+                        if env.near_bed {
+                            // Already near a bed — start sleeping
+                            pleb.activity = PlebActivity::Sleeping;
+                            pleb.path.clear();
+                            pleb.path_idx = 0;
+                        } else if let Some((bx, by)) = env.nearest_bed {
+                            // Path to nearest bed
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let path = astar_path(&self.grid_data, start, (bx, by));
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Walking;
+                            }
+                        }
+                    }
+                    // Auto-harvest: seek berries when hungry and no berries in inventory
+                    else if pleb.needs.hunger < 0.4 && pleb.inventory.berries == 0 {
+                        if env.near_berry_bush && pleb.harvest_target.is_none() {
+                            if let Some((bx, by)) = env.nearest_berry_bush {
+                                pleb.harvest_target = Some((bx, by));
+                                pleb.activity = PlebActivity::Harvesting(0.0);
+                                pleb.path.clear();
+                                pleb.path_idx = 0;
+                            }
+                        } else if pleb.harvest_target.is_none() {
+                            if let Some((bx, by)) = env.nearest_berry_bush {
+                                let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                let path = astar_path(&self.grid_data, start, (bx, by));
+                                if !path.is_empty() {
+                                    pleb.path = path;
+                                    pleb.path_idx = 0;
+                                    pleb.activity = PlebActivity::Walking;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Update walking activity based on path state
+                if pleb.path_idx < pleb.path.len() && pleb.activity == PlebActivity::Idle {
+                    pleb.activity = PlebActivity::Walking;
+                } else if pleb.path_idx >= pleb.path.len() && pleb.activity == PlebActivity::Walking {
+                    pleb.activity = PlebActivity::Idle;
+                }
 
                 // Crisis flee behavior: when holding breath or gasping, pathfind to fresh air
                 if pleb.needs.breathing_state != BreathingState::Normal
@@ -198,7 +291,7 @@ impl App {
                     let by = pleb.y.floor() as i32;
                     if let Some(target) = find_breathable_tile(&self.grid_data, bx, by, 20) {
                         pleb.needs.flee_target = Some(target);
-                        // Override current path with flee path
+                        pleb.activity = PlebActivity::Walking;
                         let start = (bx, by);
                         let path = astar_path(&self.grid_data, start, target);
                         if !path.is_empty() {
@@ -207,7 +300,6 @@ impl App {
                         }
                     }
                 }
-                // Clear flee target when breathing normally again
                 if pleb.needs.breathing_state == BreathingState::Normal {
                     pleb.needs.flee_target = None;
                 }

@@ -11,10 +11,10 @@ use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_door_rs
 use sprites::generate_tree_sprites;
 
 mod pleb;
-use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, random_name, MAX_PLEBS};
+use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, random_name, MAX_PLEBS, PlebActivity};
 
 mod needs;
-use needs::{sample_environment, tick_needs, mood_label, critical_need, AirReadback, BreathingState, breathing_label, find_breathable_tile};
+use needs::{sample_environment, tick_needs, mood_label, critical_need, AirReadback, BreathingState, breathing_label, find_breathable_tile, BERRY_HUNGER_RESTORE};
 
 mod build;
 mod camera;
@@ -122,6 +122,8 @@ struct App {
     // Per-pleb air readback from fluid sim (updated one frame behind)
     pleb_air_data: Vec<AirReadback>,
     pleb_air_readback_pending: bool,
+    // Context menu for pleb actions
+    context_menu: Option<(f32, f32)>, // screen position for context menu popup
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -318,6 +320,7 @@ impl App {
             physics_bodies: Vec::new(),
             pleb_air_data: Vec::new(),
             pleb_air_readback_pending: false,
+            context_menu: None,
         }
     }
 
@@ -779,7 +782,7 @@ impl App {
                 BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost
                 | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve
                 | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall | BuildTool::GraniteWall | BuildTool::LimestoneWall
-                | BuildTool::Cannon => {
+                | BuildTool::Cannon | BuildTool::Bed | BuildTool::BerryBush => {
                     let can_place = self.can_place_at(bx, by)
                         || (self.build_tool == BuildTool::Pump && bt == 15); // pump on pipe
                     if can_place {
@@ -800,6 +803,8 @@ impl App {
                             BuildTool::GraniteWall => make_block(24, 3, roof_flag),
                             BuildTool::LimestoneWall => make_block(25, 3, roof_flag),
                             BuildTool::Cannon => make_block(29, 2, roof_flag | rot_flags),
+                            BuildTool::Bed => make_block(30, 0, roof_flag),
+                            BuildTool::BerryBush => make_block(31, 0, 0),
                             _ => unreachable!(),
                         };
                         let roof_h = block & 0xFF000000;
@@ -1963,12 +1968,17 @@ impl ApplicationHandler for App {
                         self.drag_start = None;
                     }
                 }
-                // Right-click: pick up / drop light sources
+                // Right-click: context menu for selected pleb, or pick up lights
                 if button == winit::event::MouseButton::Right {
                     if state.is_pressed() {
                         let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
-                        self.try_pick_light(wx, wy);
-                    } else {
+                        if self.selected_pleb.is_some() {
+                            // Open context menu at mouse position
+                            self.context_menu = Some((self.last_mouse_x as f32, self.last_mouse_y as f32));
+                        } else {
+                            self.try_pick_light(wx, wy);
+                        }
+                    } else if self.dragging_light.is_some() {
                         self.drop_light();
                     }
                 }
