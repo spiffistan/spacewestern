@@ -23,132 +23,117 @@ impl App {
         let mut foliage_opacity = self.camera.foliage_opacity;
         let mut foliage_variation = self.camera.foliage_variation;
         let mut oblique = self.camera.oblique_strength;
-                let base_zoom = (self.camera.screen_w / 64.0).min(self.camera.screen_h / 64.0);
-        egui::Window::new("Controls")
-            .default_pos([10.0, 10.0])
-            .default_width(300.0)
-            .resizable(false)
-            .show(ctx, |ui| {
-                // Time of day as hours:minutes for display
+        let base_zoom = (self.camera.screen_w / 64.0).min(self.camera.screen_h / 64.0);
+
+        // --- Top menu bar ---
+        egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                // Time menu
                 let day_frac = time_val / DAY_DURATION;
                 let hours = (day_frac * 24.0) as u32;
                 let minutes = ((day_frac * 24.0 - hours as f32) * 60.0) as u32;
-
-                // Determine phase
-                let phase = if day_frac < 0.15 {
-                    "Night"
-                } else if day_frac < 0.25 {
-                    "Dawn"
-                } else if day_frac < 0.75 {
-                    "Day"
-                } else if day_frac < 0.85 {
-                    "Dusk"
-                } else {
-                    "Night"
-                };
-
-                ui.label(format!("{:02}:{:02} - {}", hours, minutes, phase));
-                ui.add(egui::Slider::new(&mut time_val, 0.0..=DAY_DURATION)
-                    .text("Time")
-                    .show_value(false));
-                ui.horizontal(|ui| {
-                    if ui.button(if paused { "Play" } else { "Pause" }).clicked() {
-                        paused = !paused;
-                    }
-                    ui.add(egui::Slider::new(&mut speed, 0.1..=5.0)
-                        .text("Speed")
-                        .logarithmic(true));
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Night").clicked()  { time_val = DAY_DURATION * 0.0; paused = true; self.camera.force_refresh = 5.0; }
-                    if ui.button("Dawn").clicked()   { time_val = DAY_DURATION * 0.18; paused = true; self.camera.force_refresh = 5.0; }
-                    if ui.button("Day").clicked()    { time_val = DAY_DURATION * 0.5; paused = true; self.camera.force_refresh = 5.0; }
-                    if ui.button("Dusk").clicked()   { time_val = DAY_DURATION * 0.82; paused = true; self.camera.force_refresh = 5.0; }
+                let phase = if day_frac < 0.15 { "Night" }
+                    else if day_frac < 0.25 { "Dawn" }
+                    else if day_frac < 0.75 { "Day" }
+                    else if day_frac < 0.85 { "Dusk" }
+                    else { "Night" };
+                let time_label = format!("{:02}:{:02} {}", hours, minutes, phase);
+                ui.menu_button(time_label, |ui| {
+                    ui.add(egui::Slider::new(&mut time_val, 0.0..=DAY_DURATION)
+                        .text("Time").show_value(false));
+                    ui.horizontal(|ui| {
+                        if ui.button(if paused { "Play" } else { "Pause" }).clicked() { paused = !paused; }
+                        ui.add(egui::Slider::new(&mut speed, 0.1..=5.0).text("Speed").logarithmic(true));
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Night").clicked()  { time_val = DAY_DURATION * 0.0; paused = true; self.camera.force_refresh = 5.0; }
+                        if ui.button("Dawn").clicked()   { time_val = DAY_DURATION * 0.18; paused = true; self.camera.force_refresh = 5.0; }
+                        if ui.button("Day").clicked()    { time_val = DAY_DURATION * 0.5; paused = true; self.camera.force_refresh = 5.0; }
+                        if ui.button("Dusk").clicked()   { time_val = DAY_DURATION * 0.82; paused = true; self.camera.force_refresh = 5.0; }
+                    });
                 });
 
-                // Weather display
+                ui.separator();
+
+                // Weather menu
                 let weather_label = match &self.weather {
                     WeatherState::Clear => "Clear",
                     WeatherState::Cloudy => "Cloudy",
                     WeatherState::LightRain => "Light Rain",
                     WeatherState::HeavyRain => "Heavy Rain",
                 };
-                ui.label(format!("Weather: {}", weather_label));
-
-                ui.separator();
-
-                let zoom_pct = zoom / base_zoom * 100.0;
-                ui.label(format!("Zoom: {:.0}%", zoom_pct));
-                ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.05..=base_zoom * 8.0)
-                    .text("Zoom")
-                    .show_value(false)
-                    .logarithmic(true));
-                if ui.button("Reset zoom").clicked() {
-                    zoom = base_zoom;
-                }
-                let mut rs = self.render_scale;
-                ui.add(egui::Slider::new(&mut rs, 0.15..=1.0)
-                    .text("Render quality")
-                    .step_by(0.05));
-                self.render_scale = rs;
-
-                ui.separator();
-                ui.label("Lighting");
-                ui.add(egui::Slider::new(&mut glass_light, 0.0..=0.5)
-                    .text("Window glow")
-                    .step_by(0.01));
-                ui.add(egui::Slider::new(&mut indoor_glow, 0.0..=1.0)
-                    .text("Indoor glow")
-                    .step_by(0.01));
-                ui.add(egui::Slider::new(&mut bleed, 0.0..=2.0)
-                    .text("Light bleed")
-                    .step_by(0.01));
-
-                ui.separator();
-                ui.label("Foliage Shadows");
-                ui.add(egui::Slider::new(&mut foliage_opacity, 0.0..=1.0)
-                    .text("Canopy density")
-                    .step_by(0.01));
-                ui.add(egui::Slider::new(&mut foliage_variation, 0.0..=1.0)
-                    .text("Tree variation")
-                    .step_by(0.01));
-
-                ui.separator();
-                ui.label("Fluid Sim");
-                let mut fluid_spd = self.fluid_speed;
-                ui.add(egui::Slider::new(&mut fluid_spd, 0.0..=5.0)
-                    .text("Fluid speed")
-                    .step_by(0.1));
-                self.fluid_speed = fluid_spd;
-                ui.horizontal(|ui| {
-                    ui.label("Wind:");
-                    let mut wx = self.fluid_params.wind_x;
-                    let mut wy = self.fluid_params.wind_y;
-                    ui.add(egui::Slider::new(&mut wx, -20.0..=20.0).text("X").step_by(0.5));
-                    ui.add(egui::Slider::new(&mut wy, -20.0..=20.0).text("Y").step_by(0.5));
-                    self.fluid_params.wind_x = wx;
-                    self.fluid_params.wind_y = wy;
+                ui.menu_button(format!("Weather: {}", weather_label), |ui| {
+                    if ui.button("Clear").clicked() { self.weather = WeatherState::Clear; self.weather_timer = 45.0; }
+                    if ui.button("Cloudy").clicked() { self.weather = WeatherState::Cloudy; self.weather_timer = 45.0; }
+                    if ui.button("Light Rain").clicked() { self.weather = WeatherState::LightRain; self.weather_timer = 45.0; }
+                    if ui.button("Heavy Rain").clicked() { self.weather = WeatherState::HeavyRain; self.weather_timer = 45.0; }
                 });
-                let mut sr = self.fluid_params.smoke_rate;
-                ui.add(egui::Slider::new(&mut sr, 0.0..=1.0)
-                    .text("Smoke rate")
-                    .step_by(0.05));
-                self.fluid_params.smoke_rate = sr;
-                let mut fs = self.fluid_params.fan_speed;
-                ui.add(egui::Slider::new(&mut fs, 0.0..=50.0)
-                    .text("Fan speed")
-                    .step_by(1.0));
-                self.fluid_params.fan_speed = fs;
-                ui.add(egui::Slider::new(&mut self.pipe_width, 1.0..=20.0)
-                    .text("Pipe width")
-                    .step_by(0.5));
 
                 ui.separator();
-                ui.label("Camera");
-                ui.add(egui::Slider::new(&mut oblique, 0.0..=0.3)
-                    .text("Wall face tilt")
-                    .step_by(0.005));
+
+                // Lighting menu
+                ui.menu_button("Lighting", |ui| {
+                    ui.add(egui::Slider::new(&mut glass_light, 0.0..=0.5).text("Window glow").step_by(0.01));
+                    ui.add(egui::Slider::new(&mut indoor_glow, 0.0..=1.0).text("Indoor glow").step_by(0.01));
+                    ui.add(egui::Slider::new(&mut bleed, 0.0..=2.0).text("Light bleed").step_by(0.01));
+                    ui.separator();
+                    ui.label("Foliage Shadows");
+                    ui.add(egui::Slider::new(&mut foliage_opacity, 0.0..=1.0).text("Canopy density").step_by(0.01));
+                    ui.add(egui::Slider::new(&mut foliage_variation, 0.0..=1.0).text("Tree variation").step_by(0.01));
+                });
+
+                // Fluid menu
+                ui.menu_button("Fluid", |ui| {
+                    let mut fluid_spd = self.fluid_speed;
+                    ui.add(egui::Slider::new(&mut fluid_spd, 0.0..=5.0).text("Fluid speed").step_by(0.1));
+                    self.fluid_speed = fluid_spd;
+                    ui.horizontal(|ui| {
+                        ui.label("Wind:");
+                        let mut wx = self.fluid_params.wind_x;
+                        let mut wy = self.fluid_params.wind_y;
+                        ui.add(egui::Slider::new(&mut wx, -20.0..=20.0).text("X").step_by(0.5));
+                        ui.add(egui::Slider::new(&mut wy, -20.0..=20.0).text("Y").step_by(0.5));
+                        self.fluid_params.wind_x = wx;
+                        self.fluid_params.wind_y = wy;
+                    });
+                    let mut sr = self.fluid_params.smoke_rate;
+                    ui.add(egui::Slider::new(&mut sr, 0.0..=1.0).text("Smoke rate").step_by(0.05));
+                    self.fluid_params.smoke_rate = sr;
+                    let mut fs = self.fluid_params.fan_speed;
+                    ui.add(egui::Slider::new(&mut fs, 0.0..=50.0).text("Fan speed").step_by(1.0));
+                    self.fluid_params.fan_speed = fs;
+                    ui.add(egui::Slider::new(&mut self.pipe_width, 1.0..=20.0).text("Pipe width").step_by(0.5));
+                });
+
+                // Camera menu
+                ui.menu_button("Camera", |ui| {
+                    let zoom_pct = zoom / base_zoom * 100.0;
+                    ui.label(format!("Zoom: {:.0}%", zoom_pct));
+                    ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.05..=base_zoom * 8.0)
+                        .text("Zoom").show_value(false).logarithmic(true));
+                    if ui.button("Reset zoom").clicked() { zoom = base_zoom; }
+                    let mut rs = self.render_scale;
+                    ui.add(egui::Slider::new(&mut rs, 0.15..=1.0).text("Render quality").step_by(0.05));
+                    self.render_scale = rs;
+                    ui.separator();
+                    ui.add(egui::Slider::new(&mut oblique, 0.0..=0.3).text("Wall face tilt").step_by(0.005));
+                });
+
+                // Admin menu (colonist placement)
+                ui.separator();
+                ui.menu_button("Admin", |ui| {
+                    let pleb_label = format!("Add Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
+                    if ui.button(pleb_label).clicked() {
+                        self.placing_pleb = !self.placing_pleb;
+                        if self.placing_pleb { self.build_tool = BuildTool::None; }
+                        ui.close_menu();
+                    }
+                    if self.placing_pleb {
+                        ui.label(egui::RichText::new("Click to place").weak().size(10.0));
+                    }
+                });
             });
+        });
         self.time_of_day = time_val;
         self.time_paused = paused;
         self.time_speed = speed;
@@ -180,122 +165,145 @@ impl App {
                 });
         }
 
-        // --- Build categories (left bottom, Rimworld-style) ---
+        // --- Build categories (bottom bar, horizontal, Rimworld-style) ---
+        let cat_s = 18.0; // category font size
         egui::Area::new(egui::Id::new("build_categories"))
-            .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -20.0])
+            .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
             .show(ctx, |ui| {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(65.0);
-                    let s = 11.0;
-                    let categories = [
-                        ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
-                        ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Physics", "\u{1f4e6}"),
-                    ];
-                    for &(name, icon) in &categories {
-                        let selected = self.build_category == Some(name);
-                        let label = format!("{} {}", icon, name);
-                        if ui.selectable_label(selected, egui::RichText::new(label).size(s)).clicked() {
-                            if selected {
-                                self.build_category = None;
-                                self.build_tool = BuildTool::None;
-                            } else {
-                                self.build_category = Some(name);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let categories = [
+                            ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
+                            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Physics", "\u{1f4e6}"),
+                        ];
+                        for &(name, icon) in &categories {
+                            let selected = self.build_category == Some(name);
+                            let label = format!("{} {}", icon, name);
+                            if ui.selectable_label(selected, egui::RichText::new(label).size(cat_s)).clicked() {
+                                if selected {
+                                    self.build_category = None;
+                                    self.build_tool = BuildTool::None;
+                                } else {
+                                    self.build_category = Some(name);
+                                }
                             }
                         }
-                    }
-                    ui.separator();
-                    let s2 = 10.0;
-                    if ui.selectable_label(self.build_tool == BuildTool::Destroy, egui::RichText::new("\u{274c} Destroy").size(s2)).clicked() {
-                        self.build_tool = if self.build_tool == BuildTool::Destroy { BuildTool::None } else { BuildTool::Destroy };
-                        self.build_category = None;
-                    }
+                        ui.separator();
+                        if ui.selectable_label(self.build_tool == BuildTool::Destroy, egui::RichText::new("\u{274c} Destroy").size(cat_s)).clicked() {
+                            self.build_tool = if self.build_tool == BuildTool::Destroy { BuildTool::None } else { BuildTool::Destroy };
+                            self.build_category = None;
+                        }
+                    });
                 });
             });
 
-        // --- Build items panel (right of categories) ---
+        // --- Build items panel (horizontal squares flowing right, above categories) ---
         if let Some(cat) = self.build_category {
             egui::Area::new(egui::Id::new("build_items"))
-                .anchor(egui::Align2::LEFT_BOTTOM, [90.0, -20.0])
+                .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -55.0])
                 .show(ctx, |ui| {
                     egui::Frame::window(ui.style()).show(ui, |ui| {
-                        ui.set_max_width(90.0);
-                        let s = 11.0;
                         let tool = &mut self.build_tool;
-                        macro_rules! btn {
-                            ($t:expr, $label:expr) => {
-                                if ui.selectable_label(*tool == $t, egui::RichText::new($label).size(s)).clicked() {
-                                    *tool = if *tool == $t { BuildTool::None } else { $t };
-                                }
+                        let tile_size = 60.0;
+                        let icon_s = 24.0;
+                        let label_s = 11.0;
+
+                        // Square icon button helper
+                        let mut icon_btn = |ui: &mut egui::Ui, t: BuildTool, icon: &str, label: &str| {
+                            let selected = *tool == t;
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::Vec2::splat(tile_size), egui::Sense::click(),
+                            );
+                            let painter = ui.painter_at(rect);
+                            let bg = if selected {
+                                egui::Color32::from_rgb(60, 80, 110)
+                            } else if response.hovered() {
+                                egui::Color32::from_rgb(55, 58, 65)
+                            } else {
+                                egui::Color32::from_rgb(40, 42, 48)
                             };
-                        }
-                        match cat {
-                            "Walls" => {
-                                btn!(BuildTool::WoodWall, "Wood");
-                                btn!(BuildTool::SteelWall, "Steel");
-                                btn!(BuildTool::SandstoneWall, "Sandstone");
-                                btn!(BuildTool::GraniteWall, "Granite");
-                                btn!(BuildTool::LimestoneWall, "Limestone");
+                            painter.rect_filled(rect, 4.0, bg);
+                            painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
+                            painter.text(rect.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
+                                icon, egui::FontId::proportional(icon_s), egui::Color32::WHITE);
+                            painter.text(rect.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
+                                label, egui::FontId::proportional(label_s), egui::Color32::from_gray(190));
+                            if response.clicked() {
+                                *tool = if *tool == t { BuildTool::None } else { t };
                             }
-                            "Floor" => {
-                                btn!(BuildTool::WoodFloor, "Wood Floor");
-                                btn!(BuildTool::StoneFloor, "Stone Floor");
-                                btn!(BuildTool::ConcreteFloor, "Concrete");
-                                btn!(BuildTool::Roof, "Add Roof");
-                                btn!(BuildTool::RemoveFloor, "Remove Floor");
-                                btn!(BuildTool::RemoveRoof, "Remove Roof");
-                            }
-                            "Build" => {
-                                btn!(BuildTool::Fireplace, "Fireplace");
-                                btn!(BuildTool::Bench, "Bench");
-                                btn!(BuildTool::Bed, "Bed");
-                                btn!(BuildTool::StorageCrate, "Storage Crate");
-                                btn!(BuildTool::Fan, "Fan");
-                                btn!(BuildTool::Compost, "Compost");
-                                btn!(BuildTool::BerryBush, "Berry Bush");
-                                btn!(BuildTool::Cannon, "Cannon");
-                                btn!(BuildTool::ElectricLight, "Ceiling Light");
-                                btn!(BuildTool::StandingLamp, "Floor Lamp");
-                                btn!(BuildTool::TableLamp, "Table Lamp");
-                                btn!(BuildTool::Dig, "Dig Ground");
-                            }
-                            "Opening" => {
-                                btn!(BuildTool::Window, "Window");
-                                btn!(BuildTool::Door, "Door");
-                            }
-                            "Piping" => {
-                                btn!(BuildTool::Pipe, "Pipe");
-                                btn!(BuildTool::Pump, "Pump");
-                                btn!(BuildTool::Tank, "Tank");
-                                btn!(BuildTool::Valve, "Valve");
-                                btn!(BuildTool::Outlet, "Outlet");
-                                btn!(BuildTool::Inlet, "Inlet");
-                            }
-                            "Physics" => {
-                                btn!(BuildTool::WoodBox, "Wood Box");
-                                let pleb_label = format!("Add Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
-                                if ui.button(egui::RichText::new(pleb_label).size(s)).clicked() {
-                                    self.placing_pleb = !self.placing_pleb;
-                                    if self.placing_pleb { *tool = BuildTool::None; }
+                        };
+
+                        // Items flow horizontally
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::Vec2::new(4.0, 4.0);
+                            match cat {
+                                "Walls" => {
+                                    icon_btn(ui, BuildTool::WoodWall, "\u{1fab5}", "Wood");
+                                    icon_btn(ui, BuildTool::SteelWall, "\u{2699}", "Steel");
+                                    icon_btn(ui, BuildTool::SandstoneWall, "\u{1faa8}", "Sandstone");
+                                    icon_btn(ui, BuildTool::GraniteWall, "\u{26f0}", "Granite");
+                                    icon_btn(ui, BuildTool::LimestoneWall, "\u{1f532}", "Limestone");
                                 }
+                                "Floor" => {
+                                    icon_btn(ui, BuildTool::WoodFloor, "\u{1fab5}", "Wood");
+                                    icon_btn(ui, BuildTool::StoneFloor, "\u{2b1b}", "Stone");
+                                    icon_btn(ui, BuildTool::ConcreteFloor, "\u{2b1c}", "Concrete");
+                                    icon_btn(ui, BuildTool::Roof, "\u{1f3e0}", "Roof");
+                                    icon_btn(ui, BuildTool::RemoveFloor, "\u{274c}", "Rm Floor");
+                                    icon_btn(ui, BuildTool::RemoveRoof, "\u{274c}", "Rm Roof");
+                                }
+                                "Build" => {
+                                    icon_btn(ui, BuildTool::Fireplace, "\u{1f525}", "Fire");
+                                    icon_btn(ui, BuildTool::Bench, "\u{1fa91}", "Bench");
+                                    icon_btn(ui, BuildTool::Bed, "\u{1f6cf}", "Bed");
+                                    icon_btn(ui, BuildTool::StorageCrate, "\u{1f4e6}", "Crate");
+                                    icon_btn(ui, BuildTool::Fan, "\u{1f4a8}", "Fan");
+                                    icon_btn(ui, BuildTool::Compost, "\u{267b}", "Compost");
+                                    icon_btn(ui, BuildTool::BerryBush, "\u{1fad0}", "Berries");
+                                    icon_btn(ui, BuildTool::Cannon, "\u{1f4a5}", "Cannon");
+                                    icon_btn(ui, BuildTool::ElectricLight, "\u{1f4a1}", "Ceiling");
+                                    icon_btn(ui, BuildTool::StandingLamp, "\u{1f9f4}", "Floor Lamp");
+                                    icon_btn(ui, BuildTool::TableLamp, "\u{1f4a1}", "Table");
+                                    icon_btn(ui, BuildTool::Dig, "\u{26cf}", "Dig");
+                                }
+                                "Opening" => {
+                                    icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Window");
+                                    icon_btn(ui, BuildTool::Door, "\u{1f6aa}", "Door");
+                                }
+                                "Piping" => {
+                                    icon_btn(ui, BuildTool::Pipe, "\u{1f4a7}", "Pipe");
+                                    icon_btn(ui, BuildTool::Pump, "\u{2699}", "Pump");
+                                    icon_btn(ui, BuildTool::Tank, "\u{1f6e2}", "Tank");
+                                    icon_btn(ui, BuildTool::Valve, "\u{1f504}", "Valve");
+                                    icon_btn(ui, BuildTool::Outlet, "\u{27a1}", "Outlet");
+                                    icon_btn(ui, BuildTool::Inlet, "\u{2b05}", "Inlet");
+                                }
+                                "Physics" => {
+                                    icon_btn(ui, BuildTool::WoodBox, "\u{1f4e6}", "Box");
+                                }
+                                _ => {}
                             }
-                            _ => {}
-                        }
+                        });
+                        // Hint bar below icons
+                        let tool = &self.build_tool;
                         if *tool != BuildTool::None {
                             ui.separator();
-                            let hint = match *tool {
-                                BuildTool::Bench => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
+                            let hint = match tool {
+                                BuildTool::Bench | BuildTool::Bed => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
                                 BuildTool::TableLamp => "On bench".to_string(),
-                                BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet => {
+                                BuildTool::Fan | BuildTool::Pump | BuildTool::Inlet | BuildTool::Outlet | BuildTool::Cannon => {
                                     let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" };
                                     format!("Q/E [{}]", d)
                                 }
                                 BuildTool::Destroy | BuildTool::RemoveFloor | BuildTool::RemoveRoof => "Click/drag".to_string(),
                                 BuildTool::WoodBox => "Click to drop".to_string(),
                                 BuildTool::Window | BuildTool::Door => "Click wall".to_string(),
-                                BuildTool::Roof => "Drag (needs wall support)".to_string(),
-                                _ => "Click/drag to place".to_string(),
+                                BuildTool::Roof => "Drag (needs support)".to_string(),
+                                BuildTool::Dig => "Click to dig 20%".to_string(),
+                                _ => "Click/drag".to_string(),
                             };
-                            ui.label(egui::RichText::new(hint).weak().size(9.0));
+                            ui.label(egui::RichText::new(hint).weak().size(13.0));
                         }
                     });
                 });
@@ -711,11 +719,7 @@ impl App {
                         if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
                             self.show_pipe_overlay = !self.show_pipe_overlay;
                         }
-                        let mut debug = self.debug_mode;
-                        if ui.selectable_label(debug, "Debug").clicked() {
-                            debug = !debug;
-                        }
-                        self.debug_mode = debug;
+                        // Info tool: hold Shift to inspect (no toggle button)
                         if ui.selectable_label(self.enable_prox_glow, "Glow").clicked() {
                             self.enable_prox_glow = !self.enable_prox_glow;
                         }
@@ -790,10 +794,10 @@ impl App {
                 });
         }
 
-        // Debug tooltip at cursor position (also shows when holding Shift)
+        // Info tool: hold Shift to inspect any block
         let shift_held = self.pressed_keys.contains(&KeyCode::ShiftLeft)
             || self.pressed_keys.contains(&KeyCode::ShiftRight);
-        if self.debug_mode || shift_held {
+        if shift_held {
             let (wx, wy) = self.hover_world;
             let bx = wx.floor() as i32;
             let by = wy.floor() as i32;
@@ -806,20 +810,24 @@ impl App {
                 let bh = (block >> 8) & 0xFF;
                 let flags = (block >> 16) & 0xFF;
                 let type_name = match bt {
-                    0 => "air", 1 => "stone", 2 => "dirt", 3 => "water",
-                    4 => "wall", 5 => "glass", 6 => "fire", 7 => "e-light",
-                    8 => "tree", 9 => "bench", 10 => "floor-lamp", 11 => "table-lamp",
-                    12 => "fan", 13 => "compost", 14 => "insulated",
-                    15 => "pipe", 16 => "pump", 17 => "tank", 18 => "valve",
-                    19 => "outlet", 20 => "inlet",
-                    21 => "wood-wall", 22 => "steel-wall", 23 => "sandstone",
-                    24 => "granite", 25 => "limestone",
-                    26 => "wood-floor", 27 => "stone-floor", 28 => "concrete",
-                    _ => "?",
+                    0 => "Air", 1 => "Stone Wall", 2 => "Dirt", 3 => "Water",
+                    4 => "Wall", 5 => "Glass", 6 => "Fireplace", 7 => "Ceiling Light",
+                    8 => "Tree", 9 => "Bench", 10 => "Floor Lamp", 11 => "Table Lamp",
+                    12 => "Fan", 13 => "Compost", 14 => "Insulated Wall",
+                    15 => "Pipe", 16 => "Pump", 17 => "Tank", 18 => "Valve",
+                    19 => "Outlet", 20 => "Inlet",
+                    21 => "Wood Wall", 22 => "Steel Wall", 23 => "Sandstone Wall",
+                    24 => "Granite Wall", 25 => "Limestone Wall",
+                    26 => "Wood Floor", 27 => "Stone Floor", 28 => "Concrete Floor",
+                    29 => "Cannon", 30 => "Bed", 31 => "Berry Bush",
+                    32 => "Dug Ground", 33 => "Storage Crate",
+                    _ => "Unknown",
                 };
-                let roof = if flags & 2 != 0 { " R" } else { "" };
-                let door = if flags & 1 != 0 { if flags & 4 != 0 { " D:open" } else { " D:shut" } } else { "" };
-                block_info = format!("{}(h{}){}{}", type_name, bh, roof, door);
+                let mut tags = String::new();
+                if flags & 2 != 0 { tags.push_str(" [Roofed]"); }
+                if flags & 1 != 0 { tags.push_str(if flags & 4 != 0 { " [Door:Open]" } else { " [Door:Closed]" }); }
+                if bh > 0 { block_info = format!("{} (h:{}){}", type_name, bh, tags); }
+                else { block_info = format!("{}{}", type_name, tags); }
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -849,21 +857,34 @@ impl App {
                 String::new()
             };
 
+            // Material thermal properties
+            let mat_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                let bt = self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] & 0xFF;
+                let mats = crate::materials::build_material_table();
+                if (bt as usize) < mats.len() {
+                    let m = &mats[bt as usize];
+                    if m.heat_capacity > 0.0 || m.conductivity > 0.0 {
+                        format!("\nHeat cap: {:.1} | Cond: {:.3}", m.heat_capacity, m.conductivity)
+                    } else { String::new() }
+                } else { String::new() }
+            } else { String::new() };
+
             let tip = format!(
-                "({:.1}, {:.1})\n{}\n{}{}",
-                wx, wy, block_info, gas_info, pipe_info
+                "\u{1f4cd} ({:.1}, {:.1})\n{}\n{}{}{}",
+                wx, wy, block_info, gas_info, mat_info, pipe_info
             );
 
             // Position tooltip near cursor
             let cursor_screen = ctx.input(|i| {
                 i.pointer.hover_pos().unwrap_or(egui::Pos2::ZERO)
             });
-            egui::Area::new(egui::Id::new("debug_tooltip"))
+            egui::Area::new(egui::Id::new("info_tooltip"))
                 .fixed_pos(cursor_screen + egui::Vec2::new(15.0, 15.0))
                 .interactable(false)
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.label(egui::RichText::new(tip).monospace().size(12.0));
+                        ui.label(egui::RichText::new("\u{1f50d} Info").strong().size(13.0));
+                        ui.label(egui::RichText::new(tip).monospace().size(11.0));
                     });
                 });
         }

@@ -400,6 +400,7 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
 
         if sbh == 0u { continue; } // open floor
         if sbt >= 15u && sbt <= 20u { continue; } // pipe components don't block light
+        if sbt == 32u { continue; } // dug ground doesn't block light
 
         // Light is above this block — passes over (furniture below light height)
         if f32(sbh) <= light_h {
@@ -1094,10 +1095,11 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let rh = get_roof_height(bx, by);
         let is_roofed_floor = has_roof(block) && bh < 0.5;
 
-        // Pipe components (15-20) don't cast shadows — they're ground-level equipment
+        // Pipe components (15-20) and dug ground (32) don't cast shadows
         let is_pipe_block = bt >= 15u && bt <= 20u;
+        let is_dug_block = bt == 32u;
 
-        var effective_h = select(bh, 0.0, is_pipe_block);
+        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block);
         if is_roofed_floor {
             // The roof is a thin plane at height rh. Rather than a hard threshold
             // that flickers, always set effective_h to rh but apply a smooth
@@ -1779,19 +1781,19 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = bush_result.xyz;
         is_tree_pixel = bush_result.w > 0.01;
     } else if btype == 32u {
-        // Dug ground: excavated pit with darker exposed earth
-        let depth = f32(bheight);
+        // Dug ground: excavated pit, 20% per depth level (max 5 = one full block)
+        let depth = f32(bheight); // 1-5, each = 20% of a block
+        let depth_frac = depth / 5.0; // 0.0-1.0
         let base_earth = vec3<f32>(0.35, 0.28, 0.15);
-        let dark_earth = vec3<f32>(0.22, 0.18, 0.10);
-        color = mix(base_earth, dark_earth, depth / 3.0);
-        // Shadow at edges (pit walls visible)
+        let dark_earth = vec3<f32>(0.18, 0.14, 0.08);
+        color = mix(base_earth, dark_earth, depth_frac);
+        // Pit wall shadows at edges (deeper = more shadow)
         let edge_d = min(min(fx, 1.0 - fx), min(fy, 1.0 - fy));
-        let pit_shadow = smoothstep(0.15, 0.0, edge_d) * 0.3 * depth;
+        let pit_shadow = smoothstep(0.15, 0.0, edge_d) * 0.4 * depth_frac;
         color *= 1.0 - pit_shadow;
-        // Moisture darkening at depth
-        if depth >= 2.0 {
-            let moisture = (depth - 1.0) / 2.0;
-            color *= 1.0 - moisture * 0.2;
+        // Moisture seeping in (visible before full water)
+        if depth >= 1.0 {
+            color *= 1.0 - depth_frac * 0.15;
         }
     } else if btype == 33u {
         // Storage crate: wooden box with planks and brackets
@@ -1942,8 +1944,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = lit + light_color_out * light_intensity_out * pl_mul;
     }
 
-    // Water effect (type 3 = water, type 32 depth>=2 = ground water)
-    let is_water = btype == 3u || (btype == 32u && bheight >= 2u);
+    // Water effect (type 3 = water, type 32 depth>=1 = ground water at 20%+)
+    let is_water = btype == 3u || (btype == 32u && bheight >= 1u);
     if is_water {
         let t = camera.time;
         // Multi-octave ripple normals
@@ -1953,7 +1955,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ripple = (rip1 + rip2 + rip3) * 0.02;
 
         // Depth-dependent base color (deeper = darker blue)
-        let depth_factor = select(1.0, f32(bheight) / 3.0, btype == 32u);
+        let depth_factor = select(1.0, f32(bheight) / 5.0, btype == 32u);
         let shallow = vec3<f32>(0.15, 0.38, 0.55);
         let deep = vec3<f32>(0.06, 0.18, 0.40);
         var water_color = mix(shallow, deep, depth_factor * 0.7);

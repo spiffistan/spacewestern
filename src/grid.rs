@@ -199,11 +199,11 @@ pub fn generate_test_grid() -> Vec<u32> {
     oset(&mut grid, 49, 14, make_block(4, 1, 1));
     for y in 9..14 { for x in 46..51 { oset(&mut grid, x, y, make_block(2, 0, roof_flag)); } }
 
-    // Water pool: dug ground at depth 2-3 (water table fills at depth >= 2)
+    // Water pool: dug ground (depth 1-5, water fills at depth >= 1)
     for y in 40..48 {
         for x in 12..22 {
             let edge = y == 40 || y == 47 || x == 12 || x == 21;
-            let depth: u8 = if edge { 2 } else { 3 };
+            let depth: u8 = if edge { 2 } else { 5 }; // shallow edges, deep center
             oset(&mut grid, x, y, make_block(32, depth, 0));
         }
     }

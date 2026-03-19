@@ -963,18 +963,18 @@ impl App {
                     return;
                 }
                 BuildTool::Dig => {
-                    // Dig: convert dirt (type 2) to dug ground (type 32, depth 1)
-                    // Or deepen existing dug ground (depth 1→2→3)
+                    // Dig: 20% per click, max depth 5 (= 1 full block).
+                    // Water appears at depth >= 1 (20%).
                     if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                         let bt_dig = block_type_rs(block);
                         let roof_h = block & 0xFF000000;
-                        if bt_dig == 2 {
-                            // Dirt → dug ground depth 1
+                        if bt_dig == 2 || (bt_dig >= 26 && bt_dig <= 28) {
+                            // Dirt or floor → dug ground depth 1 (20%)
                             self.grid_data[idx] = make_block(32, 1, 0) | roof_h;
                             self.grid_dirty = true;
                         } else if bt_dig == 32 {
                             let depth = (block >> 8) & 0xFF;
-                            if depth < 3 {
+                            if depth < 5 {
                                 self.grid_data[idx] = make_block(32, (depth + 1) as u8, 0) | roof_h;
                                 self.grid_dirty = true;
                             }
