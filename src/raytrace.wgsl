@@ -227,7 +227,7 @@ fn get_ambient(time: f32) -> vec3<f32> {
 }
 
 const SHADOW_MAX_DIST: f32 = 12.0;
-const SHADOW_STEP: f32 = 0.25;
+const SHADOW_STEP: f32 = 0.20;
 
 // Glass properties
 const GLASS_TINT: vec3<f32> = vec3<f32>(0.7, 0.85, 0.95);
@@ -1214,9 +1214,9 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
                 // Open door: ray passes through freely (doorway is an opening)
                 // continue stepping
             } else {
-                // Opaque block (wall, roof, etc.): shadow with soft edge
+                // Opaque block (wall, roof, etc.): shadow with soft penumbra
                 let overlap = effective_h - current_h;
-                let shadow_strength = clamp(overlap * 2.0, 0.0, 1.0);
+                let shadow_strength = clamp(overlap * 1.2, 0.0, 1.0);
                 light *= (1.0 - shadow_strength);
                 if light < 0.02 {
                     return vec4<f32>(tint, 0.0);
@@ -1340,8 +1340,11 @@ fn render_glass_block(wx: f32, wy: f32, fx: f32, fy: f32, bx: i32, by: i32) -> v
     return vec4<f32>(base + vec3<f32>(highlight * 0.15), 1.0);
 }
 
+// Shared memory for workgroup shadow blur (10×10 = 8×8 + 1px border)
+var<workgroup> tile_shadow: array<f32, 100>;
+
 @compute @workgroup_size(8, 8)
-fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let px = gid.x;
     let py = gid.y;
     let sw = u32(camera.screen_w);
@@ -1360,7 +1363,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fx = fract(world_x);
     let fy = fract(world_y);
 
-    // --- Temporal reprojection: reuse previous frame if possible ---
+    // --- Temporal reprojection: compute blend weight for TAA-style accumulation ---
+    // Instead of binary reproject-or-don't, we ALWAYS render the current frame
+    // but blend with the previous frame at the end. This accumulates shadow jitter
+    // into smooth shadows over 2-3 frames.
+    var temporal_blend = 0.0; // 0 = fully current, higher = mix more previous
+    var temporal_prev_px = 0.0;
+    var temporal_prev_py = 0.0;
     {
         let prev_px = (world_x - camera.prev_center_x) * camera.prev_zoom + camera.screen_w * 0.5;
         let prev_py = (world_y - camera.prev_center_y) * camera.prev_zoom + camera.screen_h * 0.5;
@@ -1376,19 +1385,25 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let dye_check = textureSampleLevel(fluid_dye_tex, fluid_dye_sampler, fluid_uv_check, 0.0);
         let near_fluid = dye_check.r > 0.001 || abs(dye_check.g - 1.0) > 0.01 || dye_check.b > 0.005;
 
-        // Time change invalidates lighting (sun position, shadows, flicker)
         let time_delta = abs(camera.time - camera.prev_time);
-        let time_stable = time_delta < 0.0005; // only truly paused time allows reprojection
+        let time_stable = time_delta < 0.0005;
 
-        // Only reproject when NOTHING changed: camera still, time paused, no fluid nearby
-        let can_reproject = zoom_stable && in_prev_bounds && time_stable
-            && camera_delta < 0.001 && !near_fluid;
+        let can_blend = zoom_stable && in_prev_bounds && camera_delta < 0.001
+            && camera.force_refresh < 0.5;
 
-        if camera.force_refresh < 0.5 && can_reproject {
-            // Use exact integer coords when camera hasn't moved (avoids sub-pixel drift)
-            let prev_color = textureLoad(prev_output, vec2<i32>(i32(px), i32(py)), 0).rgb;
-            textureStore(output, vec2<u32>(px, py), vec4(prev_color, 1.0));
-            return;
+        if can_blend {
+            temporal_prev_px = prev_px;
+            temporal_prev_py = prev_py;
+            if time_stable && !near_fluid {
+                // Fully static: use previous frame entirely (fast path)
+                let prev_color = textureLoad(prev_output, vec2<i32>(i32(px), i32(py)), 0).rgb;
+                textureStore(output, vec2<u32>(px, py), vec4(prev_color, 1.0));
+                return;
+            }
+            // Slow time progression: blend for shadow smoothing (TAA)
+            // Higher blend = smoother shadows but more ghosting
+            let fluid_factor = select(1.0, 0.4, near_fluid); // less blend near smoke
+            temporal_blend = 0.6 * fluid_factor; // higher = smoother shadows
         }
     }
 
@@ -1963,8 +1978,17 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Wall under a roof: no sun, no shadow ray. Just ambient + interior indirect.
         light_factor = INTERIOR_INDIRECT;
     } else {
-        // Outdoor pixel: trace shadow ray toward sun (per-pixel, stays here)
-        let shadow_result = trace_shadow_ray(world_x, world_y, effective_fheight, sun_dir, sun_elev);
+        // Outdoor pixel: single shadow ray with per-frame temporal jitter.
+        // Each frame offsets the ray origin slightly (varies with time).
+        // Temporal blending at the end of the shader accumulates these into
+        // smooth shadows over 2-3 frames — TAA-style, zero extra ray cost.
+        let jt = camera.time * 5.3; // faster variation = quicker convergence
+        let jh1 = fract(sin(world_x * 127.1 + world_y * 311.7 + jt) * 43758.5);
+        let jh2 = fract(sin(world_x * 269.5 + world_y * 183.3 + jt * 1.3) * 23421.6);
+        let shadow_result = trace_shadow_ray(
+            world_x + (jh1 - 0.5) * 0.18,
+            world_y + (jh2 - 0.5) * 0.18,
+            effective_fheight, sun_dir, sun_elev);
         shadow_tint = shadow_result.xyz;
         light_factor = shadow_result.w;
 
@@ -2521,6 +2545,55 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Final fog overlay: covers EVERYTHING (terrain + gas) in the border zone
     color = mix(vec3(0.12, 0.12, 0.15), color, border_fade);
+
+    // Temporal blend: mix current frame with previous for TAA shadow smoothing
+    if temporal_blend > 0.01 {
+        let prev_color = textureLoad(prev_output, vec2<i32>(i32(temporal_prev_px), i32(temporal_prev_py)), 0).rgb;
+        color = mix(color, prev_color, temporal_blend);
+    }
+
+    // --- Workgroup shadow blur: store luminance in shared memory, blur, apply ---
+    // This smooths shadow edges spatially using fast on-chip shared memory.
+    // We blur the luminance channel only (preserves color, smooths shadow edges).
+    let luma = dot(color, vec3<f32>(0.299, 0.587, 0.114));
+    let lx = lid.x + 1u;
+    let ly = lid.y + 1u;
+    tile_shadow[ly * 10u + lx] = luma;
+    // Border pixels: clamp to edge (threads at workgroup edges fill the 1px border)
+    if lid.x == 0u { tile_shadow[ly * 10u + 0u] = luma; }
+    if lid.x == 7u { tile_shadow[ly * 10u + 9u] = luma; }
+    if lid.y == 0u { tile_shadow[0u * 10u + lx] = luma; }
+    if lid.y == 7u { tile_shadow[9u * 10u + lx] = luma; }
+    // Corners
+    if lid.x == 0u && lid.y == 0u { tile_shadow[0u] = luma; }
+    if lid.x == 7u && lid.y == 0u { tile_shadow[9u] = luma; }
+    if lid.x == 0u && lid.y == 7u { tile_shadow[90u] = luma; }
+    if lid.x == 7u && lid.y == 7u { tile_shadow[99u] = luma; }
+
+    workgroupBarrier();
+
+    // 3×3 Gaussian-weighted blur on luminance
+    let w0 = 1.0 / 16.0; // corners
+    let w1 = 2.0 / 16.0; // edges
+    let w2 = 4.0 / 16.0; // center
+    var blurred_luma = 0.0;
+    blurred_luma += tile_shadow[(ly - 1u) * 10u + (lx - 1u)] * w0;
+    blurred_luma += tile_shadow[(ly - 1u) * 10u + lx] * w1;
+    blurred_luma += tile_shadow[(ly - 1u) * 10u + (lx + 1u)] * w0;
+    blurred_luma += tile_shadow[ly * 10u + (lx - 1u)] * w1;
+    blurred_luma += tile_shadow[ly * 10u + lx] * w2;
+    blurred_luma += tile_shadow[ly * 10u + (lx + 1u)] * w1;
+    blurred_luma += tile_shadow[(ly + 1u) * 10u + (lx - 1u)] * w0;
+    blurred_luma += tile_shadow[(ly + 1u) * 10u + lx] * w1;
+    blurred_luma += tile_shadow[(ly + 1u) * 10u + (lx + 1u)] * w0;
+
+    // Apply blur: adjust color brightness toward blurred luminance
+    // Only apply where there's a difference (shadow edges) to preserve texture detail
+    let luma_diff = abs(blurred_luma - luma);
+    let blur_strength = smoothstep(0.0, 0.08, luma_diff) * 0.7; // only blur at edges
+    if luma > 0.001 {
+        color *= mix(1.0, blurred_luma / luma, blur_strength);
+    }
 
     textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
 }
