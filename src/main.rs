@@ -6,7 +6,8 @@ mod grid;
 mod sprites;
 
 use materials::{GpuMaterial, build_material_table};
-use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_door_rs, compute_roof_heights, generate_test_grid};
+use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_door_rs, compute_roof_heights, generate_test_grid, grid_idx, get_block, set_block,
+           PLEB_MOVE_SPEED, PLEB_RADIUS, DOOR_AUTO_RANGE, DOOR_AUTO_CLOSE_TIME, CANNON_SPEED, CANNON_RECOIL, DAWN_FRAC, DUSK_FRAC};
 use sprites::generate_tree_sprites;
 
 mod pleb;
