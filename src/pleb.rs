@@ -1,6 +1,7 @@
 //! Pleb (colonist) — struct, appearance, movement, and A* pathfinding.
 
 use crate::grid::{GRID_W, GRID_H};
+use crate::needs::PlebNeeds;
 
 /// Appearance data for rendering a pleb (Rimworld-style).
 #[derive(Clone, Debug)]
@@ -97,6 +98,9 @@ pub struct Pleb {
     pub torch_on: bool,
     pub headlight_on: bool,
     pub appearance: PlebAppearance,
+    pub needs: PlebNeeds,
+    pub prev_x: f32, // previous frame position (for detecting movement)
+    pub prev_y: f32,
 }
 
 impl Pleb {
@@ -109,6 +113,9 @@ impl Pleb {
             torch_on: false,
             headlight_on: false,
             appearance: PlebAppearance::random(seed),
+            needs: PlebNeeds::default(),
+            prev_x: x,
+            prev_y: y,
         }
     }
 

@@ -13,6 +13,9 @@ use sprites::generate_tree_sprites;
 mod pleb;
 use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, random_name, MAX_PLEBS};
 
+mod needs;
+use needs::{sample_environment, tick_needs, mood_label, critical_need};
+
 mod build;
 mod camera;
 mod fluid;

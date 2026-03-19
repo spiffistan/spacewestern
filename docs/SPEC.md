@@ -423,82 +423,122 @@ Phase transitions run on CPU (scan affected blocks each frame, check temperature
 
 ---
 
-## Implementation Status (v38)
+## Implementation Status (v84)
 
 ### Completed
 
 **Phase 0: Foundation** ✅
 - [x] Rust project with wgpu, winit, egui
-- [x] 256x256 block grid with terrain types
+- [x] 256x256 block grid with 30 block types
 - [x] Compute shader raytracer (top-down, per-pixel)
 - [x] Camera pan/zoom controls
-- [x] WASM build target (Trunk)
+- [x] WASM build target (Trunk), GitHub Pages deploy
+- [x] Modular codebase: 14 Rust modules + 8 WGSL shaders
 
 **Phase 1: World & Lighting** ✅
-- [x] Block types: stone, dirt, water, wall, glass, door, tree, bench, lamps
-- [x] Block height and oblique south-face projection
-- [x] Directional sun with shadow ray marching
-- [x] Point lights: fireplace, electric light, standing lamp, table lamp
-- [x] Day/night cycle with dawn/dusk color transitions
-- [x] GPU lightmap: 512x512 (2x res) with flood-fill propagation (26 iterations)
-- [x] Viewport-culled lightmap for performance
-- [x] Proximity glow with line-of-sight tracing
+- [x] 30 block types via data-driven material table (GpuMaterial with 24 properties each)
+- [x] 5 wall materials (wood, steel, sandstone, granite, limestone), 3 floor types, insulated walls
+- [x] Block height and oblique south-face projection (material-driven)
+- [x] Directional sun with shadow ray marching, foliage dappling
+- [x] Point lights: fireplace, electric light, standing lamp, table lamp (per-material properties)
+- [x] Day/night cycle with dawn/dusk color transitions, time-of-day buttons
+- [x] GPU lightmap: 512x512 (2x res) with flood-fill propagation (26 iterations, viewport-culled)
+- [x] Proximity glow with line-of-sight tracing (wall-occluded, height-aware)
 - [x] Directional light bleed through windows/doors
-- [x] Tree sprites (4 variants, procedural scattering)
-- [x] Build menu: place/remove fireplaces, lamps, benches, fans
-- [x] Door toggling (open/close affects fluid + light)
+- [x] Tree sprites (8 variants: oak, pine, bush, willow, cedar, birch + clusters), noise-clustered forests
+- [x] Build menu with drag-to-place, destroy tool, roofing, windows, doors
+- [x] sRGB gamma correction (consistent native/web appearance)
 
 **Phase 2a: Core Fluid Solver** ✅
 - [x] GPU Navier-Stokes (Stable Fluids) at 256x256
-- [x] Curl, vorticity confinement, divergence, Jacobi pressure (35 iterations)
+- [x] Curl, vorticity confinement, divergence, Jacobi pressure (35 iterations, Neumann BCs)
 - [x] Gradient subtract, semi-Lagrangian advection
-- [x] Neumann BCs at walls for pressure buildup
 - [x] Dye field at 512x512 with obstacle-aware bilinear sampling
-- [x] Mouse splat injection (velocity + dye)
 
 **Phase 2b: World Integration** ✅
-- [x] Obstacle field derived from block grid (walls, glass block; doors dynamic)
-- [x] Fire blocks inject velocity (upward + turbulent wobble) and smoke
-- [x] Multi-gas: O2 (atmospheric, depleted by fire), CO2 (produced by fire), smoke
-- [x] Fire depends on O2 — dies without oxygen in sealed rooms
-- [x] Outdoor O2 replenishment, CO2 dissipation
-- [x] Windward edge fresh air injection
-- [x] Wall fan (type 12): forced directional airflow through walls, one-way valve
-- [x] Global wind vector with UI sliders
-- [x] Smoke diffusion + accumulation for room filling
+- [x] Fire blocks: O2-dependent combustion, produce CO2 + smoke + heat velocity
+- [x] Compost blocks: anaerobic CO2 production
+- [x] Wall fan (type 12): forced directional airflow, one-way valve, adjustable speed
+- [x] Global wind with UI sliders + compass indicator
+- [x] Smoke diffusion + accumulation, edge dissipation, windward O2 injection
 
 **Phase 2c: Rendering & Debug** ✅
-- [x] Smoke overlay (white-gray haze, alpha-blended)
-- [x] O2 depletion visual (darkening + blue tint)
-- [x] CO2 visual (slight darkening)
-- [x] Debug overlays: Smoke, Velocity (with per-block arrows), Pressure (ROYGBIV), O2, CO2
-- [x] Debug tooltip (GPU readback of smoke/O2/CO2 at cursor)
-- [x] Wind compass indicator
-- [x] 20-tile border fog-of-war with gas dissipation
+- [x] 8 overlay modes: Off, Gases, Smoke, Velocity (with arrows), Pressure (ROYGBIV), O2, CO2, Temp, Heat Flow
+- [x] Debug tooltip with block info + gas values (native) or block info only (WASM)
+- [x] 20-tile border fog-of-war
+
+**Phase 2d: Temperature & Thermodynamics** ✅
+- [x] Air temperature in dye.a channel (Celsius values, advected by fluid)
+- [x] Fire injects ~300°C (O2-dependent), outdoor ambient varies 5-25°C with day/night
+- [x] Gradient-based buoyancy (radial heat expansion, not fixed direction)
+- [x] Smoke-weight coupling (dense smoke sinks, opposes thermal lift)
+- [x] Block temperature buffer (256x256 f32) with per-frame thermal exchange
+- [x] Material thermal properties: heat capacity, conductivity, solar absorption
+- [x] Solar heating of outdoor sunlit blocks
+- [x] Neumann BCs for temperature at walls (no heat sink)
+- [x] Indoor cells retain heat (zero dissipation when roofed)
+- [x] Door opening pressure release (velocity burst from hot rooms)
+- [x] Temperature overlay + Heat Flow overlay (velocity colored by temperature)
+- [x] Heat shimmer visual near fire, cold blue tint
+
+**Phase 2e: Piping System** ✅
+- [x] 6 pipe components: Pipe, Pump, Tank, Valve, Outlet, Inlet
+- [x] CPU-side pressure network simulation (pressure equalization, gas transport)
+- [x] Auto-connecting pipe rendering (straight, corner, T, cross from neighbors)
+- [x] Valve toggle (click to open/close), Pump speed slider
+- [x] Tank with fill gauge, inlet/outlet directional chevrons
+- [x] Pipe overlay mode
+
+**Phase 3: Plebs** (Partial)
+- [x] Multi-pleb system (up to 16 colonists, Vec<Pleb>)
+- [x] Randomized appearance: skin tone, hair color/style, shirt, pants
+- [x] In-world sprite matches portrait (shirt body, skin head, hair)
+- [x] WASD direct control, Q/E rotation, click-to-select, click-to-move A*
+- [x] Auto-open doors (close after 2 seconds)
+- [x] Torch (T) and headlight (G) per pleb
+- [x] Colonist bar with portraits at top of screen
+- [x] GpuPleb storage buffer for multi-pleb GPU rendering
+- [ ] Needs system (hunger, rest, warmth, oxygen, safety, comfort)
+- [ ] Health system (damage from suffocation, cold, fire)
+- [ ] Utility-based AI decision making
+- [ ] Personality traits, mood system
+
+**Phase 3b: Physics** ✅
+- [x] PhysicsBody with 3D position (x,y,z), velocity, rotation
+- [x] Gravity (25 tiles/sec²), bounce, wall collision
+- [x] Wood boxes: pushable by plebs, throwable (F key)
+- [x] Wind and fan forces affect physics bodies
+- [x] Cannon block (type 29): directional, 360° rotation, click to fire
+- [x] Cannonball: ballistic arc, kinetic energy impact damage, block destruction
+- [x] Cannonball shadow + trajectory visualization
 
 **Performance Optimizations** ✅
-- [x] Half-resolution rendering with bilinear upscale
-- [x] Adjustable render quality slider (0.15-1.0)
-- [x] Precomputed sun (trig moved from GPU to CPU)
-- [x] Conditional proximity glow (lightmap gate skips 80-95% of scans)
-- [x] Toggleable glow/bleed (skip expensive per-pixel scans)
-- [x] Temporal reprojection (reuse previous frame when static)
-- [x] Lightmap update throttling (every 2 frames)
-- [x] Force-refresh on grid changes (persists 5 frames for lightmap propagation)
+- [x] Configurable render resolution (0.15-1.0 of window)
+- [x] Temporal reprojection with force-refresh system
+- [x] Conditional proximity glow (lightmap gate)
+- [x] Toggleable glow/bleed/temporal via UI
+- [x] Lightmap throttling (every 2 frames, forced on grid changes)
+- [x] Precomputed sun parameters on CPU
+- [x] 29 unit tests across 4 modules
 
 ### Not Yet Started
 
 **Phase 2 remaining:**
-- [ ] Temperature field (air temperature in dye.a channel)
-- [ ] Buoyancy (temperature-driven velocity forces)
-- [ ] Block thermal mass and heat exchange
 - [ ] Water phase transitions (freeze/evaporate)
+- [ ] Chemical reactions (methane + fire = explosion)
+- [ ] Extended gas system (H2O, CH4, CO, H2)
 - [ ] Bloom on emissive surfaces
 
-**Phase 3: Plebs** — not started
-**Phase 4: Resources & Building** — partially started (build menu exists, no resource gathering)
+**Phase 3 remaining:**
+- [ ] Pleb needs system (hunger, rest, warmth, oxygen, safety, comfort)
+- [ ] Health + death
+- [ ] Fluid-aware pathfinding costs
+- [ ] Personality traits + mood + mental breaks
+- [ ] Multiple pleb AI (utility-based decision making)
+
+**Phase 4: Resources & Building** — partially started (build menu + 30 block types, no resource gathering/crafting)
 **Phase 5: Weather & Survival** — not started (wind exists, no weather events)
-**Phase 6: Polish & Ship** — not started
+**Phase 6: Polish & Ship** — not started (save/load, storyteller, audio)
 
 ---
 

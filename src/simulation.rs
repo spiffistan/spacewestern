@@ -178,6 +178,20 @@ impl App {
             }
         }
 
+        // --- Update pleb needs ---
+        {
+            let day_frac = self.time_of_day / DAY_DURATION;
+            for pleb in self.plebs.iter_mut() {
+                let dx = pleb.x - pleb.prev_x;
+                let dy = pleb.y - pleb.prev_y;
+                let is_moving = (dx * dx + dy * dy) > 0.0001;
+                let env = sample_environment(&self.grid_data, pleb.x, pleb.y, day_frac);
+                tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving);
+                pleb.prev_x = pleb.x;
+                pleb.prev_y = pleb.y;
+            }
+        }
+
         // Auto-open doors near ANY pleb
         for pleb in &self.plebs {
             let pbx = pleb.x.floor() as i32;

@@ -288,16 +288,39 @@ impl App {
                 });
         }
 
-        // --- Colonist bar (bottom center, like Rimworld) ---
+        // --- Colonist bar (top center, like Rimworld) ---
         if !self.plebs.is_empty() {
             // Collect pleb data for display (avoid borrow issues)
-            let pleb_display: Vec<(usize, String, [f32;3], [f32;3], [f32;3], bool, bool)> = self.plebs.iter().enumerate().map(|(i, p)| {
+            struct PlebDisplay {
+                idx: usize,
+                name: String,
+                shirt: [f32; 3],
+                skin: [f32; 3],
+                hair: [f32; 3],
+                health: f32,
+                hunger: f32,
+                rest: f32,
+                warmth: f32,
+                oxygen: f32,
+                mood: f32,
+                mood_label: &'static str,
+            }
+            let pleb_display: Vec<PlebDisplay> = self.plebs.iter().enumerate().map(|(i, p)| {
                 let a = &p.appearance;
-                (i, p.name.clone(),
-                 [a.shirt_r, a.shirt_g, a.shirt_b],
-                 [a.skin_r, a.skin_g, a.skin_b],
-                 [a.hair_r, a.hair_g, a.hair_b],
-                 p.torch_on, p.headlight_on)
+                PlebDisplay {
+                    idx: i,
+                    name: p.name.clone(),
+                    shirt: [a.shirt_r, a.shirt_g, a.shirt_b],
+                    skin: [a.skin_r, a.skin_g, a.skin_b],
+                    hair: [a.hair_r, a.hair_g, a.hair_b],
+                    health: p.needs.health,
+                    hunger: p.needs.hunger,
+                    rest: p.needs.rest,
+                    warmth: p.needs.warmth,
+                    oxygen: p.needs.oxygen,
+                    mood: p.needs.mood,
+                    mood_label: mood_label(p.needs.mood),
+                }
             }).collect();
 
             egui::Area::new(egui::Id::new("colonist_bar"))
@@ -305,9 +328,11 @@ impl App {
                 .show(ctx, |ui| {
                     egui::Frame::window(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            for &(idx, ref name, shirt, skin, hair, torch, headlight) in &pleb_display {
-                                let is_sel = self.selected_pleb == Some(idx);
-                                let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(48.0, 56.0), egui::Sense::click());
+                            for pd in &pleb_display {
+                                let is_sel = self.selected_pleb == Some(pd.idx);
+                                let card_w = if is_sel { 80.0 } else { 48.0 };
+                                let card_h = if is_sel { 80.0 } else { 56.0 };
+                                let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(card_w, card_h), egui::Sense::click());
                                 let painter = ui.painter_at(rect);
 
                                 // Background
@@ -318,44 +343,120 @@ impl App {
                                 };
                                 painter.rect_filled(rect, 4.0, bg);
 
+                                // Portrait area
+                                let portrait_center = if is_sel {
+                                    rect.left_center() + egui::Vec2::new(20.0, -6.0)
+                                } else {
+                                    rect.center() + egui::Vec2::new(0.0, -4.0)
+                                };
+
                                 // Body (shirt color)
-                                let center = rect.center();
                                 let shirt_c = egui::Color32::from_rgb(
-                                    (shirt[0] * 255.0) as u8, (shirt[1] * 255.0) as u8, (shirt[2] * 255.0) as u8);
-                                painter.circle_filled(center + egui::Vec2::new(0.0, 4.0), 12.0, shirt_c);
+                                    (pd.shirt[0] * 255.0) as u8, (pd.shirt[1] * 255.0) as u8, (pd.shirt[2] * 255.0) as u8);
+                                painter.circle_filled(portrait_center + egui::Vec2::new(0.0, 8.0), 10.0, shirt_c);
 
                                 // Head (skin color)
                                 let skin_c = egui::Color32::from_rgb(
-                                    (skin[0] * 255.0) as u8, (skin[1] * 255.0) as u8, (skin[2] * 255.0) as u8);
-                                painter.circle_filled(center + egui::Vec2::new(0.0, -6.0), 7.0, skin_c);
+                                    (pd.skin[0] * 255.0) as u8, (pd.skin[1] * 255.0) as u8, (pd.skin[2] * 255.0) as u8);
+                                painter.circle_filled(portrait_center + egui::Vec2::new(0.0, -2.0), 6.0, skin_c);
 
-                                // Hair (on top of head)
+                                // Hair
                                 let hair_c = egui::Color32::from_rgb(
-                                    (hair[0] * 255.0) as u8, (hair[1] * 255.0) as u8, (hair[2] * 255.0) as u8);
-                                painter.circle_filled(center + egui::Vec2::new(0.0, -10.0), 5.0, hair_c);
+                                    (pd.hair[0] * 255.0) as u8, (pd.hair[1] * 255.0) as u8, (pd.hair[2] * 255.0) as u8);
+                                painter.circle_filled(portrait_center + egui::Vec2::new(0.0, -6.0), 4.0, hair_c);
 
                                 // Name
+                                let name_pos = if is_sel {
+                                    rect.left_bottom() + egui::Vec2::new(20.0, -2.0)
+                                } else {
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -2.0)
+                                };
                                 painter.text(
-                                    rect.center_bottom() + egui::Vec2::new(0.0, -2.0),
+                                    name_pos,
                                     egui::Align2::CENTER_BOTTOM,
-                                    name,
+                                    &pd.name,
                                     egui::FontId::proportional(8.0),
                                     egui::Color32::WHITE,
                                 );
 
-                                // Health bar (placeholder: full green)
+                                // Health bar (real value)
+                                let bar_y = if is_sel { rect.min.y + 4.0 } else { rect.max.y - 5.0 };
+                                let bar_x = rect.min.x + 2.0;
+                                let bar_w = if is_sel { 36.0 } else { rect.width() - 4.0 };
                                 let bar_rect = egui::Rect::from_min_size(
-                                    rect.left_bottom() + egui::Vec2::new(2.0, -5.0),
-                                    egui::Vec2::new(rect.width() - 4.0, 2.0),
+                                    egui::Pos2::new(bar_x, bar_y),
+                                    egui::Vec2::new(bar_w, 2.0),
                                 );
                                 painter.rect_filled(bar_rect, 1.0, egui::Color32::from_rgb(40, 40, 40));
+                                let health_color = if pd.health > 0.5 {
+                                    egui::Color32::from_rgb(80, 200, 80)
+                                } else if pd.health > 0.25 {
+                                    egui::Color32::from_rgb(200, 200, 40)
+                                } else {
+                                    egui::Color32::from_rgb(200, 40, 40)
+                                };
                                 painter.rect_filled(
-                                    egui::Rect::from_min_size(bar_rect.min, egui::Vec2::new(bar_rect.width(), bar_rect.height())),
-                                    1.0, egui::Color32::from_rgb(80, 200, 80),
+                                    egui::Rect::from_min_size(bar_rect.min, egui::Vec2::new(bar_w * pd.health, 2.0)),
+                                    1.0, health_color,
                                 );
 
+                                // Expanded needs display when selected
+                                if is_sel {
+                                    let needs_x = rect.min.x + 40.0;
+                                    let needs_y = rect.min.y + 10.0;
+                                    let bar_h = 3.0;
+                                    let spacing = 9.0;
+                                    let need_w = 34.0;
+
+                                    let needs_data: [(&str, f32, egui::Color32); 4] = [
+                                        ("HUN", pd.hunger, egui::Color32::from_rgb(200, 160, 40)),
+                                        ("RST", pd.rest, egui::Color32::from_rgb(80, 120, 200)),
+                                        ("WRM", pd.warmth, egui::Color32::from_rgb(200, 100, 40)),
+                                        ("O2", pd.oxygen, egui::Color32::from_rgb(100, 200, 220)),
+                                    ];
+
+                                    for (i, (label, val, color)) in needs_data.iter().enumerate() {
+                                        let y = needs_y + i as f32 * spacing;
+                                        // Label
+                                        painter.text(
+                                            egui::Pos2::new(needs_x, y),
+                                            egui::Align2::LEFT_TOP,
+                                            *label,
+                                            egui::FontId::proportional(7.0),
+                                            if *val < 0.2 { egui::Color32::from_rgb(255, 80, 80) } else { egui::Color32::GRAY },
+                                        );
+                                        // Bar background
+                                        let br = egui::Rect::from_min_size(
+                                            egui::Pos2::new(needs_x, y + 7.0),
+                                            egui::Vec2::new(need_w, bar_h),
+                                        );
+                                        painter.rect_filled(br, 1.0, egui::Color32::from_rgb(30, 30, 30));
+                                        // Bar fill
+                                        painter.rect_filled(
+                                            egui::Rect::from_min_size(br.min, egui::Vec2::new(need_w * val, bar_h)),
+                                            1.0, *color,
+                                        );
+                                    }
+
+                                    // Mood label at bottom-right of card
+                                    let mood_color = if pd.mood > 20.0 {
+                                        egui::Color32::from_rgb(100, 200, 100)
+                                    } else if pd.mood > -20.0 {
+                                        egui::Color32::from_rgb(180, 180, 120)
+                                    } else {
+                                        egui::Color32::from_rgb(200, 80, 80)
+                                    };
+                                    painter.text(
+                                        egui::Pos2::new(rect.max.x - 4.0, rect.max.y - 4.0),
+                                        egui::Align2::RIGHT_BOTTOM,
+                                        pd.mood_label,
+                                        egui::FontId::proportional(7.0),
+                                        mood_color,
+                                    );
+                                }
+
                                 if response.clicked() {
-                                    self.selected_pleb = if is_sel { None } else { Some(idx) };
+                                    self.selected_pleb = if is_sel { None } else { Some(pd.idx) };
                                 }
                             }
                         });
