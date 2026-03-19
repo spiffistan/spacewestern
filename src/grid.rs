@@ -179,6 +179,8 @@ pub fn generate_test_grid() -> Vec<u32> {
     // Default bed for Jeff (horizontal, in upper room)
     oset(&mut grid, 12, 13, make_block(30, 0, roof_flag));
     oset(&mut grid, 13, 13, make_block(30, 0, roof_flag));
+    // Storage crate near bed
+    oset(&mut grid, 12, 15, make_block(33, 0, roof_flag));
 
     // === House 2: Tall building ===
     let h2_h = 5u8;
@@ -313,6 +315,15 @@ pub fn generate_test_grid() -> Vec<u32> {
                 else { 1 };
             if grid[idx] == make_block(2, 0, 0) && berry_r < berry_threshold {
                 grid[idx] = make_block(31, 1, 0);
+            }
+
+            // Rocks: scattered on bare ground, more common in sparse/open areas
+            let rock_r = ((h >> 6) & 0xFFF) as u32;
+            let rock_threshold = if density < 0.3 { 12 }
+                else if density < 0.5 { 6 }
+                else { 2 };
+            if grid[idx] == make_block(2, 0, 0) && rock_r < rock_threshold {
+                grid[idx] = make_block(34, 0, 0);
             }
         }
     }

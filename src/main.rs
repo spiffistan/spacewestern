@@ -10,10 +10,10 @@ use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_door_rs
 use sprites::generate_tree_sprites;
 
 mod pleb;
-use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, random_name, MAX_PLEBS, PlebActivity};
+use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity};
 
 mod needs;
-use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, find_cool_tile, BERRY_HUNGER_RESTORE, HEAT_CRISIS_TEMP};
+use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate, BERRY_HUNGER_RESTORE, HEAT_CRISIS_TEMP};
 
 mod build;
 mod camera;
@@ -50,6 +50,20 @@ use winit::{
 
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
+
+/// Inventory of a storage crate.
+#[derive(Clone, Debug, Default)]
+struct CrateInventory {
+    rocks: u32,
+    berries: u32,
+}
+
+const CRATE_MAX_ITEMS: u32 = 10;
+
+impl CrateInventory {
+    fn total(&self) -> u32 { self.rocks + self.berries }
+    fn space(&self) -> u32 { CRATE_MAX_ITEMS.saturating_sub(self.total()) }
+}
 
 // --- Application state ---
 struct App {
@@ -107,6 +121,8 @@ struct App {
     selected_fan_world: (f32, f32),  // world position for fan slider
     build_category: Option<&'static str>, // selected build category, None = collapsed
     debug_fluid_density: [f32; 4], // last readback: RGBA from dye texture at cursor
+    debug_block_temp: f32,         // last readback: block temperature at cursor
+    debug_block_temp_pending: bool,
     debug_fluid_readback_pending: bool,
     fluid_mouse_active: bool,  // middle mouse button held
     fluid_mouse_prev: Option<(f32, f32)>, // previous world position for velocity calc
@@ -118,6 +134,7 @@ struct App {
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
     selected_cannon: Option<u32>, // grid_idx of selected cannon for rotation
     show_pleb_help: bool,      // show controls modal
+    show_inventory: bool,      // show pleb inventory window
     pressed_keys: std::collections::HashSet<KeyCode>,
     auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
     physics_bodies: Vec<PhysicsBody>,
@@ -126,9 +143,19 @@ struct App {
     pleb_air_readback_pending: bool,
     // Context menu for pleb actions
     context_menu: Option<(f32, f32)>, // screen position for context menu popup
+    // Storage crate inventories: grid_idx → stored items
+    crate_contents: std::collections::HashMap<u32, CrateInventory>,
+    selected_crate: Option<u32>,       // grid index of crate being inspected
+    selected_crate_world: (f32, f32),  // world position for crate popup
+    // Rock context menu
+    rock_context_menu: Option<(f32, f32, i32, i32)>, // (screen_x, screen_y, grid_x, grid_y)
     // Weather system
     weather: WeatherState,
     weather_timer: f32,
+    // Wind variation: slowly drifting target angle + magnitude
+    wind_target_angle: f32,    // target angle in radians
+    wind_target_mag: f32,      // target magnitude
+    wind_change_timer: f32,    // seconds until next target shift
     wetness_data: Vec<f32>,  // 256x256 per-tile wetness (0.0-1.0)
 }
 
@@ -199,6 +226,7 @@ struct GfxState {
     fluid_bg_advect_dye: [wgpu::BindGroup; 2],     // ping-pong dye
     // Debug readback
     debug_readback_buffer: wgpu::Buffer,            // staging buffer for single texel readback
+    block_temp_readback_buffer: wgpu::Buffer,       // staging buffer for block temp readback
     // Pleb air readback — one texel per pleb, each at 256-byte aligned offset
     pleb_air_readback_buffer: wgpu::Buffer,
 }
@@ -284,8 +312,8 @@ impl App {
                 splat_radius: 5.0,
                 splat_active: 0.0,
                 time: 0.0,
-                wind_x: 10.0,
-                wind_y: 10.0,
+                wind_x: std::f32::consts::FRAC_PI_4.cos() * 10.0,
+                wind_y: std::f32::consts::FRAC_PI_4.sin() * 10.0,
                 smoke_rate: 0.3,
                 fan_speed: 40.0,
                 rain_intensity: 0.0,
@@ -306,6 +334,8 @@ impl App {
             selected_fan_world: (0.0, 0.0),
             build_category: None,
             debug_fluid_density: [0.0; 4],
+            debug_block_temp: 15.0,
+            debug_block_temp_pending: false,
             debug_fluid_readback_pending: false,
             fluid_dye_phase: 0,
             output_phase: 0,
@@ -320,20 +350,28 @@ impl App {
                 p.headlight_on = true;
                 vec![p]
             },
-            selected_pleb: Some(0),
+            selected_pleb: None,
             next_pleb_id: 1,
             placing_pleb: false,
             cannon_angles: std::collections::HashMap::new(),
             selected_cannon: None,
             show_pleb_help: false,
+            show_inventory: false,
             pressed_keys: std::collections::HashSet::new(),
             auto_doors: Vec::new(),
             physics_bodies: Vec::new(),
             pleb_air_data: Vec::new(),
             pleb_air_readback_pending: false,
             context_menu: None,
+            crate_contents: std::collections::HashMap::new(),
+            selected_crate: None,
+            selected_crate_world: (0.0, 0.0),
+            rock_context_menu: None,
             weather: WeatherState::Clear,
             weather_timer: 45.0,
+            wind_target_angle: std::f32::consts::FRAC_PI_4, // ~NE
+            wind_target_mag: 10.0,
+            wind_change_timer: 15.0,
             wetness_data: vec![0.0; (GRID_W * GRID_H) as usize],
         }
     }
@@ -344,6 +382,22 @@ impl App {
         let rx = (wx - self.camera.center_x) * self.camera.zoom + self.camera.screen_w * 0.5;
         let ry = (wy - self.camera.center_y) * self.camera.zoom + self.camera.screen_h * 0.5;
         (rx / self.render_scale, ry / self.render_scale)
+    }
+
+    /// Sync crate block height with item count for shader rendering.
+    fn sync_crate_visual(&mut self, cidx: u32) {
+        if let Some(inv) = self.crate_contents.get(&cidx) {
+            let count = inv.total().min(CRATE_MAX_ITEMS) as u8;
+            let idx = cidx as usize;
+            if idx < self.grid_data.len() {
+                let block = self.grid_data[idx];
+                if (block & 0xFF) == 33 {
+                    // Store item count in height byte (bits 8-15)
+                    self.grid_data[idx] = (block & 0xFFFF00FF) | ((count as u32) << 8);
+                    self.grid_dirty = true;
+                }
+            }
+        }
     }
 
     /// Get the tiles a bench would occupy at (bx, by) with given rotation
@@ -748,6 +802,20 @@ impl App {
             return;
         }
 
+        // Click on rock (no build tool): open rock context menu
+        if bt == 34 && self.build_tool == BuildTool::None {
+            self.rock_context_menu = Some((self.last_mouse_x as f32, self.last_mouse_y as f32, bx, by));
+            return;
+        }
+
+        // Click on storage crate: toggle inspection popup
+        if bt == 33 && self.build_tool != BuildTool::Destroy {
+            let cidx = by as u32 * GRID_W + bx as u32;
+            self.selected_crate = if self.selected_crate == Some(cidx) { None } else { Some(cidx) };
+            self.selected_crate_world = (bx as f32 + 0.5, by as f32 + 0.5);
+            return;
+        }
+
         // Pleb interaction (before build tools)
         if self.build_tool == BuildTool::None {
             // Check if clicking on any pleb
@@ -989,7 +1057,7 @@ impl App {
                     if self.can_place_at(bx, by) {
                         let roof_flag = flags & 2;
                         let roof_h = block & 0xFF000000;
-                        self.grid_data[idx] = make_block(33, 1, roof_flag) | roof_h;
+                        self.grid_data[idx] = make_block(33, 0, roof_flag) | roof_h;
                         self.grid_dirty = true;
                         self.build_tool = BuildTool::None;
                     }
@@ -1168,6 +1236,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1187,6 +1256,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1206,6 +1276,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1225,6 +1296,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1561,6 +1633,19 @@ impl App {
                 wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
             );
             self.debug_fluid_readback_pending = true;
+
+            // Also copy block temperature at cursor position from block_temp_buffer
+            let btx = wx.floor() as i32;
+            let bty = wy.floor() as i32;
+            if btx >= 0 && bty >= 0 && btx < GRID_W as i32 && bty < GRID_H as i32 {
+                let bt_idx = (bty as u32 * GRID_W + btx as u32) as u64;
+                encoder.copy_buffer_to_buffer(
+                    &gfx.block_temp_buffer, bt_idx * 4, // source offset (f32 = 4 bytes)
+                    &gfx.block_temp_readback_buffer, 0,
+                    4, // 1 f32
+                );
+                self.debug_block_temp_pending = true;
+            }
         }
 
         // Copy dye texels at each pleb position for air readback
@@ -1716,6 +1801,22 @@ impl App {
                     }
                     drop(data);
                     gfx.debug_readback_buffer.unmap();
+                }
+            }
+
+            // Block temperature readback processing
+            if self.debug_block_temp_pending {
+                self.debug_block_temp_pending = false;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let buffer_slice = gfx.block_temp_readback_buffer.slice(..4);
+                    buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+                    gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                    let data = buffer_slice.get_mapped_range();
+                    let temp_data: &[f32] = bytemuck::cast_slice(&data);
+                    self.debug_block_temp = temp_data[0];
+                    drop(data);
+                    gfx.block_temp_readback_buffer.unmap();
                 }
             }
 
@@ -1970,6 +2071,11 @@ impl ApplicationHandler for App {
                                 }
                             }
                         }
+                        PhysicalKey::Code(KeyCode::KeyI) => {
+                            if self.selected_pleb.is_some() {
+                                self.show_inventory = !self.show_inventory;
+                            }
+                        }
                         PhysicalKey::Code(KeyCode::KeyF) => {
                             // Throw nearest box in selected pleb's facing direction
                             if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
@@ -2035,12 +2141,65 @@ impl ApplicationHandler for App {
                         self.drag_start = None;
                     }
                 }
-                // Right-click: context menu for selected pleb, or pick up lights
+                // Right-click: context menu for selected pleb, rock menu, or pick up lights
                 if button == winit::event::MouseButton::Right {
                     if state.is_pressed() {
                         let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
-                        if self.selected_pleb.is_some() {
-                            // Open context menu at mouse position
+                        // Check if right-clicking a rock
+                        let rbx = wx.floor() as i32;
+                        let rby = wy.floor() as i32;
+                        let rblock_type = if rbx >= 0 && rby >= 0 && rbx < GRID_W as i32 && rby < GRID_H as i32 {
+                            self.grid_data[(rby as u32 * GRID_W + rbx as u32) as usize] & 0xFF
+                        } else { 0 };
+                        if rblock_type == 34 {
+                            // Right-click rock: open rock context menu
+                            self.rock_context_menu = Some((self.last_mouse_x as f32, self.last_mouse_y as f32, rbx, rby));
+                        } else if rblock_type == 33 {
+                            // Right-click storage crate: deposit if carrying, else inspect
+                            let cidx = rby as u32 * GRID_W + rbx as u32;
+                            let mut deposited = false;
+                            if let Some(sel_idx) = self.selected_pleb {
+                                if let Some(pleb) = self.plebs.get_mut(sel_idx) {
+                                    if pleb.inventory.carrying.is_some() {
+                                        let dist = ((pleb.x - rbx as f32 - 0.5).powi(2) + (pleb.y - rby as f32 - 0.5).powi(2)).sqrt();
+                                        if dist < 2.5 {
+                                            // Close enough — deposit now
+                                            let inv = self.crate_contents.entry(cidx).or_default();
+                                            if pleb.inventory.carrying == Some("Rock") {
+                                                let can_store = inv.space().min(pleb.inventory.rocks);
+                                                inv.rocks += can_store;
+                                                pleb.inventory.rocks -= can_store;
+                                                if pleb.inventory.rocks == 0 { pleb.inventory.carrying = None; }
+                                            }
+                                            if pleb.inventory.carrying.is_none() {
+                                                pleb.haul_target = None;
+                                                pleb.activity = PlebActivity::Idle;
+                                            }
+                                            self.sync_crate_visual(cidx);
+                                            deposited = true;
+                                        } else {
+                                            // Walk to crate and deposit
+                                            let adj = adjacent_walkable(&self.grid_data, rbx, rby).unwrap_or((rbx, rby));
+                                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                            let path = astar_path(&self.grid_data, start, adj);
+                                            if !path.is_empty() {
+                                                pleb.path = path;
+                                                pleb.path_idx = 0;
+                                                pleb.activity = PlebActivity::Hauling;
+                                                pleb.haul_target = Some((rbx, rby));
+                                                pleb.harvest_target = None;
+                                            }
+                                            deposited = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if !deposited {
+                                // Just inspect the crate
+                                self.selected_crate = if self.selected_crate == Some(cidx) { None } else { Some(cidx) };
+                                self.selected_crate_world = (rbx as f32 + 0.5, rby as f32 + 0.5);
+                            }
+                        } else if self.selected_pleb.is_some() {
                             self.context_menu = Some((self.last_mouse_x as f32, self.last_mouse_y as f32));
                         } else {
                             self.try_pick_light(wx, wy);

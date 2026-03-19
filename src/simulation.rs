@@ -73,6 +73,35 @@ impl App {
             if let Some(new_weather) = tick_weather(&self.weather, &mut self.weather_timer, dt, self.time_speed) {
                 self.weather = new_weather;
             }
+            // --- Wind variation: slowly drift direction and magnitude ---
+            self.wind_change_timer -= dt * self.time_speed;
+            if self.wind_change_timer <= 0.0 {
+                // Pick a new target: small random shift from current
+                let seed = (self.time_of_day * 1000.0) as u32;
+                let hash = |i: u32| -> f32 {
+                    let h = seed.wrapping_mul(2654435761).wrapping_add(i.wrapping_mul(1013904223));
+                    (h & 0xFFFF) as f32 / 65535.0
+                };
+                // Shift angle by ±45° (gentle drift)
+                self.wind_target_angle += (hash(0) - 0.5) * std::f32::consts::FRAC_PI_2;
+                // Vary magnitude ±30% around 8-12 range
+                self.wind_target_mag = (self.wind_target_mag + (hash(1) - 0.5) * 6.0).clamp(3.0, 18.0);
+                // Next change in 10-30 seconds game time
+                self.wind_change_timer = 10.0 + hash(2) * 20.0;
+            }
+            // Smoothly interpolate current wind toward target
+            let lerp_rate = 0.3 * dt * self.time_speed;
+            let cur_angle = self.fluid_params.wind_y.atan2(self.fluid_params.wind_x);
+            let cur_mag = (self.fluid_params.wind_x.powi(2) + self.fluid_params.wind_y.powi(2)).sqrt().max(0.1);
+            // Angle interpolation (handle wrapping)
+            let mut angle_diff = self.wind_target_angle - cur_angle;
+            if angle_diff > std::f32::consts::PI { angle_diff -= std::f32::consts::TAU; }
+            if angle_diff < -std::f32::consts::PI { angle_diff += std::f32::consts::TAU; }
+            let new_angle = cur_angle + angle_diff * lerp_rate;
+            let new_mag = cur_mag + (self.wind_target_mag - cur_mag) * lerp_rate;
+            self.fluid_params.wind_x = new_angle.cos() * new_mag;
+            self.fluid_params.wind_y = new_angle.sin() * new_mag;
+
             let rain = self.weather.rain_intensity();
             let sun_dim = self.weather.sun_dimming();
             // Dim sun during clouds/rain
@@ -140,7 +169,7 @@ impl App {
         }
 
         // --- Update all plebs ---
-        let move_speed = 3.0f32;
+        let move_speed = 5.0f32;
         let sel = self.selected_pleb;
 
         for (i, pleb) in self.plebs.iter_mut().enumerate() {
@@ -420,6 +449,80 @@ impl App {
                             }
                         } else {
                             pleb.activity = PlebActivity::Idle;
+                        }
+                    } else {
+                        pleb.activity = PlebActivity::Idle;
+                    }
+                }
+
+                // Hauling state machine: rock pickup → walk to crate → deposit
+                if pleb.activity == PlebActivity::Hauling && pleb.path_idx >= pleb.path.len() {
+                    if pleb.inventory.carrying.is_none() {
+                        // Phase 1: arrived at rock — pick it up, then walk to crate
+                        if let Some((rx, ry)) = pleb.harvest_target {
+                            let dist = ((pleb.x - rx as f32 - 0.5).powi(2) + (pleb.y - ry as f32 - 0.5).powi(2)).sqrt();
+                            if dist < 2.0 {
+                                let ridx = (ry as u32 * GRID_W + rx as u32) as usize;
+                                if ridx < self.grid_data.len() && (self.grid_data[ridx] & 0xFF) == 34 {
+                                    // Pick up the rock
+                                    let roof_bits = self.grid_data[ridx] & 0xFF000000;
+                                    let flag_bits = (self.grid_data[ridx] >> 16) & 2;
+                                    self.grid_data[ridx] = make_block(2, 0, flag_bits as u8) | roof_bits;
+                                    self.grid_dirty = true;
+                                    pleb.inventory.rocks += 1;
+                                    pleb.inventory.carrying = Some("Rock");
+                                    pleb.harvest_target = None;
+                                    log::info!("{} picked up a rock at ({}, {})", pleb.name, rx, ry);
+                                    // Now walk to crate (pathfind to adjacent walkable tile)
+                                    if let Some((cx, cy)) = pleb.haul_target {
+                                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                        let adj = adjacent_walkable(&self.grid_data, cx, cy).unwrap_or((cx, cy));
+                                        let path = astar_path(&self.grid_data, start, adj);
+                                        if !path.is_empty() {
+                                            pleb.path = path;
+                                            pleb.path_idx = 0;
+                                        } else {
+                                            pleb.activity = PlebActivity::Idle;
+                                        }
+                                    } else {
+                                        pleb.activity = PlebActivity::Idle;
+                                    }
+                                } else {
+                                    // Rock gone
+                                    pleb.harvest_target = None;
+                                    pleb.haul_target = None;
+                                    pleb.activity = PlebActivity::Idle;
+                                }
+                            }
+                        } else {
+                            pleb.activity = PlebActivity::Idle;
+                        }
+                    } else if let Some((cx, cy)) = pleb.haul_target {
+                        // Phase 2: arrived at crate — deposit
+                        let dist = ((pleb.x - cx as f32 - 0.5).powi(2) + (pleb.y - cy as f32 - 0.5).powi(2)).sqrt();
+                        if dist < 2.0 {
+                            let cidx = cy as u32 * GRID_W + cx as u32;
+                            let inv = self.crate_contents.entry(cidx).or_default();
+                            if pleb.inventory.carrying == Some("Rock") {
+                                let can_store = inv.space().min(pleb.inventory.rocks);
+                                inv.rocks += can_store;
+                                pleb.inventory.rocks -= can_store;
+                                if pleb.inventory.rocks == 0 { pleb.inventory.carrying = None; }
+                            }
+                            if pleb.inventory.carrying.is_none() {
+                                pleb.haul_target = None;
+                                pleb.activity = PlebActivity::Idle;
+                            }
+                            // Sync crate visual (inline to avoid borrow conflict)
+                            if let Some(inv) = self.crate_contents.get(&cidx) {
+                                let count = inv.total().min(CRATE_MAX_ITEMS) as u8;
+                                let cidx_usize = cidx as usize;
+                                if cidx_usize < self.grid_data.len() && (self.grid_data[cidx_usize] & 0xFF) == 33 {
+                                    self.grid_data[cidx_usize] = (self.grid_data[cidx_usize] & 0xFFFF00FF) | ((count as u32) << 8);
+                                    self.grid_dirty = true;
+                                }
+                            }
+                            log::info!("{} deposited items in crate at ({}, {})", pleb.name, cx, cy);
                         }
                     } else {
                         pleb.activity = PlebActivity::Idle;

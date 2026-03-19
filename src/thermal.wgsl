@@ -38,7 +38,7 @@ fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 13u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 39u)]; }
 
 @compute @workgroup_size(8, 8)
 fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -63,24 +63,30 @@ fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // --- Solar heating ---
-    // Outdoor blocks (no roof) gain heat from sunlight based on sun intensity and material absorption
+    // Outdoor blocks (no roof) gain heat from sunlight based on sun intensity and absorption.
+    // Rate is slow — stone takes many game-minutes to warm significantly.
     if !has_roof(block) && block_height(block) > 0u {
-        let solar_heat = camera.sun_intensity * mat.solar_absorption * 0.5; // °C per frame
+        let solar_heat = camera.sun_intensity * mat.solar_absorption * 0.005; // ~0.3°C/sec for stone
         block_temp += solar_heat;
     }
+
+    // --- Radiative cooling ---
+    // All blocks radiate heat toward ambient temperature (15°C).
+    // Rate is slower for high thermal mass (stone retains heat longer).
+    let ambient = 15.0;
+    let cool_rate = 0.002 / max(mat.heat_capacity, 0.5); // high capacity = slow cooling
+    block_temp += (ambient - block_temp) * cool_rate;
 
     // --- Heat exchange with adjacent air ---
     // Sample air temperature from dye texture at this block's position
     let dye_pos = vec2<i32>(i32(gid.x) * 2 + 1, i32(gid.y) * 2 + 1);
     let air_temp = textureLoad(dye_tex, dye_pos, 0).a;
 
-    // Heat transfer: block → air and air → block based on conductivity
+    // Heat transfer: block ↔ air based on conductivity and heat capacity
+    // Higher capacity = more thermal inertia = slower to change
     let temp_diff = air_temp - block_temp;
-    let transfer = temp_diff * mat.conductivity;
-
-    // Heat capacity determines how much the block temperature changes
-    // Higher capacity = slower to heat/cool
-    block_temp += transfer / max(mat.heat_capacity, 0.1);
+    let transfer_rate = mat.conductivity / max(mat.heat_capacity, 0.5);
+    block_temp += temp_diff * transfer_rate * 0.3;
 
     // --- Heat conduction between adjacent blocks ---
     let bx = i32(gid.x);
@@ -104,7 +110,7 @@ fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if neighbor_count > 0.0 {
         let avg_neighbor = neighbor_heat / neighbor_count;
-        block_temp += (avg_neighbor - block_temp) * mat.conductivity * 0.5;
+        block_temp += (avg_neighbor - block_temp) * transfer_rate * 0.2;
     }
 
     // Clamp temperature

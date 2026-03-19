@@ -69,11 +69,12 @@ struct Camera {
 @group(0) @binding(10) var prev_output: texture_2d<f32>;
 @group(0) @binding(11) var<storage, read> materials: array<GpuMaterial>;
 @group(0) @binding(12) var<storage, read> plebs: array<GpuPleb>;
+@group(0) @binding(13) var<storage, read> block_temps: array<f32>;
 
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
     x: f32, y: f32, angle: f32, selected: f32,
-    torch: f32, headlight: f32, _pad0: f32, _pad1: f32,
+    torch: f32, headlight: f32, carrying: f32, _pad1: f32,
     skin_r: f32, skin_g: f32, skin_b: f32, hair_style: f32,
     hair_r: f32, hair_g: f32, hair_b: f32, _pad2: f32,
     shirt_r: f32, shirt_g: f32, shirt_b: f32, _pad3: f32,
@@ -107,7 +108,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 29u)];
+    return materials[min(bt, 39u)];
 }
 
 // --- Sprite constants ---
@@ -1095,11 +1096,13 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let rh = get_roof_height(bx, by);
         let is_roofed_floor = has_roof(block) && bh < 0.5;
 
-        // Pipe components (15-20) and dug ground (32) don't cast shadows
+        // Pipe components (15-20), dug ground (32), crates (33), rocks (34) don't cast shadows
         let is_pipe_block = bt >= 15u && bt <= 20u;
         let is_dug_block = bt == 32u;
+        let is_crate_block = bt == 33u; // height = item count, not visual
+        let is_rock_block = bt == 34u;
 
-        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block);
+        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block);
         if is_roofed_floor {
             // The roof is a thin plane at height rh. Rather than a hard threshold
             // that flickers, always set effective_h to rh but apply a smooth
@@ -1797,6 +1800,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     } else if btype == 33u {
         // Storage crate: wooden box with planks and brackets
+        // bheight = number of stored items (0-10)
         let ground = vec3<f32>(0.45, 0.35, 0.20);
         let crate_min = 0.1;
         let crate_max = 0.9;
@@ -1824,6 +1828,76 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             if cross_h || cross_v {
                 color = vec3<f32>(0.38, 0.30, 0.18);
             }
+            // Stacked items inside crate (rocks shown as small circles)
+            let item_count = bheight; // 0-10
+            if item_count > 0u {
+                // Arrange items in a grid pattern inside the crate
+                let inner_min = 0.20;
+                let inner_max = 0.80;
+                let inner_fx = (fx - inner_min) / (inner_max - inner_min);
+                let inner_fy = (fy - inner_min) / (inner_max - inner_min);
+                if inner_fx > 0.0 && inner_fx < 1.0 && inner_fy > 0.0 && inner_fy < 1.0 {
+                    // Up to 10 items in a roughly 4x3 grid
+                    var item_drawn = false;
+                    for (var it = 0u; it < item_count && it < 10u; it++) {
+                        // Position each item with slight randomized offsets
+                        let col = f32(it % 4u);
+                        let row = f32(it / 4u);
+                        let ox = (col + 0.5) / 4.0 + fract(sin(f32(it) * 73.1 + world_x * 3.0) * 437.5) * 0.06 - 0.03;
+                        let oy = (row + 0.5) / 3.0 + fract(sin(f32(it) * 31.7 + world_y * 5.0) * 218.3) * 0.06 - 0.03;
+                        let idist = length(vec2<f32>(inner_fx - ox, inner_fy - oy));
+                        if idist < 0.10 {
+                            // Rock item
+                            let rv = fract(sin(f32(it) * 127.1) * 43758.5) * 0.06 - 0.03;
+                            if idist < 0.07 {
+                                color = vec3<f32>(0.34 + rv, 0.32 + rv, 0.28 + rv);
+                            } else {
+                                color = vec3<f32>(0.20, 0.19, 0.17); // outline
+                            }
+                            item_drawn = true;
+                        }
+                    }
+                }
+            }
+        } else {
+            color = ground;
+        }
+    } else if btype == 34u {
+        // Rock: dark natural stone on dirt, irregular shape with outline
+        let ground = vec3<f32>(0.42, 0.35, 0.22);
+        // Irregular shape: offset center + multi-frequency noise distortion
+        let rcx = fx - 0.48;
+        let rcy = fy - 0.52;
+        let n1 = fract(sin(world_x * 53.1 + world_y * 97.3) * 43758.5) * 0.06;
+        let n2 = fract(sin(world_x * 127.7 - world_y * 43.1) * 23421.6) * 0.04;
+        let n3 = fract(sin(world_x * 31.3 + world_y * 171.9) * 61283.1) * 0.03;
+        let angle_warp = n1 + n2 - 0.05;
+        let rock_dist = length(vec2<f32>(rcx * 1.4 + n3 - 0.015, rcy * 1.1 + angle_warp));
+        let outline_r = 0.30;
+        let fill_r = 0.26;
+        if rock_dist < outline_r {
+            if rock_dist < fill_r {
+                // Rock interior: dark gray with variation
+                let rvar = fract(sin(world_x * 127.1 + world_y * 311.7) * 43758.5) * 0.06 - 0.03;
+                let rvar2 = fract(sin(world_x * 73.7 + world_y * 199.3) * 17654.3) * 0.04 - 0.02;
+                color = vec3<f32>(0.32 + rvar, 0.30 + rvar + rvar2, 0.28 + rvar);
+                // Edge darkening (AO)
+                let edge_dark = smoothstep(fill_r, fill_r * 0.4, rock_dist);
+                color *= 0.7 + edge_dark * 0.3;
+                // Specular highlight (upper-left)
+                let spec_spot = length(vec2<f32>(rcx + 0.08, rcy + 0.10));
+                if spec_spot < 0.09 {
+                    color += vec3<f32>(0.08, 0.07, 0.06) * (1.0 - spec_spot / 0.09);
+                }
+                // Subtle cracks
+                let crack = abs(fract(rcx * 7.0 + rcy * 3.0 + n1 * 5.0) - 0.5);
+                if crack < 0.04 && rock_dist < fill_r * 0.8 {
+                    color *= 0.85;
+                }
+            } else {
+                // Dark outline ring
+                color = vec3<f32>(0.18, 0.17, 0.15);
+            }
         } else {
             color = ground;
         }
@@ -1837,7 +1911,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_tree_ground = (btype == 8u || btype == 31u) && !is_tree_pixel;
     let is_pipe = btype >= 15u && btype <= 20u;
     let is_dug = btype == 32u; // dug ground: height = depth, not visual height
-    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug);
+    let is_rock = btype == 34u;
+    let is_crate = btype == 33u; // crate height = item count, not visual height
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)
@@ -1994,9 +2070,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             water_color = mix(water_color, vec3<f32>(0.30, 0.28, 0.22), shore * 0.5);
         }
 
-        // Apply ambient + sun lighting (so water darkens at night)
-        let water_ambient = 0.08 + camera.sun_intensity * 0.12;
-        water_color = water_color * (water_ambient + light_factor * 0.8);
+        // Apply the same lighting as terrain (ambient + sun), so water darkens at night
+        water_color = water_color * (ambient + sun_color * light_factor * 0.85);
+        // Add point light contribution (torches, lamps illuminate water at night)
+        let water_pl_mul = select(camera.light_bleed_mul, camera.indoor_glow_mul, is_indoor);
+        water_color += light_color_out * light_intensity_out * water_pl_mul * 0.5;
         color = water_color;
     }
 
@@ -2097,6 +2175,22 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let hair_r = select(0.08, 0.12, p.hair_style > 1.5); // longer hair = bigger
             if hair_dist < hair_r {
                 color = vec3(p.hair_r, p.hair_g, p.hair_b);
+            }
+
+            // Carried rock: small dark stone sprite offset above head
+            if p.carrying > 0.5 {
+                let carry_ox = cos(p.angle) * 0.05;
+                let carry_oy = sin(p.angle) * 0.05 - 0.18; // offset above head
+                let carry_dx = pdx - carry_ox;
+                let carry_dy = pdy - carry_oy;
+                let carry_dist = length(vec2(carry_dx * 1.3, carry_dy));
+                if carry_dist < 0.10 {
+                    let rv = fract(sin(world_x * 53.1 + world_y * 97.3) * 43758.5) * 0.04;
+                    color = vec3(0.30 + rv, 0.28 + rv, 0.26 + rv);
+                    if carry_dist > 0.07 {
+                        color = vec3(0.16, 0.15, 0.13); // outline
+                    }
+                }
             }
 
             // Direction indicator: small bright dot at front edge
@@ -2285,24 +2379,72 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let co2_color = mix(vec3(0.05, 0.1, 0.05), vec3(0.85, 0.9, 0.2), co2);
         color = mix(color * 0.3, co2_color, clamp(co2 + 0.1, 0.0, 0.8));
     } else if camera.fluid_overlay < 7.5 {
-        // Temperature: blue (cold) → white (ambient) → red (hot) → yellow (very hot)
-        let temp = smoke.a;
-        let temp_norm = clamp((temp + 20.0) / 520.0, 0.0, 1.0); // -20°C..500°C → 0..1
-        var temp_color: vec3<f32>;
-        if temp_norm < 0.05 {
-            temp_color = vec3(0.0, 0.0, 0.8);  // very cold: blue
-        } else if temp_norm < 0.1 {
-            let t = (temp_norm - 0.05) / 0.05;
-            temp_color = mix(vec3(0.0, 0.0, 0.8), vec3(0.7, 0.7, 0.9), t); // cold → cool
-        } else if temp_norm < 0.15 {
-            let t = (temp_norm - 0.1) / 0.05;
-            temp_color = mix(vec3(0.7, 0.7, 0.9), vec3(0.9, 0.9, 0.9), t); // cool → white (ambient)
-        } else if temp_norm < 0.4 {
-            let t = (temp_norm - 0.15) / 0.25;
-            temp_color = mix(vec3(0.9, 0.9, 0.9), vec3(1.0, 0.3, 0.0), t); // ambient → hot red
+        // Temperature overlay — expanded palette focused on useful range
+        // For solid blocks (walls), read block temperature from block_temps buffer
+        // For air/ground, read from dye texture
+        let grid_idx = u32(by) * u32(camera.grid_w) + u32(bx);
+        let bt_for_temp = btype;
+        let bh_for_temp = bheight;
+        let is_solid_block = bh_for_temp > 0u && (bt_for_temp == 1u || bt_for_temp == 4u || bt_for_temp == 5u
+            || bt_for_temp == 14u || (bt_for_temp >= 21u && bt_for_temp <= 25u));
+        let temp = select(smoke.a, block_temps[grid_idx], is_solid_block);
+        // Remap: -30→0, 0→0.15, 15→0.30, 25→0.40, 40→0.55, 60→0.70, 100→0.85, 500→1.0
+        var temp_norm: f32;
+        if temp < -30.0 {
+            temp_norm = 0.0;
+        } else if temp < 0.0 {
+            temp_norm = (temp + 30.0) / 30.0 * 0.15;           // -30..0 → 0..0.15
+        } else if temp < 15.0 {
+            temp_norm = 0.15 + temp / 15.0 * 0.15;             // 0..15 → 0.15..0.30
+        } else if temp < 25.0 {
+            temp_norm = 0.30 + (temp - 15.0) / 10.0 * 0.10;   // 15..25 → 0.30..0.40
+        } else if temp < 40.0 {
+            temp_norm = 0.40 + (temp - 25.0) / 15.0 * 0.15;   // 25..40 → 0.40..0.55
+        } else if temp < 60.0 {
+            temp_norm = 0.55 + (temp - 40.0) / 20.0 * 0.15;   // 40..60 → 0.55..0.70
+        } else if temp < 100.0 {
+            temp_norm = 0.70 + (temp - 60.0) / 40.0 * 0.15;   // 60..100 → 0.70..0.85
         } else {
-            let t = (temp_norm - 0.4) / 0.6;
-            temp_color = mix(vec3(1.0, 0.3, 0.0), vec3(1.0, 1.0, 0.3), t); // hot → very hot yellow
+            temp_norm = 0.85 + clamp((temp - 100.0) / 400.0, 0.0, 0.15); // 100..500 → 0.85..1.0
+        }
+        temp_norm = clamp(temp_norm, 0.0, 1.0);
+        var temp_color: vec3<f32>;
+        if temp_norm < 0.075 {
+            // Deep freeze: dark blue-purple (-30 to -15°C)
+            let t = temp_norm / 0.075;
+            temp_color = mix(vec3(0.15, 0.0, 0.4), vec3(0.0, 0.1, 0.7), t);
+        } else if temp_norm < 0.15 {
+            // Freezing: blue (-15 to 0°C)
+            let t = (temp_norm - 0.075) / 0.075;
+            temp_color = mix(vec3(0.0, 0.1, 0.7), vec3(0.2, 0.4, 0.9), t);
+        } else if temp_norm < 0.225 {
+            // Cold: light blue (0 to ~8°C)
+            let t = (temp_norm - 0.15) / 0.075;
+            temp_color = mix(vec3(0.2, 0.4, 0.9), vec3(0.5, 0.7, 1.0), t);
+        } else if temp_norm < 0.30 {
+            // Cool: cyan-white (8 to 15°C)
+            let t = (temp_norm - 0.225) / 0.075;
+            temp_color = mix(vec3(0.5, 0.7, 1.0), vec3(0.7, 0.85, 0.7), t);
+        } else if temp_norm < 0.40 {
+            // Comfortable: green-white (15 to 25°C)
+            let t = (temp_norm - 0.30) / 0.10;
+            temp_color = mix(vec3(0.7, 0.85, 0.7), vec3(0.9, 0.92, 0.8), t);
+        } else if temp_norm < 0.55 {
+            // Warm: cream to yellow (25 to 40°C)
+            let t = (temp_norm - 0.40) / 0.15;
+            temp_color = mix(vec3(0.9, 0.92, 0.8), vec3(1.0, 0.85, 0.3), t);
+        } else if temp_norm < 0.70 {
+            // Hot: orange (40 to 60°C)
+            let t = (temp_norm - 0.55) / 0.15;
+            temp_color = mix(vec3(1.0, 0.85, 0.3), vec3(1.0, 0.45, 0.1), t);
+        } else if temp_norm < 0.85 {
+            // Very hot: deep red (60 to 100°C)
+            let t = (temp_norm - 0.70) / 0.15;
+            temp_color = mix(vec3(1.0, 0.45, 0.1), vec3(0.85, 0.1, 0.1), t);
+        } else {
+            // Extreme: red to bright white-yellow (100 to 500°C)
+            let t = (temp_norm - 0.85) / 0.15;
+            temp_color = mix(vec3(0.85, 0.1, 0.1), vec3(1.0, 1.0, 0.6), t);
         }
         color = mix(color * 0.3, temp_color, 0.7);
     } else {

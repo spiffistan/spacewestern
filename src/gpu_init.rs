@@ -44,8 +44,12 @@ impl App {
                 &wgpu::DeviceDescriptor {
                     label: Some("rayworld-device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults()
-                        .using_resolution(adapter.limits()),
+                    required_limits: {
+                        let mut limits = wgpu::Limits::downlevel_defaults()
+                            .using_resolution(adapter.limits());
+                        limits.max_storage_buffers_per_shader_stage = 8;
+                        limits
+                    },
                     memory_hints: wgpu::MemoryHints::default(),
                     ..Default::default()
                 },
@@ -163,7 +167,7 @@ impl App {
         let block_temp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("block-temp-buffer"),
             size: (block_temp_data.len() * std::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         queue.write_buffer(&block_temp_buffer, 0, bytemuck::cast_slice(&block_temp_data));
@@ -874,6 +878,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Block temperature buffer (storage buffer, read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -904,6 +919,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -923,6 +939,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -942,6 +959,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -961,6 +979,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 5, resource: sprite_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 11, resource: material_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1112,6 +1131,12 @@ impl App {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
+        let block_temp_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("block-temp-readback"),
+            size: 256, // only need 4 bytes but alignment
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
 
         // Per-pleb air readback: 16 plebs × 256 bytes each (alignment)
         let pleb_air_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1218,6 +1243,7 @@ impl App {
             fluid_bg_pressure_clear,
             fluid_bg_advect_dye: [fluid_bg_advect_dye_0, fluid_bg_advect_dye_1],
             debug_readback_buffer,
+            block_temp_readback_buffer,
             pleb_air_readback_buffer,
             block_temp_buffer,
             thermal_pipeline: thermal_pipeline_val,

@@ -36,6 +36,7 @@ pub enum PlebActivity {
     Sleeping,         // in bed, recovering rest
     Harvesting(f32),  // progress 0-1, harvesting a berry bush at nearby tile
     Eating,           // consuming food (quick action)
+    Hauling,          // carrying item to a storage crate
     /// Crisis override — pleb acts autonomously, ignoring player input.
     /// Inner activity is what they're doing (Walking to food/bed, Harvesting, Eating, Sleeping).
     Crisis(Box<PlebActivity>, &'static str), // (inner_activity, reason_label)
@@ -68,6 +69,8 @@ impl PlebActivity {
 #[derive(Clone, Debug, Default)]
 pub struct PlebInventory {
     pub berries: u32,
+    pub rocks: u32,
+    pub carrying: Option<&'static str>, // what the pleb is currently hauling (None = hands free)
 }
 
 /// Appearance data for rendering a pleb (Rimworld-style).
@@ -147,7 +150,7 @@ impl PlebAppearance {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuPleb {
     pub x: f32, pub y: f32, pub angle: f32, pub selected: f32,
-    pub torch: f32, pub headlight: f32, pub _pad0: f32, pub _pad1: f32,
+    pub torch: f32, pub headlight: f32, pub carrying: f32, pub _pad1: f32,
     pub skin_r: f32, pub skin_g: f32, pub skin_b: f32, pub hair_style: f32,
     pub hair_r: f32, pub hair_g: f32, pub hair_b: f32, pub _pad2: f32,
     pub shirt_r: f32, pub shirt_g: f32, pub shirt_b: f32, pub _pad3: f32,
@@ -171,6 +174,7 @@ pub struct Pleb {
     pub activity: PlebActivity,
     pub inventory: PlebInventory,
     pub harvest_target: Option<(i32, i32)>, // grid coords of bush being harvested
+    pub haul_target: Option<(i32, i32)>,    // grid coords of storage crate to deliver to
 }
 
 impl Pleb {
@@ -189,6 +193,7 @@ impl Pleb {
             activity: PlebActivity::Idle,
             inventory: PlebInventory::default(),
             harvest_target: None,
+            haul_target: None,
         }
     }
 
@@ -199,7 +204,8 @@ impl Pleb {
             selected: if selected { 1.0 } else { 0.0 },
             torch: if self.torch_on { 1.0 } else { 0.0 },
             headlight: if self.headlight_on { 1.0 } else { 0.0 },
-            _pad0: 0.0, _pad1: 0.0,
+            carrying: if self.inventory.carrying.is_some() { 1.0 } else { 0.0 },
+            _pad1: 0.0,
             skin_r: a.skin_r, skin_g: a.skin_g, skin_b: a.skin_b,
             hair_style: a.hair_style as f32,
             hair_r: a.hair_r, hair_g: a.hair_g, hair_b: a.hair_b, _pad2: 0.0,
@@ -234,11 +240,24 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         let is_dug_shallow = bt == 32 && bh <= 1;
-        if !is_door && !is_dug_shallow && (bh > 0 || !is_type_walkable(bt)) {
+        let is_pipe = bt >= 15 && bt <= 20; // pipes are ground-level, walkable
+        if !is_door && !is_dug_shallow && !is_pipe && (bh > 0 || !is_type_walkable(bt)) {
             return false;
         }
     }
     true
+}
+
+/// Find the nearest walkable tile adjacent to (gx, gy). Used when pathfinding to non-walkable targets (e.g. crates, walls).
+pub fn adjacent_walkable(grid: &[u32], gx: i32, gy: i32) -> Option<(i32, i32)> {
+    for &(dx, dy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+        let nx = gx + dx;
+        let ny = gy + dy;
+        if is_walkable_pos(grid, nx as f32 + 0.5, ny as f32 + 0.5) {
+            return Some((nx, ny));
+        }
+    }
+    None
 }
 
 /// A* pathfinding on the block grid. Returns path from start to goal (inclusive), or empty if unreachable.
@@ -254,7 +273,7 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == 32 && bh <= 1)
+        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == 32 && bh <= 1) || (bt >= 15 && bt <= 20)
     };
 
     if !is_walk(goal.0, goal.1) { return vec![]; }

@@ -165,6 +165,145 @@ impl App {
                 });
         }
 
+        // --- Inventory window (RPG-style, toggle with I key or click pleb name) ---
+        if self.show_inventory {
+            if let Some(sel_idx) = self.selected_pleb {
+                if let Some(pleb) = self.plebs.get(sel_idx) {
+                    let pleb_name = pleb.name.clone();
+                    let carrying = pleb.inventory.carrying;
+                    let rocks = pleb.inventory.rocks;
+                    let berries = pleb.inventory.berries;
+                    let health = pleb.needs.health;
+                    let hunger = pleb.needs.hunger;
+                    let rest = pleb.needs.rest;
+                    let warmth = pleb.needs.warmth;
+                    let oxygen = pleb.needs.oxygen;
+                    let mood = pleb.needs.mood;
+                    let mood_l = mood_label(mood);
+                    let a = &pleb.appearance;
+                    let shirt = [a.shirt_r, a.shirt_g, a.shirt_b];
+                    let skin = [a.skin_r, a.skin_g, a.skin_b];
+                    let hair = [a.hair_r, a.hair_g, a.hair_b];
+
+                    let mut close_inv = false;
+                    egui::Window::new("Inventory")
+                        .collapsible(false)
+                        .resizable(false)
+                        .default_width(200.0)
+                        .anchor(egui::Align2::RIGHT_TOP, [-10.0, 40.0])
+                        .show(ctx, |ui| {
+                            // Portrait header
+                            ui.horizontal(|ui| {
+                                // Mini portrait
+                                let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(36.0, 44.0), egui::Sense::hover());
+                                let painter = ui.painter_at(rect);
+                                painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(35, 38, 45));
+                                let center = rect.center();
+                                let shirt_c = egui::Color32::from_rgb((shirt[0]*255.0) as u8, (shirt[1]*255.0) as u8, (shirt[2]*255.0) as u8);
+                                let skin_c = egui::Color32::from_rgb((skin[0]*255.0) as u8, (skin[1]*255.0) as u8, (skin[2]*255.0) as u8);
+                                let hair_c = egui::Color32::from_rgb((hair[0]*255.0) as u8, (hair[1]*255.0) as u8, (hair[2]*255.0) as u8);
+                                painter.circle_filled(center + egui::Vec2::new(0.0, 6.0), 10.0, shirt_c);
+                                painter.circle_filled(center + egui::Vec2::new(0.0, -4.0), 7.0, skin_c);
+                                painter.circle_filled(center + egui::Vec2::new(0.0, -10.0), 4.0, hair_c);
+
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new(&pleb_name).strong().size(14.0));
+                                    ui.label(egui::RichText::new(mood_l).size(10.0).color(
+                                        if mood > 20.0 { egui::Color32::from_rgb(100, 200, 100) }
+                                        else if mood > -20.0 { egui::Color32::from_rgb(180, 180, 120) }
+                                        else { egui::Color32::from_rgb(200, 80, 80) }
+                                    ));
+                                });
+                            });
+
+                            ui.separator();
+
+                            // Stats bars
+                            let bar = |ui: &mut egui::Ui, label: &str, val: f32, color: egui::Color32| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(label).size(10.0).monospace());
+                                    let bar_w = 120.0;
+                                    let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(bar_w, 10.0), egui::Sense::hover());
+                                    let painter = ui.painter_at(rect);
+                                    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
+                                    painter.rect_filled(
+                                        egui::Rect::from_min_size(rect.min, egui::Vec2::new(bar_w * val.clamp(0.0, 1.0), 10.0)),
+                                        2.0, color,
+                                    );
+                                    ui.label(egui::RichText::new(format!("{:.0}%", val * 100.0)).size(9.0).weak());
+                                });
+                            };
+                            bar(ui, "HP  ", health, egui::Color32::from_rgb(200, 60, 60));
+                            bar(ui, "Food", hunger, egui::Color32::from_rgb(200, 160, 40));
+                            bar(ui, "Rest", rest, egui::Color32::from_rgb(80, 120, 200));
+                            bar(ui, "Warm", warmth, egui::Color32::from_rgb(200, 100, 40));
+                            bar(ui, "O2  ", oxygen, egui::Color32::from_rgb(100, 200, 220));
+
+                            ui.separator();
+                            ui.label(egui::RichText::new("Inventory").strong().size(11.0));
+
+                            // Carrying slot
+                            ui.horizontal(|ui| {
+                                let (slot, _) = ui.allocate_exact_size(egui::Vec2::splat(28.0), egui::Sense::hover());
+                                let painter = ui.painter_at(slot);
+                                painter.rect_filled(slot, 3.0, egui::Color32::from_rgb(45, 48, 55));
+                                painter.rect_stroke(slot, 3.0, egui::Stroke::new(1.0, egui::Color32::from_gray(80)), egui::StrokeKind::Outside);
+                                if carrying.is_some() {
+                                    // Draw rock icon
+                                    painter.circle_filled(slot.center(), 8.0, egui::Color32::from_rgb(90, 85, 78));
+                                    painter.circle_filled(slot.center() + egui::Vec2::new(-2.0, -2.0), 3.0, egui::Color32::from_rgb(110, 105, 98));
+                                }
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new("Hands").size(9.0).weak());
+                                    if let Some(c) = carrying {
+                                        ui.label(egui::RichText::new(c).size(10.0));
+                                    } else {
+                                        ui.label(egui::RichText::new("Empty").size(10.0).weak());
+                                    }
+                                });
+                            });
+
+                            // Inventory items
+                            if berries > 0 || rocks > 0 {
+                                ui.add_space(4.0);
+                                if rocks > 0 {
+                                    ui.horizontal(|ui| {
+                                        let (slot, _) = ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::hover());
+                                        let painter = ui.painter_at(slot);
+                                        painter.rect_filled(slot, 2.0, egui::Color32::from_rgb(40, 42, 48));
+                                        painter.circle_filled(slot.center(), 6.0, egui::Color32::from_rgb(80, 76, 70));
+                                        ui.label(egui::RichText::new(format!("Rock x{}", rocks)).size(10.0));
+                                    });
+                                }
+                                if berries > 0 {
+                                    ui.horizontal(|ui| {
+                                        let (slot, _) = ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::hover());
+                                        let painter = ui.painter_at(slot);
+                                        painter.rect_filled(slot, 2.0, egui::Color32::from_rgb(40, 42, 48));
+                                        painter.circle_filled(slot.center(), 6.0, egui::Color32::from_rgb(180, 40, 60));
+                                        ui.label(egui::RichText::new(format!("Berry x{}", berries)).size(10.0));
+                                    });
+                                }
+                            } else if carrying.is_none() {
+                                ui.label(egui::RichText::new("No items").weak().size(10.0));
+                            }
+
+                            ui.separator();
+                            if ui.small_button("Close").clicked() {
+                                close_inv = true;
+                            }
+                        });
+                    if close_inv {
+                        self.show_inventory = false;
+                    }
+                } else {
+                    self.show_inventory = false;
+                }
+            } else {
+                self.show_inventory = false;
+            }
+        }
+
         // --- Build categories (bottom bar, horizontal, Rimworld-style) ---
         let cat_s = 18.0; // category font size
         egui::Area::new(egui::Id::new("build_categories"))
@@ -332,6 +471,8 @@ impl App {
                 air_co2: f32,
                 activity: String,
                 berries: u32,
+                rocks: u32,
+                carrying: Option<&'static str>,
                 is_crisis: bool,
                 crisis_reason: Option<&'static str>,
             }
@@ -363,6 +504,7 @@ impl App {
                             PlebActivity::Sleeping => "Sleeping".to_string(),
                             PlebActivity::Harvesting(pr) => format!("Harvesting {:.0}%", pr * 100.0),
                             PlebActivity::Eating => "Eating".to_string(),
+                            PlebActivity::Hauling => "Hauling".to_string(),
                             PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                         };
                         if let Some(reason) = p.activity.crisis_reason() {
@@ -372,6 +514,8 @@ impl App {
                         }
                     },
                     berries: p.inventory.berries,
+                    rocks: p.inventory.rocks,
+                    carrying: p.inventory.carrying,
                     is_crisis: p.activity.is_crisis(),
                     crisis_reason: p.activity.crisis_reason(),
                 }
@@ -524,8 +668,12 @@ impl App {
 
                                     // Activity + inventory line
                                     let info_y = breath_y + 9.0;
-                                    let berry_str = if pd.berries > 0 {
-                                        format!("{} | {}x Berry", pd.activity, pd.berries)
+                                    let mut inv_parts = Vec::new();
+                                    if pd.berries > 0 { inv_parts.push(format!("{}x Berry", pd.berries)); }
+                                    if pd.rocks > 0 { inv_parts.push(format!("{}x Rock", pd.rocks)); }
+                                    if let Some(c) = pd.carrying { inv_parts.push(format!("[{}]", c)); }
+                                    let berry_str = if !inv_parts.is_empty() {
+                                        format!("{} | {}", pd.activity, inv_parts.join(" "))
                                     } else {
                                         pd.activity.clone()
                                     };
@@ -555,7 +703,16 @@ impl App {
                                 }
 
                                 if response.clicked() {
+                                    if is_sel {
+                                        // Click again on selected pleb → toggle inventory
+                                        self.show_inventory = !self.show_inventory;
+                                    } else {
+                                        self.selected_pleb = Some(pd.idx);
+                                    }
+                                }
+                                if response.secondary_clicked() {
                                     self.selected_pleb = if is_sel { None } else { Some(pd.idx) };
+                                    self.show_inventory = false;
                                 }
                             }
                         });
@@ -568,6 +725,8 @@ impl App {
             if let Some(sel_idx) = self.selected_pleb {
                 if let Some(pleb) = self.plebs.get(sel_idx) {
                     let has_berries = pleb.inventory.berries > 0;
+                    let is_carrying = pleb.inventory.carrying.is_some();
+                    let carrying_label = pleb.inventory.carrying.unwrap_or("").to_string();
                     let is_sleeping = *pleb.activity.inner() == PlebActivity::Sleeping;
                     let in_crisis = pleb.activity.is_crisis();
                     let hunger = pleb.needs.hunger;
@@ -658,6 +817,60 @@ impl App {
                                     close_menu = true;
                                 }
 
+                                // Carrying actions
+                                if is_carrying && !in_crisis {
+                                    ui.separator();
+                                    ui.label(egui::RichText::new(format!("Carrying: {}", carrying_label)).size(10.0));
+                                    // Drop item here
+                                    if ui.button(egui::RichText::new("Drop here").size(10.0)).clicked() {
+                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
+                                            if p.inventory.carrying == Some("Rock") {
+                                                // Place rock at pleb's feet
+                                                let rx = p.x.floor() as i32;
+                                                let ry = p.y.floor() as i32;
+                                                if rx >= 0 && ry >= 0 && rx < GRID_W as i32 && ry < GRID_H as i32 {
+                                                    let ridx = (ry as u32 * GRID_W + rx as u32) as usize;
+                                                    let rb = self.grid_data[ridx];
+                                                    let rbt = rb & 0xFF;
+                                                    if rbt == 2 || rbt == 0 { // dirt or air = empty ground
+                                                        let roof_bits = rb & 0xFF000000;
+                                                        let flag_bits = (rb >> 16) & 2;
+                                                        self.grid_data[ridx] = make_block(34, 0, flag_bits as u8) | roof_bits;
+                                                        self.grid_dirty = true;
+                                                        p.inventory.rocks = p.inventory.rocks.saturating_sub(1);
+                                                    }
+                                                }
+                                                p.inventory.carrying = None;
+                                            }
+                                            p.activity = PlebActivity::Idle;
+                                            p.haul_target = None;
+                                            p.path.clear();
+                                            p.path_idx = 0;
+                                        }
+                                        close_menu = true;
+                                    }
+                                    // Haul to nearest storage
+                                    if ui.button(egui::RichText::new("Haul to storage").size(10.0)).clicked() {
+                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
+                                            let px = p.x.floor() as i32;
+                                            let py = p.y.floor() as i32;
+                                            if let Some((cx, cy)) = find_nearest_crate(&self.grid_data, px, py) {
+                                                let adj = adjacent_walkable(&self.grid_data, cx, cy).unwrap_or((cx, cy));
+                                                let start = (px, py);
+                                                let path = astar_path(&self.grid_data, start, adj);
+                                                if !path.is_empty() {
+                                                    p.path = path;
+                                                    p.path_idx = 0;
+                                                    p.activity = PlebActivity::Hauling;
+                                                    p.haul_target = Some((cx, cy));
+                                                    p.harvest_target = None; // already carrying
+                                                }
+                                            }
+                                        }
+                                        close_menu = true;
+                                    }
+                                }
+
                                 ui.separator();
                                 if ui.button(egui::RichText::new("Cancel").size(10.0)).clicked() {
                                     close_menu = true;
@@ -675,9 +888,84 @@ impl App {
             }
         }
 
-        // Close context menu on left click elsewhere
-        if self.mouse_pressed && self.context_menu.is_some() {
-            self.context_menu = None;
+        // Close context menu when clicking anywhere (pointer not over menu)
+        if self.context_menu.is_some() {
+            let pointer_over_ui = ctx.is_pointer_over_area();
+            let any_click = ctx.input(|i| i.pointer.any_pressed());
+            if any_click && !pointer_over_ui {
+                self.context_menu = None;
+            }
+        }
+
+        // --- Rock context menu (right-click or ctrl-click on a rock) ---
+        if let Some((mx, my, rx, ry)) = self.rock_context_menu {
+            let mut close_rock_menu = false;
+            // Verify rock still exists
+            let rock_valid = if rx >= 0 && ry >= 0 && rx < GRID_W as i32 && ry < GRID_H as i32 {
+                (self.grid_data[(ry as u32 * GRID_W + rx as u32) as usize] & 0xFF) == 34
+            } else { false };
+            if rock_valid {
+                egui::Area::new(egui::Id::new("rock_context_menu"))
+                    .fixed_pos(egui::Pos2::new(mx / bp_ppp, my / bp_ppp))
+                    .show(ctx, |ui| {
+                        egui::Frame::menu(ui.style()).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Rock").strong().size(12.0));
+                            ui.separator();
+                            // Find nearest pleb that can haul
+                            let mut best_pleb: Option<(usize, f32)> = None;
+                            for (i, p) in self.plebs.iter().enumerate() {
+                                if p.activity.is_crisis() || p.inventory.carrying.is_some() { continue; }
+                                let dist = ((p.x - rx as f32 - 0.5).powi(2) + (p.y - ry as f32 - 0.5).powi(2)).sqrt();
+                                if best_pleb.is_none() || dist < best_pleb.unwrap().1 {
+                                    best_pleb = Some((i, dist));
+                                }
+                            }
+                            // Find nearest crate (wide search)
+                            let nearest_crate = find_nearest_crate(&self.grid_data, rx, ry);
+                            if let Some((pleb_idx, _)) = best_pleb {
+                                let pleb_name = self.plebs[pleb_idx].name.clone();
+                                if let Some((cx, cy)) = nearest_crate {
+                                    let label = format!("Haul to storage ({})", pleb_name);
+                                    if ui.button(egui::RichText::new(label).size(11.0)).clicked() {
+                                        let pleb = &mut self.plebs[pleb_idx];
+                                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                        let path = astar_path(&self.grid_data, start, (rx, ry));
+                                        if !path.is_empty() {
+                                            pleb.path = path;
+                                            pleb.path_idx = 0;
+                                            pleb.activity = PlebActivity::Hauling;
+                                            pleb.haul_target = Some((cx, cy));
+                                            pleb.harvest_target = Some((rx, ry));
+                                            self.selected_pleb = Some(pleb_idx);
+                                        }
+                                        close_rock_menu = true;
+                                    }
+                                } else {
+                                    ui.label(egui::RichText::new("No storage crate on map").weak().size(10.0));
+                                }
+                            } else {
+                                ui.label(egui::RichText::new("No colonist available").weak().size(10.0));
+                            }
+                            ui.separator();
+                            if ui.button(egui::RichText::new("Cancel").size(10.0)).clicked() {
+                                close_rock_menu = true;
+                            }
+                        });
+                    });
+            } else {
+                close_rock_menu = true;
+            }
+            if close_rock_menu {
+                self.rock_context_menu = None;
+            }
+        }
+        // Close rock menu when clicking anywhere (pointer not over menu)
+        if self.rock_context_menu.is_some() {
+            let pointer_over_ui = ctx.is_pointer_over_area();
+            let any_click = ctx.input(|i| i.pointer.any_pressed());
+            if any_click && !pointer_over_ui {
+                self.rock_context_menu = None;
+            }
         }
 
         // --- Overlay bar (bottom-right) ---
@@ -757,32 +1045,48 @@ impl App {
                 });
         }
 
-        // Wind direction compass (bottom-right, above overlay bar)
+        // Wind compass (upper-left, below top menu bar)
         {
             let wx = self.fluid_params.wind_x;
             let wy = self.fluid_params.wind_y;
             let wind_mag = (wx * wx + wy * wy).sqrt();
             egui::Area::new(egui::Id::new("wind_compass"))
-                .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -60.0])
+                .anchor(egui::Align2::LEFT_TOP, [10.0, 32.0])
                 .interactable(false)
                 .show(ctx, |ui| {
-                    let size = 40.0;
+                    let size = 56.0;
                     let (resp, painter) = ui.allocate_painter(egui::Vec2::splat(size), egui::Sense::hover());
                     let center = resp.rect.center();
+                    let radius = size * 0.45;
                     // Circle background
-                    painter.circle_filled(center, size * 0.45, egui::Color32::from_rgba_unmultiplied(30, 30, 40, 180));
-                    painter.circle_stroke(center, size * 0.45, egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
+                    painter.circle_filled(center, radius, egui::Color32::from_rgba_unmultiplied(30, 30, 40, 200));
+                    painter.circle_stroke(center, radius, egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
+                    // NSEW labels
+                    let label_color = egui::Color32::from_gray(130);
+                    let label_font = egui::FontId::proportional(9.0);
+                    let label_r = radius + 1.0;
+                    painter.text(center + egui::Vec2::new(0.0, -label_r), egui::Align2::CENTER_BOTTOM, "N", label_font.clone(), label_color);
+                    painter.text(center + egui::Vec2::new(0.0, label_r), egui::Align2::CENTER_TOP, "S", label_font.clone(), label_color);
+                    painter.text(center + egui::Vec2::new(label_r, 0.0), egui::Align2::LEFT_CENTER, "E", label_font.clone(), label_color);
+                    painter.text(center + egui::Vec2::new(-label_r, 0.0), egui::Align2::RIGHT_CENTER, "W", label_font, label_color);
+                    // Tick marks at cardinal directions
+                    let tick_color = egui::Color32::from_gray(80);
+                    for &(dx, dy) in &[(0.0f32, -1.0f32), (0.0, 1.0), (1.0, 0.0), (-1.0, 0.0)] {
+                        let inner = center + egui::Vec2::new(dx, dy) * (radius - 4.0);
+                        let outer = center + egui::Vec2::new(dx, dy) * (radius - 1.0);
+                        painter.line_segment([inner, outer], egui::Stroke::new(1.0, tick_color));
+                    }
+                    // Wind arrow
                     if wind_mag > 0.1 {
                         let dir_x = wx / wind_mag;
                         let dir_y = wy / wind_mag;
-                        let arrow_len = size * 0.35 * (wind_mag / 20.0).min(1.0).max(0.3);
+                        let arrow_len = (radius - 6.0) * (wind_mag / 20.0).min(1.0).max(0.3);
                         let tip = center + egui::Vec2::new(dir_x * arrow_len, dir_y * arrow_len);
                         let tail = center - egui::Vec2::new(dir_x * arrow_len * 0.3, dir_y * arrow_len * 0.3);
-                        // Arrow shaft
                         painter.line_segment([tail, tip], egui::Stroke::new(2.0, egui::Color32::from_rgb(200, 220, 255)));
                         // Arrowhead
-                        let perp = egui::Vec2::new(-dir_y, dir_x) * arrow_len * 0.3;
-                        let head_base = center + egui::Vec2::new(dir_x * arrow_len * 0.5, dir_y * arrow_len * 0.5);
+                        let perp = egui::Vec2::new(-dir_y, dir_x) * arrow_len * 0.25;
+                        let head_base = center + egui::Vec2::new(dir_x * arrow_len * 0.55, dir_y * arrow_len * 0.55);
                         painter.add(egui::Shape::convex_polygon(
                             vec![tip, head_base + perp, head_base - perp],
                             egui::Color32::from_rgb(200, 220, 255),
@@ -791,6 +1095,14 @@ impl App {
                     } else {
                         painter.text(center, egui::Align2::CENTER_CENTER, "·", egui::FontId::proportional(14.0), egui::Color32::from_gray(150));
                     }
+                    // Wind speed label below compass
+                    painter.text(
+                        resp.rect.center_bottom() + egui::Vec2::new(0.0, 10.0),
+                        egui::Align2::CENTER_TOP,
+                        format!("{:.0}", wind_mag),
+                        egui::FontId::proportional(9.0),
+                        egui::Color32::from_gray(150),
+                    );
                 });
         }
 
@@ -820,7 +1132,7 @@ impl App {
                     24 => "Granite Wall", 25 => "Limestone Wall",
                     26 => "Wood Floor", 27 => "Stone Floor", 28 => "Concrete Floor",
                     29 => "Cannon", 30 => "Bed", 31 => "Berry Bush",
-                    32 => "Dug Ground", 33 => "Storage Crate",
+                    32 => "Dug Ground", 33 => "Storage Crate", 34 => "Rock",
                     _ => "Unknown",
                 };
                 let mut tags = String::new();
@@ -833,7 +1145,18 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             let gas_info = {
                 let [smoke_r, o2, co2, temp] = self.debug_fluid_density;
-                format!("Smoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C", smoke_r, o2, co2, temp)
+                // Check if this is a solid block (wall) — show block temp instead of air data
+                let is_solid_wall = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                    let ib = self.grid_data[(by as u32 * GRID_W + bx as u32) as usize];
+                    let ibt = ib & 0xFF;
+                    let ibh = (ib >> 8) & 0xFF;
+                    ibh > 0 && (ibt == 1 || ibt == 4 || ibt == 5 || ibt == 14 || (ibt >= 21 && ibt <= 25))
+                } else { false };
+                if is_solid_wall {
+                    format!("Smoke: —\nO2: —\nCO2: —\nWall temp: {:.1}°C", self.debug_block_temp)
+                } else {
+                    format!("Smoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C", smoke_r, o2, co2, temp)
+                }
             };
             #[cfg(target_arch = "wasm32")]
             let gas_info = String::from("(gas readback: native only)");
@@ -1334,6 +1657,56 @@ impl App {
             }
         }
 
+        // Storage crate inspection popup
+        if let Some(crate_idx) = self.selected_crate {
+            let (cwx, cwy) = self.selected_crate_world;
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let sx = ((cwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
+            let sy = ((cwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
+            let mut still_valid = true;
+            // Check the crate still exists
+            if (crate_idx as usize) < self.grid_data.len() {
+                let cb = self.grid_data[crate_idx as usize];
+                if (cb & 0xFF) != 33 { still_valid = false; }
+            } else {
+                still_valid = false;
+            }
+            if still_valid {
+                let inv = self.crate_contents.get(&crate_idx);
+                egui::Area::new(egui::Id::new("crate_popup"))
+                    .fixed_pos(egui::pos2(sx, sy))
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            let total = inv.map(|i| i.total()).unwrap_or(0);
+                            ui.label(egui::RichText::new(format!("Storage Crate ({}/{})", total, CRATE_MAX_ITEMS)).strong().size(12.0));
+                            ui.separator();
+                            if let Some(inv) = inv {
+                                let has_items = inv.rocks > 0 || inv.berries > 0;
+                                if has_items {
+                                    if inv.rocks > 0 {
+                                        ui.label(egui::RichText::new(format!("Rocks: {}", inv.rocks)).size(11.0));
+                                    }
+                                    if inv.berries > 0 {
+                                        ui.label(egui::RichText::new(format!("Berries: {}", inv.berries)).size(11.0));
+                                    }
+                                } else {
+                                    ui.label(egui::RichText::new("Empty").weak().size(10.0));
+                                }
+                            } else {
+                                ui.label(egui::RichText::new("Empty").weak().size(10.0));
+                            }
+                            ui.separator();
+                            if ui.small_button("Close").clicked() {
+                                still_valid = false;
+                            }
+                        });
+                    });
+            }
+            if !still_valid {
+                self.selected_crate = None;
+            }
+        }
+
         // --- World labels: pleb names, activity, key items ---
         {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
@@ -1378,6 +1751,7 @@ impl App {
                             PlebActivity::Sleeping => Some("Zzz..."),
                             PlebActivity::Harvesting(_) => Some("Harvesting"),
                             PlebActivity::Eating => Some("Eating"),
+                            PlebActivity::Hauling => Some("Hauling"),
                             PlebActivity::Crisis(_, _) => None,
                         };
                         if let Some(text) = act_text {

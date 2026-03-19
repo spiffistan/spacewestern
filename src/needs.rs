@@ -87,8 +87,10 @@ pub struct EnvSample {
     pub near_bed: bool,       // within 2 blocks of bed (type 30)
     pub near_furniture: bool, // within 3 blocks of bench/table/chair
     pub near_berry_bush: bool, // within 2 blocks of berry bush (type 31)
+    pub near_crate: bool,      // within 2 blocks of storage crate (type 33)
     pub nearest_bed: Option<(i32, i32)>,       // coords of nearest bed
     pub nearest_berry_bush: Option<(i32, i32)>, // coords of nearest berry bush
+    pub nearest_crate: Option<(i32, i32)>,     // coords of nearest storage crate
     pub is_night: bool,
     pub fire_dist: f32,       // distance to nearest fire (for danger)
 }
@@ -113,11 +115,14 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
     let mut near_bed = false;
     let mut near_furniture = false;
     let mut near_berry_bush = false;
+    let mut near_crate = false;
     let mut nearest_bed: Option<(i32, i32)> = None;
     let mut nearest_berry_bush: Option<(i32, i32)> = None;
+    let mut nearest_crate: Option<(i32, i32)> = None;
     let mut fire_dist = f32::MAX;
     let mut bed_dist = f32::MAX;
     let mut bush_dist = f32::MAX;
+    let mut crate_dist = f32::MAX;
 
     // Scan nearby blocks (radius 6 for berry bushes, 4 for most)
     let scan_r = 6i32;
@@ -166,6 +171,14 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
                         nearest_berry_bush = Some((sx, sy));
                     }
                 }
+                // Storage crate (type 33)
+                33 => {
+                    if dist < 2.0 { near_crate = true; }
+                    if dist < crate_dist {
+                        crate_dist = dist;
+                        nearest_crate = Some((sx, sy));
+                    }
+                }
                 _ => {}
             }
         }
@@ -178,8 +191,10 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
         near_bed,
         near_furniture,
         near_berry_bush,
+        near_crate,
         nearest_bed,
         nearest_berry_bush,
+        nearest_crate,
         is_night,
         fire_dist,
     }
@@ -468,6 +483,29 @@ pub fn breathing_label(state: &BreathingState) -> &'static str {
     }
 }
 
+/// Find the nearest storage crate by scanning a large radius from (bx, by).
+pub fn find_nearest_crate(grid: &[u32], bx: i32, by: i32) -> Option<(i32, i32)> {
+    let mut best: Option<(i32, i32)> = None;
+    let mut best_dist = f32::MAX;
+    let scan_r = 60i32; // scan entire visible area
+    for dy in -scan_r..=scan_r {
+        for dx in -scan_r..=scan_r {
+            let sx = bx + dx;
+            let sy = by + dy;
+            if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+            let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
+            if block_type_rs(b) == 33 {
+                let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
+                if dist < best_dist {
+                    best_dist = dist;
+                    best = Some((sx, sy));
+                }
+            }
+        }
+    }
+    best
+}
+
 /// Find the nearest tile that is cooler (outdoors / no roof = likely cooler).
 /// Used for heat crisis flee behavior.
 pub fn find_cool_tile(grid: &[u32], bx: i32, by: i32, max_radius: i32) -> Option<(i32, i32)> {
@@ -531,8 +569,10 @@ mod tests {
             near_bed: false,
             near_furniture: false,
             near_berry_bush: false,
+            near_crate: false,
             nearest_bed: None,
             nearest_berry_bush: None,
+            nearest_crate: None,
             is_night: false,
             fire_dist: f32::MAX,
         }

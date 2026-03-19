@@ -158,19 +158,19 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         let block = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         let bt = block & 0xFFu;
         if bt == 6u {
-            // Fire block: O2-dependent combustion
+            // Fire block: O2-dependent combustion (realistic fireplace)
             let fire_o2 = result.g;
             let fire_strength = clamp(fire_o2 * 3.0 - 0.5, 0.0, 1.0);
             let wx = f32(bx) + 0.5;
             let wy = f32(by) + 0.5;
             let phase = fire_hash(vec2(wx, wy)) * 6.28;
             let flicker = sin(params.time * 8.3 + phase) * 0.3 + 0.7;
-            // Produce smoke (scaled by smoke_rate slider)
-            result.r += params.smoke_rate * flicker * fire_strength;
-            // Consume O2
-            result.g -= 0.03 * fire_strength;
+            // Produce smoke — much less than before (well-drafted fireplace)
+            result.r += params.smoke_rate * flicker * fire_strength * 0.15;
+            // Consume O2 (slower — realistic combustion)
+            result.g -= 0.015 * fire_strength;
             // Produce CO2
-            result.b += 0.02 * fire_strength;
+            result.b += 0.01 * fire_strength;
         }
     }
 
@@ -232,7 +232,7 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Accumulation: smoke gains density only when smoke_rate > 0 ---
     if params.smoke_rate > 0.01 && result.r > 0.05 {
-        result.r += 0.005 * params.smoke_rate;
+        result.r += 0.001 * params.smoke_rate;
     }
 
     // --- Edge zone: gases reset to atmospheric at map borders ---
@@ -296,13 +296,67 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Fire injects heat continuously (builds up in enclosed spaces)
+    // Wall heat conduction: solid walls absorb heat from adjacent hot air and
+    // radiate it into adjacent cooler air. This lets fireplaces heat a room
+    // through the stone walls acting as thermal mass.
+    // Check 4 neighbors — if any is a solid wall, the wall conducts heat toward this cell.
+    if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
+        let this_block = grid[u32(by) * u32(params.sim_w) + u32(bx)];
+        let this_bt = this_block & 0xFFu;
+        let this_solid = this_bt == 1u || this_bt == 4u || this_bt == 14u
+            || (this_bt >= 21u && this_bt <= 25u); // all wall types
+        if !this_solid {
+            // This is an air cell — check if adjacent to hot walls
+            for (var d = 0; d < 4; d++) {
+                var ndx = 0; var ndy = 0;
+                if d == 0 { ndx = 1; } else if d == 1 { ndx = -1; }
+                else if d == 2 { ndy = 1; } else { ndy = -1; }
+                let nx = bx + ndx;
+                let ny = by + ndy;
+                if nx < 0 || ny < 0 || nx >= i32(params.sim_w) || ny >= i32(params.sim_h) { continue; }
+                let nb = grid[u32(ny) * u32(params.sim_w) + u32(nx)];
+                let nbt = nb & 0xFFu;
+                let n_solid = nbt == 1u || nbt == 4u || nbt == 14u
+                    || (nbt >= 21u && nbt <= 25u);
+                if !n_solid { continue; }
+                // Wall found — check air on the other side of the wall
+                let ox = nx + ndx;
+                let oy = ny + ndy;
+                if ox < 0 || oy < 0 || ox >= i32(params.sim_w) || oy >= i32(params.sim_h) { continue; }
+                // Read air temp on the opposite side via dye texture
+                let opp_dye = vec2<i32>(ox * 2 + 1, oy * 2 + 1);
+                let opp_temp = textureLoad(dye_in, opp_dye, 0).a;
+                // Conductivity based on wall type (stone=high, wood=low, insulated=0)
+                var conductivity = 0.0;
+                if nbt == 1u { conductivity = 0.012; }       // stone
+                else if nbt == 4u { conductivity = 0.008; }  // generic wall
+                else if nbt == 14u { conductivity = 0.0; }   // insulated (zero)
+                else if nbt == 21u { conductivity = 0.003; } // wood
+                else if nbt == 22u { conductivity = 0.06; }  // steel
+                else if nbt == 23u { conductivity = 0.010; } // sandstone
+                else if nbt == 24u { conductivity = 0.015; } // granite
+                else if nbt == 25u { conductivity = 0.008; } // limestone
+                // Transfer heat: wall conducts from hot side to cold side
+                let diff = opp_temp - result.a;
+                result.a += diff * conductivity * 0.5;
+            }
+        }
+    }
+
+    // Fire injects heat — realistic fireplace (~600°C flame, heats air gradually)
+    // Heat injection rate is moderate; enclosed rooms accumulate heat over time.
+    // The fire itself is very hot, but surrounding air heats gently via convection.
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block_t = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         if (block_t & 0xFFu) == 6u {
             let fire_o2_t = clamp(result.g * 3.0 - 0.5, 0.0, 1.0);
-            result.a += 15.0 * fire_o2_t;
-            result.a = max(result.a, 200.0 * fire_o2_t);
+            // Radiant heating: push air temperature toward fire temp (~80°C near flame)
+            // Rate depends on how cold the air currently is (diminishing returns)
+            let fire_target = 80.0 * fire_o2_t;
+            let heat_deficit = max(fire_target - result.a, 0.0);
+            result.a += heat_deficit * 0.08 * fire_o2_t; // gradual approach
+            // Minimum temperature near an active fire
+            result.a = max(result.a, 30.0 * fire_o2_t);
         }
     }
 

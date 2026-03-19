@@ -54,11 +54,12 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.color_r = 0.05; m.color_g = 0.05; m.color_b = 0.08;
         m.light_transmission = 1.0; m.walkable = 1.0;
     }
-    // 1: Stone wall
+    // 1: Stone wall — high thermal mass, moderate conductivity (stores heat well)
+    // Real stone: ~800 J/(kg·K), ~1.5 W/(m·K). Absorbs sun heat slowly, releases it at night.
     { let m = &mut mats[1];
         m.color_r = 0.52; m.color_g = 0.50; m.color_b = 0.48;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
-        m.heat_capacity = 4.0; m.conductivity = 0.002; m.solar_absorption = 0.7;
+        m.heat_capacity = 8.0; m.conductivity = 0.012; m.solar_absorption = 0.7;
         m.shows_wall_face = 1.0;
     }
     // 2: Dirt
@@ -73,11 +74,11 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.light_transmission = 0.8;
         m.heat_capacity = 8.0; m.conductivity = 0.01; m.solar_absorption = 0.3;
     }
-    // 4: Wall (generic)
+    // 4: Wall (generic) — moderate thermal mass
     { let m = &mut mats[4];
         m.color_r = 0.58; m.color_g = 0.56; m.color_b = 0.52;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
-        m.heat_capacity = 3.0; m.conductivity = 0.003; m.solar_absorption = 0.6;
+        m.heat_capacity = 6.0; m.conductivity = 0.008; m.solar_absorption = 0.6;
         m.shows_wall_face = 1.0;
     }
     // 5: Glass
@@ -209,40 +210,45 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.heat_capacity = 1.0; m.conductivity = 0.03; m.solar_absorption = 0.5;
     }
 
-    // 21: Wood wall — warm, flammable, moderate insulation
+    // 21: Wood wall — low thermal mass, good insulator (air pockets), flammable
+    // Real wood: ~1700 J/(kg·K), ~0.12 W/(m·K). Poor heat storage, great insulation.
     { let m = &mut mats[21];
         m.color_r = 0.55; m.color_g = 0.38; m.color_b = 0.18;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
-        m.heat_capacity = 2.0; m.conductivity = 0.003; m.solar_absorption = 0.4;
+        m.heat_capacity = 3.0; m.conductivity = 0.003; m.solar_absorption = 0.4;
         m.is_flammable = 1.0; m.ignition_temp = 250.0;
         m.shows_wall_face = 1.0;
     }
-    // 22: Steel wall — strong, high conductivity, fireproof
+    // 22: Steel wall — low thermal mass, very high conductivity, fireproof
+    // Real steel: ~500 J/(kg·K), ~50 W/(m·K). Heats and cools fast, terrible insulator.
     { let m = &mut mats[22];
         m.color_r = 0.60; m.color_g = 0.62; m.color_b = 0.65;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
-        m.heat_capacity = 1.0; m.conductivity = 0.08; m.solar_absorption = 0.9;
+        m.heat_capacity = 2.0; m.conductivity = 0.06; m.solar_absorption = 0.9;
         m.shows_wall_face = 1.0;
     }
-    // 23: Sandstone wall — warm color, moderate properties
+    // 23: Sandstone wall — good thermal mass, low conductivity (porous)
+    // Real sandstone: ~920 J/(kg·K), ~1.7 W/(m·K). Good balance of storage and insulation.
     { let m = &mut mats[23];
         m.color_r = 0.72; m.color_g = 0.60; m.color_b = 0.42;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
-        m.heat_capacity = 3.5; m.conductivity = 0.004; m.solar_absorption = 0.6;
+        m.heat_capacity = 7.0; m.conductivity = 0.010; m.solar_absorption = 0.6;
         m.shows_wall_face = 1.0;
     }
-    // 24: Granite wall — very strong, dense, slow to heat
+    // 24: Granite wall — very high thermal mass, moderate conductivity (dense crystalline)
+    // Real granite: ~790 J/(kg·K) but very dense (~2700 kg/m³), ~2.5 W/(m·K). Massive heat battery.
     { let m = &mut mats[24];
         m.color_r = 0.42; m.color_g = 0.40; m.color_b = 0.45;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
-        m.heat_capacity = 5.0; m.conductivity = 0.005; m.solar_absorption = 0.8;
+        m.heat_capacity = 10.0; m.conductivity = 0.015; m.solar_absorption = 0.8;
         m.shows_wall_face = 1.0;
     }
-    // 25: Limestone wall — light color, porous, moderate insulation
+    // 25: Limestone wall — moderate thermal mass, porous (good insulator)
+    // Real limestone: ~840 J/(kg·K), ~1.3 W/(m·K). Light color reflects more sun.
     { let m = &mut mats[25];
         m.color_r = 0.82; m.color_g = 0.78; m.color_b = 0.70;
         m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 3.0;
-        m.heat_capacity = 3.0; m.conductivity = 0.003; m.solar_absorption = 0.5;
+        m.heat_capacity = 6.0; m.conductivity = 0.008; m.solar_absorption = 0.4;
         m.shows_wall_face = 1.0;
     }
 
@@ -307,6 +313,16 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.light_transmission = 1.0; m.is_furniture = 1.0;
         m.is_removable = 1.0;
         m.heat_capacity = 2.0; m.conductivity = 0.002; m.solar_absorption = 0.4;
+    }
+
+    // 34: Rock — natural stone that can be picked up and hauled
+    { let m = &mut mats[34];
+        m.color_r = 0.50; m.color_g = 0.48; m.color_b = 0.44;
+        m.render_style = 21.0;
+        m.walkable = 1.0; // can walk over
+        m.is_removable = 1.0;
+        m.light_transmission = 1.0;
+        m.heat_capacity = 3.0; m.conductivity = 0.02; m.solar_absorption = 0.6;
     }
 
     mats
