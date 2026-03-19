@@ -2387,7 +2387,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let bh_for_temp = bheight;
         let is_solid_block = bh_for_temp > 0u && (bt_for_temp == 1u || bt_for_temp == 4u || bt_for_temp == 5u
             || bt_for_temp == 14u || (bt_for_temp >= 21u && bt_for_temp <= 25u));
-        let temp = select(smoke.a, block_temps[grid_idx], is_solid_block);
+        let is_pipe_block_t = bt_for_temp >= 15u && bt_for_temp <= 20u;
+        let temp = select(smoke.a, block_temps[grid_idx], is_solid_block || is_pipe_block_t);
         // Remap: -30→0, 0→0.15, 15→0.30, 25→0.40, 40→0.55, 60→0.70, 100→0.85, 500→1.0
         var temp_norm: f32;
         if temp < -30.0 {

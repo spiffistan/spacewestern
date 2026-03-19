@@ -17,6 +17,7 @@ struct FluidParams {
 @group(0) @binding(3) var<uniform> params: FluidParams;
 @group(0) @binding(4) var<storage, read> grid: array<u32>;
 @group(0) @binding(5) var obstacle_tex: texture_2d<f32>;
+@group(0) @binding(6) var<storage, read> block_temps: array<f32>;
 
 // Scale from dye-space to sim-space (computed per-invocation, but constant)
 fn dye_to_sim() -> vec2<f32> {
@@ -305,8 +306,10 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         let this_bt = this_block & 0xFFu;
         let this_solid = this_bt == 1u || this_bt == 4u || this_bt == 14u
             || (this_bt >= 21u && this_bt <= 25u); // all wall types
-        if !this_solid {
-            // This is an air cell — check if adjacent to hot walls
+        let this_pipe = this_bt >= 15u && this_bt <= 20u;
+        if !this_solid && !this_pipe {
+            // This is an air cell — check if adjacent to hot walls or pipes
+            let gw = u32(params.sim_w);
             for (var d = 0; d < 4; d++) {
                 var ndx = 0; var ndy = 0;
                 if d == 0 { ndx = 1; } else if d == 1 { ndx = -1; }
@@ -314,31 +317,39 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let nx = bx + ndx;
                 let ny = by + ndy;
                 if nx < 0 || ny < 0 || nx >= i32(params.sim_w) || ny >= i32(params.sim_h) { continue; }
-                let nb = grid[u32(ny) * u32(params.sim_w) + u32(nx)];
+                let nb = grid[u32(ny) * gw + u32(nx)];
                 let nbt = nb & 0xFFu;
                 let n_solid = nbt == 1u || nbt == 4u || nbt == 14u
                     || (nbt >= 21u && nbt <= 25u);
-                if !n_solid { continue; }
-                // Wall found — check air on the other side of the wall
-                let ox = nx + ndx;
-                let oy = ny + ndy;
-                if ox < 0 || oy < 0 || ox >= i32(params.sim_w) || oy >= i32(params.sim_h) { continue; }
-                // Read air temp on the opposite side via dye texture
-                let opp_dye = vec2<i32>(ox * 2 + 1, oy * 2 + 1);
-                let opp_temp = textureLoad(dye_in, opp_dye, 0).a;
-                // Conductivity based on wall type (stone=high, wood=low, insulated=0)
-                var conductivity = 0.0;
-                if nbt == 1u { conductivity = 0.012; }       // stone
-                else if nbt == 4u { conductivity = 0.008; }  // generic wall
-                else if nbt == 14u { conductivity = 0.0; }   // insulated (zero)
-                else if nbt == 21u { conductivity = 0.003; } // wood
-                else if nbt == 22u { conductivity = 0.06; }  // steel
-                else if nbt == 23u { conductivity = 0.010; } // sandstone
-                else if nbt == 24u { conductivity = 0.015; } // granite
-                else if nbt == 25u { conductivity = 0.008; } // limestone
-                // Transfer heat: wall conducts from hot side to cold side
-                let diff = opp_temp - result.a;
-                result.a += diff * conductivity * 0.5;
+                let n_pipe = nbt >= 15u && nbt <= 20u;
+
+                if n_pipe {
+                    // Pipe: radiates its internal gas temperature to surrounding air
+                    // Read pipe temp from block_temps (set by CPU from pipe network)
+                    let pipe_idx = u32(ny) * gw + u32(nx);
+                    let pipe_temp = block_temps[pipe_idx];
+                    let diff = pipe_temp - result.a;
+                    // Metal pipes conduct well (similar to steel)
+                    result.a += diff * 0.04;
+                } else if n_solid {
+                    // Wall: conducts heat from air on the other side
+                    let ox = nx + ndx;
+                    let oy = ny + ndy;
+                    if ox < 0 || oy < 0 || ox >= i32(params.sim_w) || oy >= i32(params.sim_h) { continue; }
+                    let opp_dye = vec2<i32>(ox * 2 + 1, oy * 2 + 1);
+                    let opp_temp = textureLoad(dye_in, opp_dye, 0).a;
+                    var conductivity = 0.0;
+                    if nbt == 1u { conductivity = 0.012; }       // stone
+                    else if nbt == 4u { conductivity = 0.008; }  // generic wall
+                    else if nbt == 14u { conductivity = 0.0; }   // insulated (zero)
+                    else if nbt == 21u { conductivity = 0.003; } // wood
+                    else if nbt == 22u { conductivity = 0.06; }  // steel
+                    else if nbt == 23u { conductivity = 0.010; } // sandstone
+                    else if nbt == 24u { conductivity = 0.015; } // granite
+                    else if nbt == 25u { conductivity = 0.008; } // limestone
+                    let diff = opp_temp - result.a;
+                    result.a += diff * conductivity * 0.5;
+                }
             }
         }
     }

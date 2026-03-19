@@ -531,6 +531,7 @@ impl App {
                 wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         });
 
@@ -726,6 +727,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 3, resource: fluid_params_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: grid_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 6, resource: block_temp_buffer.as_entire_binding() },
             ],
         });
         let fluid_bg_advect_dye_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -737,6 +739,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 3, resource: fluid_params_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: grid_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&fv_obstacle) },
+                wgpu::BindGroupEntry { binding: 6, resource: block_temp_buffer.as_entire_binding() },
             ],
         });
 

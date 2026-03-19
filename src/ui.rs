@@ -1146,14 +1146,18 @@ impl App {
             let gas_info = {
                 let [smoke_r, o2, co2, temp] = self.debug_fluid_density;
                 // Check if this is a solid block (wall) — show block temp instead of air data
-                let is_solid_wall = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                let (is_solid_wall, is_pipe_block) = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                     let ib = self.grid_data[(by as u32 * GRID_W + bx as u32) as usize];
                     let ibt = ib & 0xFF;
                     let ibh = (ib >> 8) & 0xFF;
-                    ibh > 0 && (ibt == 1 || ibt == 4 || ibt == 5 || ibt == 14 || (ibt >= 21 && ibt <= 25))
-                } else { false };
+                    let solid = ibh > 0 && (ibt == 1 || ibt == 4 || ibt == 5 || ibt == 14 || (ibt >= 21 && ibt <= 25));
+                    let pipe = ibt >= 15 && ibt <= 20;
+                    (solid, pipe)
+                } else { (false, false) };
                 if is_solid_wall {
                     format!("Smoke: —\nO2: —\nCO2: —\nWall temp: {:.1}°C", self.debug_block_temp)
+                } else if is_pipe_block {
+                    format!("Smoke: —\nO2: —\nCO2: —\nPipe temp: {:.1}°C", self.debug_block_temp)
                 } else {
                     format!("Smoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C", smoke_r, o2, co2, temp)
                 }

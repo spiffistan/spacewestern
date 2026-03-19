@@ -1732,6 +1732,18 @@ impl App {
             // Submit the main encoder FIRST (compute + blit) so the surface has content
             gfx.queue.submit(std::iter::once(encoder.finish()));
 
+            // Write pipe gas temperatures into block_temps buffer (AFTER thermal shader)
+            // This makes pipe blocks show their internal gas temperature in the overlay
+            // and allows heat exchange with surrounding air via the dye shader.
+            for (&idx, cell) in &self.pipe_network.cells {
+                let pipe_temp = cell.gas[3]; // temperature channel
+                gfx.queue.write_buffer(
+                    &gfx.block_temp_buffer,
+                    (idx as u64) * 4,
+                    bytemuck::bytes_of(&pipe_temp),
+                );
+            }
+
             // Apply pipe outlet injections to dye texture (AFTER shader runs)
             // Write into cells ADJACENT to the outlet (in the outlet's facing direction)
             for &(ox, oy, gas, pressure) in &pipe_injections {
