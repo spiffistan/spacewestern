@@ -1188,25 +1188,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
 
         // Does this block/roof intersect the ray?
         if effective_h > current_h {
-            if bt == 5u {
-                // Glass block: fixed-ratio split between window opening and
-                // solid wall (sill + lintel). No current_h-dependent terms
-                // to avoid flickering as sun angle changes frame-to-frame.
-                let window_open_frac = 1.0 - WINDOW_SILL_FRAC - WINDOW_LINTEL_FRAC;
-
-                // Glass portion: tint and partial absorption
-                let absorption = GLASS_ABSORPTION * SHADOW_STEP * window_open_frac;
-                light *= (1.0 - absorption);
-                tint *= mix(vec3<f32>(1.0), GLASS_TINT, SHADOW_STEP * 0.8 * window_open_frac);
-
-                // Wall portion (sill + lintel): fixed partial shadow per step
-                let wall_frac = 1.0 - window_open_frac;
-                light *= (1.0 - wall_frac * SHADOW_STEP * 1.5);
-
-                if light < 0.02 {
-                    return vec4<f32>(tint, 0.0);
-                }
-            } else if is_roofed_floor {
+            if is_roofed_floor {
                 // Roof is a hard opaque surface — fully blocks the shadow ray.
                 // (Indoor pixels never reach here; they use compute_interior_light instead.)
                 return vec4<f32>(tint, 0.0);
@@ -1277,11 +1259,13 @@ fn render_glass_block(wx: f32, wy: f32, fx: f32, fy: f32, bx: i32, by: i32) -> v
     let top_t = block_type(get_block(bx, by - 1));
     let bot_t = block_type(get_block(bx, by + 1));
 
-    // Wall neighbors: type 1 (stone) or type 4 (wall) or type 5 (glass)
-    let h_wall = (left_t == 1u || left_t == 4u || left_t == 5u) ||
-                 (right_t == 1u || right_t == 4u || right_t == 5u);
-    let v_wall = (top_t == 1u || top_t == 4u || top_t == 5u) ||
-                 (bot_t == 1u || bot_t == 4u || bot_t == 5u);
+    // Wall neighbors: stone, generic, glass, insulated, or any named wall type (21-25)
+    let left_w = left_t == 1u || left_t == 4u || left_t == 5u || left_t == 14u || (left_t >= 21u && left_t <= 25u);
+    let right_w = right_t == 1u || right_t == 4u || right_t == 5u || right_t == 14u || (right_t >= 21u && right_t <= 25u);
+    let top_w = top_t == 1u || top_t == 4u || top_t == 5u || top_t == 14u || (top_t >= 21u && top_t <= 25u);
+    let bot_w = bot_t == 1u || bot_t == 4u || bot_t == 5u || bot_t == 14u || (bot_t >= 21u && bot_t <= 25u);
+    let h_wall = left_w || right_w;
+    let v_wall = top_w || bot_w;
 
     // Determine thin axis: if in a horizontal wall run, thin in Y; if vertical, thin in X
     // If both or neither, default to thinner in both axes
@@ -1487,11 +1471,37 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         let mortar = f32(line < 0.06) * 0.04;
         face_color -= vec3<f32>(mortar);
 
-        // Glass face: show a window strip in the middle
+        // Glass face: window between sill and lintel with frame detail
         if btype == 5u {
-            let glass_zone = wall_face_t > 0.2 && wall_face_t < 0.8;
-            if glass_zone {
-                face_color = vec3<f32>(0.4, 0.55, 0.7) * (0.8 + 0.2 * (1.0 - wall_face_t));
+            let sill_t = WINDOW_SILL_FRAC;
+            let lintel_t = 1.0 - WINDOW_LINTEL_FRAC;
+            let in_window = wall_face_t > sill_t && wall_face_t < lintel_t;
+            if in_window {
+                // Window frame (thin border around glass)
+                let frame_w = 0.04;
+                let near_sill = wall_face_t < sill_t + frame_w;
+                let near_lintel = wall_face_t > lintel_t - frame_w;
+                let near_side = fx < 0.08 || fx > 0.92;
+                // Cross bar in the middle
+                let cross_bar = abs(wall_face_t - (sill_t + lintel_t) * 0.5) < frame_w * 0.5;
+                let mid_bar = abs(fx - 0.5) < 0.02;
+                if near_sill || near_lintel || near_side || cross_bar || mid_bar {
+                    // Dark wood/metal frame
+                    face_color = vec3<f32>(0.28, 0.25, 0.22);
+                } else {
+                    // Glass pane — blue-tinted, slight reflection gradient
+                    let glass_t = (wall_face_t - sill_t) / (lintel_t - sill_t);
+                    face_color = vec3<f32>(0.35, 0.50, 0.65) * (0.85 + 0.15 * (1.0 - glass_t));
+                    // Slight specular highlight near top
+                    if glass_t < 0.15 {
+                        face_color += vec3<f32>(0.08, 0.08, 0.10) * (1.0 - glass_t / 0.15);
+                    }
+                }
+            } else {
+                // Sill below window: stone ledge, slightly lighter
+                if wall_face_t < sill_t && wall_face_t > sill_t - 0.06 {
+                    face_color = vec3<f32>(0.58, 0.56, 0.52);
+                }
             }
         }
 
