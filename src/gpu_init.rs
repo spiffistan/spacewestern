@@ -1113,6 +1113,14 @@ impl App {
             mapped_at_creation: false,
         });
 
+        // Per-pleb air readback: 16 plebs × 256 bytes each (alignment)
+        let pleb_air_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pleb-air-readback"),
+            size: 16 * 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
         self.egui_state = Some(EguiState {
             ctx: egui_ctx,
             winit_state: egui_winit_state,
@@ -1210,6 +1218,7 @@ impl App {
             fluid_bg_pressure_clear,
             fluid_bg_advect_dye: [fluid_bg_advect_dye_0, fluid_bg_advect_dye_1],
             debug_readback_buffer,
+            pleb_air_readback_buffer,
             block_temp_buffer,
             thermal_pipeline: thermal_pipeline_val,
             thermal_bind_group: thermal_bind_group_val,

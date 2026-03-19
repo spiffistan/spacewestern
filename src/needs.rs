@@ -1,8 +1,41 @@
 //! Pleb needs system — hunger, rest, warmth, oxygen, safety, comfort.
 //! Each need is 0.0 (desperate) to 1.0 (fully satisfied).
 //! Needs decay over time and are replenished by environment/actions.
+//!
+//! Oxygen is driven by GPU fluid sim readback (O2/CO2 at pleb position).
+//! Plebs can hold their breath when air is bad, and flee toward good air.
 
 use crate::grid::{GRID_W, GRID_H, block_type_rs, roof_height_rs};
+use crate::pleb::is_walkable_pos;
+
+// --- Breathing constants (realistic human physiology) ---
+/// Maximum breath-hold duration in game seconds (~30 real seconds at 1x)
+const BREATH_HOLD_MAX: f32 = 30.0;
+/// O2 level below which you can't breathe (even if you try)
+const O2_UNBREATHABLE: f32 = 0.12;
+/// O2 level below which breathing is labored (partial benefit)
+const O2_LABORED: f32 = 0.35;
+/// CO2 level above which you must hold your breath (toxic)
+const CO2_TOXIC: f32 = 0.25;
+/// CO2 level that causes irritation but is still breathable
+const CO2_IRRITANT: f32 = 0.10;
+/// Health damage rate from suffocation (per game second, breath depleted in bad air)
+const SUFFOCATE_DAMAGE: f32 = 0.03;
+/// Health damage rate from CO2 poisoning (per game second, breathing toxic CO2)
+const CO2_POISON_DAMAGE: f32 = 0.015;
+/// Breath recovery rate when breathing good air (seconds of breath per second)
+const BREATH_RECOVERY_RATE: f32 = 3.0;
+
+/// Breathing state machine for a pleb.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BreathingState {
+    /// Breathing normally — good air
+    Normal,
+    /// Holding breath — CO2 too high or O2 too low to breathe
+    HoldingBreath,
+    /// Gasping — breath ran out, forced to inhale bad air, taking damage
+    Gasping,
+}
 
 /// All needs for a single pleb.
 #[derive(Clone, Debug)]
@@ -10,11 +43,19 @@ pub struct PlebNeeds {
     pub hunger: f32,     // 1.0 = full, decays over time
     pub rest: f32,       // 1.0 = rested, decays faster when moving
     pub warmth: f32,     // 1.0 = comfortable temp, driven by environment
-    pub oxygen: f32,     // 1.0 = fresh air, driven by environment
+    pub oxygen: f32,     // 1.0 = fresh air, driven by actual O2/CO2 levels
     pub safety: f32,     // 1.0 = safe, drops near fire/outdoors at night
     pub comfort: f32,    // 1.0 = comfy, indoors + furniture
     pub health: f32,     // 1.0 = full health, damaged by unmet needs
     pub mood: f32,       // -100 to +100, aggregate of all needs
+
+    // Breathing system
+    pub breath_remaining: f32,   // seconds of breath left (0..BREATH_HOLD_MAX)
+    pub breathing_state: BreathingState,
+    pub air_o2: f32,             // last sampled O2 at position (0-1, from fluid sim)
+    pub air_co2: f32,            // last sampled CO2 at position (0-1.5, from fluid sim)
+    pub air_temp: f32,           // last sampled temperature at position (°C, from fluid sim)
+    pub flee_target: Option<(i32, i32)>, // crisis pathfind target (nearest good air)
 }
 
 impl Default for PlebNeeds {
@@ -28,6 +69,12 @@ impl Default for PlebNeeds {
             comfort: 0.5,
             health: 1.0,
             mood: 50.0,
+            breath_remaining: BREATH_HOLD_MAX,
+            breathing_state: BreathingState::Normal,
+            air_o2: 1.0,
+            air_co2: 0.0,
+            air_temp: 20.0,
+            flee_target: None,
         }
     }
 }
@@ -107,6 +154,15 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
     }
 }
 
+/// Air quality data from GPU fluid sim readback (per pleb, per frame).
+#[derive(Clone, Debug, Default)]
+pub struct AirReadback {
+    pub o2: f32,    // 0.0-1.0, atmospheric is ~1.0
+    pub co2: f32,   // 0.0-1.5, normal is ~0.0
+    pub temp: f32,  // degrees C
+    pub smoke: f32, // smoke density
+}
+
 // --- Need decay rates (per real second at 1x speed) ---
 const HUNGER_DECAY: f32 = 0.003;       // ~5.5 min to starve from full
 const REST_DECAY_IDLE: f32 = 0.002;    // ~8 min to exhaust while idle
@@ -115,15 +171,27 @@ const REST_RECOVER: f32 = 0.015;       // ~1 min to fully rest near bed
 
 // --- Health damage rates (per real second) ---
 const STARVE_DAMAGE: f32 = 0.008;      // ~2 min to die from starvation
-const SUFFOCATE_DAMAGE: f32 = 0.025;   // ~40s to die from no oxygen
 const FREEZE_DAMAGE: f32 = 0.012;      // ~1.3 min to die from cold
 const FIRE_DAMAGE: f32 = 0.04;         // ~25s to die in fire
+
+/// Determine whether air is breathable at the pleb's position.
+fn air_breathable(o2: f32, co2: f32) -> bool {
+    o2 >= O2_UNBREATHABLE && co2 < CO2_TOXIC
+}
 
 /// Update a single pleb's needs based on environment. Call once per frame.
 /// `dt` = frame delta time, `time_speed` = game speed multiplier.
 /// `is_moving` = true if pleb moved this frame.
-pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f32, is_moving: bool) {
+/// `air` = fluid sim readback (None if readback not available, e.g. WASM).
+pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f32, is_moving: bool, air: Option<&AirReadback>) {
     let t = dt * time_speed;
+
+    // --- Store air readings ---
+    if let Some(air) = air {
+        needs.air_o2 = air.o2;
+        needs.air_co2 = air.co2;
+        needs.air_temp = air.temp;
+    }
 
     // --- Hunger: always decays ---
     needs.hunger = (needs.hunger - HUNGER_DECAY * t).max(0.0);
@@ -137,31 +205,110 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
         needs.rest = (needs.rest - REST_DECAY_IDLE * t).max(0.0);
     }
 
-    // --- Warmth: driven by environment ---
-    let target_warmth = if env.near_fire || env.near_heater {
-        1.0
-    } else if env.is_indoors {
-        0.7 // insulated but no heat source
-    } else if env.is_night {
-        0.2 // cold outside at night
+    // --- Warmth: driven by fluid sim temperature when available ---
+    let target_warmth = if let Some(air) = air {
+        // Map real temperature to warmth need: 18-24°C is comfortable
+        let temp = air.temp;
+        if temp >= 18.0 && temp <= 28.0 {
+            1.0
+        } else if temp > 28.0 {
+            // Too hot — mild discomfort
+            (1.0 - (temp - 28.0) / 50.0).max(0.2)
+        } else if temp >= 5.0 {
+            // Cool — linear drop
+            (temp - 5.0) / 13.0 // 0 at 5°C, 1 at 18°C
+        } else {
+            // Freezing
+            0.0
+        }
     } else {
-        0.5 // mild outside during day
+        // Fallback: grid-based approximation
+        if env.near_fire || env.near_heater { 1.0 }
+        else if env.is_indoors { 0.7 }
+        else if env.is_night { 0.2 }
+        else { 0.5 }
     };
-    // Smooth approach to target (faster cooling, slower heating)
     let rate = if target_warmth > needs.warmth { 0.3 } else { 0.5 };
     needs.warmth += (target_warmth - needs.warmth) * rate * t;
     needs.warmth = needs.warmth.clamp(0.0, 1.0);
 
-    // --- Oxygen: indoors with fire consumes O2, outdoors always good ---
-    if !env.is_indoors {
-        // Outdoors: always fresh air
-        needs.oxygen = (needs.oxygen + 0.5 * t).min(1.0);
-    } else if env.near_fire {
-        // Fire in enclosed space depletes oxygen slowly
-        needs.oxygen = (needs.oxygen - 0.01 * t).max(0.0);
+    // --- Breathing system (O2/CO2 from fluid sim) ---
+    let (o2, co2) = if air.is_some() {
+        (needs.air_o2, needs.air_co2)
     } else {
-        // Indoors without fire: slow depletion from breathing
-        needs.oxygen = (needs.oxygen - 0.002 * t).max(0.0);
+        // Fallback: estimate from grid
+        let o2 = if !env.is_indoors { 1.0 }
+            else if env.near_fire { 0.6 }
+            else { 0.9 };
+        let co2 = if env.is_indoors && env.near_fire { 0.15 } else { 0.0 };
+        (o2, co2)
+    };
+
+    let can_breathe = air_breathable(o2, co2);
+
+    match needs.breathing_state {
+        BreathingState::Normal => {
+            if can_breathe {
+                // Good air — recover breath, replenish O2 need
+                needs.breath_remaining = (needs.breath_remaining + BREATH_RECOVERY_RATE * t).min(BREATH_HOLD_MAX);
+
+                // O2 need based on air quality
+                let o2_quality = if o2 > O2_LABORED && co2 < CO2_IRRITANT {
+                    1.0 // perfect air
+                } else {
+                    // Labored breathing — partial benefit
+                    let o2_factor = ((o2 - O2_UNBREATHABLE) / (O2_LABORED - O2_UNBREATHABLE)).clamp(0.0, 1.0);
+                    let co2_factor = (1.0 - (co2 - CO2_IRRITANT) / (CO2_TOXIC - CO2_IRRITANT)).clamp(0.0, 1.0);
+                    o2_factor * co2_factor * 0.7
+                };
+                needs.oxygen = (needs.oxygen + o2_quality * 0.5 * t).min(1.0);
+
+                // Transition to holding breath if air becomes bad
+                if !can_breathe {
+                    needs.breathing_state = BreathingState::HoldingBreath;
+                    needs.flee_target = None; // will be computed in crisis behavior
+                }
+            } else {
+                // Air just went bad — hold breath
+                needs.breathing_state = BreathingState::HoldingBreath;
+                needs.flee_target = None;
+            }
+        }
+        BreathingState::HoldingBreath => {
+            // Breath depletes — faster if moving (exertion)
+            let depletion = if is_moving { 2.0 } else { 1.0 };
+            needs.breath_remaining = (needs.breath_remaining - depletion * t).max(0.0);
+
+            // O2 need slowly drops while holding breath
+            needs.oxygen = (needs.oxygen - 0.02 * t).max(0.0);
+
+            if can_breathe {
+                // Air is good again — resume breathing
+                needs.breathing_state = BreathingState::Normal;
+                needs.flee_target = None;
+            } else if needs.breath_remaining <= 0.0 {
+                // Can't hold any longer — forced to gasp
+                needs.breathing_state = BreathingState::Gasping;
+            }
+        }
+        BreathingState::Gasping => {
+            // Forced to inhale bad air — taking damage
+            needs.oxygen = (needs.oxygen - 0.08 * t).max(0.0);
+
+            // Periodic gasps — can get small amounts of whatever O2 is available
+            if o2 > 0.05 {
+                needs.breath_remaining = (needs.breath_remaining + o2 * 0.5 * t).min(3.0);
+                // Brief respite allows another short hold
+                if needs.breath_remaining > 2.0 && !can_breathe {
+                    needs.breathing_state = BreathingState::HoldingBreath;
+                }
+            }
+
+            if can_breathe {
+                needs.breathing_state = BreathingState::Normal;
+                needs.flee_target = None;
+            }
+        }
     }
 
     // --- Safety: threatened by fire proximity and being outside at night ---
@@ -171,6 +318,10 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
     }
     if env.is_night && !env.is_indoors {
         safety_target -= 0.3;
+    }
+    // Bad air reduces safety feeling
+    if needs.breathing_state != BreathingState::Normal {
+        safety_target -= 0.4;
     }
     safety_target = safety_target.max(0.0);
     needs.safety += (safety_target - needs.safety) * 0.4 * t;
@@ -192,9 +343,17 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
     if needs.hunger < 0.05 {
         damage += STARVE_DAMAGE;
     }
-    if needs.oxygen < 0.15 {
-        damage += SUFFOCATE_DAMAGE * (1.0 - needs.oxygen / 0.15);
+
+    // Suffocation: gasping in bad air
+    if needs.breathing_state == BreathingState::Gasping {
+        if o2 < O2_UNBREATHABLE {
+            damage += SUFFOCATE_DAMAGE * (1.0 - o2 / O2_UNBREATHABLE);
+        }
+        if co2 > CO2_TOXIC {
+            damage += CO2_POISON_DAMAGE * ((co2 - CO2_TOXIC) / 0.5).min(1.0);
+        }
     }
+
     if needs.warmth < 0.15 {
         damage += FREEZE_DAMAGE * (1.0 - needs.warmth / 0.15);
     }
@@ -219,7 +378,6 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
         + needs.oxygen * 25.0
         + needs.safety * 10.0
         + needs.comfort * 10.0;
-    // weighted is 0-100, map to -100..+100
     let target_mood = weighted * 2.0 - 100.0;
     needs.mood += (target_mood - needs.mood) * 0.1 * t;
     needs.mood = needs.mood.clamp(-100.0, 100.0);
@@ -248,6 +406,39 @@ pub fn critical_need(needs: &PlebNeeds) -> Option<(&'static str, f32)> {
         .map(|&(name, val)| (name, val))
 }
 
+/// Breathing state label for UI display.
+pub fn breathing_label(state: &BreathingState) -> &'static str {
+    match state {
+        BreathingState::Normal => "Breathing",
+        BreathingState::HoldingBreath => "Holding breath",
+        BreathingState::Gasping => "GASPING!",
+    }
+}
+
+/// Find the nearest tile with breathable air by scanning outward from (bx, by).
+/// Returns grid coords of nearest breathable tile, or None if none found within radius.
+/// Uses a simple distance-ordered search (not A* — just finds the target).
+pub fn find_breathable_tile(grid: &[u32], bx: i32, by: i32, max_radius: i32) -> Option<(i32, i32)> {
+    // Search in expanding rings
+    for r in 1..=max_radius {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx.abs() != r && dy.abs() != r { continue; } // only ring perimeter
+                let sx = bx + dx;
+                let sy = by + dy;
+                if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+
+                let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
+                // Outdoors (no roof) = guaranteed breathable air
+                if roof_height_rs(b) == 0 && is_walkable_pos(grid, sx as f32 + 0.5, sy as f32 + 0.5) {
+                    return Some((sx, sy));
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,12 +456,24 @@ mod tests {
         }
     }
 
+    fn good_air() -> AirReadback {
+        AirReadback { o2: 1.0, co2: 0.0, temp: 20.0, smoke: 0.0 }
+    }
+
+    fn toxic_air() -> AirReadback {
+        AirReadback { o2: 0.08, co2: 0.5, temp: 40.0, smoke: 1.0 }
+    }
+
+    fn high_co2_air() -> AirReadback {
+        AirReadback { o2: 0.8, co2: 0.4, temp: 22.0, smoke: 0.2 }
+    }
+
     #[test]
     fn test_hunger_decays() {
         let mut needs = PlebNeeds::default();
         let env = default_env();
         let initial = needs.hunger;
-        tick_needs(&mut needs, &env, 1.0, 1.0, false);
+        tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&good_air()));
         assert!(needs.hunger < initial, "hunger should decay");
     }
 
@@ -280,32 +483,119 @@ mod tests {
         needs.rest = 0.5;
         let mut env = default_env();
         env.near_bed = true;
-        tick_needs(&mut needs, &env, 1.0, 1.0, false);
+        tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&good_air()));
         assert!(needs.rest > 0.5, "rest should recover near bed");
     }
 
     #[test]
-    fn test_warmth_from_fire() {
+    fn test_warmth_from_temperature() {
         let mut needs = PlebNeeds::default();
         needs.warmth = 0.2;
-        let mut env = default_env();
-        env.near_fire = true;
-        // Tick several times to let warmth approach target
+        let env = default_env();
+        let warm_air = AirReadback { o2: 1.0, co2: 0.0, temp: 22.0, smoke: 0.0 };
         for _ in 0..10 {
-            tick_needs(&mut needs, &env, 0.5, 1.0, false);
+            tick_needs(&mut needs, &env, 0.5, 1.0, false, Some(&warm_air));
         }
-        assert!(needs.warmth > 0.8, "warmth should rise near fire, got {}", needs.warmth);
+        assert!(needs.warmth > 0.8, "warmth should rise in warm air, got {}", needs.warmth);
     }
 
     #[test]
-    fn test_oxygen_depletes_indoors_with_fire() {
+    fn test_warmth_drops_in_cold() {
         let mut needs = PlebNeeds::default();
-        let mut env = default_env();
-        env.is_indoors = true;
-        env.near_fire = true;
-        let initial = needs.oxygen;
-        tick_needs(&mut needs, &env, 1.0, 1.0, false);
-        assert!(needs.oxygen < initial, "oxygen should deplete indoors with fire");
+        needs.warmth = 1.0;
+        let env = default_env();
+        let cold_air = AirReadback { o2: 1.0, co2: 0.0, temp: 0.0, smoke: 0.0 };
+        for _ in 0..20 {
+            tick_needs(&mut needs, &env, 0.5, 1.0, false, Some(&cold_air));
+        }
+        assert!(needs.warmth < 0.2, "warmth should drop in freezing air, got {}", needs.warmth);
+    }
+
+    #[test]
+    fn test_breathing_normal_in_good_air() {
+        let mut needs = PlebNeeds::default();
+        let env = default_env();
+        tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&good_air()));
+        assert_eq!(needs.breathing_state, BreathingState::Normal);
+        assert!(needs.oxygen > 0.9);
+    }
+
+    #[test]
+    fn test_hold_breath_in_co2() {
+        let mut needs = PlebNeeds::default();
+        let env = default_env();
+        // Expose to high CO2 — should trigger breath hold
+        tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&high_co2_air()));
+        assert_eq!(needs.breathing_state, BreathingState::HoldingBreath,
+            "should hold breath when CO2 > toxic threshold");
+    }
+
+    #[test]
+    fn test_breath_depletes_while_holding() {
+        let mut needs = PlebNeeds::default();
+        needs.breathing_state = BreathingState::HoldingBreath;
+        let env = default_env();
+        let initial_breath = needs.breath_remaining;
+        tick_needs(&mut needs, &env, 5.0, 1.0, false, Some(&toxic_air()));
+        assert!(needs.breath_remaining < initial_breath, "breath should deplete while holding");
+    }
+
+    #[test]
+    fn test_breath_depletes_faster_when_moving() {
+        let mut needs1 = PlebNeeds::default();
+        needs1.breathing_state = BreathingState::HoldingBreath;
+        let mut needs2 = PlebNeeds::default();
+        needs2.breathing_state = BreathingState::HoldingBreath;
+        let env = default_env();
+
+        tick_needs(&mut needs1, &env, 5.0, 1.0, false, Some(&toxic_air()));
+        tick_needs(&mut needs2, &env, 5.0, 1.0, true, Some(&toxic_air()));
+        assert!(needs2.breath_remaining < needs1.breath_remaining,
+            "breath should deplete faster when moving (running uses more O2)");
+    }
+
+    #[test]
+    fn test_gasping_when_breath_runs_out() {
+        let mut needs = PlebNeeds::default();
+        needs.breathing_state = BreathingState::HoldingBreath;
+        needs.breath_remaining = 0.5;
+        let env = default_env();
+        tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&toxic_air()));
+        assert_eq!(needs.breathing_state, BreathingState::Gasping,
+            "should start gasping when breath runs out");
+    }
+
+    #[test]
+    fn test_gasping_causes_health_damage() {
+        let mut needs = PlebNeeds::default();
+        needs.breathing_state = BreathingState::Gasping;
+        needs.breath_remaining = 0.0;
+        let env = default_env();
+        let initial_health = needs.health;
+        tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&toxic_air()));
+        assert!(needs.health < initial_health,
+            "gasping in toxic air should damage health");
+    }
+
+    #[test]
+    fn test_resume_breathing_when_air_clears() {
+        let mut needs = PlebNeeds::default();
+        needs.breathing_state = BreathingState::HoldingBreath;
+        needs.breath_remaining = 10.0;
+        let env = default_env();
+        tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&good_air()));
+        assert_eq!(needs.breathing_state, BreathingState::Normal,
+            "should resume breathing when air becomes good");
+    }
+
+    #[test]
+    fn test_breath_recovers_in_good_air() {
+        let mut needs = PlebNeeds::default();
+        needs.breath_remaining = 10.0;
+        let env = default_env();
+        tick_needs(&mut needs, &env, 2.0, 1.0, false, Some(&good_air()));
+        assert!(needs.breath_remaining > 10.0,
+            "breath should recover in good air, got {}", needs.breath_remaining);
     }
 
     #[test]
@@ -314,7 +604,7 @@ mod tests {
         needs.hunger = 0.0;
         let env = default_env();
         let initial = needs.health;
-        tick_needs(&mut needs, &env, 1.0, 1.0, false);
+        tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&good_air()));
         assert!(needs.health < initial, "health should drop when starving");
     }
 
@@ -327,7 +617,7 @@ mod tests {
         needs.warmth = 0.9;
         needs.oxygen = 1.0;
         let env = default_env();
-        tick_needs(&mut needs, &env, 1.0, 1.0, false);
+        tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&good_air()));
         assert!(needs.health > 0.8, "health should slowly heal");
     }
 
@@ -338,14 +628,14 @@ mod tests {
         good.oxygen = 1.0; good.safety = 1.0; good.comfort = 1.0;
         good.mood = 0.0;
         let env = default_env();
-        tick_needs(&mut good, &env, 1.0, 1.0, false);
+        tick_needs(&mut good, &env, 1.0, 1.0, false, Some(&good_air()));
         assert!(good.mood > 0.0, "mood should be positive with all needs met");
 
         let mut bad = PlebNeeds::default();
         bad.hunger = 0.0; bad.rest = 0.0; bad.warmth = 0.0;
         bad.oxygen = 0.0; bad.safety = 0.0; bad.comfort = 0.0;
         bad.mood = 0.0;
-        tick_needs(&mut bad, &env, 1.0, 1.0, false);
+        tick_needs(&mut bad, &env, 1.0, 1.0, false, Some(&good_air()));
         assert!(bad.mood < 0.0, "mood should be negative with no needs met");
     }
 
@@ -375,9 +665,20 @@ mod tests {
         let mut env = default_env();
         env.fire_dist = 1.0;
         for _ in 0..10 {
-            tick_needs(&mut needs, &env, 0.5, 1.0, false);
+            tick_needs(&mut needs, &env, 0.5, 1.0, false, Some(&good_air()));
         }
         assert!(needs.safety < 0.9, "safety should drop near fire, got {}", needs.safety);
+    }
+
+    #[test]
+    fn test_safety_drops_when_holding_breath() {
+        let mut needs = PlebNeeds::default();
+        let env = default_env();
+        // Tick in toxic air to trigger breath hold, then measure safety
+        for _ in 0..5 {
+            tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&high_co2_air()));
+        }
+        assert!(needs.safety < 0.8, "safety should drop when holding breath, got {}", needs.safety);
     }
 
     #[test]
@@ -387,5 +688,45 @@ mod tests {
         assert!(!env.is_indoors);
         assert!(!env.near_fire);
         assert!(!env.is_night);
+    }
+
+    #[test]
+    fn test_find_breathable_tile() {
+        let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
+        // Make a small indoor area (3x3 with roof)
+        for y in 10..13 {
+            for x in 10..13 {
+                let idx = (y * GRID_W + x) as usize;
+                // Set roof height to 3 (bits 24-31)
+                grid[idx] = make_block(2, 0, 0) | (3 << 24);
+            }
+        }
+        // Standing inside at (11, 11), should find outdoor tile nearby
+        let result = find_breathable_tile(&grid, 11, 11, 10);
+        assert!(result.is_some(), "should find a breathable tile");
+        let (rx, ry) = result.unwrap();
+        // Should be just outside the indoor area
+        let dist = ((rx - 11) as f32).hypot((ry - 11) as f32);
+        assert!(dist <= 3.0, "breathable tile should be nearby, dist={}", dist);
+    }
+
+    #[test]
+    fn test_o2_need_rises_in_good_air() {
+        let mut needs = PlebNeeds::default();
+        needs.oxygen = 0.3; // low from previous bad air
+        let env = default_env();
+        for _ in 0..5 {
+            tick_needs(&mut needs, &env, 1.0, 1.0, false, Some(&good_air()));
+        }
+        assert!(needs.oxygen > 0.8, "O2 need should recover in good air, got {}", needs.oxygen);
+    }
+
+    #[test]
+    fn test_air_breathable() {
+        assert!(air_breathable(1.0, 0.0));
+        assert!(air_breathable(0.5, 0.1));
+        assert!(!air_breathable(0.05, 0.0)); // too little O2
+        assert!(!air_breathable(1.0, 0.3));  // too much CO2
+        assert!(!air_breathable(0.05, 0.5)); // both bad
     }
 }

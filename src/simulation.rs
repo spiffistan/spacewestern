@@ -181,12 +181,37 @@ impl App {
         // --- Update pleb needs ---
         {
             let day_frac = self.time_of_day / DAY_DURATION;
-            for pleb in self.plebs.iter_mut() {
+            for (i, pleb) in self.plebs.iter_mut().enumerate() {
                 let dx = pleb.x - pleb.prev_x;
                 let dy = pleb.y - pleb.prev_y;
                 let is_moving = (dx * dx + dy * dy) > 0.0001;
                 let env = sample_environment(&self.grid_data, pleb.x, pleb.y, day_frac);
-                tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving);
+                let air = self.pleb_air_data.get(i);
+                tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving, air);
+
+                // Crisis flee behavior: when holding breath or gasping, pathfind to fresh air
+                if pleb.needs.breathing_state != BreathingState::Normal
+                    && pleb.needs.breath_remaining < 15.0
+                    && pleb.needs.flee_target.is_none()
+                {
+                    let bx = pleb.x.floor() as i32;
+                    let by = pleb.y.floor() as i32;
+                    if let Some(target) = find_breathable_tile(&self.grid_data, bx, by, 20) {
+                        pleb.needs.flee_target = Some(target);
+                        // Override current path with flee path
+                        let start = (bx, by);
+                        let path = astar_path(&self.grid_data, start, target);
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 0;
+                        }
+                    }
+                }
+                // Clear flee target when breathing normally again
+                if pleb.needs.breathing_state == BreathingState::Normal {
+                    pleb.needs.flee_target = None;
+                }
+
                 pleb.prev_x = pleb.x;
                 pleb.prev_y = pleb.y;
             }

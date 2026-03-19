@@ -304,6 +304,11 @@ impl App {
                 oxygen: f32,
                 mood: f32,
                 mood_label: &'static str,
+                breath_pct: f32,            // 0-1, breath remaining
+                breathing_label: &'static str,
+                breathing_state: BreathingState,
+                air_o2: f32,
+                air_co2: f32,
             }
             let pleb_display: Vec<PlebDisplay> = self.plebs.iter().enumerate().map(|(i, p)| {
                 let a = &p.appearance;
@@ -320,6 +325,11 @@ impl App {
                     oxygen: p.needs.oxygen,
                     mood: p.needs.mood,
                     mood_label: mood_label(p.needs.mood),
+                    breath_pct: p.needs.breath_remaining / 30.0,
+                    breathing_label: breathing_label(&p.needs.breathing_state),
+                    breathing_state: p.needs.breathing_state.clone(),
+                    air_o2: p.needs.air_o2,
+                    air_co2: p.needs.air_co2,
                 }
             }).collect();
 
@@ -330,8 +340,8 @@ impl App {
                         ui.horizontal(|ui| {
                             for pd in &pleb_display {
                                 let is_sel = self.selected_pleb == Some(pd.idx);
-                                let card_w = if is_sel { 80.0 } else { 48.0 };
-                                let card_h = if is_sel { 80.0 } else { 56.0 };
+                                let card_w = if is_sel { 110.0 } else { 48.0 };
+                                let card_h = if is_sel { 90.0 } else { 56.0 };
                                 let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(card_w, card_h), egui::Sense::click());
                                 let painter = ui.painter_at(rect);
 
@@ -403,40 +413,71 @@ impl App {
                                 // Expanded needs display when selected
                                 if is_sel {
                                     let needs_x = rect.min.x + 40.0;
-                                    let needs_y = rect.min.y + 10.0;
+                                    let needs_y = rect.min.y + 8.0;
                                     let bar_h = 3.0;
-                                    let spacing = 9.0;
-                                    let need_w = 34.0;
+                                    let spacing = 8.5;
+                                    let need_w = 62.0;
 
-                                    let needs_data: [(&str, f32, egui::Color32); 4] = [
+                                    let needs_data: [(&str, f32, egui::Color32); 5] = [
                                         ("HUN", pd.hunger, egui::Color32::from_rgb(200, 160, 40)),
                                         ("RST", pd.rest, egui::Color32::from_rgb(80, 120, 200)),
                                         ("WRM", pd.warmth, egui::Color32::from_rgb(200, 100, 40)),
                                         ("O2", pd.oxygen, egui::Color32::from_rgb(100, 200, 220)),
+                                        ("BRE", pd.breath_pct, egui::Color32::from_rgb(150, 180, 255)),
                                     ];
 
                                     for (i, (label, val, color)) in needs_data.iter().enumerate() {
                                         let y = needs_y + i as f32 * spacing;
-                                        // Label
+                                        // Label — flash red for critical
+                                        let label_color = if *val < 0.2 {
+                                            egui::Color32::from_rgb(255, 80, 80)
+                                        } else {
+                                            egui::Color32::GRAY
+                                        };
                                         painter.text(
                                             egui::Pos2::new(needs_x, y),
                                             egui::Align2::LEFT_TOP,
                                             *label,
                                             egui::FontId::proportional(7.0),
-                                            if *val < 0.2 { egui::Color32::from_rgb(255, 80, 80) } else { egui::Color32::GRAY },
+                                            label_color,
                                         );
                                         // Bar background
                                         let br = egui::Rect::from_min_size(
-                                            egui::Pos2::new(needs_x, y + 7.0),
-                                            egui::Vec2::new(need_w, bar_h),
+                                            egui::Pos2::new(needs_x + 20.0, y + 1.0),
+                                            egui::Vec2::new(need_w - 20.0, bar_h),
                                         );
                                         painter.rect_filled(br, 1.0, egui::Color32::from_rgb(30, 30, 30));
                                         // Bar fill
                                         painter.rect_filled(
-                                            egui::Rect::from_min_size(br.min, egui::Vec2::new(need_w * val, bar_h)),
+                                            egui::Rect::from_min_size(br.min, egui::Vec2::new((need_w - 20.0) * val.clamp(0.0, 1.0), bar_h)),
                                             1.0, *color,
                                         );
                                     }
+
+                                    // Breathing state label (flashing when critical)
+                                    let breath_y = needs_y + 5.0 * spacing;
+                                    let breath_color = match pd.breathing_state {
+                                        BreathingState::Normal => egui::Color32::from_rgb(120, 180, 120),
+                                        BreathingState::HoldingBreath => egui::Color32::from_rgb(220, 200, 80),
+                                        BreathingState::Gasping => egui::Color32::from_rgb(255, 60, 60),
+                                    };
+                                    painter.text(
+                                        egui::Pos2::new(needs_x, breath_y),
+                                        egui::Align2::LEFT_TOP,
+                                        pd.breathing_label,
+                                        egui::FontId::proportional(7.0),
+                                        breath_color,
+                                    );
+
+                                    // Air quality readout
+                                    let air_y = breath_y + 9.0;
+                                    painter.text(
+                                        egui::Pos2::new(needs_x, air_y),
+                                        egui::Align2::LEFT_TOP,
+                                        &format!("O2:{:.0}% CO2:{:.0}%", pd.air_o2 * 100.0, pd.air_co2 * 100.0),
+                                        egui::FontId::proportional(6.5),
+                                        egui::Color32::from_rgb(140, 140, 140),
+                                    );
 
                                     // Mood label at bottom-right of card
                                     let mood_color = if pd.mood > 20.0 {

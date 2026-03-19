@@ -14,7 +14,7 @@ mod pleb;
 use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, random_name, MAX_PLEBS};
 
 mod needs;
-use needs::{sample_environment, tick_needs, mood_label, critical_need};
+use needs::{sample_environment, tick_needs, mood_label, critical_need, AirReadback, BreathingState, breathing_label, find_breathable_tile};
 
 mod build;
 mod camera;
@@ -119,6 +119,9 @@ struct App {
     pressed_keys: std::collections::HashSet<KeyCode>,
     auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
     physics_bodies: Vec<PhysicsBody>,
+    // Per-pleb air readback from fluid sim (updated one frame behind)
+    pleb_air_data: Vec<AirReadback>,
+    pleb_air_readback_pending: bool,
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -188,6 +191,8 @@ struct GfxState {
     fluid_bg_advect_dye: [wgpu::BindGroup; 2],     // ping-pong dye
     // Debug readback
     debug_readback_buffer: wgpu::Buffer,            // staging buffer for single texel readback
+    // Pleb air readback — one texel per pleb, each at 256-byte aligned offset
+    pleb_air_readback_buffer: wgpu::Buffer,
 }
 
 struct EguiState {
@@ -311,6 +316,8 @@ impl App {
             pressed_keys: std::collections::HashSet::new(),
             auto_doors: Vec::new(),
             physics_bodies: Vec::new(),
+            pleb_air_data: Vec::new(),
+            pleb_air_readback_pending: false,
         }
     }
 
@@ -1484,6 +1491,35 @@ impl App {
             self.debug_fluid_readback_pending = true;
         }
 
+        // Copy dye texels at each pleb position for air readback
+        if !self.plebs.is_empty() {
+            let dye_idx = self.fluid_dye_phase;
+            for (i, pleb) in self.plebs.iter().enumerate() {
+                let dye_x = ((pleb.x / GRID_W as f32) * FLUID_DYE_W as f32)
+                    .clamp(0.0, (FLUID_DYE_W - 1) as f32) as u32;
+                let dye_y = ((pleb.y / GRID_H as f32) * FLUID_DYE_H as f32)
+                    .clamp(0.0, (FLUID_DYE_H - 1) as f32) as u32;
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &gfx.fluid_dye[dye_idx],
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: dye_x, y: dye_y, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &gfx.pleb_air_readback_buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: (i * 256) as u64,
+                            bytes_per_row: Some(256),
+                            rows_per_image: Some(1),
+                        },
+                    },
+                    wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                );
+            }
+            self.pleb_air_readback_pending = true;
+        }
+
         // Reset splat
         self.fluid_params.splat_active = 0.0;
 
@@ -1608,6 +1644,35 @@ impl App {
                     }
                     drop(data);
                     gfx.debug_readback_buffer.unmap();
+                }
+            }
+
+            // Pleb air readback processing
+            if self.pleb_air_readback_pending {
+                self.pleb_air_readback_pending = false;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let num_plebs = self.plebs.len();
+                    if num_plebs > 0 {
+                        let read_size = (num_plebs * 256) as u64;
+                        let buffer_slice = gfx.pleb_air_readback_buffer.slice(..read_size);
+                        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+                        gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                        let data = buffer_slice.get_mapped_range();
+                        self.pleb_air_data.resize(num_plebs, AirReadback::default());
+                        for i in 0..num_plebs {
+                            let offset = i * 256; // 256-byte aligned
+                            let f16_data: &[u16] = bytemuck::cast_slice(&data[offset..offset + 8]);
+                            self.pleb_air_data[i] = AirReadback {
+                                smoke: half_to_f32(f16_data[0]),
+                                o2: half_to_f32(f16_data[1]),
+                                co2: half_to_f32(f16_data[2]),
+                                temp: half_to_f32(f16_data[3]),
+                            };
+                        }
+                        drop(data);
+                        gfx.pleb_air_readback_buffer.unmap();
+                    }
                 }
             }
 
