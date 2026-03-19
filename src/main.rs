@@ -33,6 +33,9 @@ use pipes::PipeNetwork;
 mod physics;
 use physics::{PhysicsBody, tick_bodies, pleb_body_collision, nearest_body};
 
+mod weather;
+use weather::{WeatherState, tick_weather, tick_wetness};
+
 #[path = "time.rs"]
 mod game_time;
 use game_time::Instant;
@@ -124,6 +127,10 @@ struct App {
     pleb_air_readback_pending: bool,
     // Context menu for pleb actions
     context_menu: Option<(f32, f32)>, // screen position for context menu popup
+    // Weather system
+    weather: WeatherState,
+    weather_timer: f32,
+    wetness_data: Vec<f32>,  // 256x256 per-tile wetness (0.0-1.0)
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -240,6 +247,7 @@ impl App {
                 force_refresh: 1.0,
                 pleb_x: 0.0, pleb_y: 0.0, pleb_angle: 0.0, pleb_selected: 0.0, pleb_torch: 0.0, pleb_headlight: 0.0,
                 prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
+                rain_intensity: 0.0, cloud_cover: 0.0, _cam_pad0: 0.0, _cam_pad1: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -281,7 +289,7 @@ impl App {
                 wind_y: 10.0,
                 smoke_rate: 0.3,
                 fan_speed: 40.0,
-                _pad3: 0.0,
+                rain_intensity: 0.0,
             },
             fluid_overlay: FluidOverlay::None,
             pipe_network: PipeNetwork::new(),
@@ -321,6 +329,9 @@ impl App {
             pleb_air_data: Vec::new(),
             pleb_air_readback_pending: false,
             context_menu: None,
+            weather: WeatherState::Clear,
+            weather_timer: 45.0,
+            wetness_data: vec![0.0; (GRID_W * GRID_H) as usize],
         }
     }
 
@@ -951,6 +962,34 @@ impl App {
                     self.physics_bodies.push(PhysicsBody::new_wood_box(wx, wy));
                     // Don't deselect — can place multiple
                     return;
+                }
+                BuildTool::Dig => {
+                    // Dig: convert dirt (type 2) to dug ground (type 32, depth 1)
+                    // Or deepen existing dug ground (depth 1→2→3)
+                    if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                        let bt_dig = block_type_rs(block);
+                        let roof_h = block & 0xFF000000;
+                        if bt_dig == 2 {
+                            // Dirt → dug ground depth 1
+                            self.grid_data[idx] = make_block(32, 1, 0) | roof_h;
+                            self.grid_dirty = true;
+                        } else if bt_dig == 32 {
+                            let depth = (block >> 8) & 0xFF;
+                            if depth < 3 {
+                                self.grid_data[idx] = make_block(32, (depth + 1) as u8, 0) | roof_h;
+                                self.grid_dirty = true;
+                            }
+                        }
+                    }
+                }
+                BuildTool::StorageCrate => {
+                    if self.can_place_at(bx, by) {
+                        let roof_flag = flags & 2;
+                        let roof_h = block & 0xFF000000;
+                        self.grid_data[idx] = make_block(33, 1, roof_flag) | roof_h;
+                        self.grid_dirty = true;
+                        self.build_tool = BuildTool::None;
+                    }
                 }
                 BuildTool::None | BuildTool::Destroy
                 | BuildTool::WoodFloor | BuildTool::StoneFloor | BuildTool::ConcreteFloor

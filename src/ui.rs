@@ -66,6 +66,15 @@ impl App {
                     if ui.button("Dusk").clicked()   { time_val = DAY_DURATION * 0.82; paused = true; self.camera.force_refresh = 5.0; }
                 });
 
+                // Weather display
+                let weather_label = match &self.weather {
+                    WeatherState::Clear => "Clear",
+                    WeatherState::Cloudy => "Cloudy",
+                    WeatherState::LightRain => "Light Rain",
+                    WeatherState::HeavyRain => "Heavy Rain",
+                };
+                ui.label(format!("Weather: {}", weather_label));
+
                 ui.separator();
 
                 let zoom_pct = zoom / base_zoom * 100.0;
@@ -239,6 +248,7 @@ impl App {
                                 btn!(BuildTool::Fireplace, "Fireplace");
                                 btn!(BuildTool::Bench, "Bench");
                                 btn!(BuildTool::Bed, "Bed");
+                                btn!(BuildTool::StorageCrate, "Storage Crate");
                                 btn!(BuildTool::Fan, "Fan");
                                 btn!(BuildTool::Compost, "Compost");
                                 btn!(BuildTool::BerryBush, "Berry Bush");
@@ -246,6 +256,7 @@ impl App {
                                 btn!(BuildTool::ElectricLight, "Ceiling Light");
                                 btn!(BuildTool::StandingLamp, "Floor Lamp");
                                 btn!(BuildTool::TableLamp, "Table Lamp");
+                                btn!(BuildTool::Dig, "Dig Ground");
                             }
                             "Opening" => {
                                 btn!(BuildTool::Window, "Window");
@@ -1299,6 +1310,78 @@ impl App {
                 });
             if !still_valid {
                 self.selected_fan = None;
+            }
+        }
+
+        // --- World labels: pleb names, activity, key items ---
+        {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+
+            // Only show labels when zoomed in enough
+            if tile_px > 6.0 {
+                let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    egui::pos2(sx, sy)
+                };
+
+                let label_painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground, egui::Id::new("world_labels"),
+                ));
+
+                // Pleb name + activity labels
+                for pleb in &self.plebs {
+                    let pos = to_screen(pleb.x, pleb.y + 0.7);
+
+                    // Name label (always visible)
+                    let name_color = if pleb.activity.is_crisis() {
+                        egui::Color32::from_rgb(255, 80, 80)
+                    } else {
+                        egui::Color32::from_rgb(220, 220, 220)
+                    };
+                    label_painter.text(
+                        pos,
+                        egui::Align2::CENTER_TOP,
+                        &pleb.name,
+                        egui::FontId::proportional(9.0),
+                        name_color,
+                    );
+
+                    // Activity label (when not idle and zoomed in enough)
+                    if tile_px > 12.0 {
+                        let inner = pleb.activity.inner();
+                        let act_text = match inner {
+                            PlebActivity::Idle => None,
+                            PlebActivity::Walking => None, // too noisy
+                            PlebActivity::Sleeping => Some("Zzz..."),
+                            PlebActivity::Harvesting(_) => Some("Harvesting"),
+                            PlebActivity::Eating => Some("Eating"),
+                            PlebActivity::Crisis(_, _) => None,
+                        };
+                        if let Some(text) = act_text {
+                            let act_pos = to_screen(pleb.x, pleb.y + 0.95);
+                            label_painter.text(
+                                act_pos,
+                                egui::Align2::CENTER_TOP,
+                                text,
+                                egui::FontId::proportional(7.0),
+                                egui::Color32::from_rgb(180, 180, 140),
+                            );
+                        }
+                        // Crisis reason
+                        if let Some(reason) = pleb.activity.crisis_reason() {
+                            let crisis_pos = to_screen(pleb.x, pleb.y + 0.95);
+                            label_painter.text(
+                                crisis_pos,
+                                egui::Align2::CENTER_TOP,
+                                reason,
+                                egui::FontId::proportional(8.0),
+                                egui::Color32::from_rgb(255, 60, 60),
+                            );
+                        }
+                    }
+                }
             }
         }
     }

@@ -5,7 +5,7 @@
 
 use bytemuck::Zeroable;
 
-pub const NUM_MATERIALS: usize = 32;
+pub const NUM_MATERIALS: usize = 40;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]
@@ -290,6 +290,23 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.light_transmission = 0.6;
         m.walkable = 1.0; // can walk through (low bush)
         m.heat_capacity = 1.5; m.conductivity = 0.001; m.solar_absorption = 0.3;
+    }
+
+    // 32: Dug ground — excavated tile, can fill with water at depth >= 2
+    { let m = &mut mats[32];
+        m.color_r = 0.35; m.color_g = 0.28; m.color_b = 0.15; // exposed earth
+        m.render_style = 19.0;
+        m.light_transmission = 1.0; m.walkable = 1.0;
+        m.heat_capacity = 2.0; m.conductivity = 0.003; m.solar_absorption = 0.5;
+    }
+
+    // 33: Storage crate — holds resources
+    { let m = &mut mats[33];
+        m.color_r = 0.50; m.color_g = 0.38; m.color_b = 0.20;
+        m.render_style = 20.0;
+        m.light_transmission = 1.0; m.is_furniture = 1.0;
+        m.is_removable = 1.0;
+        m.heat_capacity = 2.0; m.conductivity = 0.002; m.solar_absorption = 0.4;
     }
 
     mats

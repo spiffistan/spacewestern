@@ -68,6 +68,29 @@ impl App {
             self.camera.ambient_b = night_amb[2] + (day_amb[2] - night_amb[2]) * intensity;
         }
 
+        // --- Weather tick ---
+        if !self.time_paused {
+            if let Some(new_weather) = tick_weather(&self.weather, &mut self.weather_timer, dt, self.time_speed) {
+                self.weather = new_weather;
+            }
+            let rain = self.weather.rain_intensity();
+            let sun_dim = self.weather.sun_dimming();
+            // Dim sun during clouds/rain
+            self.camera.sun_intensity *= sun_dim;
+            self.camera.sun_color_r *= sun_dim;
+            self.camera.sun_color_g *= sun_dim;
+            self.camera.sun_color_b *= sun_dim;
+            // Pass weather to shader and fluid sim
+            self.camera.rain_intensity = rain;
+            self.camera.cloud_cover = self.weather.cloud_cover();
+            self.fluid_params.rain_intensity = rain;
+            // Update wetness
+            tick_wetness(
+                &mut self.wetness_data, &self.grid_data,
+                rain, self.camera.sun_intensity, dt, self.time_speed, GRID_W,
+            );
+        }
+
         let prev_overlay = self.camera.fluid_overlay;
         self.camera.fluid_overlay = match self.fluid_overlay {
             FluidOverlay::None => 0.0,

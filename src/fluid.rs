@@ -18,7 +18,7 @@ pub struct FluidParams {
     pub dt: f32, pub dissipation: f32, pub vorticity_strength: f32, pub pressure_iterations: f32,
     pub splat_x: f32, pub splat_y: f32, pub splat_vx: f32, pub splat_vy: f32,
     pub splat_radius: f32, pub splat_active: f32, pub time: f32, pub wind_x: f32,
-    pub wind_y: f32, pub smoke_rate: f32, pub fan_speed: f32, pub _pad3: f32,
+    pub wind_y: f32, pub smoke_rate: f32, pub fan_speed: f32, pub rain_intensity: f32,
 }
 
 /// Build the obstacle field (256x256 u8) from the block grid.

@@ -50,6 +50,10 @@ struct Camera {
     prev_center_y: f32,
     prev_zoom: f32,
     prev_time: f32,
+    rain_intensity: f32,
+    cloud_cover: f32,
+    _cam_pad0: f32,
+    _cam_pad1: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -1773,7 +1777,54 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Berry bush: leafy mound with berries
         let bush_result = render_berry_bush(fx, fy, world_x, world_y, camera.time);
         color = bush_result.xyz;
-        is_tree_pixel = bush_result.w > 0.01; // treat canopy like tree for shadow/height
+        is_tree_pixel = bush_result.w > 0.01;
+    } else if btype == 32u {
+        // Dug ground: excavated pit with darker exposed earth
+        let depth = f32(bheight);
+        let base_earth = vec3<f32>(0.35, 0.28, 0.15);
+        let dark_earth = vec3<f32>(0.22, 0.18, 0.10);
+        color = mix(base_earth, dark_earth, depth / 3.0);
+        // Shadow at edges (pit walls visible)
+        let edge_d = min(min(fx, 1.0 - fx), min(fy, 1.0 - fy));
+        let pit_shadow = smoothstep(0.15, 0.0, edge_d) * 0.3 * depth;
+        color *= 1.0 - pit_shadow;
+        // Moisture darkening at depth
+        if depth >= 2.0 {
+            let moisture = (depth - 1.0) / 2.0;
+            color *= 1.0 - moisture * 0.2;
+        }
+    } else if btype == 33u {
+        // Storage crate: wooden box with planks and brackets
+        let ground = vec3<f32>(0.45, 0.35, 0.20);
+        let crate_min = 0.1;
+        let crate_max = 0.9;
+        let on_crate = fx > crate_min && fx < crate_max && fy > crate_min && fy < crate_max;
+        if on_crate {
+            // Wood planks running horizontally
+            let plank_y = fract(fy * 4.0);
+            let plank_edge = f32(plank_y < 0.06) * 0.04;
+            let wood = vec3<f32>(0.50, 0.38, 0.20);
+            color = wood - vec3<f32>(plank_edge);
+            // Plank variation
+            let pid = floor(fy * 4.0);
+            let pvar = fract(sin(pid * 127.1 + world_x * 17.0) * 43758.5) * 0.06 - 0.03;
+            color += vec3<f32>(pvar);
+            // Corner brackets (dark metal)
+            let bracket_size = 0.12;
+            let at_corner = (fx < crate_min + bracket_size || fx > crate_max - bracket_size)
+                         && (fy < crate_min + bracket_size || fy > crate_max - bracket_size);
+            if at_corner {
+                color = vec3<f32>(0.25, 0.25, 0.28);
+            }
+            // Center cross brace
+            let cross_h = abs(fx - 0.5) < 0.03;
+            let cross_v = abs(fy - 0.5) < 0.03;
+            if cross_h || cross_v {
+                color = vec3<f32>(0.38, 0.30, 0.18);
+            }
+        } else {
+            color = ground;
+        }
     } else {
         color = block_base_color(btype, bflags);
     }
@@ -1783,12 +1834,25 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Trees: transparent sprite pixels are ground-level; canopy keeps height for shadows
     let is_tree_ground = (btype == 8u || btype == 31u) && !is_tree_pixel;
     let is_pipe = btype >= 15u && btype <= 20u;
-    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe);
+    let is_dug = btype == 32u; // dug ground: height = depth, not visual height
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)
     if btype != 8u {
         color += vec3<f32>(effective_fheight * 0.03);
+    }
+
+    // Wet soil darkening: outdoor ground tiles darken in rain
+    let is_ground_tile = btype == 2u || btype == 26u || btype == 27u || btype == 28u;
+    if is_ground_tile && effective_height == 0u && camera.rain_intensity > 0.0 {
+        let roof_h_wet = (block >> 24u) & 0xFFu;
+        if roof_h_wet == 0u { // outdoor only
+            let wet = camera.rain_intensity * 0.7;
+            color *= 1.0 - wet * 0.3;
+            // Slight blue tint from water
+            color = mix(color, vec3(color.r * 0.7, color.g * 0.75, color.b * 0.9), wet * 0.15);
+        }
     }
 
     // Wall side faces (3D bevel) — skip for doors and trees
@@ -1878,15 +1942,57 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = lit + light_color_out * light_intensity_out * pl_mul;
     }
 
-    // Water effect
-    if btype == 3u {
+    // Water effect (type 3 = water, type 32 depth>=2 = ground water)
+    let is_water = btype == 3u || (btype == 32u && bheight >= 2u);
+    if is_water {
         let t = camera.time;
-        let wave1 = sin(world_x * 11.0 + world_y * 7.0 + t * 2.0) * 0.03;
-        let wave2 = sin(world_x * 5.0 - world_y * 13.0 + t * 1.3) * 0.02;
-        let shimmer = wave1 + wave2 + 0.04;
-        color += vec3<f32>(shimmer * 0.2, shimmer * 0.4, shimmer * 0.8);
-        let caustic = abs(sin(world_x * 17.0 + t * 0.7) * sin(world_y * 19.0 + t * 0.9));
-        color += vec3<f32>(0.0, 0.02, 0.06) * caustic * light_factor;
+        // Multi-octave ripple normals
+        let rip1 = sin(world_x * 11.0 + world_y * 7.0 + t * 2.0);
+        let rip2 = sin(world_x * 5.3 - world_y * 13.0 + t * 1.3);
+        let rip3 = sin(world_x * 23.0 + world_y * 3.0 + t * 3.1) * 0.5;
+        let ripple = (rip1 + rip2 + rip3) * 0.02;
+
+        // Depth-dependent base color (deeper = darker blue)
+        let depth_factor = select(1.0, f32(bheight) / 3.0, btype == 32u);
+        let shallow = vec3<f32>(0.15, 0.38, 0.55);
+        let deep = vec3<f32>(0.06, 0.18, 0.40);
+        var water_color = mix(shallow, deep, depth_factor * 0.7);
+
+        // Animated caustic patterns (sun-modulated)
+        let caust1 = abs(sin(world_x * 17.0 + t * 0.7) * sin(world_y * 19.0 + t * 0.9));
+        let caust2 = abs(sin(world_x * 11.0 - t * 0.5) * sin(world_y * 13.0 + t * 1.1));
+        let caustic = caust1 * caust2;
+        water_color += vec3<f32>(0.02, 0.06, 0.10) * caustic * light_factor;
+
+        // Sky reflection (simple fresnel approximation from above)
+        let sky_color = vec3<f32>(0.5, 0.6, 0.8) * (camera.sun_intensity * 0.5 + 0.1);
+        let reflect_amount = 0.15 + ripple * 2.0;
+        water_color = mix(water_color, sky_color, clamp(reflect_amount, 0.0, 0.3));
+
+        // Specular highlight from sun
+        let spec = pow(max(rip1 * 0.5 + 0.5, 0.0), 16.0) * camera.sun_intensity * 0.3;
+        water_color += vec3<f32>(spec);
+
+        // Surface shimmer
+        water_color += vec3<f32>(ripple * 0.3, ripple * 0.5, ripple * 0.8);
+
+        // Edge darkening (shoreline)
+        if btype == 3u {
+            let edge_dist = min(min(fx, 1.0 - fx), min(fy, 1.0 - fy));
+            // Check neighbors for non-water
+            let n_n = block_type(get_block(bx, by - 1));
+            let n_s = block_type(get_block(bx, by + 1));
+            let n_e = block_type(get_block(bx + 1, by));
+            let n_w = block_type(get_block(bx - 1, by));
+            let shore_n = f32(n_n != 3u) * smoothstep(0.3, 0.0, fy);
+            let shore_s = f32(n_s != 3u) * smoothstep(0.7, 1.0, fy);
+            let shore_e = f32(n_e != 3u) * smoothstep(0.7, 1.0, fx);
+            let shore_w = f32(n_w != 3u) * smoothstep(0.3, 0.0, fx);
+            let shore = max(max(shore_n, shore_s), max(shore_e, shore_w));
+            water_color = mix(water_color, vec3<f32>(0.30, 0.28, 0.22), shore * 0.5);
+        }
+
+        color = water_color;
     }
 
     // Door detail: open doors show floor, closed doors show planks + handle
@@ -2244,6 +2350,25 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         color = hf_color;
+    }
+
+    // Rain overlay: animated streaks
+    if camera.rain_intensity > 0.01 {
+        let rain_speed = 25.0;
+        let streak_seed = world_x * 3.7 + world_y * 0.3;
+        let streak_x = fract(streak_seed + camera.time * 0.02);
+        let streak_y = fract(world_y * 2.0 + camera.time * rain_speed * 0.08);
+        let streak = smoothstep(0.92, 1.0, streak_y) * smoothstep(0.03, 0.0, abs(streak_x - 0.5));
+        // Add a second layer of smaller streaks
+        let streak2_x = fract(world_x * 7.1 + world_y * 0.7 + camera.time * 0.03 + 0.5);
+        let streak2_y = fract(world_y * 3.0 + camera.time * rain_speed * 0.12 + 0.3);
+        let streak2 = smoothstep(0.94, 1.0, streak2_y) * smoothstep(0.02, 0.0, abs(streak2_x - 0.5));
+        let rain_alpha = (streak + streak2 * 0.6) * camera.rain_intensity * 0.35;
+        let rain_color = vec3(0.65, 0.70, 0.80);
+        color = mix(color, rain_color, clamp(rain_alpha, 0.0, 0.4));
+        // Cloud dimming tint
+        let cloud_tint = mix(vec3(1.0), vec3(0.75, 0.78, 0.85), camera.cloud_cover * 0.3);
+        color *= cloud_tint;
     }
 
     // Final fog overlay: covers EVERYTHING (terrain + gas) in the border zone

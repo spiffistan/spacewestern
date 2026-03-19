@@ -8,7 +8,7 @@ struct FluidParams {
     dt: f32, dissipation: f32, vorticity_strength: f32, pressure_iterations: f32,
     splat_x: f32, splat_y: f32, splat_vx: f32, splat_vy: f32,
     splat_radius: f32, splat_active: f32, time: f32, wind_x: f32,
-    wind_y: f32, smoke_rate: f32, fan_speed: f32, _pad3: f32,
+    wind_y: f32, smoke_rate: f32, fan_speed: f32, rain_intensity: f32,
 };
 
 @group(0) @binding(0) var dye_in: texture_2d<f32>;
@@ -289,6 +289,11 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     // through doors/windows via advection, not via magic dissipation.
     if !is_indoor_cell {
         result.a += (ambient_temp - result.a) * 0.015;
+        // Rain cooling: outdoor cells cool toward rain temperature (~10°C)
+        if params.rain_intensity > 0.0 {
+            let rain_temp = 10.0;
+            result.a += (rain_temp - result.a) * params.rain_intensity * 0.02;
+        }
     }
 
     // Fire injects heat continuously (builds up in enclosed spaces)

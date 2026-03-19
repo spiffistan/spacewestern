@@ -34,6 +34,8 @@ pub enum BuildTool {
     Cannon,
     Bed,
     BerryBush,
+    Dig,
+    StorageCrate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

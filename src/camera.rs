@@ -48,4 +48,8 @@ pub struct CameraUniform {
     pub prev_center_y: f32,
     pub prev_zoom: f32,
     pub prev_time: f32,
+    pub rain_intensity: f32,
+    pub cloud_cover: f32,
+    pub _cam_pad0: f32,
+    pub _cam_pad1: f32,
 }

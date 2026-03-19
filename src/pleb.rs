@@ -208,7 +208,8 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        if !is_door && (bh > 0 || (bt != 0 && bt != 2 && bt != 6 && bt != 7 && bt != 10 && bt != 13 && bt != 15 && bt != 16 && bt != 17 && bt != 18 && bt != 26 && bt != 27 && bt != 28 && bt != 30 && bt != 31)) {
+        let is_dug_shallow = bt == 32 && bh <= 1; // dug ground depth 1 is walkable
+        if !is_door && !is_dug_shallow && (bh > 0 || (bt != 0 && bt != 2 && bt != 6 && bt != 7 && bt != 10 && bt != 13 && bt != 15 && bt != 16 && bt != 17 && bt != 18 && bt != 26 && bt != 27 && bt != 28 && bt != 30 && bt != 31)) {
             return false;
         }
     }
@@ -229,6 +230,7 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         is_door || (bh == 0 && (bt == 0 || bt == 2 || bt == 6 || bt == 7 || bt == 10 || bt == 13 || bt == 26 || bt == 27 || bt == 28 || bt == 30 || bt == 31))
+            || (bt == 32 && bh <= 1) // dug ground depth 1 is walkable
     };
 
     if !is_walk(goal.0, goal.1) { return vec![]; }
