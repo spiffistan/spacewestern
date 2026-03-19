@@ -69,3 +69,66 @@ pub fn half_to_f32(h: u16) -> f32 {
     let v = 2.0f32.powi(exp as i32 - 15) * (1.0 + mant as f32 / 1024.0);
     if sign == 1 { -v } else { v }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grid::make_block;
+
+    #[test]
+    fn test_obstacle_walls_block() {
+        let grid = vec![make_block(1, 3, 0)]; // stone wall height 3
+        let obs = build_obstacle_field(&grid);
+        assert_eq!(obs[0], 255, "stone wall should be obstacle");
+    }
+
+    #[test]
+    fn test_obstacle_open_ground() {
+        let grid = vec![make_block(2, 0, 0)]; // dirt floor
+        let obs = build_obstacle_field(&grid);
+        assert_eq!(obs[0], 0, "dirt floor should not be obstacle");
+    }
+
+    #[test]
+    fn test_obstacle_open_door() {
+        let grid = vec![make_block(4, 1, 1 | 4)]; // door + open flags
+        let obs = build_obstacle_field(&grid);
+        assert_eq!(obs[0], 0, "open door should not be obstacle");
+    }
+
+    #[test]
+    fn test_obstacle_closed_door() {
+        let grid = vec![make_block(4, 1, 1)]; // door flag only (closed)
+        let obs = build_obstacle_field(&grid);
+        assert_eq!(obs[0], 255, "closed door should be obstacle");
+    }
+
+    #[test]
+    fn test_obstacle_tree_not_blocking() {
+        let grid = vec![make_block(8, 3, 0)]; // tree
+        let obs = build_obstacle_field(&grid);
+        assert_eq!(obs[0], 0, "tree should not block fluid");
+    }
+
+    #[test]
+    fn test_obstacle_fire_not_blocking() {
+        let grid = vec![make_block(6, 1, 0)]; // fireplace
+        let obs = build_obstacle_field(&grid);
+        assert_eq!(obs[0], 0, "fireplace should not block fluid");
+    }
+
+    #[test]
+    fn test_half_float_roundtrip() {
+        let f16 = f32_to_f16(1.0);
+        let back = half_to_f32(f16);
+        assert!((back - 1.0).abs() < 0.001, "1.0 roundtrip failed: got {}", back);
+
+        let f16 = f32_to_f16(0.5);
+        let back = half_to_f32(f16);
+        assert!((back - 0.5).abs() < 0.001, "0.5 roundtrip failed: got {}", back);
+
+        let f16 = f32_to_f16(0.0);
+        let back = half_to_f32(f16);
+        assert_eq!(back, 0.0, "0.0 roundtrip failed");
+    }
+}

@@ -16,6 +16,14 @@ pub fn block_flags_rs(b: u32) -> u8 {
     ((b >> 16) & 0xFF) as u8
 }
 
+pub fn block_height_rs(b: u32) -> u8 {
+    ((b >> 8) & 0xFF) as u8
+}
+
+pub fn roof_height_rs(b: u32) -> u8 {
+    ((b >> 24) & 0xFF) as u8
+}
+
 pub fn is_door_rs(b: u32) -> bool {
     (block_flags_rs(b) & 1) != 0
 }
@@ -255,4 +263,93 @@ pub fn generate_test_grid() -> Vec<u32> {
     }
 
     grid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_make_block_roundtrip() {
+        // Pack and unpack should be lossless
+        for bt in [0u8, 1, 5, 8, 13, 29, 255] {
+            for h in [0u8, 1, 3, 5, 128, 255] {
+                for f in [0u8, 1, 2, 4, 7, 63] {
+                    let block = make_block(bt, h, f);
+                    assert_eq!(block_type_rs(block), bt, "type mismatch for ({bt},{h},{f})");
+                    assert_eq!(block_height_rs(block), h, "height mismatch for ({bt},{h},{f})");
+                    assert_eq!(block_flags_rs(block), f, "flags mismatch for ({bt},{h},{f})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_block_flags() {
+        // bit0 = door, bit1 = roof, bit2 = open
+        let door_closed = make_block(4, 1, 1); // door flag
+        assert!(is_door_rs(door_closed));
+        assert_eq!(block_flags_rs(door_closed) & 4, 0); // not open
+
+        let door_open = make_block(4, 1, 1 | 4); // door + open
+        assert!(is_door_rs(door_open));
+        assert_ne!(block_flags_rs(door_open) & 4, 0); // open
+
+        let wall = make_block(1, 3, 0);
+        assert!(!is_door_rs(wall));
+
+        let roofed = make_block(2, 0, 2); // roof flag
+        assert_eq!(block_flags_rs(roofed) & 2, 2);
+    }
+
+    #[test]
+    fn test_roof_height_stored_in_upper_byte() {
+        let mut block = make_block(2, 0, 2); // dirt floor with roof
+        // Manually set roof height in bits 24-31
+        block = (block & 0x00FFFFFF) | (5u32 << 24);
+        assert_eq!(roof_height_rs(block), 5);
+        // Shouldn't affect other fields
+        assert_eq!(block_type_rs(block), 2);
+        assert_eq!(block_height_rs(block), 0);
+        assert_eq!(block_flags_rs(block), 2);
+    }
+
+    #[test]
+    fn test_compute_roof_heights_simple_room() {
+        // Create a tiny 8x8 grid with a 4x4 room
+        // Override GRID_W/H for testing... actually compute_roof_heights uses the module constants.
+        // So we need a full 256x256 grid. Create one with a small room.
+        let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
+        let w = GRID_W;
+
+        // Build a 4x4 room at (10,10)-(13,13) with height-3 walls
+        for x in 10..14 {
+            grid[(10 * w + x) as usize] = make_block(1, 3, 0); // top wall
+            grid[(13 * w + x) as usize] = make_block(1, 3, 0); // bottom wall
+        }
+        for y in 10..14 {
+            grid[(y * w + 10) as usize] = make_block(1, 3, 0); // left wall
+            grid[(y * w + 13) as usize] = make_block(1, 3, 0); // right wall
+        }
+        // Interior: roofed floor
+        for y in 11..13 {
+            for x in 11..13 {
+                grid[(y * w + x) as usize] = make_block(2, 0, 2); // dirt + roof flag
+            }
+        }
+
+        compute_roof_heights(&mut grid);
+
+        // Interior tiles should have roof_height = 3 (from walls)
+        let interior = grid[(11 * w + 11) as usize];
+        assert_eq!(roof_height_rs(interior), 3, "interior should have roof height 3");
+
+        // Wall tiles should also have roof_height = 3
+        let wall = grid[(10 * w + 11) as usize];
+        assert_eq!(roof_height_rs(wall), 3, "wall should have roof height 3");
+
+        // Outdoor tile should have roof_height = 0
+        let outdoor = grid[(5 * w + 5) as usize];
+        assert_eq!(roof_height_rs(outdoor), 0, "outdoor should have roof height 0");
+    }
 }

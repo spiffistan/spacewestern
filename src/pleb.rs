@@ -218,3 +218,109 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
 
     vec![]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grid::make_block;
+
+    /// Create a small test grid. All dirt floor (walkable) with optional walls.
+    fn test_grid(walls: &[(u32, u32)]) -> Vec<u32> {
+        let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
+        for &(x, y) in walls {
+            grid[(y * GRID_W + x) as usize] = make_block(1, 3, 0); // stone wall
+        }
+        grid
+    }
+
+    #[test]
+    fn test_astar_same_start_goal() {
+        let grid = test_grid(&[]);
+        let path = astar_path(&grid, (5, 5), (5, 5));
+        assert_eq!(path, vec![(5, 5)]);
+    }
+
+    #[test]
+    fn test_astar_straight_line() {
+        let grid = test_grid(&[]);
+        let path = astar_path(&grid, (5, 5), (5, 8));
+        assert!(!path.is_empty());
+        assert_eq!(path.first(), Some(&(5, 5)));
+        assert_eq!(path.last(), Some(&(5, 8)));
+        // Should be 4 steps (including start and goal)
+        assert_eq!(path.len(), 4);
+    }
+
+    #[test]
+    fn test_astar_around_wall() {
+        // Wall blocking direct path from (5,5) to (5,8)
+        let grid = test_grid(&[(5, 6), (5, 7)]);
+        let path = astar_path(&grid, (5, 5), (5, 8));
+        assert!(!path.is_empty());
+        assert_eq!(path.last(), Some(&(5, 8)));
+        // Path should go around (longer than 4)
+        assert!(path.len() > 4);
+        // Path should not contain wall tiles
+        for &(px, py) in &path {
+            assert!(!(px == 5 && (py == 6 || py == 7)), "path goes through wall");
+        }
+    }
+
+    #[test]
+    fn test_astar_unreachable() {
+        // Completely walled-off goal
+        let grid = test_grid(&[(9, 9), (10, 9), (11, 9), (9, 10), (11, 10), (9, 11), (10, 11), (11, 11)]);
+        let path = astar_path(&grid, (5, 5), (10, 10));
+        assert!(path.is_empty(), "should be empty for unreachable goal");
+    }
+
+    #[test]
+    fn test_astar_goal_is_wall() {
+        let grid = test_grid(&[(10, 10)]);
+        let path = astar_path(&grid, (5, 5), (10, 10));
+        assert!(path.is_empty(), "should be empty when goal is a wall");
+    }
+
+    #[test]
+    fn test_walkable_pos_open_ground() {
+        let grid = test_grid(&[]);
+        assert!(is_walkable_pos(&grid, 5.5, 5.5));
+    }
+
+    #[test]
+    fn test_walkable_pos_wall() {
+        let grid = test_grid(&[(5, 5)]);
+        assert!(!is_walkable_pos(&grid, 5.5, 5.5));
+    }
+
+    #[test]
+    fn test_walkable_pos_near_wall_edge() {
+        let grid = test_grid(&[(5, 5)]);
+        // Just outside the wall (pleb radius is 0.25)
+        assert!(is_walkable_pos(&grid, 4.5, 5.5)); // left of wall
+        // On the wall
+        assert!(!is_walkable_pos(&grid, 5.2, 5.2));
+    }
+
+    #[test]
+    fn test_walkable_pos_door() {
+        let mut grid = test_grid(&[]);
+        // Place a closed door (type 4, height 1, flag=door)
+        grid[(5 * GRID_W + 5) as usize] = make_block(4, 1, 1);
+        // Doors are walkable (plebs open them)
+        assert!(is_walkable_pos(&grid, 5.5, 5.5));
+    }
+
+    #[test]
+    fn test_appearance_deterministic() {
+        let a1 = PlebAppearance::random(42);
+        let a2 = PlebAppearance::random(42);
+        assert_eq!(a1.skin_r, a2.skin_r);
+        assert_eq!(a1.hair_r, a2.hair_r);
+        assert_eq!(a1.shirt_r, a2.shirt_r);
+
+        // Different seed = different appearance
+        let a3 = PlebAppearance::random(99);
+        assert_ne!(a1.skin_r, a3.skin_r);
+    }
+}

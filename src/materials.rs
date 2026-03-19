@@ -276,3 +276,70 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
 
     mats
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_material_count() {
+        let mats = build_material_table();
+        assert_eq!(mats.len(), NUM_MATERIALS);
+    }
+
+    #[test]
+    fn test_solid_blocks_have_height() {
+        let mats = build_material_table();
+        for (i, m) in mats.iter().enumerate() {
+            if m.is_solid > 0.5 && m.default_height < 0.5 {
+                // Pipe components and similar can be solid without default height
+                // but walls should have height
+                if matches!(i, 1 | 4 | 14 | 21..=25) {
+                    panic!("Wall material {} has is_solid but no default_height", i);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_light_sources_have_color() {
+        let mats = build_material_table();
+        for (i, m) in mats.iter().enumerate() {
+            if m.light_intensity > 0.0 {
+                let color_sum = m.light_color_r + m.light_color_g + m.light_color_b;
+                assert!(color_sum > 0.1, "Light source {} has intensity but no color", i);
+                assert!(m.light_radius > 0.0, "Light source {} has intensity but no radius", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_walkable_items_not_solid() {
+        let mats = build_material_table();
+        for (i, m) in mats.iter().enumerate() {
+            if m.walkable > 0.5 && m.is_solid > 0.5 {
+                panic!("Material {} is both walkable and solid", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_insulated_wall_zero_conductivity() {
+        let mats = build_material_table();
+        let insulated = &mats[14];
+        assert_eq!(insulated.conductivity, 0.0);
+        assert_eq!(insulated.solar_absorption, 0.0);
+        assert!(insulated.heat_capacity > 5.0); // high thermal mass
+    }
+
+    #[test]
+    fn test_flammable_materials_have_ignition_temp() {
+        let mats = build_material_table();
+        for (i, m) in mats.iter().enumerate() {
+            if m.is_flammable > 0.5 {
+                assert!(m.ignition_temp > 0.0,
+                    "Flammable material {} has no ignition temperature", i);
+            }
+        }
+    }
+}
