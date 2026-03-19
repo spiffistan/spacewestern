@@ -9,6 +9,8 @@ winit = "0.30"
 egui = "0.33"
 egui-wgpu = "0.33"
 bytemuck = { version = "1", features = ["derive"] }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
 log = "0.4"
 cfg-if = "1"
 

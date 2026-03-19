@@ -4,8 +4,10 @@ use std::sync::Arc;
 mod materials;
 mod grid;
 mod sprites;
+mod block_defs;
 
 use materials::{GpuMaterial, build_material_table};
+use block_defs::BlockRegistry;
 use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_door_rs, compute_roof_heights, generate_test_grid};
 use sprites::generate_tree_sprites;
 
@@ -679,11 +681,17 @@ impl App {
                 if (bt == 0 || bt == 2) && bh == 0 {
                     let roof_flag = block_flags_rs(block) & 2;
                     let roof_h = block & 0xFF000000;
-                    let height = if block_type_id == 15 { 1u8 } else if block_type_id >= 26 { 0u8 } else { 3u8 };
+                    let height = if block_type_id == 15 { 1u8 }
+                        else if block_type_id >= 26 && block_type_id <= 28 { 0u8 } // floors have no height
+                        else { 3u8 }; // walls default to height 3
                     self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
                     self.grid_dirty = true;
                 }
             }
+        }
+        // Recompute roof heights after placing walls (needed for shadows)
+        if self.grid_dirty {
+            compute_roof_heights(&mut self.grid_data);
         }
     }
 
@@ -901,6 +909,7 @@ impl App {
                         let roof_h = block & 0xFF000000;
                         self.grid_data[idx] = new_block | roof_h;
                         self.grid_dirty = true;
+                        compute_roof_heights(&mut self.grid_data);
                         // Initialize cannon angle from build rotation
                         if self.build_tool == BuildTool::Cannon {
                             let angle = match self.build_rotation {

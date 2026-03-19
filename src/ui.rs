@@ -1230,7 +1230,7 @@ impl App {
                         Self::filled_rect_tiles(sx, sy, ex, ey)
                     }
                     BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall
-                    | BuildTool::GraniteWall | BuildTool::LimestoneWall => {
+                    | BuildTool::GraniteWall | BuildTool::LimestoneWall | BuildTool::MudWall => {
                         Self::hollow_rect_tiles(sx, sy, ex, ey)
                     }
                     _ => Vec::new(),

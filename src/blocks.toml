@@ -1,0 +1,546 @@
+# Block definitions — centralized data for all block types.
+# Loaded at compile time via include_str!. Generates GPU material table,
+# build menu entries, placement rules, and info tool names.
+
+[[block]]
+id = 0
+name = "Air"
+color = [0.05, 0.05, 0.08]
+light_transmission = 1.0
+walkable = true
+
+[[block]]
+id = 1
+name = "Stone Wall"
+color = [0.52, 0.50, 0.48]
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+thermal = { heat_capacity = 8.0, conductivity = 0.012, solar_absorption = 0.7 }
+
+[[block]]
+id = 2
+name = "Dirt"
+color = [0.45, 0.35, 0.20]
+light_transmission = 1.0
+walkable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.003, solar_absorption = 0.5 }
+
+[[block]]
+id = 3
+name = "Water"
+color = [0.12, 0.30, 0.55]
+light_transmission = 0.8
+thermal = { heat_capacity = 8.0, conductivity = 0.01, solar_absorption = 0.3 }
+
+[[block]]
+id = 4
+name = "Wall"
+color = [0.58, 0.56, 0.52]
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+thermal = { heat_capacity = 6.0, conductivity = 0.008, solar_absorption = 0.6 }
+
+[[block]]
+id = 5
+name = "Glass"
+color = [0.65, 0.78, 0.88]
+render_style = 1.0
+light_transmission = 0.4
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+thermal = { heat_capacity = 1.5, conductivity = 0.02, solar_absorption = 0.1 }
+[block.placement]
+category = "Opening"
+icon = "🪟"
+label = "Window"
+click = "on_wall"
+place_height = 3
+drag = "none"
+
+[[block]]
+id = 6
+name = "Fireplace"
+color = [0.35, 0.30, 0.28]
+render_style = 2.0
+is_emissive = true
+walkable = true
+is_removable = true
+light = { intensity = 0.9, color = [1.0, 0.55, 0.15], radius = 6.0, height = 1.0 }
+thermal = { heat_capacity = 3.0, conductivity = 0.01, solar_absorption = 0.7 }
+[block.placement]
+category = "Build"
+icon = "🔥"
+label = "Fire"
+click = "simple"
+place_height = 1
+
+[[block]]
+id = 7
+name = "Ceiling Light"
+color = [0.45, 0.35, 0.20]
+render_style = 3.0
+is_emissive = true
+walkable = true
+is_removable = true
+light = { intensity = 0.8, color = [0.95, 0.92, 0.85], radius = 6.0, height = 0.0 }
+[block.placement]
+category = "Build"
+icon = "💡"
+label = "Ceiling"
+click = "simple"
+place_height = 0
+
+[[block]]
+id = 8
+name = "Tree"
+color = [0.18, 0.35, 0.12]
+render_style = 4.0
+light_transmission = 0.5
+thermal = { heat_capacity = 2.0, conductivity = 0.001, solar_absorption = 0.3 }
+
+[[block]]
+id = 9
+name = "Bench"
+color = [0.55, 0.38, 0.18]
+render_style = 5.0
+light_transmission = 1.0
+is_furniture = true
+walkable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.003, solar_absorption = 0.4 }
+[block.placement]
+category = "Build"
+icon = "🪑"
+label = "Bench"
+click = "multi_tile"
+place_height = 1
+rotatable = true
+
+[[block]]
+id = 10
+name = "Floor Lamp"
+color = [0.45, 0.35, 0.20]
+render_style = 6.0
+is_emissive = true
+walkable = true
+is_removable = true
+light = { intensity = 1.0, color = [0.95, 0.85, 0.60], radius = 6.0, height = 2.0 }
+[block.placement]
+category = "Build"
+icon = "🧴"
+label = "Floor Lamp"
+click = "simple"
+place_height = 2
+
+[[block]]
+id = 11
+name = "Table Lamp"
+color = [0.55, 0.38, 0.18]
+render_style = 7.0
+is_furniture = true
+is_removable = true
+light = { intensity = 0.35, color = [0.95, 0.80, 0.50], radius = 4.0, height = 1.5 }
+[block.placement]
+category = "Build"
+icon = "💡"
+label = "Table"
+click = "on_furniture"
+place_height = 1
+
+[[block]]
+id = 12
+name = "Fan"
+color = [0.60, 0.60, 0.62]
+render_style = 8.0
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+is_removable = true
+shows_wall_face = true
+thermal = { heat_capacity = 1.0, conductivity = 0.05, solar_absorption = 0.8 }
+[block.placement]
+category = "Build"
+icon = "💨"
+label = "Fan"
+click = "simple"
+place_height = 1
+rotatable = true
+
+[[block]]
+id = 13
+name = "Compost"
+color = [0.30, 0.25, 0.15]
+render_style = 9.0
+walkable = true
+is_removable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.005, solar_absorption = 0.5 }
+[block.placement]
+category = "Build"
+icon = "♻"
+label = "Compost"
+click = "simple"
+place_height = 1
+
+[[block]]
+id = 14
+name = "Insulated Wall"
+color = [0.90, 0.90, 0.92]
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+thermal = { heat_capacity = 10.0, conductivity = 0.0, solar_absorption = 0.0 }
+
+[[block]]
+id = 15
+name = "Pipe"
+color = [0.50, 0.52, 0.55]
+render_style = 10.0
+is_solid = true
+fluid_obstacle = true
+is_removable = true
+thermal = { heat_capacity = 1.0, conductivity = 0.03, solar_absorption = 0.5 }
+[block.placement]
+category = "Piping"
+icon = "💧"
+label = "Pipe"
+click = "simple"
+place_height = 1
+stays_selected = true
+drag = "line"
+
+[[block]]
+id = 16
+name = "Pump"
+color = [0.45, 0.55, 0.45]
+render_style = 11.0
+is_solid = true
+fluid_obstacle = true
+is_removable = true
+thermal = { heat_capacity = 1.5, conductivity = 0.02, solar_absorption = 0.4 }
+[block.placement]
+category = "Piping"
+icon = "⚙"
+label = "Pump"
+click = "simple"
+place_height = 1
+rotatable = true
+
+[[block]]
+id = 17
+name = "Tank"
+color = [0.55, 0.55, 0.60]
+render_style = 12.0
+is_solid = true
+fluid_obstacle = true
+is_removable = true
+thermal = { heat_capacity = 3.0, conductivity = 0.01, solar_absorption = 0.3 }
+[block.placement]
+category = "Piping"
+icon = "🛢"
+label = "Tank"
+click = "simple"
+place_height = 1
+
+[[block]]
+id = 18
+name = "Valve"
+color = [0.60, 0.45, 0.40]
+render_style = 13.0
+is_solid = true
+fluid_obstacle = true
+is_removable = true
+thermal = { heat_capacity = 1.0, conductivity = 0.03, solar_absorption = 0.5 }
+[block.placement]
+category = "Piping"
+icon = "🔄"
+label = "Valve"
+click = "simple"
+place_height = 1
+extra_flags = 4
+
+[[block]]
+id = 19
+name = "Outlet"
+color = [0.50, 0.52, 0.55]
+render_style = 14.0
+is_solid = true
+fluid_obstacle = true
+is_removable = true
+thermal = { heat_capacity = 1.0, conductivity = 0.03, solar_absorption = 0.5 }
+[block.placement]
+category = "Piping"
+icon = "➡"
+label = "Outlet"
+click = "on_wall"
+place_height = 3
+rotatable = true
+
+[[block]]
+id = 20
+name = "Inlet"
+color = [0.55, 0.50, 0.45]
+render_style = 15.0
+is_solid = true
+fluid_obstacle = true
+is_removable = true
+thermal = { heat_capacity = 1.0, conductivity = 0.03, solar_absorption = 0.5 }
+[block.placement]
+category = "Piping"
+icon = "⬅"
+label = "Inlet"
+click = "on_wall"
+place_height = 3
+rotatable = true
+
+[[block]]
+id = 21
+name = "Wood Wall"
+color = [0.55, 0.38, 0.18]
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+is_flammable = true
+ignition_temp = 250.0
+thermal = { heat_capacity = 3.0, conductivity = 0.003, solar_absorption = 0.4 }
+[block.placement]
+category = "Walls"
+icon = "🪵"
+label = "Wood"
+click = "simple"
+place_height = 3
+drag = "hollow_rect"
+
+[[block]]
+id = 22
+name = "Steel Wall"
+color = [0.60, 0.62, 0.65]
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+thermal = { heat_capacity = 2.0, conductivity = 0.06, solar_absorption = 0.9 }
+[block.placement]
+category = "Walls"
+icon = "⚙"
+label = "Steel"
+click = "simple"
+place_height = 3
+drag = "hollow_rect"
+
+[[block]]
+id = 23
+name = "Sandstone Wall"
+color = [0.72, 0.60, 0.42]
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+thermal = { heat_capacity = 7.0, conductivity = 0.010, solar_absorption = 0.6 }
+[block.placement]
+category = "Walls"
+icon = "🪨"
+label = "Sandstone"
+click = "simple"
+place_height = 3
+drag = "hollow_rect"
+
+[[block]]
+id = 24
+name = "Granite Wall"
+color = [0.42, 0.40, 0.45]
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+thermal = { heat_capacity = 10.0, conductivity = 0.015, solar_absorption = 0.8 }
+[block.placement]
+category = "Walls"
+icon = "⛰"
+label = "Granite"
+click = "simple"
+place_height = 3
+drag = "hollow_rect"
+
+[[block]]
+id = 25
+name = "Limestone Wall"
+color = [0.82, 0.78, 0.70]
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+thermal = { heat_capacity = 6.0, conductivity = 0.008, solar_absorption = 0.4 }
+[block.placement]
+category = "Walls"
+icon = "🔲"
+label = "Limestone"
+click = "simple"
+place_height = 3
+drag = "hollow_rect"
+
+[[block]]
+id = 26
+name = "Wood Floor"
+color = [0.55, 0.42, 0.22]
+light_transmission = 1.0
+walkable = true
+is_removable = true
+thermal = { heat_capacity = 2.5, conductivity = 0.002, solar_absorption = 0.4 }
+[block.placement]
+category = "Floor"
+icon = "🪵"
+label = "Wood"
+click = "none"
+place_height = 0
+drag = "filled_rect"
+
+[[block]]
+id = 27
+name = "Stone Floor"
+color = [0.50, 0.48, 0.45]
+light_transmission = 1.0
+walkable = true
+is_removable = true
+thermal = { heat_capacity = 4.0, conductivity = 0.006, solar_absorption = 0.5 }
+[block.placement]
+category = "Floor"
+icon = "⬛"
+label = "Stone"
+click = "none"
+place_height = 0
+drag = "filled_rect"
+
+[[block]]
+id = 28
+name = "Concrete Floor"
+color = [0.58, 0.57, 0.55]
+light_transmission = 1.0
+walkable = true
+is_removable = true
+thermal = { heat_capacity = 3.5, conductivity = 0.005, solar_absorption = 0.5 }
+[block.placement]
+category = "Floor"
+icon = "⬜"
+label = "Concrete"
+click = "none"
+place_height = 0
+drag = "filled_rect"
+
+[[block]]
+id = 29
+name = "Cannon"
+color = [0.30, 0.28, 0.25]
+render_style = 16.0
+is_solid = true
+fluid_obstacle = true
+default_height = 2.0
+is_removable = true
+thermal = { heat_capacity = 3.0, conductivity = 0.04, solar_absorption = 0.7 }
+[block.placement]
+category = "Build"
+icon = "💥"
+label = "Cannon"
+click = "simple"
+place_height = 2
+rotatable = true
+
+[[block]]
+id = 30
+name = "Bed"
+color = [0.35, 0.25, 0.50]
+render_style = 17.0
+light_transmission = 1.0
+is_furniture = true
+walkable = true
+is_removable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.002, solar_absorption = 0.3 }
+[block.placement]
+category = "Build"
+icon = "🛏"
+label = "Bed"
+click = "multi_tile"
+place_height = 0
+rotatable = true
+
+[[block]]
+id = 31
+name = "Berry Bush"
+color = [0.20, 0.40, 0.15]
+render_style = 18.0
+light_transmission = 0.6
+walkable = true
+thermal = { heat_capacity = 1.5, conductivity = 0.001, solar_absorption = 0.3 }
+[block.placement]
+category = "Build"
+icon = "🫐"
+label = "Berries"
+click = "simple"
+place_height = 1
+
+[[block]]
+id = 32
+name = "Dug Ground"
+color = [0.35, 0.28, 0.15]
+render_style = 19.0
+light_transmission = 1.0
+walkable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.003, solar_absorption = 0.5 }
+
+[[block]]
+id = 33
+name = "Storage Crate"
+color = [0.50, 0.38, 0.20]
+render_style = 20.0
+light_transmission = 1.0
+is_furniture = true
+is_removable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.002, solar_absorption = 0.4 }
+[block.placement]
+category = "Build"
+icon = "📦"
+label = "Crate"
+click = "simple"
+place_height = 0
+
+[[block]]
+id = 34
+name = "Rock"
+color = [0.50, 0.48, 0.44]
+render_style = 21.0
+walkable = true
+is_removable = true
+light_transmission = 1.0
+thermal = { heat_capacity = 3.0, conductivity = 0.02, solar_absorption = 0.6 }
+
+[[block]]
+id = 35
+name = "Mud Wall"
+color = [0.52, 0.40, 0.25]
+is_solid = true
+fluid_obstacle = true
+default_height = 3.0
+shows_wall_face = true
+is_wall = true
+thermal = { heat_capacity = 5.0, conductivity = 0.004, solar_absorption = 0.5 }
+[block.placement]
+category = "Walls"
+icon = "🏚"
+label = "Mud"
+click = "simple"
+place_height = 3
+drag = "hollow_rect"
