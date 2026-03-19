@@ -6,15 +6,14 @@ mod grid;
 mod sprites;
 
 use materials::{GpuMaterial, build_material_table};
-use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_door_rs, compute_roof_heights, generate_test_grid, grid_idx, get_block, set_block,
-           PLEB_MOVE_SPEED, PLEB_RADIUS, DOOR_AUTO_RANGE, DOOR_AUTO_CLOSE_TIME, CANNON_SPEED, CANNON_RECOIL, DAWN_FRAC, DUSK_FRAC};
+use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_door_rs, compute_roof_heights, generate_test_grid};
 use sprites::generate_tree_sprites;
 
 mod pleb;
 use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, random_name, MAX_PLEBS, PlebActivity};
 
 mod needs;
-use needs::{sample_environment, tick_needs, mood_label, critical_need, AirReadback, BreathingState, breathing_label, find_breathable_tile, BERRY_HUNGER_RESTORE};
+use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, BERRY_HUNGER_RESTORE};
 
 mod build;
 mod camera;

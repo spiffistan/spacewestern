@@ -2,6 +2,31 @@
 
 use crate::grid::{GRID_W, GRID_H};
 use crate::needs::PlebNeeds;
+use crate::materials::{build_material_table, NUM_MATERIALS};
+use std::sync::OnceLock;
+
+/// Cached walkable lookup table indexed by block type. True = walkable at height 0.
+static WALKABLE_TABLE: OnceLock<[bool; NUM_MATERIALS]> = OnceLock::new();
+
+fn walkable_table() -> &'static [bool; NUM_MATERIALS] {
+    WALKABLE_TABLE.get_or_init(|| {
+        let mats = build_material_table();
+        let mut table = [false; NUM_MATERIALS];
+        for (i, m) in mats.iter().enumerate() {
+            table[i] = m.walkable > 0.5;
+        }
+        table
+    })
+}
+
+/// Check if a block type is walkable (from material table).
+fn is_type_walkable(bt: u32) -> bool {
+    if (bt as usize) < NUM_MATERIALS {
+        walkable_table()[bt as usize]
+    } else {
+        false
+    }
+}
 
 /// What the pleb is currently doing.
 #[derive(Clone, Debug, PartialEq)]
@@ -208,8 +233,8 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        let is_dug_shallow = bt == 32 && bh <= 1; // dug ground depth 1 is walkable
-        if !is_door && !is_dug_shallow && (bh > 0 || (bt != 0 && bt != 2 && bt != 6 && bt != 7 && bt != 10 && bt != 13 && bt != 15 && bt != 16 && bt != 17 && bt != 18 && bt != 26 && bt != 27 && bt != 28 && bt != 30 && bt != 31)) {
+        let is_dug_shallow = bt == 32 && bh <= 1;
+        if !is_door && !is_dug_shallow && (bh > 0 || !is_type_walkable(bt)) {
             return false;
         }
     }
@@ -229,8 +254,7 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        is_door || (bh == 0 && (bt == 0 || bt == 2 || bt == 6 || bt == 7 || bt == 10 || bt == 13 || bt == 26 || bt == 27 || bt == 28 || bt == 30 || bt == 31))
-            || (bt == 32 && bh <= 1) // dug ground depth 1 is walkable
+        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == 32 && bh <= 1)
     };
 
     if !is_walk(goal.0, goal.1) { return vec![]; }

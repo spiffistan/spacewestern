@@ -1,7 +1,5 @@
 //! Fluid simulation — parameters and obstacle field generation.
 
-use crate::grid::GRID_W;
-
 // Fluid simulation resolution. Set HIRES_FLUID to true for 512x512 velocity
 // (4x compute cost but smoother convection patterns).
 pub const FLUID_SIM_W: u32 = 256;
