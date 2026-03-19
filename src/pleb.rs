@@ -7,10 +7,36 @@ use crate::needs::PlebNeeds;
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlebActivity {
     Idle,
-    Walking,          // following a path
+    Walking,          // following a path (player-ordered or auto)
     Sleeping,         // in bed, recovering rest
     Harvesting(f32),  // progress 0-1, harvesting a berry bush at nearby tile
     Eating,           // consuming food (quick action)
+    /// Crisis override — pleb acts autonomously, ignoring player input.
+    /// Inner activity is what they're doing (Walking to food/bed, Harvesting, Eating, Sleeping).
+    Crisis(Box<PlebActivity>, &'static str), // (inner_activity, reason_label)
+}
+
+impl PlebActivity {
+    /// Returns true if the pleb is in a crisis state (player input blocked).
+    pub fn is_crisis(&self) -> bool {
+        matches!(self, PlebActivity::Crisis(_, _))
+    }
+
+    /// Get the inner activity (unwraps crisis wrapper if present).
+    pub fn inner(&self) -> &PlebActivity {
+        match self {
+            PlebActivity::Crisis(inner, _) => inner,
+            other => other,
+        }
+    }
+
+    /// Get the crisis reason label, if in crisis.
+    pub fn crisis_reason(&self) -> Option<&'static str> {
+        match self {
+            PlebActivity::Crisis(_, reason) => Some(reason),
+            _ => None,
+        }
+    }
 }
 
 /// Simple inventory: resource name → count.

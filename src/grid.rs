@@ -291,10 +291,19 @@ pub fn generate_test_grid() -> Vec<u32> {
                     let tree_h = 2 + ((h >> 8) & 0x3) as u8;
                     grid[idx] = make_block(8, tree_h, 0);
                 } else {
-                    // Small bush
+                    // Small bush (tree type)
                     let bush_h = 1 + ((h >> 8) & 0x1) as u8;
                     grid[idx] = make_block(8, bush_h, 0);
                 }
+            }
+
+            // Berry bushes: scattered in moderate-density areas, rarer than trees
+            let berry_r = ((h >> 4) & 0xFFF) as u32;
+            let berry_threshold = if density > 0.6 && density < 1.0 { 15 }
+                else if density > 0.4 { 5 }
+                else { 1 };
+            if grid[idx] == make_block(2, 0, 0) && berry_r < berry_threshold {
+                grid[idx] = make_block(31, 1, 0);
             }
         }
     }

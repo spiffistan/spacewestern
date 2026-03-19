@@ -750,9 +750,9 @@ impl App {
                 return;
             }
 
-            // Click-to-move for selected pleb
+            // Click-to-move for selected pleb (blocked during crisis)
             if let Some(sel) = self.selected_pleb {
-                if sel < self.plebs.len() {
+                if sel < self.plebs.len() && !self.plebs[sel].activity.is_crisis() {
                     let p = &self.plebs[sel];
                     let start_x = p.x.floor() as i32;
                     let start_y = p.y.floor() as i32;
@@ -1337,6 +1337,7 @@ impl App {
             let hby = hwy.floor() as i32;
             let tiles: Vec<(i32, i32)> = match self.build_tool {
                 BuildTool::Bench => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
+                BuildTool::Bed => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
                 _ => vec![(hbx, hby)],
             };
             let on_furniture = self.build_tool == BuildTool::TableLamp;

@@ -123,8 +123,8 @@ impl App {
         for (i, pleb) in self.plebs.iter_mut().enumerate() {
             let is_selected = sel == Some(i);
 
-            // WASD direct movement (only for selected pleb)
-            if is_selected {
+            // WASD direct movement (only for selected pleb, blocked during crisis)
+            if is_selected && !pleb.activity.is_crisis() {
                 let mut dx = 0.0f32;
                 let mut dy = 0.0f32;
                 if self.pressed_keys.contains(&KeyCode::KeyW) { dy -= 1.0; }
@@ -190,79 +190,132 @@ impl App {
                 let is_sleeping = pleb.activity == PlebActivity::Sleeping;
                 tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving, is_sleeping, air);
 
-                // --- Activity state machine ---
-                match &pleb.activity {
+                // --- Activity state machine (works on inner activity for crisis) ---
+                let inner_act = pleb.activity.inner().clone();
+                let was_crisis = pleb.activity.is_crisis();
+                let crisis_reason = pleb.activity.crisis_reason();
+
+                match &inner_act {
                     PlebActivity::Sleeping => {
-                        // Wake up when rest is full, or when a crisis happens
+                        // Wake up when rest is full, or breathing crisis
                         if pleb.needs.rest > 0.95
                             || pleb.needs.breathing_state != BreathingState::Normal
-                            || pleb.needs.hunger < 0.1
                         {
                             pleb.activity = PlebActivity::Idle;
                         }
                     }
                     PlebActivity::Harvesting(progress) => {
-                        let new_progress = progress + dt * self.time_speed * 0.5; // ~2 game seconds to harvest
+                        let new_progress = progress + dt * self.time_speed * 0.5;
                         if new_progress >= 1.0 {
-                            // Harvest complete — add berries to inventory
                             pleb.inventory.berries += 3;
-                            pleb.activity = PlebActivity::Idle;
                             pleb.harvest_target = None;
                             log::info!("{} harvested 3 berries (total: {})", pleb.name, pleb.inventory.berries);
+                            // After harvesting in crisis, eat immediately
+                            if was_crisis {
+                                pleb.activity = PlebActivity::Crisis(
+                                    Box::new(PlebActivity::Eating),
+                                    crisis_reason.unwrap_or("Starving"),
+                                );
+                            } else {
+                                pleb.activity = PlebActivity::Idle;
+                            }
+                        } else if was_crisis {
+                            pleb.activity = PlebActivity::Crisis(
+                                Box::new(PlebActivity::Harvesting(new_progress)),
+                                crisis_reason.unwrap_or("Starving"),
+                            );
                         } else {
                             pleb.activity = PlebActivity::Harvesting(new_progress);
                         }
                     }
                     PlebActivity::Eating => {
-                        // Instant — eat one berry
                         if pleb.inventory.berries > 0 {
                             pleb.inventory.berries -= 1;
                             pleb.needs.hunger = (pleb.needs.hunger + BERRY_HUNGER_RESTORE).min(1.0);
                             log::info!("{} ate a berry (hunger: {:.0}%, berries left: {})",
                                 pleb.name, pleb.needs.hunger * 100.0, pleb.inventory.berries);
                         }
-                        pleb.activity = PlebActivity::Idle;
+                        // Stay in crisis if still hungry and have berries
+                        if was_crisis && pleb.needs.hunger < 0.3 && pleb.inventory.berries > 0 {
+                            pleb.activity = PlebActivity::Crisis(
+                                Box::new(PlebActivity::Eating),
+                                crisis_reason.unwrap_or("Starving"),
+                            );
+                        } else {
+                            pleb.activity = PlebActivity::Idle;
+                        }
                     }
                     _ => {}
                 }
 
-                // --- Auto-behaviors (only when idle or walking) ---
-                if pleb.activity == PlebActivity::Idle || pleb.activity == PlebActivity::Walking {
-                    // CRITICAL: auto-eat when starving and have berries
-                    if pleb.needs.hunger < 0.15 && pleb.inventory.berries > 0 {
-                        pleb.activity = PlebActivity::Eating;
-                    }
-                    // Auto-sleep: seek bed when very tired and it's nighttime (or exhausted any time)
-                    else if (pleb.needs.rest < 0.2 || (pleb.needs.rest < 0.4 && env.is_night))
-                        && pleb.activity != PlebActivity::Sleeping
-                    {
-                        if env.near_bed {
-                            // Already near a bed — start sleeping
-                            pleb.activity = PlebActivity::Sleeping;
+                // --- Crisis auto-behaviors (override player control) ---
+                let is_idle_or_walk = matches!(pleb.activity.inner(),
+                    PlebActivity::Idle | PlebActivity::Walking);
+
+                // CRISIS: Starving — must eat or find food NOW
+                if pleb.needs.hunger < 0.10 && is_idle_or_walk {
+                    if pleb.inventory.berries > 0 {
+                        pleb.activity = PlebActivity::Crisis(
+                            Box::new(PlebActivity::Eating), "Starving!");
+                    } else if let Some((bx, by)) = env.nearest_berry_bush {
+                        if env.near_berry_bush {
+                            pleb.harvest_target = Some((bx, by));
+                            pleb.activity = PlebActivity::Crisis(
+                                Box::new(PlebActivity::Harvesting(0.0)), "Starving!");
                             pleb.path.clear();
                             pleb.path_idx = 0;
-                        } else if let Some((bx, by)) = env.nearest_bed {
-                            // Path to nearest bed
+                        } else {
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                             let path = astar_path(&self.grid_data, start, (bx, by));
                             if !path.is_empty() {
                                 pleb.path = path;
                                 pleb.path_idx = 0;
-                                pleb.activity = PlebActivity::Walking;
+                                pleb.activity = PlebActivity::Crisis(
+                                    Box::new(PlebActivity::Walking), "Starving!");
                             }
                         }
                     }
-                    // Auto-harvest: seek berries when hungry and no berries in inventory
-                    else if pleb.needs.hunger < 0.4 && pleb.inventory.berries == 0 {
-                        if env.near_berry_bush && pleb.harvest_target.is_none() {
-                            if let Some((bx, by)) = env.nearest_berry_bush {
-                                pleb.harvest_target = Some((bx, by));
-                                pleb.activity = PlebActivity::Harvesting(0.0);
+                }
+                // CRISIS: Exhausted — must sleep
+                else if pleb.needs.rest < 0.08 && is_idle_or_walk && !pleb.activity.is_crisis() {
+                    if env.near_bed {
+                        pleb.activity = PlebActivity::Crisis(
+                            Box::new(PlebActivity::Sleeping), "Exhausted!");
+                        pleb.path.clear();
+                        pleb.path_idx = 0;
+                    } else if let Some((bx, by)) = env.nearest_bed {
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let path = astar_path(&self.grid_data, start, (bx, by));
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 0;
+                            pleb.activity = PlebActivity::Crisis(
+                                Box::new(PlebActivity::Walking), "Exhausted!");
+                        }
+                    } else {
+                        // No bed — collapse and sleep on ground (slow recovery)
+                        pleb.activity = PlebActivity::Crisis(
+                            Box::new(PlebActivity::Sleeping), "Collapsed!");
+                        pleb.path.clear();
+                        pleb.path_idx = 0;
+                    }
+                }
+                // Non-crisis auto-behaviors (player can override)
+                else if !pleb.activity.is_crisis() {
+                    if pleb.activity == PlebActivity::Idle || pleb.activity == PlebActivity::Walking {
+                        // Auto-eat when hungry and have berries
+                        if pleb.needs.hunger < 0.25 && pleb.inventory.berries > 0 {
+                            pleb.activity = PlebActivity::Eating;
+                        }
+                        // Auto-sleep: seek bed when tired at night
+                        else if (pleb.needs.rest < 0.2 || (pleb.needs.rest < 0.4 && env.is_night))
+                            && !matches!(pleb.activity, PlebActivity::Sleeping)
+                        {
+                            if env.near_bed {
+                                pleb.activity = PlebActivity::Sleeping;
                                 pleb.path.clear();
                                 pleb.path_idx = 0;
-                            }
-                        } else if pleb.harvest_target.is_none() {
-                            if let Some((bx, by)) = env.nearest_berry_bush {
+                            } else if let Some((bx, by)) = env.nearest_bed {
                                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                                 let path = astar_path(&self.grid_data, start, (bx, by));
                                 if !path.is_empty() {
@@ -272,14 +325,67 @@ impl App {
                                 }
                             }
                         }
+                        // Auto-harvest: hungry and no berries
+                        else if pleb.needs.hunger < 0.4 && pleb.inventory.berries == 0 {
+                            if env.near_berry_bush && pleb.harvest_target.is_none() {
+                                if let Some((bx, by)) = env.nearest_berry_bush {
+                                    pleb.harvest_target = Some((bx, by));
+                                    pleb.activity = PlebActivity::Harvesting(0.0);
+                                    pleb.path.clear();
+                                    pleb.path_idx = 0;
+                                }
+                            } else if pleb.harvest_target.is_none() {
+                                if let Some((bx, by)) = env.nearest_berry_bush {
+                                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                    let path = astar_path(&self.grid_data, start, (bx, by));
+                                    if !path.is_empty() {
+                                        pleb.path = path;
+                                        pleb.path_idx = 0;
+                                        pleb.activity = PlebActivity::Walking;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
-                // Update walking activity based on path state
-                if pleb.path_idx < pleb.path.len() && pleb.activity == PlebActivity::Idle {
-                    pleb.activity = PlebActivity::Walking;
-                } else if pleb.path_idx >= pleb.path.len() && pleb.activity == PlebActivity::Walking {
-                    pleb.activity = PlebActivity::Idle;
+                // Update walking state (handles both crisis and non-crisis walking)
+                let inner = pleb.activity.inner().clone();
+                if pleb.path_idx < pleb.path.len() && inner == PlebActivity::Idle {
+                    if pleb.activity.is_crisis() {
+                        let reason = pleb.activity.crisis_reason().unwrap_or("Crisis");
+                        pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Walking), reason);
+                    } else {
+                        pleb.activity = PlebActivity::Walking;
+                    }
+                } else if pleb.path_idx >= pleb.path.len() && inner == PlebActivity::Walking {
+                    if pleb.activity.is_crisis() {
+                        // Arrived at destination during crisis — check what to do
+                        let reason = pleb.activity.crisis_reason().unwrap_or("Crisis");
+                        if reason == "Starving!" {
+                            // Arrived near bush — harvest or eat
+                            if pleb.inventory.berries > 0 {
+                                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Eating), reason);
+                            } else if env.near_berry_bush {
+                                if let Some((bx, by)) = env.nearest_berry_bush {
+                                    pleb.harvest_target = Some((bx, by));
+                                    pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Harvesting(0.0)), reason);
+                                }
+                            } else {
+                                pleb.activity = PlebActivity::Idle; // couldn't find food
+                            }
+                        } else if reason == "Exhausted!" {
+                            if env.near_bed {
+                                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Sleeping), reason);
+                            } else {
+                                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Sleeping), "Collapsed!");
+                            }
+                        } else {
+                            pleb.activity = PlebActivity::Idle;
+                        }
+                    } else {
+                        pleb.activity = PlebActivity::Idle;
+                    }
                 }
 
                 // Crisis flee behavior: when holding breath or gasping, pathfind to fresh air

@@ -313,6 +313,8 @@ impl App {
                 air_co2: f32,
                 activity: String,
                 berries: u32,
+                is_crisis: bool,
+                crisis_reason: Option<&'static str>,
             }
             let pleb_display: Vec<PlebDisplay> = self.plebs.iter().enumerate().map(|(i, p)| {
                 let a = &p.appearance;
@@ -334,14 +336,25 @@ impl App {
                     breathing_state: p.needs.breathing_state.clone(),
                     air_o2: p.needs.air_o2,
                     air_co2: p.needs.air_co2,
-                    activity: format!("{}", match &p.activity {
-                        PlebActivity::Idle => "Idle".to_string(),
-                        PlebActivity::Walking => "Walking".to_string(),
-                        PlebActivity::Sleeping => "Sleeping".to_string(),
-                        PlebActivity::Harvesting(p) => format!("Harvesting {:.0}%", p * 100.0),
-                        PlebActivity::Eating => "Eating".to_string(),
-                    }),
+                    activity: {
+                        let inner = p.activity.inner();
+                        let act_str = match inner {
+                            PlebActivity::Idle => "Idle".to_string(),
+                            PlebActivity::Walking => "Walking".to_string(),
+                            PlebActivity::Sleeping => "Sleeping".to_string(),
+                            PlebActivity::Harvesting(pr) => format!("Harvesting {:.0}%", pr * 100.0),
+                            PlebActivity::Eating => "Eating".to_string(),
+                            PlebActivity::Crisis(_, _) => "Crisis".to_string(),
+                        };
+                        if let Some(reason) = p.activity.crisis_reason() {
+                            format!("{} ({})", act_str, reason)
+                        } else {
+                            act_str
+                        }
+                    },
                     berries: p.inventory.berries,
+                    is_crisis: p.activity.is_crisis(),
+                    crisis_reason: p.activity.crisis_reason(),
                 }
             }).collect();
 
@@ -357,13 +370,22 @@ impl App {
                                 let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(card_w, card_h), egui::Sense::click());
                                 let painter = ui.painter_at(rect);
 
-                                // Background
-                                let bg = if is_sel {
+                                // Background (red tint during crisis)
+                                let bg = if pd.is_crisis {
+                                    egui::Color32::from_rgb(100, 40, 40)
+                                } else if is_sel {
                                     egui::Color32::from_rgb(60, 100, 60)
                                 } else {
                                     egui::Color32::from_rgb(50, 55, 65)
                                 };
                                 painter.rect_filled(rect, 4.0, bg);
+
+                                // Crisis border: thin red frame
+                                if pd.is_crisis {
+                                    let inset = rect.shrink(1.5);
+                                    painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(180, 30, 30));
+                                    painter.rect_filled(inset, 3.0, bg);
+                                }
 
                                 // Portrait area
                                 let portrait_center = if is_sel {
@@ -527,7 +549,8 @@ impl App {
             if let Some(sel_idx) = self.selected_pleb {
                 if let Some(pleb) = self.plebs.get(sel_idx) {
                     let has_berries = pleb.inventory.berries > 0;
-                    let is_sleeping = pleb.activity == PlebActivity::Sleeping;
+                    let is_sleeping = *pleb.activity.inner() == PlebActivity::Sleeping;
+                    let in_crisis = pleb.activity.is_crisis();
                     let hunger = pleb.needs.hunger;
                     let rest = pleb.needs.rest;
                     let pleb_name = pleb.name.clone();
@@ -538,9 +561,15 @@ impl App {
                         .show(ctx, |ui| {
                             egui::Frame::menu(ui.style()).show(ui, |ui| {
                                 ui.label(egui::RichText::new(&pleb_name).strong().size(11.0));
+                                if in_crisis {
+                                    ui.label(egui::RichText::new("(Crisis - cannot give orders)")
+                                        .size(9.0).color(egui::Color32::from_rgb(255, 80, 80)));
+                                }
                                 ui.separator();
 
-                                if has_berries {
+                                if in_crisis {
+                                    ui.label(egui::RichText::new("Actions unavailable").size(10.0).color(egui::Color32::GRAY));
+                                } else if has_berries {
                                     let label = format!("Eat Berry ({:.0}% hunger)", hunger * 100.0);
                                     if ui.button(egui::RichText::new(label).size(10.0)).clicked() {
                                         if let Some(p) = self.plebs.get_mut(sel_idx) {
