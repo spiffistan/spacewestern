@@ -2439,19 +2439,20 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         );
         color = mix(color * 0.3, heat, clamp(density * 2.0, 0.0, 0.9));
     } else if camera.fluid_overlay < 3.5 {
-        // Velocity: hue = direction, brightness = magnitude, with per-block arrows
+        // Velocity: magnitude as brightness with subtle directional tint, per-block arrows
         let sim_pos = vec2<i32>(vec2<f32>(world_x, world_y));
         let sim_clamped = clamp(sim_pos, vec2(0), vec2(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1));
         let vel = textureLoad(fluid_vel_tex, sim_clamped, 0).xy;
         let mag = length(vel);
-        let norm_mag = clamp(mag * 0.1, 0.0, 1.0);
-        let angle = atan2(vel.y, vel.x) * 0.159 + 0.5;
-        let vel_color = vec3(
-            clamp(abs(angle * 6.0 - 3.0) - 1.0, 0.0, 1.0),
-            clamp(2.0 - abs(angle * 6.0 - 2.0), 0.0, 1.0),
-            clamp(2.0 - abs(angle * 6.0 - 4.0), 0.0, 1.0)
-        ) * norm_mag;
-        color = mix(color * 0.3, vel_color, clamp(norm_mag * 2.0, 0.0, 0.9));
+        // Logarithmic scaling so small velocities are still visible
+        let norm_mag = clamp(log(1.0 + mag * 0.5) * 0.5, 0.0, 1.0);
+        // Calm blue base → brighter cyan/white at high velocity
+        let vel_color = mix(
+            vec3<f32>(0.1, 0.15, 0.3),    // calm: dark blue
+            vec3<f32>(0.4, 0.85, 1.0),    // fast: bright cyan
+            norm_mag
+        );
+        color = mix(color * 0.3, vel_color, clamp(norm_mag + 0.15, 0.0, 0.8));
 
         // Procedural arrow per block (no extra texture reads)
         if mag > 0.3 {
@@ -2472,7 +2473,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
             }
         }
     } else if camera.fluid_overlay < 4.5 {
-        // Pressure: absolute pressure with ROYGBIV colormap (violet=low, red=high)
+        // Pressure: signed divergence-free pressure field
+        // Blue = negative (suction), white = zero, red = positive (push)
         // Bilinear interpolation for smooth display
         let fp = vec2<f32>(world_x, world_y) - 0.5;
         let f = fract(fp);
@@ -2484,32 +2486,20 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         let p11 = textureLoad(fluid_pres_tex, clamp(base + vec2(1, 1), vec2(0), maxc), 0).r;
         let p = mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y);
 
-        // Absolute pressure mapped to 0..1 range
-        let abs_p = clamp(abs(p) * 0.5, 0.0, 1.0);
-
-        // Reverse ROYGBIV: violet(0) → blue → cyan → green → yellow → orange → red(1)
+        // Signed pressure: -1..+1 range with soft scaling
+        let signed_p = clamp(p * 0.05, -1.0, 1.0);
+        // Blue (negative) → gray (zero) → red (positive)
         var pcolor: vec3<f32>;
-        if abs_p < 0.167 {
-            let t = abs_p / 0.167;
-            pcolor = mix(vec3(0.56, 0.0, 1.0), vec3(0.0, 0.0, 1.0), t);   // violet → blue
-        } else if abs_p < 0.333 {
-            let t = (abs_p - 0.167) / 0.167;
-            pcolor = mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), t);   // blue → cyan
-        } else if abs_p < 0.5 {
-            let t = (abs_p - 0.333) / 0.167;
-            pcolor = mix(vec3(0.0, 1.0, 1.0), vec3(0.0, 1.0, 0.0), t);   // cyan → green
-        } else if abs_p < 0.667 {
-            let t = (abs_p - 0.5) / 0.167;
-            pcolor = mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), t);   // green → yellow
-        } else if abs_p < 0.833 {
-            let t = (abs_p - 0.667) / 0.167;
-            pcolor = mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 0.5, 0.0), t);   // yellow → orange
+        if signed_p < 0.0 {
+            let t = -signed_p; // 0..1
+            pcolor = mix(vec3<f32>(0.5, 0.5, 0.55), vec3<f32>(0.15, 0.25, 0.8), t);
         } else {
-            let t = (abs_p - 0.833) / 0.167;
-            pcolor = mix(vec3(1.0, 0.5, 0.0), vec3(1.0, 0.0, 0.0), t);   // orange → red
+            let t = signed_p;  // 0..1
+            pcolor = mix(vec3<f32>(0.5, 0.5, 0.55), vec3<f32>(0.85, 0.2, 0.15), t);
         }
 
-        color = mix(color * 0.25, pcolor, clamp(abs_p * 2.5 + 0.1, 0.0, 0.9));
+        let strength = clamp(abs(signed_p) * 1.5 + 0.2, 0.0, 0.8);
+        color = mix(color * 0.3, pcolor, strength);
     } else if camera.fluid_overlay < 5.5 {
         // O2: blue (high/atmospheric) to red (depleted)
         let o2 = clamp(smoke.g, 0.0, 1.0);
