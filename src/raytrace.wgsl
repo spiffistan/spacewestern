@@ -403,6 +403,11 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
         if sbt >= 15u && sbt <= 20u { continue; } // pipe components don't block light
         if sbt == 32u { continue; } // dug ground doesn't block light
 
+        // Doors: open = pass through, closed = block (regardless of height)
+        if is_door(sb) {
+            if is_open(sb) { continue; } else { return 0.0; }
+        }
+
         // Light is above this block — passes over (furniture below light height)
         if f32(sbh) <= light_h {
             continue;
@@ -421,9 +426,6 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
             if vis < 0.02 { return 0.0; }
             continue;
         }
-
-        // Open door: passes through
-        if is_door(sb) && is_open(sb) { continue; }
 
         // Solid wall: blocked
         return 0.0;
@@ -1387,7 +1389,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
             // Slow time progression: blend for shadow smoothing (TAA)
             // Higher blend = smoother shadows but more ghosting
             let fluid_factor = select(1.0, 0.4, near_fluid); // less blend near smoke
-            temporal_blend = 0.6 * fluid_factor; // higher = smoother shadows
+            temporal_blend = 0.35 * fluid_factor;
         }
     }
 
@@ -1993,7 +1995,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         // across the image with no clumping or visible patterns. Much smoother
         // than white noise (fract(sin(...))), combined with temporal accumulation.
         // Reference: Jorge Jimenez, "Next Generation Post Processing in Call of Duty"
-        let frame_offset = fract(camera.time * 5.3) * 5.0; // temporal variation
+        let frame_offset = fract(camera.time * 5.3) * 5.0;
         let ign_x = f32(px) + frame_offset;
         let ign_y = f32(py) + frame_offset * 0.7;
         let ign1 = fract(52.9829189 * fract(0.06711056 * ign_x + 0.00583715 * ign_y));
@@ -2004,6 +2006,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
             effective_fheight, sun_dir, sun_elev);
         shadow_tint = shadow_result.xyz;
         light_factor = shadow_result.w;
+
+        // DEBUG: output roof height as color — red channel = roof_h/5
 
         // Outdoor lighting: directional window bleed only.
         // Outdoor point lights are handled by proximity glow (line-of-sight traced)
@@ -2152,8 +2156,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         let pdy = world_y - p.y;
         let pdist = length(vec2(pdx, pdy));
 
+        // Skip pleb lights on wall tops / elevated surfaces — light is at ground level
+        let is_elevated = effective_height > 0u;
+
         // Torch: warm point light with wall occlusion
-        if p.torch > 0.5 && pdist < 6.0 {
+        if p.torch > 0.5 && pdist < 6.0 && !is_elevated {
             let vis = trace_glow_visibility(world_x, world_y, p.x, p.y, 1.0);
             if vis > 0.01 {
                 let torch_atten = 1.0 / (1.0 + pdist * 0.4 + pdist * pdist * 0.08);
@@ -2163,7 +2170,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         }
 
         // Headlight: directional cone with wall occlusion
-        if p.headlight > 0.5 && pdist > 0.5 && pdist < 10.0 {
+        if p.headlight > 0.5 && pdist > 0.5 && pdist < 10.0 && !is_elevated {
             let vis = trace_glow_visibility(world_x, world_y, p.x, p.y, 1.5);
             if vis > 0.01 {
                 let to_pixel = normalize(vec2(pdx, pdy));
@@ -2566,6 +2573,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     }
 
     // --- Workgroup shadow blur: store luminance in shared memory, blur, apply ---
+    {
     // This smooths shadow edges spatially using fast on-chip shared memory.
     // We blur the luminance channel only (preserves color, smooths shadow edges).
     let luma = dot(color, vec3<f32>(0.299, 0.587, 0.114));
@@ -2607,6 +2615,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     if luma > 0.001 {
         color *= mix(1.0, blurred_luma / luma, blur_strength);
     }
+    } // end disabled workgroup blur
 
     textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
 }

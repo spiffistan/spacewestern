@@ -346,8 +346,7 @@ impl App {
             fluid_mouse_active: false,
             fluid_mouse_prev: None,
             plebs: {
-                let mut p = Pleb::new(0, "Jeff".to_string(), 102.5, 100.5, 42);
-                p.headlight_on = true;
+                let p = Pleb::new(0, "Jeff".to_string(), 102.5, 100.5, 42);
                 vec![p]
             },
             selected_pleb: None,
@@ -687,38 +686,22 @@ impl App {
         }
     }
 
-    /// Destroy a placed block at grid position, reverting to ground or wall.
+    /// Destroy a placed block at grid position, reverting to bare dirt.
     fn destroy_block_at(&mut self, bx: i32, by: i32) {
         if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return; }
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
-        let flags = block_flags_rs(block);
-        let roof_flag = flags & 2;
-        let roof_h = block & 0xFF000000;
-        let height = ((block >> 8) & 0xFF) as u8;
 
-        // If tile has a roof flag, remove the roof first before destroying the block
-        let has_roof = (flags & 2) != 0;
-        if has_roof {
-            self.grid_data[idx] &= !(2u32 << 16); // clear roof flag
-            self.grid_dirty = true;
-            compute_roof_heights(&mut self.grid_data);
-            return; // don't destroy the block itself
-        }
-
-        // Destroyable types: lights, furniture, pipes, fans, compost, placed walls, floors
-        let is_destroyable = matches!(bt, 6 | 7 | 10 | 11 | 12 | 13 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28);
-        if !is_destroyable { return; }
+        // Air and bare dirt can't be destroyed
+        if bt == 0 || (bt == 2 && block == make_block(2, 0, 0)) { return; }
 
         // Wall-mounted items (fan, inlet, outlet with height > 1): revert to stone wall
-        if (bt == 12 || bt == 19 || bt == 20) && height > 1 {
-            self.grid_data[idx] = make_block(1, height, roof_flag) | roof_h;
-        } else {
-            // Ground-placed: revert to dirt floor
-            self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
-        }
+        // Revert to bare dirt — no roof, no height, no flags
+        self.grid_data[idx] = make_block(2, 0, 0);
         self.grid_dirty = true;
+        // Recompute roof heights since we may have removed a wall or roof tile
+        compute_roof_heights(&mut self.grid_data);
     }
 
     /// Handle left-click: build tool placement, door toggle, or light toggle

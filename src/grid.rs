@@ -102,8 +102,10 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
         }
     }
 
-    // Pass 2: for each building tile, find max wall height in a large radius
-    let search = 15i32; // handles buildings up to 30x30
+    // Pass 2: for each building tile, find the nearest enclosing wall in each
+    // cardinal direction. This naturally finds the walls of THIS building without
+    // bleeding into nearby buildings (which the old radius search did).
+    let max_search = 20i32;
     for y in 0..h {
         for x in 0..w {
             let idx = (y * w + x) as usize;
@@ -112,21 +114,27 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
             }
 
             let mut max_h: u8 = 0;
-            for dy in -search..=search {
-                for dx in -search..=search {
-                    let nx = x + dx;
-                    let ny = y + dy;
-                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
-                        continue;
-                    }
+            // Search in 4 cardinal directions for the nearest wall
+            let dirs: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+            for &(ddx, ddy) in &dirs {
+                for dist in 1..=max_search {
+                    let nx = x + ddx * dist;
+                    let ny = y + ddy * dist;
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h { break; }
                     let nidx = (ny * w + nx) as usize;
                     let nb = grid[nidx];
                     let nbh = ((nb >> 8) & 0xFF) as u8;
                     let nbt = (nb & 0xFF) as u8;
                     let nb_flags = ((nb >> 16) & 0xFF) as u8;
-                    // Wall-type blocks: has height, not roofed floor, not tree/fire/light
+                    // Wall: has height, not roofed floor, not tree/fire/light
                     if nbh > 0 && (nb_flags & 2) == 0 && nbt != 8 && nbt != 6 && nbt != 7 {
                         max_h = max_h.max(nbh);
+                        break; // found nearest wall in this direction
+                    }
+                    // If we hit a non-building tile, stop searching this direction
+                    // (we've left the building footprint)
+                    if !is_building[nidx] {
+                        break;
                     }
                 }
             }
