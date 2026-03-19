@@ -3040,7 +3040,7 @@ impl App {
             }).collect();
 
             egui::Area::new(egui::Id::new("colonist_bar"))
-                .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -10.0])
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 10.0])
                 .show(&egui_state.ctx, |ui| {
                     egui::Frame::window(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
