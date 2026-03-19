@@ -6,11 +6,142 @@ use crate::*;
 impl App {
     pub fn draw_ui(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: Vec<((i32,i32), bool)>, dt: f32) {
         let bp_ppp = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
-        // Version label in top-right corner — kept here for now
+        // --- Layers menu (top-right) ---
+        egui::Area::new(egui::Id::new("layers_menu"))
+            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 32.0])
+            .show(ctx, |ui| {
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(160.0);
+                    ui.label(egui::RichText::new("Layers").strong().size(12.0));
+                    ui.separator();
+                    let ov = &mut self.fluid_overlay;
+                    // Atmosphere
+                    ui.label(egui::RichText::new("Atmosphere").size(9.0).weak());
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(*ov == FluidOverlay::Gases, "All").clicked() {
+                            *ov = if *ov == FluidOverlay::Gases { FluidOverlay::None } else { FluidOverlay::Gases };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::Smoke, "Smoke").clicked() {
+                            *ov = if *ov == FluidOverlay::Smoke { FluidOverlay::None } else { FluidOverlay::Smoke };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::O2, "O\u{2082}").clicked() {
+                            *ov = if *ov == FluidOverlay::O2 { FluidOverlay::None } else { FluidOverlay::O2 };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::CO2, "CO\u{2082}").clicked() {
+                            *ov = if *ov == FluidOverlay::CO2 { FluidOverlay::None } else { FluidOverlay::CO2 };
+                        }
+                    });
+                    // Thermal
+                    ui.label(egui::RichText::new("Thermal").size(9.0).weak());
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(*ov == FluidOverlay::Temp, "Temp").clicked() {
+                            *ov = if *ov == FluidOverlay::Temp { FluidOverlay::None } else { FluidOverlay::Temp };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::HeatFlow, "Convection").clicked() {
+                            *ov = if *ov == FluidOverlay::HeatFlow { FluidOverlay::None } else { FluidOverlay::HeatFlow };
+                        }
+                    });
+                    // Physics
+                    ui.label(egui::RichText::new("Physics").size(9.0).weak());
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(*ov == FluidOverlay::Velocity, "Velocity").clicked() {
+                            *ov = if *ov == FluidOverlay::Velocity { FluidOverlay::None } else { FluidOverlay::Velocity };
+                        }
+                        if ui.selectable_label(*ov == FluidOverlay::Pressure, "Pressure").clicked() {
+                            *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
+                        }
+                    });
+                    // Infrastructure
+                    ui.label(egui::RichText::new("Infrastructure").size(9.0).weak());
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
+                            self.show_pipe_overlay = !self.show_pipe_overlay;
+                        }
+                    });
+                });
+            });
+
+        // --- Layer legend (below layers menu, top-right) ---
+        {
+            let s = 12.0;
+            let dot = |ui: &mut egui::Ui, col: egui::Color32, label: &str| {
+                ui.horizontal(|ui| {
+                    let (r, p) = ui.allocate_painter(egui::Vec2::splat(s), egui::Sense::hover());
+                    p.rect_filled(r.rect, 2.0, col);
+                    ui.label(egui::RichText::new(label).size(11.0));
+                });
+            };
+            let grad = |ui: &mut egui::Ui, colors: &[(egui::Color32, &str)]| {
+                for &(col, label) in colors {
+                    dot(ui, col, label);
+                }
+            };
+            let show_legend = self.fluid_overlay != FluidOverlay::None;
+            if show_legend {
+                egui::Area::new(egui::Id::new("layer_legend"))
+                    .anchor(egui::Align2::RIGHT_TOP, [-10.0, 260.0])
+                    .interactable(false)
+                    .show(ctx, |ui| {
+                        egui::Frame::window(ui.style()).show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            match self.fluid_overlay {
+                                FluidOverlay::Gases | FluidOverlay::Smoke => {
+                                    dot(ui, egui::Color32::from_rgb(230, 230, 235), "Smoke");
+                                    dot(ui, egui::Color32::from_rgb(50, 100, 255), "O\u{2082} deficit");
+                                    dot(ui, egui::Color32::from_rgb(180, 200, 25), "CO\u{2082}");
+                                }
+                                FluidOverlay::O2 => {
+                                    dot(ui, egui::Color32::from_rgb(25, 100, 255), "High O\u{2082}");
+                                    dot(ui, egui::Color32::from_rgb(230, 25, 0), "Low O\u{2082}");
+                                }
+                                FluidOverlay::CO2 => {
+                                    dot(ui, egui::Color32::from_rgb(180, 200, 25), "High CO\u{2082}");
+                                    dot(ui, egui::Color32::from_rgb(40, 40, 40), "Low CO\u{2082}");
+                                }
+                                FluidOverlay::Temp => {
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(38, 0, 102), "< -15\u{b0}C"),
+                                        (egui::Color32::from_rgb(0, 25, 178), "0\u{b0}C"),
+                                        (egui::Color32::from_rgb(178, 217, 178), "15-25\u{b0}C"),
+                                        (egui::Color32::from_rgb(255, 217, 76), "30-40\u{b0}C"),
+                                        (egui::Color32::from_rgb(255, 115, 25), "50-60\u{b0}C"),
+                                        (egui::Color32::from_rgb(217, 25, 25), "80-100\u{b0}C"),
+                                        (egui::Color32::from_rgb(255, 255, 153), "> 200\u{b0}C"),
+                                    ]);
+                                }
+                                FluidOverlay::HeatFlow => {
+                                    dot(ui, egui::Color32::from_rgb(255, 100, 50), "Hot flow");
+                                    dot(ui, egui::Color32::from_rgb(50, 100, 255), "Cold flow");
+                                    dot(ui, egui::Color32::from_rgb(180, 180, 180), "Neutral");
+                                }
+                                FluidOverlay::Velocity => {
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(25, 38, 76), "Still"),
+                                        (egui::Color32::from_rgb(50, 130, 200), "Slow"),
+                                        (egui::Color32::from_rgb(100, 217, 255), "Fast"),
+                                    ]);
+                                    dot(ui, egui::Color32::WHITE, "Arrow = direction");
+                                }
+                                FluidOverlay::Pressure => {
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(38, 64, 204), "Negative"),
+                                        (egui::Color32::from_rgb(128, 128, 140), "Neutral"),
+                                        (egui::Color32::from_rgb(217, 51, 38), "Positive"),
+                                    ]);
+                                }
+                                _ => {}
+                            }
+                        });
+                    });
+            }
+        }
+
+        // Version label below layers menu
         egui::Area::new(egui::Id::new("version_label"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
+            .interactable(false)
             .show(ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v{} | {:.0} fps", include_str!("../VERSION").trim(), self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(14.0));
+                ui.label(egui::RichText::new(format!("v{} | {:.0} fps", include_str!("../VERSION").trim(), self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(12.0));
             });
 
         let mut time_val = self.time_of_day;
@@ -120,6 +251,21 @@ impl App {
                 });
 
                 // Admin menu (colonist placement)
+                ui.separator();
+                // Render menu (glow, bleed, temporal)
+                ui.menu_button("Render", |ui| {
+                    if ui.selectable_label(self.enable_prox_glow, "Proximity Glow").clicked() {
+                        self.enable_prox_glow = !self.enable_prox_glow;
+                    }
+                    if ui.selectable_label(self.enable_dir_bleed, "Light Bleed").clicked() {
+                        self.enable_dir_bleed = !self.enable_dir_bleed;
+                    }
+                    if ui.selectable_label(self.enable_temporal, "Temporal AA").clicked() {
+                        self.enable_temporal = !self.enable_temporal;
+                        self.camera.force_refresh = 10.0;
+                    }
+                });
+
                 ui.separator();
                 ui.menu_button("Admin", |ui| {
                     let pleb_label = format!("Add Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
@@ -969,82 +1115,6 @@ impl App {
             }
         }
 
-        // --- Overlay bar (bottom-right) ---
-        egui::Area::new(egui::Id::new("overlay_bar"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -20.0])
-            .show(ctx, |ui| {
-                egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let ov = &mut self.fluid_overlay;
-                        if ui.selectable_label(*ov == FluidOverlay::None, "Off").clicked() {
-                            *ov = FluidOverlay::None;
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::Gases, "Gases").clicked() {
-                            *ov = if *ov == FluidOverlay::Gases { FluidOverlay::None } else { FluidOverlay::Gases };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::Smoke, "Smoke").clicked() {
-                            *ov = if *ov == FluidOverlay::Smoke { FluidOverlay::None } else { FluidOverlay::Smoke };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::O2, "O2").clicked() {
-                            *ov = if *ov == FluidOverlay::O2 { FluidOverlay::None } else { FluidOverlay::O2 };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::CO2, "CO2").clicked() {
-                            *ov = if *ov == FluidOverlay::CO2 { FluidOverlay::None } else { FluidOverlay::CO2 };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::Temp, "Temp").clicked() {
-                            *ov = if *ov == FluidOverlay::Temp { FluidOverlay::None } else { FluidOverlay::Temp };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::HeatFlow, "Heat").clicked() {
-                            *ov = if *ov == FluidOverlay::HeatFlow { FluidOverlay::None } else { FluidOverlay::HeatFlow };
-                        }
-                        ui.separator();
-                        if ui.selectable_label(*ov == FluidOverlay::Velocity, "Vel").clicked() {
-                            *ov = if *ov == FluidOverlay::Velocity { FluidOverlay::None } else { FluidOverlay::Velocity };
-                        }
-                        if ui.selectable_label(*ov == FluidOverlay::Pressure, "Pres").clicked() {
-                            *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
-                        }
-                        ui.separator();
-                        if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
-                            self.show_pipe_overlay = !self.show_pipe_overlay;
-                        }
-                        // Info tool: hold Shift to inspect (no toggle button)
-                        if ui.selectable_label(self.enable_prox_glow, "Glow").clicked() {
-                            self.enable_prox_glow = !self.enable_prox_glow;
-                        }
-                        if ui.selectable_label(self.enable_dir_bleed, "Bleed").clicked() {
-                            self.enable_dir_bleed = !self.enable_dir_bleed;
-                        }
-                        if ui.selectable_label(self.enable_temporal, "Temporal").clicked() {
-                            self.enable_temporal = !self.enable_temporal;
-                            self.camera.force_refresh = 10.0;
-                        }
-                    });
-                });
-            });
-
-        // Gas legend (shown when a gas overlay is active)
-        if matches!(self.fluid_overlay, FluidOverlay::Gases | FluidOverlay::Smoke | FluidOverlay::O2 | FluidOverlay::CO2) {
-            egui::Area::new(egui::Id::new("gas_legend"))
-                .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -55.0])
-                .interactable(false)
-                .show(ctx, |ui| {
-                    egui::Frame::window(ui.style()).show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        let s = 10.0;
-                        let dot = |ui: &mut egui::Ui, col: egui::Color32, label: &str| {
-                            ui.horizontal(|ui| {
-                                let (r, p) = ui.allocate_painter(egui::Vec2::splat(s), egui::Sense::hover());
-                                p.rect_filled(r.rect, 2.0, col);
-                                ui.label(egui::RichText::new(label).size(10.0));
-                            });
-                        };
-                        dot(ui, egui::Color32::from_rgb(230, 230, 235), "Smoke");
-                        dot(ui, egui::Color32::from_rgb(50, 100, 255), "O\u{2082} deficit");
-                        dot(ui, egui::Color32::from_rgb(180, 200, 25), "CO\u{2082}");
-                    });
-                });
-        }
 
         // Wind compass (upper-left, below top menu bar)
         {
