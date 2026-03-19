@@ -647,6 +647,30 @@ impl App {
             return;
         }
 
+        // Click cannon to fire
+        if bt == 29 && self.build_tool == BuildTool::None {
+            let dir_bits = (flags >> 3) & 3;
+            let (dir_x, dir_y) = match dir_bits {
+                0 => (0.0f32, -1.0f32), // north
+                1 => (1.0, 0.0),         // east
+                2 => (0.0, 1.0),         // south
+                _ => (-1.0, 0.0),        // west
+            };
+            // Spawn cannonball in front of cannon barrel
+            let spawn_x = bx as f32 + 0.5 + dir_x * 0.8;
+            let spawn_y = by as f32 + 0.5 + dir_y * 0.8;
+            self.physics_bodies.push(PhysicsBody::new_cannonball(spawn_x, spawn_y, dir_x, dir_y));
+            // Muzzle smoke + recoil blast
+            self.fluid_params.splat_x = bx as f32 + 0.5;
+            self.fluid_params.splat_y = by as f32 + 0.5;
+            self.fluid_params.splat_vx = -dir_x * 30.0;
+            self.fluid_params.splat_vy = -dir_y * 30.0;
+            self.fluid_params.splat_radius = 1.5;
+            self.fluid_params.splat_active = 1.0;
+            log::info!("Cannon fired at ({}, {})", bx, by);
+            return;
+        }
+
         // Placing pleb mode
         if self.placing_pleb {
             if is_walkable_pos(&self.grid_data, wx, wy) && self.plebs.len() < MAX_PLEBS {
@@ -718,7 +742,8 @@ impl App {
                 }
                 BuildTool::Fireplace | BuildTool::ElectricLight | BuildTool::StandingLamp | BuildTool::Compost
                 | BuildTool::Pipe | BuildTool::Pump | BuildTool::Tank | BuildTool::Valve
-                | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall | BuildTool::GraniteWall | BuildTool::LimestoneWall => {
+                | BuildTool::WoodWall | BuildTool::SteelWall | BuildTool::SandstoneWall | BuildTool::GraniteWall | BuildTool::LimestoneWall
+                | BuildTool::Cannon => {
                     let can_place = self.can_place_at(bx, by)
                         || (self.build_tool == BuildTool::Pump && bt == 15); // pump on pipe
                     if can_place {
@@ -738,6 +763,7 @@ impl App {
                             BuildTool::SandstoneWall => make_block(23, 3, roof_flag),
                             BuildTool::GraniteWall => make_block(24, 3, roof_flag),
                             BuildTool::LimestoneWall => make_block(25, 3, roof_flag),
+                            BuildTool::Cannon => make_block(29, 2, roof_flag | rot_flags),
                             _ => unreachable!(),
                         };
                         let roof_h = block & 0xFF000000;
@@ -2610,7 +2636,7 @@ impl App {
                     else { 0.0 };
                 (p.x, p.y, pvx, pvy, p.angle)
             });
-            tick_bodies(
+            let impacts = tick_bodies(
                 &mut self.physics_bodies,
                 dt,
                 &self.grid_data,
@@ -2618,6 +2644,22 @@ impl App {
                 self.fluid_params.wind_y,
                 pleb_data,
             );
+
+            // Handle cannonball impacts — destroy blocks, inject smoke
+            for impact in &impacts {
+                if impact.destroy_block {
+                    self.destroy_block_at(impact.block_x, impact.block_y);
+                    log::info!("Cannonball destroyed block at ({}, {}) KE={:.0}",
+                        impact.block_x, impact.block_y, impact.kinetic_energy);
+                }
+                // Inject smoke burst at impact point
+                self.fluid_params.splat_x = impact.x;
+                self.fluid_params.splat_y = impact.y;
+                self.fluid_params.splat_vx = 0.0;
+                self.fluid_params.splat_vy = 0.0;
+                self.fluid_params.splat_radius = 2.0;
+                self.fluid_params.splat_active = 1.0;
+            }
         }
 
         let gfx = self.gfx.as_ref().unwrap();
@@ -2980,6 +3022,7 @@ impl App {
                                 btn!(BuildTool::Bench, "Bench");
                                 btn!(BuildTool::Fan, "Fan");
                                 btn!(BuildTool::Compost, "Compost");
+                                btn!(BuildTool::Cannon, "Cannon");
                                 btn!(BuildTool::ElectricLight, "Ceiling Light");
                                 btn!(BuildTool::StandingLamp, "Floor Lamp");
                                 btn!(BuildTool::TableLamp, "Table Lamp");

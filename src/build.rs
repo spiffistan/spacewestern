@@ -31,6 +31,7 @@ pub enum BuildTool {
     RemoveFloor,
     RemoveRoof,
     WoodBox,
+    Cannon,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

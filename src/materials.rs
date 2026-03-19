@@ -5,7 +5,7 @@
 
 use bytemuck::Zeroable;
 
-pub const NUM_MATERIALS: usize = 29;
+pub const NUM_MATERIALS: usize = 30;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]
@@ -263,6 +263,15 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.color_r = 0.58; m.color_g = 0.57; m.color_b = 0.55;
         m.light_transmission = 1.0; m.walkable = 1.0; m.is_removable = 1.0;
         m.heat_capacity = 3.5; m.conductivity = 0.005; m.solar_absorption = 0.5;
+    }
+
+    // 29: Cannon — directional, fires cannonballs
+    { let m = &mut mats[29];
+        m.color_r = 0.30; m.color_g = 0.28; m.color_b = 0.25;
+        m.render_style = 16.0;
+        m.is_solid = 1.0; m.fluid_obstacle = 1.0; m.default_height = 2.0;
+        m.is_removable = 1.0;
+        m.heat_capacity = 3.0; m.conductivity = 0.04; m.solar_absorption = 0.7;
     }
 
     mats

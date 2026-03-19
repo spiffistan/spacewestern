@@ -28,6 +28,16 @@ pub struct PhysicsBody {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BodyType {
     WoodBox,
+    Cannonball,
+}
+
+/// Result of a cannonball impact.
+#[derive(Debug)]
+pub struct Impact {
+    pub x: f32, pub y: f32,
+    pub block_x: i32, pub block_y: i32,
+    pub kinetic_energy: f32,
+    pub destroy_block: bool,
 }
 
 impl PhysicsBody {
@@ -43,6 +53,27 @@ impl PhysicsBody {
             size: 0.45,
             render_height: 1.5,
             body_type: BodyType::WoodBox,
+        }
+    }
+
+    /// Create a cannonball fired from position in a direction.
+    pub fn new_cannonball(x: f32, y: f32, dir_x: f32, dir_y: f32) -> Self {
+        let speed = 28.0; // tiles/sec horizontal
+        let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
+        PhysicsBody {
+            x, y, z: 1.5, // starts at cannon barrel height
+            vx: dir_x / len * speed,
+            vy: dir_y / len * speed,
+            vz: 6.0, // upward arc
+            rot_x: 0.0, rot_y: 0.0, rot_z: 0.0,
+            spin_x: 0.0, spin_y: 0.0,
+            spin_z: dir_y.atan2(dir_x) * 3.0, // spin around flight axis
+            mass: 5.0,
+            friction: 0.6,
+            bounce: 0.2, // low bounce — cannonballs don't bounce much
+            size: 0.12,
+            render_height: 0.5,
+            body_type: BodyType::Cannonball,
         }
     }
 
@@ -122,7 +153,7 @@ pub fn nearest_body(bodies: &[PhysicsBody], x: f32, y: f32, range: f32) -> Optio
     best
 }
 
-/// Tick all physics bodies.
+/// Tick all physics bodies. Returns list of cannonball impacts for block destruction.
 pub fn tick_bodies(
     bodies: &mut Vec<PhysicsBody>,
     dt: f32,
@@ -130,7 +161,8 @@ pub fn tick_bodies(
     wind_x: f32,
     wind_y: f32,
     pleb: Option<(f32, f32, f32, f32, f32)>, // (pleb_x, pleb_y, pleb_vx, pleb_vy, pleb_angle)
-) {
+) -> Vec<Impact> {
+    let mut impacts = Vec::new();
     let wind_threshold = 5.0; // minimum wind speed to push a box
 
     for body in bodies.iter_mut() {
@@ -256,31 +288,75 @@ pub fn tick_bodies(
         }
 
         // --- Velocity cap ---
+        let max_speed = if body.body_type == BodyType::Cannonball { 40.0 } else { 30.0 };
         let speed = (body.vx * body.vx + body.vy * body.vy).sqrt();
-        if speed > 30.0 {
-            body.vx *= 30.0 / speed;
-            body.vy *= 30.0 / speed;
+        if speed > max_speed {
+            body.vx *= max_speed / speed;
+            body.vy *= max_speed / speed;
         }
 
-        // --- Move with collision (only collide with walls when on/near ground) ---
+        // --- Move with collision ---
         let nx = body.x + body.vx * dt;
         let ny = body.y + body.vy * dt;
 
         if body.z < 2.0 { // below wall height — collide
+            let mut hit_wall_x = false;
+            let mut hit_wall_y = false;
+
             if body_can_move(grid, nx, body.y, body.size) {
                 body.x = nx;
             } else {
-                body.vx *= -body.bounce; // bounce off wall
+                hit_wall_x = true;
+                body.vx *= -body.bounce;
             }
             if body_can_move(grid, body.x, ny, body.size) {
                 body.y = ny;
             } else {
-                body.vy *= -body.bounce; // bounce off wall
+                hit_wall_y = true;
+                body.vy *= -body.bounce;
+            }
+
+            // Cannonball impact on wall hit
+            if body.body_type == BodyType::Cannonball && (hit_wall_x || hit_wall_y) {
+                let ke = 0.5 * body.mass * speed * speed;
+                let hit_bx = if hit_wall_x { nx.floor() as i32 } else { body.x.floor() as i32 };
+                let hit_by = if hit_wall_y { ny.floor() as i32 } else { body.y.floor() as i32 };
+
+                // Block strength lookup (simplified — uses material table concept)
+                let mut destroy = false;
+                if hit_bx >= 0 && hit_by >= 0 && hit_bx < GRID_W as i32 && hit_by < GRID_H as i32 {
+                    let b = grid[(hit_by as u32 * GRID_W + hit_bx as u32) as usize];
+                    let bt = block_type_rs(b);
+                    let strength = match bt {
+                        5 => 5.0,    // glass: very fragile
+                        9 => 10.0,   // bench: fragile
+                        21 => 20.0,  // wood wall: breakable
+                        1 | 4 | 23 | 25 => 100.0, // stone/sandstone/limestone
+                        24 => 200.0, // granite: very tough
+                        22 => 300.0, // steel: nearly indestructible
+                        14 => 500.0, // insulated: reinforced
+                        _ => 50.0,
+                    };
+                    destroy = ke > strength;
+                }
+
+                impacts.push(Impact {
+                    x: body.x, y: body.y,
+                    block_x: hit_bx, block_y: hit_by,
+                    kinetic_energy: ke,
+                    destroy_block: destroy,
+                });
             }
         } else {
             // Airborne above walls — no collision
             body.x = nx;
             body.y = ny;
+        }
+
+        // Cannonball: stop and mark for removal when speed is very low
+        if body.body_type == BodyType::Cannonball && body.on_ground() && speed < 0.5 {
+            body.vx = 0.0;
+            body.vy = 0.0;
         }
 
         // Stop if very slow and on ground
@@ -289,4 +365,17 @@ pub fn tick_bodies(
             body.vy = 0.0;
         }
     }
+
+    // Remove cannonballs that are out of bounds or stopped
+    bodies.retain(|b| {
+        if b.body_type == BodyType::Cannonball {
+            let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
+            let moving = (b.vx.abs() + b.vy.abs()) > 0.3 || b.z > 0.1;
+            in_bounds && moving
+        } else {
+            true
+        }
+    });
+
+    impacts
 }

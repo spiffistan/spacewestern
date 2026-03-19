@@ -103,7 +103,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 25u)];
+    return materials[min(bt, 29u)];
 }
 
 // --- Sprite constants ---
