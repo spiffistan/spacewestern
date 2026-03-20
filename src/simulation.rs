@@ -219,18 +219,32 @@ impl App {
             }
         }
 
-        // --- Bullet-pleb collision ---
+        // --- Bullet-pleb collision (line segment vs circle) ---
         {
-            let mut hits: Vec<(usize, usize)> = Vec::new(); // (bullet_idx, pleb_idx)
+            let mut hits: Vec<(usize, usize)> = Vec::new();
+            let hit_radius = 0.4f32;
             for (bi, body) in self.physics_bodies.iter().enumerate() {
                 if body.body_type != physics::BodyType::Bullet { continue; }
+                // Bullet path this frame: from prev position to current
+                let bx0 = body.x - body.vx * dt;
+                let by0 = body.y - body.vy * dt;
+                let bx1 = body.x;
+                let by1 = body.y;
                 for (pi, pleb) in self.plebs.iter().enumerate() {
-                    let dx = body.x - pleb.x;
-                    let dy = body.y - pleb.y;
+                    if Some(pi) == self.selected_pleb { continue; }
+                    // Closest point on line segment (bx0,by0)→(bx1,by1) to pleb
+                    let seg_dx = bx1 - bx0;
+                    let seg_dy = by1 - by0;
+                    let seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+                    let t = if seg_len_sq > 0.0001 {
+                        ((pleb.x - bx0) * seg_dx + (pleb.y - by0) * seg_dy) / seg_len_sq
+                    } else { 0.0 }.clamp(0.0, 1.0);
+                    let closest_x = bx0 + t * seg_dx;
+                    let closest_y = by0 + t * seg_dy;
+                    let dx = closest_x - pleb.x;
+                    let dy = closest_y - pleb.y;
                     let dist = (dx * dx + dy * dy).sqrt();
-                    if dist < 0.4 {
-                        // Don't hit the shooter (first pleb = Jeff when selected)
-                        if Some(pi) == self.selected_pleb { continue; }
+                    if dist < hit_radius {
                         hits.push((bi, pi));
                         break;
                     }
