@@ -630,3 +630,19 @@ icon = "🔋"
 label = "Large"
 click = "multi_tile"
 place_height = 1
+
+[[block]]
+id = 41
+name = "Wind Turbine"
+color = [0.60, 0.62, 0.65]
+render_style = 27.0
+walkable = false
+is_removable = true
+light_transmission = 0.5
+thermal = { heat_capacity = 1.0, conductivity = 0.03, solar_absorption = 0.5 }
+[block.placement]
+category = "Power"
+icon = "🌀"
+label = "Wind"
+click = "simple"
+place_height = 2

@@ -282,7 +282,7 @@ impl App {
                 force_refresh: 1.0,
                 pleb_x: 0.0, pleb_y: 0.0, pleb_angle: 0.0, pleb_selected: 0.0, pleb_torch: 0.0, pleb_headlight: 0.0,
                 prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
-                rain_intensity: 0.0, cloud_cover: 0.0, _cam_pad0: 0.0, _cam_pad1: 0.0,
+                rain_intensity: 0.0, cloud_cover: 0.0, wind_magnitude: 0.0, _cam_pad1: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -1658,10 +1658,13 @@ impl App {
           let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
           p.set_pipeline(&gfx.thermal_pipeline); p.set_bind_group(0, &gfx.thermal_bind_group, &[]); p.dispatch_workgroups(tw, th, 1); }
 
-        // 11. Power grid voltage relaxation (256x256)
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("power"), timestamp_writes: None });
-          let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
-          p.set_pipeline(&gfx.power_pipeline); p.set_bind_group(0, &gfx.power_bind_group, &[]); p.dispatch_workgroups(tw, th, 1); }
+        // 11. Power grid voltage relaxation (256x256, 8 iterations for fast convergence)
+        { let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
+          for _ in 0..8 {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("power"), timestamp_writes: None });
+            p.set_pipeline(&gfx.power_pipeline); p.set_bind_group(0, &gfx.power_bind_group, &[]); p.dispatch_workgroups(tw, th, 1);
+          }
+        }
 
         // Debug: copy one dye texel at cursor position for readback
         let shift_for_debug = self.pressed_keys.contains(&KeyCode::ShiftLeft)

@@ -52,7 +52,7 @@ struct Camera {
     prev_time: f32,
     rain_intensity: f32,
     cloud_cover: f32,
-    _cam_pad0: f32,
+    wind_magnitude: f32,
     _cam_pad1: f32,
 };
 
@@ -109,7 +109,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 41u)];
+    return materials[min(bt, 43u)];
 }
 
 // --- Sprite constants ---
@@ -2125,7 +2125,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
                 color = vec3<f32>(0.50, 0.50, 0.55);
             }
             let v39 = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
-            let ch39 = clamp(v39 / 18.0, 0.0, 1.0);
+            let ch39 = clamp(v39 / 12.0, 0.0, 1.0);
             let bar39 = (gy39 - m39 - 0.10) / 0.74;
             if bar39 > 0.0 && bar39 < 1.0 && gx39 > 0.25 && gx39 < 0.75 {
                 if bar39 < ch39 { color = mix(vec3<f32>(0.8, 0.2, 0.1), vec3<f32>(0.2, 0.8, 0.2), ch39); }
@@ -2151,7 +2151,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
                      && (gy40 < m40 + 0.06 || gy40 > 1.0 - m40 - 0.06);
             if cb40 { color = vec3<f32>(0.45, 0.45, 0.48); }
             let v40 = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
-            let ch40 = clamp(v40 / 24.0, 0.0, 1.0);
+            let ch40 = clamp(v40 / 12.0, 0.0, 1.0);
             let bar40 = (gy40 - m40 - 0.08) / 0.80;
             if bar40 > 0.0 && bar40 < 1.0 && gx40 > 0.20 && gx40 < 0.80 {
                 if bar40 < ch40 { color = mix(vec3<f32>(0.8, 0.2, 0.1), vec3<f32>(0.1, 0.7, 0.2), ch40); }
@@ -2160,6 +2160,34 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
             // Panel lines
             if abs(gx40 - 0.5) < 0.008 { color *= 0.85; }
         } else { color = vec3<f32>(0.42, 0.35, 0.22); }
+    } else if btype == 41u {
+        // Wind turbine: pole with spinning blades
+        let tcx = fx - 0.5;
+        let tcy = fy - 0.5;
+        let tdist = length(vec2<f32>(tcx, tcy));
+        // Base/pole
+        if tdist < 0.08 {
+            color = vec3<f32>(0.50, 0.50, 0.55); // metal pole
+        } else if tdist < 0.38 {
+            // Spinning blades (3 blades, animated)
+            let blade_angle = atan2(tcy, tcx) + camera.time * camera.wind_magnitude * 0.5;
+            let blade_phase = fract(blade_angle / 2.094); // 2π/3 = 3 blades
+            let on_blade = blade_phase < 0.12 && tdist > 0.10;
+            if on_blade {
+                // Blade: white with gray edge
+                let blade_t = (tdist - 0.10) / 0.28;
+                color = mix(vec3<f32>(0.85, 0.85, 0.88), vec3<f32>(0.70, 0.70, 0.72), blade_t);
+            } else {
+                color = vec3<f32>(0.42, 0.35, 0.22); // ground visible between blades
+            }
+        } else {
+            color = vec3<f32>(0.42, 0.35, 0.22); // ground
+        }
+        // Voltage glow on pole
+        let wv = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+        if wv > 0.5 && tdist < 0.08 {
+            color += vec3<f32>(0.1, 0.15, 0.05) * clamp(wv / 12.0, 0.0, 1.0);
+        }
     } else if btype == 14u {
         // Insulated wall: outer shell with fiberglass insulation core
         let edge = 0.15; // outer shell thickness

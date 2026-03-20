@@ -50,6 +50,6 @@ pub struct CameraUniform {
     pub prev_time: f32,
     pub rain_intensity: f32,
     pub cloud_cover: f32,
-    pub _cam_pad0: f32,
+    pub wind_magnitude: f32,
     pub _cam_pad1: f32,
 }

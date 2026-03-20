@@ -5,7 +5,7 @@
 
 use bytemuck::Zeroable;
 
-pub const NUM_MATERIALS: usize = 42;
+pub const NUM_MATERIALS: usize = 44;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]
@@ -367,6 +367,14 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.render_style = 26.0;
         m.is_removable = 1.0; m.is_furniture = 1.0; m.light_transmission = 1.0;
         m.heat_capacity = 5.0; m.conductivity = 0.01; m.solar_absorption = 0.3;
+    }
+
+    // 41: Wind Turbine
+    { let m = &mut mats[41];
+        m.color_r = 0.60; m.color_g = 0.62; m.color_b = 0.65;
+        m.render_style = 27.0;
+        m.is_removable = 1.0; m.light_transmission = 0.5;
+        m.heat_capacity = 1.0; m.conductivity = 0.03; m.solar_absorption = 0.5;
     }
 
     mats

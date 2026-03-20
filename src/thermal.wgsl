@@ -16,7 +16,7 @@ struct Camera {
     pleb_x: f32, pleb_y: f32, pleb_angle: f32, pleb_selected: f32,
     pleb_torch: f32, pleb_headlight: f32,
     prev_center_x: f32, prev_center_y: f32, prev_zoom: f32, prev_time: f32,
-    rain_intensity: f32, cloud_cover: f32, _cam_pad0: f32, _cam_pad1: f32,
+    rain_intensity: f32, cloud_cover: f32, wind_magnitude: f32, _cam_pad1: f32,
 };
 
 struct GpuMaterial {
@@ -38,7 +38,7 @@ fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 41u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 43u)]; }
 
 @compute @workgroup_size(8, 8)
 fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {

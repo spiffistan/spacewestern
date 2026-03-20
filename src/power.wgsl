@@ -17,7 +17,7 @@ struct Camera {
     pleb_x: f32, pleb_y: f32, pleb_angle: f32, pleb_selected: f32,
     pleb_torch: f32, pleb_headlight: f32,
     prev_center_x: f32, prev_center_y: f32, prev_zoom: f32, prev_time: f32,
-    rain_intensity: f32, cloud_cover: f32, _cam_pad0: f32, _cam_pad1: f32,
+    rain_intensity: f32, cloud_cover: f32, wind_magnitude: f32, _cam_pad1: f32,
 };
 
 @group(0) @binding(0) var<storage, read_write> voltage: array<f32>;
@@ -29,10 +29,10 @@ fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 
 // Is this block part of the power network?
 fn is_conductor(bt: u32, flags: u32) -> bool {
-    // Wire=36, Solar=37, Battery=38/39/40, Electric light=7, Fan=12, Standing lamp=10
+    // Wire=36, Solar=37, Battery=38/39/40, Wind=41, Electric light=7, Fan=12, Standing lamp=10
     // Also: any block with wire overlay flag (bit 7 of flags)
     let has_wire = (flags & 0x80u) != 0u;
-    return bt == 36u || bt == 37u || bt == 38u || bt == 39u || bt == 40u
+    return bt == 36u || bt == 37u || bt == 38u || bt == 39u || bt == 40u || bt == 41u
         || bt == 7u || bt == 12u || bt == 10u || bt == 11u || bt == 16u || has_wire;
 }
 
@@ -42,7 +42,7 @@ fn is_battery(bt: u32) -> bool {
 
 // Is this block a power source?
 fn is_generator(bt: u32) -> bool {
-    return bt == 37u; // Solar panel
+    return bt == 37u || bt == 41u; // Solar panel, Wind turbine
 }
 
 // Is this block a power consumer?
@@ -68,38 +68,97 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // --- Generators: inject voltage based on sun ---
+    // --- Generators: inject voltage ---
     if is_generator(bt) {
-        let solar_output = camera.sun_intensity * (1.0 - camera.cloud_cover * 0.8);
-        let target_v = solar_output * 12.0;
+        var target_v = 0.0;
+        if bt == 37u {
+            // Solar panel: output from sun intensity and clouds
+            let solar_output = camera.sun_intensity * (1.0 - camera.cloud_cover * 0.8);
+            target_v = solar_output * 12.0;
+        } else if bt == 41u {
+            // Wind turbine: output from wind speed (cut-in at 3, rated at 15, max 12V)
+            let wind = camera.wind_magnitude;
+            let wind_factor = clamp((wind - 3.0) / 12.0, 0.0, 1.0);
+            target_v = wind_factor * 12.0;
+        }
         let current_v = voltage[idx];
-        voltage[idx] = mix(current_v, target_v, 0.2);
+        voltage[idx] = mix(current_v, target_v, 0.3);
         return;
     }
 
-    // --- Batteries: store charge, discharge slowly ---
+    // --- Batteries: actual energy storage with charge/discharge dynamics ---
+    // All batteries output 12V max. Capacity = how slowly they drain.
+    // Charge rate: slow (takes time to fill from solar)
+    // Discharge rate: moderate (responsive as power source)
+    // Self-discharge: very slow (holds charge overnight)
     if is_battery(bt) {
-        // Battery capacity: small=12V, medium=18V (1.5x), large=24V (2x)
-        var max_v = 12.0;
-        if bt == 39u { max_v = 18.0; }
-        if bt == 40u { max_v = 24.0; }
-        // Battery acts as a capacitor: slowly absorbs/releases charge
-        // Don't participate in relaxation — just clamp and decay very slowly
-        let current_v = voltage[idx];
-        voltage[idx] = clamp(current_v, 0.0, max_v);
-        // Very slow self-discharge (battery retains charge overnight)
-        voltage[idx] *= 0.9998;
-        // Battery doesn't return here — it still participates in relaxation below
-        // but with high inertia (slow to change)
+        // Capacity scaling via charge/discharge rates
+        // Small (38):  fast drain  — runs a few lights for a short while
+        // Medium (39): 1.8x capacity — good for a small base
+        // Large (40):  3.5x capacity — powers a full colony overnight
+        var charge_rate = 0.02;       // how fast it absorbs energy
+        var discharge_rate = 0.15;    // how fast it supplies energy (must keep up with consumers)
+        var self_discharge = 0.99995; // per-frame voltage retention
+        if bt == 39u {
+            charge_rate = 0.011;
+            discharge_rate = 0.083;
+            self_discharge = 0.99998;
+        }
+        if bt == 40u {
+            charge_rate = 0.006;
+            discharge_rate = 0.043;
+            self_discharge = 0.99999;
+        }
+
+        // Find average neighbor voltage (same scan as below but battery-specific)
+        let bbx = i32(gid.x);
+        let bby = i32(gid.y);
+        var bneigh_sum = 0.0;
+        var bneigh_count = 0.0;
+        for (var bd = 0; bd < 4; bd++) {
+            var bndx = 0; var bndy = 0;
+            if bd == 0 { bndx = 1; } else if bd == 1 { bndx = -1; }
+            else if bd == 2 { bndy = 1; } else { bndy = -1; }
+            let bnx = bbx + bndx;
+            let bny = bby + bndy;
+            if bnx < 0 || bny < 0 || bnx >= i32(gw) || bny >= i32(gh) { continue; }
+            let bnidx = u32(bny) * gw + u32(bnx);
+            let bnb = grid[bnidx];
+            let bnbt = block_type(bnb);
+            let bnflags = (bnb >> 16u) & 0xFFu;
+            if is_conductor(bnbt, bnflags) {
+                bneigh_sum += voltage[bnidx];
+                bneigh_count += 1.0;
+            }
+        }
+
+        var bat_v = voltage[idx];
+        if bneigh_count > 0.0 {
+            let bavg = bneigh_sum / bneigh_count;
+            if bavg > bat_v {
+                // Charging: network voltage higher than battery → absorb slowly
+                bat_v = mix(bat_v, bavg, charge_rate);
+            } else {
+                // Discharging: battery voltage higher than network → supply power
+                bat_v = mix(bat_v, bavg, discharge_rate);
+            }
+        }
+
+        // Self-discharge (very slow — retains ~95% overnight at 60fps)
+        bat_v *= self_discharge;
+
+        voltage[idx] = clamp(bat_v, 0.0, 12.0);
+        return; // batteries handle their own relaxation, skip the generic path
     }
 
     // --- Consumers: draw current (reduce voltage) ---
+    // Load in watts (relative units). Applied as small voltage drop per frame.
     var load = 0.0;
-    if bt == 7u { load = 0.3; }   // Ceiling light: moderate draw
-    if bt == 10u { load = 0.3; }  // Standing lamp: moderate draw
-    if bt == 11u { load = 0.2; }  // Table lamp: low draw
-    if bt == 12u { load = 0.5; }  // Fan: high draw
-    if bt == 16u { load = 0.4; }  // Pump: moderate-high draw
+    if bt == 7u { load = 0.05; }   // Ceiling light: 5W
+    if bt == 10u { load = 0.05; }  // Standing lamp: 5W
+    if bt == 11u { load = 0.03; }  // Table lamp: 3W
+    if bt == 12u { load = 0.10; }  // Fan: 10W
+    if bt == 16u { load = 0.08; }  // Pump: 8W
 
     // --- Voltage relaxation ---
     // Wires connect to direct 4-neighbors only.
@@ -109,8 +168,9 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     var neighbor_sum = 0.0;
     var neighbor_count = 0.0;
 
-    if bt == 36u || bt == 37u || bt == 38u {
-        // Wire/Solar/Battery: direct 4-neighbor connections only
+    let has_wire = (flags & 0x80u) != 0u;
+    if bt == 36u || has_wire {
+        // Wire (standalone or overlay): direct 4-neighbor connections
         for (var d = 0; d < 4; d++) {
             var ndx = 0; var ndy = 0;
             if d == 0 { ndx = 1; } else if d == 1 { ndx = -1; }
@@ -159,12 +219,12 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Relaxation step: move toward neighbor average
+    // Relaxation step: move toward neighbor average (fast for wires)
     let avg = neighbor_sum / neighbor_count;
-    var new_v = mix(voltage[idx], avg, 0.4); // relaxation rate
+    var new_v = mix(voltage[idx], avg, 0.6); // fast relaxation for wires
 
-    // Apply consumer load (voltage drop proportional to load)
-    new_v -= load * 0.1;
+    // Apply consumer load (small voltage drop per frame)
+    new_v -= load;
     new_v = max(new_v, 0.0);
 
     voltage[idx] = new_v;

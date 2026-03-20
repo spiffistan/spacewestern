@@ -609,6 +609,7 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(38), "\u{1f50b}", "Bat S");
                                     icon_btn(ui, BuildTool::Place(39), "\u{1f50b}", "Bat M");
                                     icon_btn(ui, BuildTool::Place(40), "\u{1f50b}", "Bat L");
+                                    icon_btn(ui, BuildTool::Place(41), "\u{1f300}", "Wind");
                                     icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
                                     icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
                                     icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table");
@@ -1265,7 +1266,12 @@ impl App {
                     (solid, pipe)
                 } else { (false, false) };
                 let voltage_str = if self.debug_voltage > 0.01 {
-                    format!("\nVoltage: {:.1}V", self.debug_voltage)
+                    let v = self.debug_voltage;
+                    // Estimate current from voltage (I = V/R, assume R ≈ 10Ω for display)
+                    let r = 10.0f32; // approximate resistance
+                    let amps = v / r;
+                    let watts = v * amps;
+                    format!("\n⚡ {:.1}V | {:.2}A | {:.1}W", v, amps, watts)
                 } else { String::new() };
                 if is_solid_wall {
                     format!("Smoke: —\nO2: —\nCO2: —\nWall temp: {:.1}°C{}", self.debug_block_temp, voltage_str)

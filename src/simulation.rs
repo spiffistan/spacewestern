@@ -112,6 +112,7 @@ impl App {
             // Pass weather to shader and fluid sim
             self.camera.rain_intensity = rain;
             self.camera.cloud_cover = self.weather.cloud_cover();
+            self.camera.wind_magnitude = (self.fluid_params.wind_x.powi(2) + self.fluid_params.wind_y.powi(2)).sqrt();
             self.fluid_params.rain_intensity = rain;
             // Update wetness
             tick_wetness(
