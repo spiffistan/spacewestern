@@ -2803,7 +2803,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let smoke_density = clamp(smoke.r * 0.4, 0.0, 0.85);
         // Toxic gas: green tint when both smoke and CO2 are high
         let toxic = clamp(min(smoke.r, smoke.b * 1.5) * 0.8, 0.0, 1.0);
-        let smoke_color = mix(vec3(0.75, 0.73, 0.72), vec3(0.25, 0.65, 0.15), toxic);
+        let smoke_color = mix(vec3(0.75, 0.73, 0.72), vec3(0.15, 1.0, 0.05), toxic);
         color = mix(color, smoke_color, smoke_density);
 
         // O2 depletion: darkening + slight blue tint
