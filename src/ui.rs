@@ -26,11 +26,11 @@ impl App {
     pub fn draw_ui(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: Vec<((i32,i32), bool)>, dt: f32) {
         let bp_ppp = self.ppp();
         self.draw_layers_bar(ctx);
-        self.draw_layer_legend(ctx, bp_ppp);
+        self.draw_layer_legend(ctx);
         self.draw_menu_bar(ctx, dt);
-        self.draw_inventory_window(ctx, bp_ppp);
-        self.draw_build_bar(ctx, bp_ppp);
-        self.draw_colonist_bar(ctx, bp_ppp, bp_cam);
+        self.draw_inventory_window(ctx);
+        self.draw_build_bar(ctx);
+        self.draw_colonist_bar(ctx);
         self.draw_context_menus(ctx, bp_ppp, bp_cam);
         self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
         self.draw_world_labels(ctx, bp_cam);
@@ -114,7 +114,7 @@ impl App {
 
     }
 
-    fn draw_layer_legend(&mut self, ctx: &egui::Context, bp_ppp: f32) {
+    fn draw_layer_legend(&mut self, ctx: &egui::Context) {
         // --- Layer legend (below layers menu, top-right) ---
         {
             let s = 12.0;
@@ -246,8 +246,7 @@ impl App {
 
     }
 
-    fn draw_menu_bar(&mut self, ctx: &egui::Context, dt: f32) {
-        let bp_ppp = self.ppp();
+    fn draw_menu_bar(&mut self, ctx: &egui::Context, _dt: f32) {
         let mut time_val = self.time_of_day;
         let mut paused = self.time_paused;
         let mut speed = self.time_speed;
@@ -417,7 +416,7 @@ impl App {
 
     }
 
-    fn draw_inventory_window(&mut self, ctx: &egui::Context, bp_ppp: f32) {
+    fn draw_inventory_window(&mut self, ctx: &egui::Context) {
         // --- Inventory window (RPG-style, toggle with I key or click pleb name) ---
         if self.show_inventory {
             if let Some(sel_idx) = self.selected_pleb {
@@ -559,7 +558,7 @@ impl App {
 
     }
 
-    fn draw_build_bar(&mut self, ctx: &egui::Context, bp_ppp: f32) {
+    fn draw_build_bar(&mut self, ctx: &egui::Context) {
         // --- Build categories (bottom bar, horizontal, Rimworld-style) ---
         let cat_s = 18.0; // category font size
         egui::Area::new(egui::Id::new("build_categories"))
@@ -720,7 +719,7 @@ impl App {
 
     }
 
-    fn draw_colonist_bar(&mut self, ctx: &egui::Context, bp_ppp: f32, bp_cam: (f32,f32,f32,f32,f32)) {
+    fn draw_colonist_bar(&mut self, ctx: &egui::Context) {
         // --- Colonist bar (top center, like Rimworld) ---
         if !self.plebs.is_empty() {
             // Collect pleb data for display (avoid borrow issues)

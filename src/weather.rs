@@ -84,7 +84,7 @@ pub fn tick_wetness(
     sun_intensity: f32,
     dt: f32,
     time_speed: f32,
-    grid_w: u32,
+    _grid_w: u32,
 ) {
     let t = dt * time_speed;
     for (i, w) in wetness.iter_mut().enumerate() {
