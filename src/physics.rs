@@ -23,6 +23,7 @@ pub struct PhysicsBody {
     pub size: f32,
     pub render_height: f32,
     pub body_type: BodyType,
+    pub fuse_timer: f32, // seconds remaining for grenade emission (0 = inactive)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -54,7 +55,7 @@ impl PhysicsBody {
             bounce: 0.3,
             size: 0.45,
             render_height: 1.5,
-            body_type: BodyType::WoodBox,
+            body_type: BodyType::WoodBox, fuse_timer: 0.0,
         }
     }
 
@@ -75,7 +76,7 @@ impl PhysicsBody {
             bounce: 0.2, // low bounce — cannonballs don't bounce much
             size: 0.12,
             render_height: 0.5,
-            body_type: BodyType::Cannonball,
+            body_type: BodyType::Cannonball, fuse_timer: 0.0,
         }
     }
 
@@ -95,7 +96,7 @@ impl PhysicsBody {
             bounce: 0.3,
             size: 0.08,
             render_height: 0.3,
-            body_type: BodyType::Grenade,
+            body_type: BodyType::Grenade, fuse_timer: 12.0,
         }
     }
 
@@ -389,9 +390,13 @@ pub fn tick_bodies(
         }
     }
 
-    // Grenade detonation: explode on ground contact or wall impact
-    for body in bodies.iter() {
-        if body.body_type == BodyType::Grenade && body.on_ground() {
+    // Grenade emission: continuously emit toxic gas while on ground with fuse remaining
+    for body in bodies.iter_mut() {
+        if body.body_type == BodyType::Grenade && body.on_ground() && body.fuse_timer > 0.0 {
+            body.fuse_timer -= dt;
+            // Stop movement once on ground (grenade sits and hisses)
+            body.vx = 0.0;
+            body.vy = 0.0;
             impacts.push(Impact {
                 x: body.x, y: body.y,
                 block_x: body.x.floor() as i32, block_y: body.y.floor() as i32,
@@ -402,11 +407,11 @@ pub fn tick_bodies(
         }
     }
 
-    // Remove projectiles that are out of bounds or stopped
+    // Remove projectiles that are out of bounds, stopped, or fuse expired
     bodies.retain(|b| {
         if b.body_type == BodyType::Grenade {
             let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
-            in_bounds && !b.on_ground() // remove when it hits ground (detonated above)
+            in_bounds && (b.fuse_timer > 0.0 || !b.on_ground())
         } else if b.body_type == BodyType::Cannonball {
             let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
             let moving = (b.vx.abs() + b.vy.abs()) > 0.3 || b.z > 0.1;

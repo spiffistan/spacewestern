@@ -2039,25 +2039,26 @@ impl App {
                 }
             }
 
-            // Grenade toxic gas injection: write high smoke + CO2 to dye texture
+            // Grenade toxic gas injection: continuous emission while fuse burns
             for &(gx, gy) in &self.grenade_impacts {
                 let dye_scale = (FLUID_DYE_W / FLUID_SIM_W) as i32;
-                let radius = 3i32; // 3-tile radius toxic cloud
+                let radius = 1i32; // small source — fluid sim spreads it
                 for oy in -radius..=radius {
                     for ox in -radius..=radius {
                         let dist = ((ox * ox + oy * oy) as f32).sqrt();
-                        if dist > radius as f32 { continue; }
-                        let strength = 1.0 - dist / (radius as f32 + 0.5);
+                        if dist > radius as f32 + 0.5 { continue; }
+                        let strength = 1.0 - dist / (radius as f32 + 1.0);
                         let wx = (gx as i32 + ox).clamp(0, GRID_W as i32 - 1);
                         let wy = (gy as i32 + oy).clamp(0, GRID_H as i32 - 1);
                         let dye_bx = wx * dye_scale;
                         let dye_by = wy * dye_scale;
-                        // Toxic: high smoke (R) + high CO2 (B), low O2 (G)
+                        // Toxic: moderate smoke (R) + high CO2 (B), depleted O2 (G)
+                        // Per-frame emission — builds up over 12 seconds
                         let pixel: [u16; 4] = [
-                            f32_to_f16(1.5 * strength),  // smoke
-                            f32_to_f16(0.3),              // low O2
-                            f32_to_f16(1.2 * strength),  // high CO2
-                            f32_to_f16(20.0),             // ambient temp
+                            f32_to_f16(0.6 * strength),   // smoke
+                            f32_to_f16(0.2),               // very low O2
+                            f32_to_f16(0.8 * strength),   // high CO2
+                            f32_to_f16(15.0),              // slightly cool (chemical reaction)
                         ];
                         let bytes: &[u8] = bytemuck::cast_slice(&pixel);
                         for dy_off in 0..dye_scale {
