@@ -1102,6 +1102,8 @@ fn roof_color(wx: f32, wy: f32) -> vec3<f32> {
 // --- Pixel-level shadow ray ---
 // Traces from a world position toward the sun, accumulating occlusion.
 // Returns: vec4(tint_rgb, light_factor)
+// Features: contact hardening (sharp near caster, soft far away),
+// distance fade (no hard cutoff), accumulated travel distance for penumbra.
 fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_elev: f32) -> vec4<f32> {
     let dir2d = normalize(sun_dir);
     let step_x = dir2d.x * SHADOW_STEP;
@@ -1113,12 +1115,14 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
     var sy = wy;
     var light = 1.0;
     var tint = vec3<f32>(1.0, 1.0, 1.0);
+    var travel_dist = 0.0; // distance traveled along shadow ray
 
     let max_steps = i32(SHADOW_MAX_DIST / SHADOW_STEP);
     for (var i: i32 = 0; i < max_steps; i++) {
         sx += step_x;
         sy += step_y;
         current_h += step_h;
+        travel_dist += SHADOW_STEP;
 
         let bx = i32(floor(sx));
         let by = i32(floor(sy));
@@ -1246,15 +1250,26 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
                 // Open door: ray passes through freely (doorway is an opening)
                 // continue stepping
             } else {
-                // Opaque block (wall, roof, etc.): shadow with soft penumbra
+                // Opaque block: contact-hardened shadow.
+                // Sharp near the caster (small travel_dist), soft far away.
                 let overlap = effective_h - current_h;
-                let shadow_strength = clamp(overlap * 1.2, 0.0, 1.0);
+                // Penumbra widens with distance (sun has angular size ~0.5°)
+                let penumbra = 1.0 + travel_dist * 0.15; // softens with distance
+                let shadow_strength = clamp(overlap * 1.2 / penumbra, 0.0, 1.0);
                 light *= (1.0 - shadow_strength);
                 if light < 0.02 {
                     return vec4<f32>(tint, 0.0);
                 }
             }
         }
+    }
+
+    // Distance fade: if we reached max distance, smoothly blend remaining
+    // shadow toward fully lit (prevents hard shadow cutoff at the edge)
+    let fade_start = SHADOW_MAX_DIST * 0.75;
+    if travel_dist > fade_start && light < 0.95 {
+        let fade = (travel_dist - fade_start) / (SHADOW_MAX_DIST - fade_start);
+        light = mix(light, 1.0, clamp(fade, 0.0, 1.0));
     }
 
     return vec4<f32>(tint, light);
@@ -2567,8 +2582,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             color = mix(color, beneath_col * GLASS_TINT, 0.25);
         }
     } else {
-        // Normal block: apply shadow + additive point light
-        let lit = color * (ambient + sun_color * light_factor * 0.85 * shadow_tint);
+        // Normal block: apply shadow + sky fill + additive point light
+        // In shadow: blue sky fill light replaces some of the lost sunlight
+        let shadow_depth = 1.0 - light_factor;
+        let sky_fill = vec3<f32>(0.06, 0.08, 0.14) * shadow_depth * camera.sun_intensity;
+        let lit = color * (ambient + sun_color * light_factor * 0.85 * shadow_tint + sky_fill);
         // Point light is additive (not multiplied by base color) so it illuminates
         // even when ambient/sun is very low (e.g. at night)
         let pl_mul = select(camera.light_bleed_mul, camera.indoor_glow_mul, is_indoor);
