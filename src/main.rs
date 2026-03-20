@@ -414,6 +414,15 @@ impl App {
         }
     }
 
+    /// Get the 9 tiles a solar panel occupies at (bx, by) — 3×3 grid
+    fn solar_tiles(&self, bx: i32, by: i32) -> [(i32, i32); 9] {
+        [
+            (bx, by),     (bx + 1, by),     (bx + 2, by),
+            (bx, by + 1), (bx + 1, by + 1), (bx + 2, by + 1),
+            (bx, by + 2), (bx + 1, by + 2), (bx + 2, by + 2),
+        ]
+    }
+
     fn bench_tiles(&self, bx: i32, by: i32, rotation: u32) -> [(i32, i32); 3] {
         if rotation == 0 {
             // Horizontal: extends east
@@ -671,11 +680,17 @@ impl App {
                 let block = self.grid_data[idx];
                 let bt = block_type_rs(block);
                 let bh = (block >> 8) & 0xFF;
-                if (bt == 0 || bt == 2) && bh == 0 {
-                    let roof_flag = block_flags_rs(block) & 2;
-                    let roof_h = block & 0xFF000000;
-                    let height = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(3);
-                    self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
+                let wire_anywhere = block_type_id == 36;
+                if ((bt == 0 || bt == 2) && bh == 0) || (wire_anywhere && bt != 36) {
+                    if wire_anywhere && bt != 0 && bt != 2 {
+                        // Wire on non-ground: add wire flag to existing block
+                        self.grid_data[idx] |= 0x80 << 16;
+                    } else {
+                        let roof_flag = block_flags_rs(block) & 2;
+                        let roof_h = block & 0xFF000000;
+                        let height = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(3);
+                        self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
+                    }
                     self.grid_dirty = true;
                 }
             }
@@ -834,6 +849,28 @@ impl App {
         // Build tool placement
         if self.build_tool != BuildTool::None {
             match self.build_tool {
+                BuildTool::Place(37) => {
+                    // Solar panel: 3×3 multi-tile placement
+                    let tiles = self.solar_tiles(bx, by);
+                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
+                    if all_valid {
+                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tblock = self.grid_data[tidx];
+                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
+                            let roof_h = tblock & 0xFF000000;
+                            // flags: bits 3-4 = column (0-2), bits 5-6 = row (0-2)
+                            let col = (i % 3) as u8;
+                            let row = (i / 3) as u8;
+                            let seg_flags = roof_flag | (col << 3) | (row << 5);
+                            self.grid_data[tidx] = make_block(37, 0, seg_flags) | roof_h;
+                        }
+                        self.grid_dirty = true;
+                        compute_roof_heights(&mut self.grid_data);
+                        log::info!("Placed solar panel at ({}, {})", bx, by);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
                 BuildTool::Place(9) => {
                     // Bench: multi-tile placement
                     let tiles = self.bench_tiles(bx, by, self.build_rotation);
@@ -933,13 +970,19 @@ impl App {
                     let click_mode = placement.map(|p| p.click.clone()).unwrap_or(block_defs::ClickMode::Simple);
 
                     let can_place = self.can_place_at(bx, by)
-                        || (id == 16 && bt == 15); // pump on pipe
+                        || (id == 16 && bt == 15) // pump on pipe
+                        || (id == 36 && bt != 36); // wire can go anywhere except on existing wire
                     if can_place && click_mode != block_defs::ClickMode::None {
-                        let roof_flag = flags & 2;
-                        let rot_flags = (self.build_rotation as u8) << 3;
-                        let combined_flags = roof_flag | rot_flags | extra_flags;
-                        let roof_h = block & 0xFF000000;
-                        self.grid_data[idx] = make_block(id, place_height, combined_flags) | roof_h;
+                        if id == 36 && bt != 0 && bt != 2 {
+                            // Wire on non-ground: add wire flag to existing block (bit 7)
+                            self.grid_data[idx] |= 0x80 << 16; // set wire overlay flag
+                        } else {
+                            let roof_flag = flags & 2;
+                            let rot_flags = (self.build_rotation as u8) << 3;
+                            let combined_flags = roof_flag | rot_flags | extra_flags;
+                            let roof_h = block & 0xFF000000;
+                            self.grid_data[idx] = make_block(id, place_height, combined_flags) | roof_h;
+                        }
                         self.grid_dirty = true;
                         compute_roof_heights(&mut self.grid_data);
                         // Initialize cannon angle from build rotation
@@ -1418,6 +1461,7 @@ impl App {
             let tiles: Vec<(i32, i32)> = match self.build_tool {
                 BuildTool::Place(9) => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
                 BuildTool::Place(30) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
+                BuildTool::Place(37) => self.solar_tiles(hbx, hby).to_vec(),
                 _ => vec![(hbx, hby)],
             };
             let on_furniture = self.build_tool == BuildTool::Place(11);

@@ -470,6 +470,19 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             var light_col = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
             let light_h = mat.light_height;
 
+            // Electric lights: intensity depends on power (voltage)
+            if bt == 7u || bt == 10u || bt == 11u {
+                let light_idx = u32(ny) * u32(camera.grid_w) + u32(nx);
+                let lv = voltage[light_idx];
+                let power_factor = clamp(lv / 6.0, 0.0, 1.0); // full brightness at 6V+
+                intensity *= power_factor;
+                // Slight flicker when low power (< 3V)
+                if lv > 0.5 && lv < 3.0 {
+                    let pf = sin(time * 15.0 + f32(light_idx) * 3.7) * 0.3 + 0.7;
+                    intensity *= pf;
+                }
+            }
+
             // Fireplace: apply flicker animation
             if bt == 6u {
                 let phase = fire_hash(vec2<f32>(lcx, lcy)) * 6.28;
@@ -1970,57 +1983,95 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
             color = ground;
         }
     } else if btype == 36u {
-        // Wire: thin conductor line on dirt, glows when carrying voltage
+        // Wire: copper conductor with directional segments and corner sprites
         let ground = vec3<f32>(0.42, 0.35, 0.22);
-        // Wire runs as a thin line (detect horizontal vs vertical from neighbors)
+        // Check 4 neighbors for power-network connections
         let n_w = block_type(get_block(bx - 1, by));
         let n_e = block_type(get_block(bx + 1, by));
         let n_n = block_type(get_block(bx, by - 1));
         let n_s = block_type(get_block(bx, by + 1));
-        let h_conn = (n_w == 36u || n_w == 37u || n_w == 38u || n_w == 7u || n_w == 12u)
-                  || (n_e == 36u || n_e == 37u || n_e == 38u || n_e == 7u || n_e == 12u);
-        let v_conn = (n_n == 36u || n_n == 37u || n_n == 38u || n_n == 7u || n_n == 12u)
-                  || (n_s == 36u || n_s == 37u || n_s == 38u || n_s == 7u || n_s == 12u);
-        let wire_w = 0.08;
+        let conn_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 7u || n_w == 12u || n_w == 10u;
+        let conn_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 7u || n_e == 12u || n_e == 10u;
+        let conn_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 7u || n_n == 12u || n_n == 10u;
+        let conn_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 7u || n_s == 12u || n_s == 10u;
+        let wire_w = 0.07;
         var on_wire = false;
-        if h_conn { on_wire = on_wire || abs(fy - 0.5) < wire_w; }
-        if v_conn { on_wire = on_wire || abs(fx - 0.5) < wire_w; }
-        // Center junction dot
+        // Draw segments toward each connected neighbor
+        if conn_w { on_wire = on_wire || (fx < 0.5 && abs(fy - 0.5) < wire_w); }
+        if conn_e { on_wire = on_wire || (fx > 0.5 && abs(fy - 0.5) < wire_w); }
+        if conn_n { on_wire = on_wire || (fy < 0.5 && abs(fx - 0.5) < wire_w); }
+        if conn_s { on_wire = on_wire || (fy > 0.5 && abs(fx - 0.5) < wire_w); }
+        // Center junction (always visible — this is where connections meet)
         let cdist = length(vec2<f32>(fx - 0.5, fy - 0.5));
-        on_wire = on_wire || cdist < 0.12;
+        on_wire = on_wire || cdist < 0.10;
+        // Corner radius: round the turns where two perpendicular segments meet
+        if (conn_n || conn_s) && (conn_w || conn_e) {
+            // Fill the inner corner of L-bends with a rounded shape
+            let qx = abs(fx - 0.5);
+            let qy = abs(fy - 0.5);
+            if qx < wire_w + 0.03 && qy < wire_w + 0.03 {
+                on_wire = true;
+            }
+        }
         if on_wire {
-            // Base copper color
-            var wire_col = vec3<f32>(0.55, 0.40, 0.25);
-            // Glow based on voltage
+            // Copper wire color
+            var wire_col = vec3<f32>(0.60, 0.42, 0.22);
+            // Dark outline
+            let outline_w = wire_w + 0.025;
+            var near_edge = false;
+            if conn_w && fx < 0.5 { near_edge = near_edge || abs(fy - 0.5) > wire_w - 0.02; }
+            if conn_e && fx > 0.5 { near_edge = near_edge || abs(fy - 0.5) > wire_w - 0.02; }
+            if conn_n && fy < 0.5 { near_edge = near_edge || abs(fx - 0.5) > wire_w - 0.02; }
+            if conn_s && fy > 0.5 { near_edge = near_edge || abs(fx - 0.5) > wire_w - 0.02; }
+            if near_edge { wire_col *= 0.7; }
+            // Voltage glow
             let v = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
             let glow_intensity = clamp(v / 12.0, 0.0, 1.0);
-            wire_col = mix(wire_col, vec3<f32>(1.0, 0.85, 0.3), glow_intensity * 0.6);
-            // Animated pulse showing current flow direction
+            wire_col = mix(wire_col, vec3<f32>(1.0, 0.85, 0.3), glow_intensity * 0.5);
+            // Animated pulse showing current flow
             let pulse = sin(world_x * 4.0 + world_y * 4.0 - camera.time * 8.0) * 0.5 + 0.5;
-            wire_col += vec3<f32>(0.1, 0.08, 0.02) * pulse * glow_intensity;
+            wire_col += vec3<f32>(0.08, 0.06, 0.01) * pulse * glow_intensity;
             color = wire_col;
         } else {
             color = ground;
         }
     } else if btype == 37u {
-        // Solar panel: dark blue cells with grid lines
-        let cell_x = fract(fx * 4.0);
-        let cell_y = fract(fy * 4.0);
-        let grid_line = f32(cell_x < 0.06 || cell_y < 0.06) * 0.08;
-        // Dark blue silicon with slight variation
-        let sv = fract(sin(floor(fx * 4.0) * 17.1 + floor(fy * 4.0) * 31.7) * 43758.5) * 0.03;
-        color = vec3<f32>(0.10 + sv, 0.14 + sv, 0.30 + sv);
-        // Grid lines (silver)
-        if cell_x < 0.06 || cell_y < 0.06 {
-            color = vec3<f32>(0.55, 0.55, 0.60);
+        // Solar panel: 3×3 tile panel. Segment info in flags: bits3-4=col, bits5-6=row
+        let seg_col = f32((bflags >> 3u) & 3u);
+        let seg_row = f32((bflags >> 5u) & 3u);
+        // Global UV across the full 3×3 panel (0-1 over the whole panel)
+        let gx = (seg_col + fx) / 3.0;
+        let gy = (seg_row + fy) / 3.0;
+        // Panel frame: dark aluminum border around the entire 3×3
+        let frame_w = 0.02;
+        let on_frame = gx < frame_w || gx > (1.0 - frame_w) || gy < frame_w || gy > (1.0 - frame_w);
+        if on_frame {
+            color = vec3<f32>(0.40, 0.40, 0.42); // aluminum frame
+        } else {
+            // Silicon cells: 6×6 grid across the full panel
+            let cell_x = fract(gx * 6.0);
+            let cell_y = fract(gy * 6.0);
+            // Dark blue silicon with per-cell variation
+            let cell_id = floor(gx * 6.0) * 7.0 + floor(gy * 6.0) * 13.0;
+            let sv = fract(sin(cell_id * 17.1 + world_x * 0.01) * 43758.5) * 0.02;
+            color = vec3<f32>(0.08 + sv, 0.12 + sv, 0.28 + sv);
+            // Cell grid lines (thin silver conductors)
+            if cell_x < 0.04 || cell_y < 0.04 {
+                color = vec3<f32>(0.50, 0.50, 0.55);
+            }
+            // Horizontal bus bars (thicker, every 2 cells)
+            let bus = fract(gy * 3.0);
+            if bus < 0.015 || bus > 0.985 {
+                color = vec3<f32>(0.55, 0.55, 0.58);
+            }
+            // Sun reflection: slight specular sheen
+            let reflect = camera.sun_intensity * 0.08;
+            color += vec3<f32>(reflect * 0.5, reflect * 0.5, reflect);
         }
-        // Slight reflective sheen based on sun
-        color += vec3<f32>(0.03, 0.03, 0.05) * camera.sun_intensity;
-        // Voltage-based glow at edges (power output indicator)
+        // Voltage indicator: subtle green glow on active panel
         let v = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
         if v > 0.5 {
-            let edge_glow = smoothstep(0.4, 0.5, max(abs(fx - 0.5), abs(fy - 0.5)));
-            color += vec3<f32>(0.1, 0.15, 0.02) * edge_glow * clamp(v / 12.0, 0.0, 1.0);
+            color += vec3<f32>(0.02, 0.06, 0.01) * clamp(v / 12.0, 0.0, 1.0);
         }
     } else if btype == 38u {
         // Battery: green casing with charge indicator
@@ -2140,6 +2191,39 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     // Wall side faces (3D bevel) — skip for doors and trees
     if effective_height > 0u && btype != 8u {
         color += wall_side_shade(world_x, world_y, bx, by, effective_height);
+    }
+
+    // Wire overlay: draw wire on top of walls/blocks that have wire flag (bit 7)
+    let has_wire_flag = (bflags & 0x80u) != 0u;
+    if has_wire_flag && btype != 36u {
+        // Same wire rendering logic as standalone wire, but overlaid
+        let wn_w = block_type(get_block(bx - 1, by));
+        let wn_e = block_type(get_block(bx + 1, by));
+        let wn_n = block_type(get_block(bx, by - 1));
+        let wn_s = block_type(get_block(bx, by + 1));
+        let wf_w = (get_block(bx - 1, by) >> 16u) & 0x80u;
+        let wf_e = (get_block(bx + 1, by) >> 16u) & 0x80u;
+        let wf_n = (get_block(bx, by - 1) >> 16u) & 0x80u;
+        let wf_s = (get_block(bx, by + 1) >> 16u) & 0x80u;
+        let wc_w = wn_w == 36u || wn_w == 37u || wn_w == 38u || wf_w != 0u;
+        let wc_e = wn_e == 36u || wn_e == 37u || wn_e == 38u || wf_e != 0u;
+        let wc_n = wn_n == 36u || wn_n == 37u || wn_n == 38u || wf_n != 0u;
+        let wc_s = wn_s == 36u || wn_s == 37u || wn_s == 38u || wf_s != 0u;
+        let ww = 0.06;
+        var on_overlay_wire = false;
+        if wc_w { on_overlay_wire = on_overlay_wire || (fx < 0.5 && abs(fy - 0.5) < ww); }
+        if wc_e { on_overlay_wire = on_overlay_wire || (fx > 0.5 && abs(fy - 0.5) < ww); }
+        if wc_n { on_overlay_wire = on_overlay_wire || (fy < 0.5 && abs(fx - 0.5) < ww); }
+        if wc_s { on_overlay_wire = on_overlay_wire || (fy > 0.5 && abs(fx - 0.5) < ww); }
+        let ow_cdist = length(vec2<f32>(fx - 0.5, fy - 0.5));
+        on_overlay_wire = on_overlay_wire || ow_cdist < 0.08;
+        if on_overlay_wire {
+            var ow_col = vec3<f32>(0.55, 0.38, 0.20);
+            let ow_v = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+            let ow_glow = clamp(ow_v / 12.0, 0.0, 1.0);
+            ow_col = mix(ow_col, vec3<f32>(1.0, 0.85, 0.3), ow_glow * 0.5);
+            color = ow_col;
+        }
     }
 
     // Shadow / interior lighting

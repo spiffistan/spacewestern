@@ -502,7 +502,7 @@ impl App {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         let categories = [
                             ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
-                            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Power", "\u{26a1}"), ("Physics", "\u{1f4e6}"),
+                            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Vent", "\u{1f4a8}"), ("Power", "\u{26a1}"), ("Physics", "\u{1f4e6}"),
                         ];
                         for &(name, icon) in &categories {
                             let selected = self.build_category == Some(name);
@@ -586,13 +586,9 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(9), "\u{1fa91}", "Bench");
                                     icon_btn(ui, BuildTool::Place(30), "\u{1f6cf}", "Bed");
                                     icon_btn(ui, BuildTool::Place(33), "\u{1f4e6}", "Crate");
-                                    icon_btn(ui, BuildTool::Place(12), "\u{1f4a8}", "Fan");
                                     icon_btn(ui, BuildTool::Place(13), "\u{267b}", "Compost");
                                     icon_btn(ui, BuildTool::Place(31), "\u{1fad0}", "Berries");
                                     icon_btn(ui, BuildTool::Place(29), "\u{1f4a5}", "Cannon");
-                                    icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
-                                    icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
-                                    icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table");
                                     icon_btn(ui, BuildTool::Dig, "\u{26cf}", "Dig");
                                 }
                                 "Opening" => {
@@ -606,6 +602,17 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(18), "\u{1f504}", "Valve");
                                     icon_btn(ui, BuildTool::Place(19), "\u{27a1}", "Outlet");
                                     icon_btn(ui, BuildTool::Place(20), "\u{2b05}", "Inlet");
+                                }
+                                "Power" => {
+                                    icon_btn(ui, BuildTool::Place(36), "\u{26a1}", "Wire");
+                                    icon_btn(ui, BuildTool::Place(37), "\u{2600}", "Solar");
+                                    icon_btn(ui, BuildTool::Place(38), "\u{1f50b}", "Battery");
+                                    icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
+                                    icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
+                                    icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table");
+                                }
+                                "Vent" => {
+                                    icon_btn(ui, BuildTool::Place(12), "\u{1f4a8}", "Fan");
                                 }
                                 "Physics" => {
                                     icon_btn(ui, BuildTool::WoodBox, "\u{1f4e6}", "Box");
@@ -1386,8 +1393,11 @@ impl App {
                             }
                         } else {
                             // Validate each tile individually
+                            let is_wire_tool = matches!(self.build_tool, BuildTool::Place(36));
                             let valid = if *tx < 0 || *ty < 0 || *tx >= GRID_W as i32 || *ty >= GRID_H as i32 {
                                 false
+                            } else if is_wire_tool {
+                                true // wire can go anywhere
                             } else {
                                 let tidx = (*ty as u32 * GRID_W + *tx as u32) as usize;
                                 let tb = self.grid_data[tidx];
@@ -1603,6 +1613,69 @@ impl App {
                 if is_selected {
                     cannon_painter.circle_stroke(egui::pos2(sx, sy), barrel_len * 1.1,
                         egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)));
+                }
+            }
+        }
+
+        // Render power cables: squiggly lines from lights/fans to nearest wire
+        {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            if tile_px > 3.0 { // only draw when zoomed in enough
+                let cable_painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground, egui::Id::new("power_cables"),
+                ));
+                let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    egui::pos2(sx, sy)
+                };
+                // Scan visible area for consumers (lights, fans) and find nearest wire
+                let vx0 = (cam_cx - cam_sw * 0.5 / cam_zoom).floor() as i32 - 1;
+                let vy0 = (cam_cy - cam_sh * 0.5 / cam_zoom).floor() as i32 - 1;
+                let vx1 = (cam_cx + cam_sw * 0.5 / cam_zoom).ceil() as i32 + 1;
+                let vy1 = (cam_cy + cam_sh * 0.5 / cam_zoom).ceil() as i32 + 1;
+                for y in vy0.max(0)..vy1.min(GRID_H as i32) {
+                    for x in vx0.max(0)..vx1.min(GRID_W as i32) {
+                        let idx = (y as u32 * GRID_W + x as u32) as usize;
+                        let bt = self.grid_data[idx] & 0xFF;
+                        // Consumer blocks that auto-connect: electric light (7), floor lamp (10), fan (12)
+                        if bt != 7 && bt != 10 && bt != 12 { continue; }
+                        // Search for nearest wire within 3 tiles
+                        let mut best_wire: Option<(i32, i32, f32)> = None;
+                        for dy in -3i32..=3 {
+                            for dx in -3i32..=3 {
+                                let wx = x + dx;
+                                let wy = y + dy;
+                                if wx < 0 || wy < 0 || wx >= GRID_W as i32 || wy >= GRID_H as i32 { continue; }
+                                let widx = (wy as u32 * GRID_W + wx as u32) as usize;
+                                if (self.grid_data[widx] & 0xFF) == 36 {
+                                    let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
+                                    if best_wire.is_none() || dist < best_wire.unwrap().2 {
+                                        best_wire = Some((wx, wy, dist));
+                                    }
+                                }
+                            }
+                        }
+                        if let Some((wire_x, wire_y, _)) = best_wire {
+                            let from = to_screen(x as f32 + 0.5, y as f32 + 0.5);
+                            let to = to_screen(wire_x as f32 + 0.5, wire_y as f32 + 0.5);
+                            // Draw squiggly cable: midpoint offset + curve
+                            let mid = egui::pos2((from.x + to.x) * 0.5, (from.y + to.y) * 0.5);
+                            let perp_x = -(to.y - from.y);
+                            let perp_y = to.x - from.x;
+                            let perp_len = (perp_x * perp_x + perp_y * perp_y).sqrt().max(1.0);
+                            let sag = tile_px * 0.15; // cable sag amount
+                            let sag_mid = egui::pos2(mid.x + perp_x / perp_len * sag, mid.y + perp_y / perp_len * sag + sag * 0.5);
+                            // Draw as segmented line through sag point
+                            let cable_color = egui::Color32::from_rgb(70, 60, 45);
+                            cable_painter.line_segment([from, sag_mid], egui::Stroke::new(1.5, cable_color));
+                            cable_painter.line_segment([sag_mid, to], egui::Stroke::new(1.5, cable_color));
+                            // Small connector dots at endpoints
+                            cable_painter.circle_filled(from, 2.0, cable_color);
+                            cable_painter.circle_filled(to, 2.0, cable_color);
+                        }
+                    }
                 }
             }
         }

@@ -28,9 +28,11 @@ struct Camera {
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 
 // Is this block part of the power network?
-fn is_conductor(bt: u32) -> bool {
-    // Wire=36, Solar=37, Battery=38, Electric light=7, Fan=12
-    return bt == 36u || bt == 37u || bt == 38u || bt == 7u || bt == 12u;
+fn is_conductor(bt: u32, flags: u32) -> bool {
+    // Wire=36, Solar=37, Battery=38, Electric light=7, Fan=12, Standing lamp=10
+    // Also: any block with wire overlay flag (bit 7 of flags)
+    let has_wire = (flags & 0x80u) != 0u;
+    return bt == 36u || bt == 37u || bt == 38u || bt == 7u || bt == 12u || bt == 10u || has_wire;
 }
 
 // Is this block a power source?
@@ -40,7 +42,8 @@ fn is_generator(bt: u32) -> bool {
 
 // Is this block a power consumer?
 fn is_consumer(bt: u32) -> bool {
-    return bt == 7u || bt == 12u; // Electric light, Fan
+    // Electric light=7, Standing lamp=10, Table lamp=11, Fan=12, Pump=16
+    return bt == 7u || bt == 10u || bt == 11u || bt == 12u || bt == 16u;
 }
 
 @compute @workgroup_size(8, 8)
@@ -52,9 +55,10 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.y * gw + gid.x;
     let block = grid[idx];
     let bt = block_type(block);
+    let flags = (block >> 16u) & 0xFFu;
 
     // Non-conductor cells: voltage = 0 (insulator)
-    if !is_conductor(bt) {
+    if !is_conductor(bt, flags) {
         voltage[idx] = 0.0;
         return;
     }
@@ -72,26 +76,61 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Consumers: draw current (reduce voltage) ---
     var load = 0.0;
-    if bt == 7u { load = 0.3; }  // Electric light: moderate draw
-    if bt == 12u { load = 0.5; } // Fan: higher draw
+    if bt == 7u { load = 0.3; }   // Ceiling light: moderate draw
+    if bt == 10u { load = 0.3; }  // Standing lamp: moderate draw
+    if bt == 11u { load = 0.2; }  // Table lamp: low draw
+    if bt == 12u { load = 0.5; }  // Fan: high draw
+    if bt == 16u { load = 0.4; }  // Pump: moderate-high draw
 
-    // --- Voltage relaxation: average of connected conductor neighbors ---
+    // --- Voltage relaxation ---
+    // Wires connect to direct 4-neighbors only.
+    // Consumers (lights/fans) connect to nearest wire within 3 tiles (cable).
     let bx = i32(gid.x);
     let by = i32(gid.y);
     var neighbor_sum = 0.0;
     var neighbor_count = 0.0;
-    for (var d = 0; d < 4; d++) {
-        var ndx = 0; var ndy = 0;
-        if d == 0 { ndx = 1; } else if d == 1 { ndx = -1; }
-        else if d == 2 { ndy = 1; } else { ndy = -1; }
-        let nx = bx + ndx;
-        let ny = by + ndy;
-        if nx < 0 || ny < 0 || nx >= i32(gw) || ny >= i32(gh) { continue; }
-        let nidx = u32(ny) * gw + u32(nx);
-        let nbt = block_type(grid[nidx]);
-        if is_conductor(nbt) {
-            neighbor_sum += voltage[nidx];
-            neighbor_count += 1.0;
+
+    if bt == 36u || bt == 37u || bt == 38u {
+        // Wire/Solar/Battery: direct 4-neighbor connections only
+        for (var d = 0; d < 4; d++) {
+            var ndx = 0; var ndy = 0;
+            if d == 0 { ndx = 1; } else if d == 1 { ndx = -1; }
+            else if d == 2 { ndy = 1; } else { ndy = -1; }
+            let nx = bx + ndx;
+            let ny = by + ndy;
+            if nx < 0 || ny < 0 || nx >= i32(gw) || ny >= i32(gh) { continue; }
+            let nidx = u32(ny) * gw + u32(nx);
+            let nb = grid[nidx];
+            let nbt = block_type(nb);
+            let nflags = (nb >> 16u) & 0xFFu;
+            if is_conductor(nbt, nflags) {
+                neighbor_sum += voltage[nidx];
+                neighbor_count += 1.0;
+            }
+        }
+    } else {
+        // Consumer (light/fan): search 3-tile radius for nearest wire
+        var best_dist = 100.0;
+        var best_v = 0.0;
+        for (var dy = -3; dy <= 3; dy++) {
+            for (var dx = -3; dx <= 3; dx++) {
+                let nx = bx + dx;
+                let ny = by + dy;
+                if nx < 0 || ny < 0 || nx >= i32(gw) || ny >= i32(gh) { continue; }
+                let nidx = u32(ny) * gw + u32(nx);
+                let nbt = block_type(grid[nidx]);
+                if nbt == 36u { // wire
+                    let dist = sqrt(f32(dx * dx + dy * dy));
+                    if dist < best_dist {
+                        best_dist = dist;
+                        best_v = voltage[nidx];
+                    }
+                }
+            }
+        }
+        if best_dist < 4.0 {
+            neighbor_sum = best_v;
+            neighbor_count = 1.0;
         }
     }
 
@@ -122,8 +161,10 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ny2 = by + ndy2;
         if nx2 < 0 || ny2 < 0 || nx2 >= i32(gw) || ny2 >= i32(gh) { continue; }
         let nidx2 = u32(ny2) * gw + u32(nx2);
-        let nbt2 = block_type(grid[nidx2]);
-        if is_conductor(nbt2) {
+        let nb2 = grid[nidx2];
+        let nbt2 = block_type(nb2);
+        let nflags2 = (nb2 >> 16u) & 0xFFu;
+        if is_conductor(nbt2, nflags2) {
             let dv = abs(voltage[nidx2] - new_v);
             total_current += dv;
         }
