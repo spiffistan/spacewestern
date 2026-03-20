@@ -65,13 +65,7 @@ impl PlebActivity {
     }
 }
 
-/// Simple inventory: resource name → count.
-#[derive(Clone, Debug, Default)]
-pub struct PlebInventory {
-    pub berries: u32,
-    pub rocks: u32,
-    pub carrying: Option<&'static str>, // what the pleb is currently hauling (None = hands free)
-}
+pub use crate::resources::PlebInventory;
 
 /// Appearance data for rendering a pleb (Rimworld-style).
 #[derive(Clone, Debug)]

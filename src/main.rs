@@ -37,6 +37,9 @@ use physics::{PhysicsBody, tick_bodies, pleb_body_collision, nearest_body};
 mod weather;
 use weather::{WeatherState, tick_weather, tick_wetness};
 
+mod resources;
+use resources::{CrateInventory, CRATE_MAX_ITEMS};
+
 #[path = "time.rs"]
 mod game_time;
 use game_time::Instant;
@@ -53,19 +56,6 @@ use winit::{
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
 
-/// Inventory of a storage crate.
-#[derive(Clone, Debug, Default)]
-struct CrateInventory {
-    rocks: u32,
-    berries: u32,
-}
-
-const CRATE_MAX_ITEMS: u32 = 10;
-
-impl CrateInventory {
-    fn total(&self) -> u32 { self.rocks + self.berries }
-    fn space(&self) -> u32 { CRATE_MAX_ITEMS.saturating_sub(self.total()) }
-}
 
 // --- Application state ---
 struct App {
