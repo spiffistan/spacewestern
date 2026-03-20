@@ -244,8 +244,8 @@ fn get_ambient(time: f32) -> vec3<f32> {
     return mix(night_ambient, day_ambient, intensity);
 }
 
-const SHADOW_MAX_DIST: f32 = 12.0;
-const SHADOW_STEP: f32 = 0.20;
+const SHADOW_MAX_DIST: f32 = 30.0;
+const SHADOW_STEP: f32 = 0.30;
 
 // Glass properties
 const GLASS_TINT: vec3<f32> = vec3<f32>(0.7, 0.85, 0.95);
