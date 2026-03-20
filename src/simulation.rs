@@ -163,7 +163,7 @@ impl App {
 
         // --- Pleb update ---
         // --- Cannon rotation (Q/E when cannon is selected) ---
-        if let Some(cannon_idx) = self.selected_cannon {
+        if let Some(cannon_idx) = self.block_sel.cannon {
             let rot_speed = 1.5f32; // radians per second
             if self.pressed_keys.contains(&KeyCode::KeyQ) {
                 *self.cannon_angles.entry(cannon_idx).or_insert(0.0) -= rot_speed * dt;

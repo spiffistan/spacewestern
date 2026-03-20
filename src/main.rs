@@ -57,6 +57,38 @@ const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
 
 
+/// GPU debug readback state (shift-hover info tool).
+#[derive(Clone, Debug)]
+struct DebugReadback {
+    mode: bool,
+    fluid_density: [f32; 4],
+    block_temp: f32,
+    block_temp_pending: bool,
+    voltage: f32,
+    voltage_pending: bool,
+    fluid_pending: bool,
+}
+
+impl Default for DebugReadback {
+    fn default() -> Self {
+        Self { mode: false, fluid_density: [0.0; 4], block_temp: 15.0, block_temp_pending: false, voltage: 0.0, voltage_pending: false, fluid_pending: false }
+    }
+}
+
+/// Which popup/slider is open for a selected block.
+#[derive(Clone, Debug, Default)]
+struct BlockSelection {
+    pump: Option<u32>,
+    pump_world: (f32, f32),
+    fan: Option<u32>,
+    fan_world: (f32, f32),
+    dimmer: Option<u32>,
+    dimmer_world: (f32, f32),
+    cannon: Option<u32>,
+    crate_idx: Option<u32>,
+    crate_world: (f32, f32),
+}
+
 // --- Application state ---
 struct App {
     window: Option<Arc<Window>>,
@@ -100,26 +132,15 @@ struct App {
     fluid_overlay: FluidOverlay,
     pipe_network: PipeNetwork,
     fluid_speed: f32,             // fluid simulation speed multiplier
-    debug_mode: bool,             // show debug tooltip at cursor
     enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
     enable_dir_bleed: bool,       // directional light bleed (expensive)
     enable_temporal: bool,        // temporal reprojection (reuse previous frame)
     show_pipe_overlay: bool,       // draw pipe gas contents as egui overlay
     pipe_width: f32,               // pipe conductance multiplier (1=narrow, 10=wide)
     drag_start: Option<(i32, i32)>, // grid coords where drag started (for shape building)
-    selected_pump: Option<u32>,     // grid index of pump being adjusted
-    selected_pump_world: (f32, f32), // world position for pump slider
-    selected_fan: Option<u32>,       // grid index of fan being adjusted
-    selected_fan_world: (f32, f32),  // world position for fan slider
-    selected_dimmer: Option<u32>,    // grid index of dimmer being adjusted
-    selected_dimmer_world: (f32, f32),
+    block_sel: BlockSelection,      // which popup/slider is open
     build_category: Option<&'static str>, // selected build category, None = collapsed
-    debug_fluid_density: [f32; 4], // last readback: RGBA from dye texture at cursor
-    debug_block_temp: f32,         // last readback: block temperature at cursor
-    debug_block_temp_pending: bool,
-    debug_voltage: f32,            // last readback: voltage at cursor
-    debug_voltage_pending: bool,
-    debug_fluid_readback_pending: bool,
+    debug: DebugReadback,          // shift-hover readback state
     fluid_mouse_active: bool,  // middle mouse button held
     fluid_mouse_prev: Option<(f32, f32)>, // previous world position for velocity calc
     // Pleb (character)
@@ -128,7 +149,6 @@ struct App {
     placing_pleb: bool,
     next_pleb_id: usize,
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
-    selected_cannon: Option<u32>, // grid_idx of selected cannon for rotation
     show_pleb_help: bool,      // show controls modal
     show_inventory: bool,      // show pleb inventory window
     pressed_keys: std::collections::HashSet<KeyCode>,
@@ -141,8 +161,6 @@ struct App {
     context_menu: Option<(f32, f32)>, // screen position for context menu popup
     // Storage crate inventories: grid_idx → stored items
     crate_contents: std::collections::HashMap<u32, CrateInventory>,
-    selected_crate: Option<u32>,       // grid index of crate being inspected
-    selected_crate_world: (f32, f32),  // world position for crate popup
     // Rock context menu
     rock_context_menu: Option<(f32, f32, i32, i32)>, // (screen_x, screen_y, grid_x, grid_y)
     // Weather system
@@ -321,26 +339,15 @@ impl App {
             fluid_overlay: FluidOverlay::None,
             pipe_network: PipeNetwork::new(),
             fluid_speed: 1.0,
-            debug_mode: false,
             enable_prox_glow: true,
             enable_dir_bleed: true,
             enable_temporal: true,
             drag_start: None,
             show_pipe_overlay: false,
             pipe_width: 5.0,
-            selected_pump: None,
-            selected_pump_world: (0.0, 0.0),
-            selected_fan: None,
-            selected_fan_world: (0.0, 0.0),
-            selected_dimmer: None,
-            selected_dimmer_world: (0.0, 0.0),
+            block_sel: BlockSelection::default(),
             build_category: None,
-            debug_fluid_density: [0.0; 4],
-            debug_block_temp: 15.0,
-            debug_block_temp_pending: false,
-            debug_voltage: 0.0,
-            debug_voltage_pending: false,
-            debug_fluid_readback_pending: false,
+            debug: DebugReadback::default(),
             fluid_dye_phase: 0,
             output_phase: 0,
             prev_cam_x: 0.0,
@@ -357,7 +364,6 @@ impl App {
             next_pleb_id: 1,
             placing_pleb: false,
             cannon_angles: std::collections::HashMap::new(),
-            selected_cannon: None,
             show_pleb_help: false,
             show_inventory: false,
             pressed_keys: std::collections::HashSet::new(),
@@ -367,8 +373,6 @@ impl App {
             pleb_air_readback_pending: false,
             context_menu: None,
             crate_contents: std::collections::HashMap::new(),
-            selected_crate: None,
-            selected_crate_world: (0.0, 0.0),
             rock_context_menu: None,
             weather: WeatherState::Clear,
             weather_timer: 45.0,
@@ -743,7 +747,7 @@ impl App {
         // Click cannon: select for rotation, or fire if already selected
         if bt == 29 && self.build_tool == BuildTool::None {
             let cannon_idx = by as u32 * GRID_W + bx as u32;
-            if self.selected_cannon == Some(cannon_idx) {
+            if self.block_sel.cannon == Some(cannon_idx) {
                 // Already selected — fire!
                 let angle = *self.cannon_angles.get(&cannon_idx).unwrap_or(&0.0);
                 let dir_x = angle.cos();
@@ -761,7 +765,7 @@ impl App {
                 log::info!("Cannon fired at ({}, {})", bx, by);
             } else {
                 // Select this cannon (deselect pleb)
-                self.selected_cannon = Some(cannon_idx);
+                self.block_sel.cannon = Some(cannon_idx);
                 self.selected_pleb = None;
                 // Initialize angle from block direction bits if not yet set
                 if !self.cannon_angles.contains_key(&cannon_idx) {
@@ -777,9 +781,9 @@ impl App {
                 log::info!("Selected cannon at ({}, {})", bx, by);
             }
             return;
-        } else if self.selected_cannon.is_some() && bt != 29 {
+        } else if self.block_sel.cannon.is_some() && bt != 29 {
             // Clicked away from cannon — deselect
-            self.selected_cannon = None;
+            self.block_sel.cannon = None;
         }
 
         // Placing pleb mode
@@ -807,8 +811,8 @@ impl App {
         // Click on storage crate: toggle inspection popup
         if bt == 33 && self.build_tool != BuildTool::Destroy {
             let cidx = by as u32 * GRID_W + bx as u32;
-            self.selected_crate = if self.selected_crate == Some(cidx) { None } else { Some(cidx) };
-            self.selected_crate_world = (bx as f32 + 0.5, by as f32 + 0.5);
+            self.block_sel.crate_idx = if self.block_sel.crate_idx == Some(cidx) { None } else { Some(cidx) };
+            self.block_sel.crate_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
 
@@ -1207,24 +1211,24 @@ impl App {
         // Click dimmer: show slider popup
         if bt == 43 && self.build_tool != BuildTool::Destroy {
             let didx = by as u32 * GRID_W + bx as u32;
-            self.selected_dimmer = if self.selected_dimmer == Some(didx) { None } else { Some(didx) };
-            self.selected_dimmer_world = (bx as f32 + 0.5, by as f32 + 0.5);
+            self.block_sel.dimmer = if self.block_sel.dimmer == Some(didx) { None } else { Some(didx) };
+            self.block_sel.dimmer_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
 
         // Click fan: show speed popup (similar to pump)
         if bt == 12 && self.build_tool != BuildTool::Destroy {
             let fidx = by as u32 * GRID_W + bx as u32;
-            self.selected_fan = if self.selected_fan == Some(fidx) { None } else { Some(fidx) };
-            self.selected_fan_world = (bx as f32 + 0.5, by as f32 + 0.5);
+            self.block_sel.fan = if self.block_sel.fan == Some(fidx) { None } else { Some(fidx) };
+            self.block_sel.fan_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
 
         // Click pump: toggle pump speed popup
         if bt == 16 {
             let pidx = by as u32 * GRID_W + bx as u32;
-            self.selected_pump = if self.selected_pump == Some(pidx) { None } else { Some(pidx) };
-            self.selected_pump_world = (bx as f32 + 0.5, by as f32 + 0.5);
+            self.block_sel.pump = if self.block_sel.pump == Some(pidx) { None } else { Some(pidx) };
+            self.block_sel.pump_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
 
@@ -1714,7 +1718,7 @@ impl App {
         // Debug: copy one dye texel at cursor position for readback
         let shift_for_debug = self.pressed_keys.contains(&KeyCode::ShiftLeft)
             || self.pressed_keys.contains(&KeyCode::ShiftRight);
-        if self.debug_mode || shift_for_debug {
+        if self.debug.mode || shift_for_debug {
             let (wx, wy) = self.hover_world;
             let dye_x = ((wx / GRID_W as f32) * FLUID_DYE_W as f32).clamp(0.0, (FLUID_DYE_W - 1) as f32) as u32;
             let dye_y = ((wy / GRID_H as f32) * FLUID_DYE_H as f32).clamp(0.0, (FLUID_DYE_H - 1) as f32) as u32;
@@ -1737,7 +1741,7 @@ impl App {
                 },
                 wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
             );
-            self.debug_fluid_readback_pending = true;
+            self.debug.fluid_pending = true;
 
             // Also copy block temperature at cursor position from block_temp_buffer
             let btx = wx.floor() as i32;
@@ -1754,8 +1758,8 @@ impl App {
                     &gfx.block_temp_readback_buffer, 4, // second f32
                     4,
                 );
-                self.debug_block_temp_pending = true;
-                self.debug_voltage_pending = true;
+                self.debug.block_temp_pending = true;
+                self.debug.voltage_pending = true;
             }
         }
 
@@ -1909,8 +1913,8 @@ impl App {
 
             // Debug: read back the dye texel
             // Debug readback processing
-            if self.debug_fluid_readback_pending {
-                self.debug_fluid_readback_pending = false;
+            if self.debug.fluid_pending {
+                self.debug.fluid_pending = false;
                 // Synchronous readback — native only (WASM can't block-wait on GPU)
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -1920,7 +1924,7 @@ impl App {
                     let data = buffer_slice.get_mapped_range();
                     let f16_data: &[u16] = bytemuck::cast_slice(&data);
                     for i in 0..4 {
-                        self.debug_fluid_density[i] = half_to_f32(f16_data[i]);
+                        self.debug.fluid_density[i] = half_to_f32(f16_data[i]);
                     }
                     drop(data);
                     gfx.debug_readback_buffer.unmap();
@@ -1928,9 +1932,9 @@ impl App {
             }
 
             // Block temperature + voltage readback processing
-            if self.debug_block_temp_pending {
-                self.debug_block_temp_pending = false;
-                self.debug_voltage_pending = false;
+            if self.debug.block_temp_pending {
+                self.debug.block_temp_pending = false;
+                self.debug.voltage_pending = false;
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let buffer_slice = gfx.block_temp_readback_buffer.slice(..8); // 2 f32s
@@ -1938,8 +1942,8 @@ impl App {
                     gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
                     let data = buffer_slice.get_mapped_range();
                     let values: &[f32] = bytemuck::cast_slice(&data);
-                    self.debug_block_temp = values[0];
-                    self.debug_voltage = values[1];
+                    self.debug.block_temp = values[0];
+                    self.debug.voltage = values[1];
                     drop(data);
                     gfx.block_temp_readback_buffer.unmap();
                 }
@@ -2139,8 +2143,8 @@ impl ApplicationHandler for App {
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::Escape) => {
                             self.placing_pleb = false;
-                            if self.debug_mode {
-                                self.debug_mode = false;
+                            if self.debug.mode {
+                                self.debug.mode = false;
                             } else if self.selected_pleb.is_some() {
                                 self.selected_pleb = None;
                             } else if self.build_tool != BuildTool::None {
@@ -2324,8 +2328,8 @@ impl ApplicationHandler for App {
                             }
                             if !deposited {
                                 // Just inspect the crate
-                                self.selected_crate = if self.selected_crate == Some(cidx) { None } else { Some(cidx) };
-                                self.selected_crate_world = (rbx as f32 + 0.5, rby as f32 + 0.5);
+                                self.block_sel.crate_idx = if self.block_sel.crate_idx == Some(cidx) { None } else { Some(cidx) };
+                                self.block_sel.crate_world = (rbx as f32 + 0.5, rby as f32 + 0.5);
                             }
                         } else if self.selected_pleb.is_some() {
                             self.context_menu = Some((self.last_mouse_x as f32, self.last_mouse_y as f32));

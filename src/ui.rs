@@ -1331,7 +1331,7 @@ impl App {
 
             #[cfg(not(target_arch = "wasm32"))]
             let gas_info = {
-                let [smoke_r, o2, co2, temp] = self.debug_fluid_density;
+                let [smoke_r, o2, co2, temp] = self.debug.fluid_density;
                 // Check if this is a solid block (wall) — show block temp instead of air data
                 let (is_solid_wall, is_pipe_block) = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                     let ib = self.grid_data[(by as u32 * GRID_W + bx as u32) as usize];
@@ -1341,8 +1341,8 @@ impl App {
                     let pipe = ibt >= 15 && ibt <= 20;
                     (solid, pipe)
                 } else { (false, false) };
-                let voltage_str = if self.debug_voltage > 0.01 {
-                    let v = self.debug_voltage;
+                let voltage_str = if self.debug.voltage > 0.01 {
+                    let v = self.debug.voltage;
                     // Estimate current from voltage (I = V/R, assume R ≈ 10Ω for display)
                     let r = 10.0f32; // approximate resistance
                     let amps = v / r;
@@ -1350,9 +1350,9 @@ impl App {
                     format!("\n⚡ {:.1}V | {:.2}A | {:.1}W", v, amps, watts)
                 } else { String::new() };
                 if is_solid_wall {
-                    format!("Smoke: —\nO2: —\nCO2: —\nWall temp: {:.1}°C{}", self.debug_block_temp, voltage_str)
+                    format!("Smoke: —\nO2: —\nCO2: —\nWall temp: {:.1}°C{}", self.debug.block_temp, voltage_str)
                 } else if is_pipe_block {
-                    format!("Smoke: —\nO2: —\nCO2: —\nPipe temp: {:.1}°C{}", self.debug_block_temp, voltage_str)
+                    format!("Smoke: —\nO2: —\nCO2: —\nPipe temp: {:.1}°C{}", self.debug.block_temp, voltage_str)
                 } else {
                     format!("Smoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C{}", smoke_r, o2, co2, temp, voltage_str)
                 }
@@ -1719,7 +1719,7 @@ impl App {
                 let barrel_w = 0.10 * tile_px;
                 let end_x = sx + angle.cos() * barrel_len;
                 let end_y = sy + angle.sin() * barrel_len;
-                let is_selected = self.selected_cannon == Some(cannon_idx);
+                let is_selected = self.block_sel.cannon == Some(cannon_idx);
                 let barrel_color = if is_selected {
                     egui::Color32::from_rgb(80, 75, 65)
                 } else {
@@ -1906,8 +1906,8 @@ impl App {
         }
 
         // Pump speed slider popup
-        if let Some(pump_idx) = self.selected_pump {
-            let (pwx, pwy) = self.selected_pump_world;
+        if let Some(pump_idx) = self.block_sel.pump {
+            let (pwx, pwy) = self.block_sel.pump_world;
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let sx = ((pwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
             let sy = ((pwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
@@ -1930,13 +1930,13 @@ impl App {
                     });
                 });
             if !still_valid {
-                self.selected_pump = None;
+                self.block_sel.pump = None;
             }
         }
 
         // Fan speed slider popup
-        if let Some(_fan_idx) = self.selected_fan {
-            let (fwx, fwy) = self.selected_fan_world;
+        if let Some(_fan_idx) = self.block_sel.fan {
+            let (fwx, fwy) = self.block_sel.fan_world;
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let sx = ((fwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
             let sy = ((fwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
@@ -1955,13 +1955,13 @@ impl App {
                     });
                 });
             if !still_valid {
-                self.selected_fan = None;
+                self.block_sel.fan = None;
             }
         }
 
         // Dimmer slider popup
-        if let Some(dimmer_idx) = self.selected_dimmer {
-            let (dwx, dwy) = self.selected_dimmer_world;
+        if let Some(dimmer_idx) = self.block_sel.dimmer {
+            let (dwx, dwy) = self.block_sel.dimmer_world;
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let sx = ((dwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
             let sy = ((dwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
@@ -1995,13 +1995,13 @@ impl App {
                     });
             }
             if !still_valid {
-                self.selected_dimmer = None;
+                self.block_sel.dimmer = None;
             }
         }
 
         // Storage crate inspection popup
-        if let Some(crate_idx) = self.selected_crate {
-            let (cwx, cwy) = self.selected_crate_world;
+        if let Some(crate_idx) = self.block_sel.crate_idx {
+            let (cwx, cwy) = self.block_sel.crate_world;
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let sx = ((cwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
             let sy = ((cwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
@@ -2045,7 +2045,7 @@ impl App {
                     });
             }
             if !still_valid {
-                self.selected_crate = None;
+                self.block_sel.crate_idx = None;
             }
         }
 
