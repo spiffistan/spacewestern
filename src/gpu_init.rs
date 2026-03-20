@@ -217,7 +217,7 @@ impl App {
         // --- Lightmap seed pipeline (writes to texture A) ---
         let lightmap_seed_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lightmap-seed"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("lightmap.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/lightmap.wgsl").into()),
         });
 
         let seed_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -317,7 +317,7 @@ impl App {
         // --- Lightmap propagation pipeline (reads texture_2d, writes storage) ---
         let lightmap_prop_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lightmap-propagate"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("lightmap_propagate.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/lightmap_propagate.wgsl").into()),
         });
 
         let prop_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -559,13 +559,13 @@ impl App {
 
         // --- Fluid shader modules ---
         let fluid_sim_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fluid-sim"), source: wgpu::ShaderSource::Wgsl(include_str!("fluid.wgsl").into()),
+            label: Some("fluid-sim"), source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluid.wgsl").into()),
         });
         let fluid_pressure_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fluid-pressure"), source: wgpu::ShaderSource::Wgsl(include_str!("fluid_pressure.wgsl").into()),
+            label: Some("fluid-pressure"), source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluid_pressure.wgsl").into()),
         });
         let fluid_dye_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fluid-dye"), source: wgpu::ShaderSource::Wgsl(include_str!("fluid_dye.wgsl").into()),
+            label: Some("fluid-dye"), source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluid_dye.wgsl").into()),
         });
 
         // --- Fluid pipelines ---
@@ -768,7 +768,7 @@ impl App {
         // --- Raytrace compute pipeline (now also reads the lightmap) ---
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("raytrace-compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("raytrace.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/raytrace.wgsl").into()),
         });
 
         let compute_bind_group_layout =
@@ -1048,7 +1048,7 @@ impl App {
         // --- Render (blit) pipeline ---
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blit-shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("blit.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blit.wgsl").into()),
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1195,7 +1195,7 @@ impl App {
         // --- Thermal exchange pipeline ---
         let thermal_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("thermal-compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("thermal.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/thermal.wgsl").into()),
         });
         let thermal_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("thermal-bgl"),
@@ -1235,7 +1235,7 @@ impl App {
         // --- Power grid pipeline ---
         let power_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("power-compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("power.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/power.wgsl").into()),
         });
         let power_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("power-bgl"),
