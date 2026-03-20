@@ -4,8 +4,39 @@
 use crate::*;
 
 impl App {
+    /// Pixels-per-point scale factor for the current window.
+    fn ppp(&self) -> f32 {
+        self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0)
+    }
+
+    /// Convert world coords to screen coords for egui overlay drawing.
+    fn world_to_screen_ui(&self, wx: f32, wy: f32, bp_cam: (f32,f32,f32,f32,f32)) -> egui::Pos2 {
+        let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+        let ppp = self.ppp();
+        let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / ppp;
+        let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / ppp;
+        egui::pos2(sx, sy)
+    }
+
+    /// Tile size in screen pixels at current zoom.
+    fn tile_px(&self, bp_cam: (f32,f32,f32,f32,f32)) -> f32 {
+        bp_cam.2 / self.render_scale / self.ppp()
+    }
+
     pub fn draw_ui(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: Vec<((i32,i32), bool)>, dt: f32) {
-        let bp_ppp = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
+        let bp_ppp = self.ppp();
+        self.draw_layers_bar(ctx);
+        self.draw_layer_legend(ctx, bp_ppp);
+        self.draw_menu_bar(ctx, dt);
+        self.draw_inventory_window(ctx, bp_ppp);
+        self.draw_build_bar(ctx, bp_ppp);
+        self.draw_colonist_bar(ctx, bp_ppp, bp_cam);
+        self.draw_context_menus(ctx, bp_ppp, bp_cam);
+        self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
+        self.draw_world_labels(ctx, bp_cam);
+    }
+
+    fn draw_layers_bar(&mut self, ctx: &egui::Context) {
         // --- Layers bar (top-right, horizontal groups with labels above) ---
         egui::Area::new(egui::Id::new("layers_menu"))
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 32.0])
@@ -81,6 +112,9 @@ impl App {
                 });
             });
 
+    }
+
+    fn draw_layer_legend(&mut self, ctx: &egui::Context, bp_ppp: f32) {
         // --- Layer legend (below layers menu, top-right) ---
         {
             let s = 12.0;
@@ -210,6 +244,10 @@ impl App {
                 ui.label(egui::RichText::new(format!("v{} | {:.0} fps", include_str!("../VERSION").trim(), self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(12.0));
             });
 
+    }
+
+    fn draw_menu_bar(&mut self, ctx: &egui::Context, dt: f32) {
+        let bp_ppp = self.ppp();
         let mut time_val = self.time_of_day;
         let mut paused = self.time_paused;
         let mut speed = self.time_speed;
@@ -377,6 +415,9 @@ impl App {
                 });
         }
 
+    }
+
+    fn draw_inventory_window(&mut self, ctx: &egui::Context, bp_ppp: f32) {
         // --- Inventory window (RPG-style, toggle with I key or click pleb name) ---
         if self.show_inventory {
             if let Some(sel_idx) = self.selected_pleb {
@@ -516,6 +557,9 @@ impl App {
             }
         }
 
+    }
+
+    fn draw_build_bar(&mut self, ctx: &egui::Context, bp_ppp: f32) {
         // --- Build categories (bottom bar, horizontal, Rimworld-style) ---
         let cat_s = 18.0; // category font size
         egui::Area::new(egui::Id::new("build_categories"))
@@ -674,6 +718,9 @@ impl App {
                 });
         }
 
+    }
+
+    fn draw_colonist_bar(&mut self, ctx: &egui::Context, bp_ppp: f32, bp_cam: (f32,f32,f32,f32,f32)) {
         // --- Colonist bar (top center, like Rimworld) ---
         if !self.plebs.is_empty() {
             // Collect pleb data for display (avoid borrow issues)
@@ -946,6 +993,9 @@ impl App {
                 });
         }
 
+    }
+
+    fn draw_context_menus(&mut self, ctx: &egui::Context, bp_ppp: f32, bp_cam: (f32,f32,f32,f32,f32)) {
         // --- Context menu (right-click on selected pleb) ---
         if let Some((mx, my)) = self.context_menu {
             if let Some(sel_idx) = self.selected_pleb {
@@ -1464,6 +1514,10 @@ impl App {
             }
         }
 
+    }
+
+    fn draw_world_overlays(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: &[((i32,i32), bool)]) {
+        let bp_ppp = self.ppp();
         // Blueprint preview — draw ghost overlay for placement
         if !blueprint_tiles.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
@@ -1473,7 +1527,7 @@ impl App {
                 egui::Id::new("blueprint"),
             ));
 
-            for &((tx, ty), valid) in &blueprint_tiles {
+            for &((tx, ty), valid) in blueprint_tiles {
                 let color = if valid {
                     egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80)
                 } else {
@@ -1996,16 +2050,20 @@ impl App {
             }
         }
 
+    }
+
+    fn draw_world_labels(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32)) {
         // --- World labels: pleb names, activity, key items ---
         {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
-            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            let ppp = self.ppp();
+            let tile_px = cam_zoom / self.render_scale / ppp;
 
             // Only show labels when zoomed in enough
             if tile_px > 6.0 {
                 let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
-                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / ppp;
+                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / ppp;
                     egui::pos2(sx, sy)
                 };
 
