@@ -187,7 +187,10 @@ const LIGHTMAP_W: u32 = GRID_W * LIGHTMAP_SCALE;
 const LIGHTMAP_H: u32 = GRID_H * LIGHTMAP_SCALE;
 const LIGHTMAP_PROP_ITERATIONS: u32 = 26; // more iterations for 2x res (covers ~13 tile radius)
 const LIGHTMAP_UPDATE_INTERVAL: u32 = 2; // recompute every N frames (~30fps lightmap at 60fps)
+#[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_RENDER_SCALE: f32 = 0.5;
+#[cfg(target_arch = "wasm32")]
+const DEFAULT_RENDER_SCALE: f32 = 0.35;
 
 struct GfxState {
     surface: wgpu::Surface<'static>,
@@ -772,7 +775,7 @@ impl App {
             return;
         }
 
-        let reg = block_defs::BlockRegistry::load();
+        let reg = block_defs::BlockRegistry::cached();
         let (block_type_id, tiles) = match self.build_tool {
             BuildTool::Destroy => (0u8, Self::filled_rect_tiles(sx, sy, ex, ey)),
             BuildTool::Place(id) => {
@@ -1136,7 +1139,7 @@ impl App {
                 }
                 BuildTool::Place(id) => {
                     // Generic Place: use registry for place_height and flags
-                    let reg = block_defs::BlockRegistry::load();
+                    let reg = block_defs::BlockRegistry::cached();
                     let placement = reg.get(id).and_then(|d| d.placement.as_ref());
                     let place_height = placement.map(|p| p.place_height).unwrap_or(1);
                     let extra_flags = placement.map(|p| p.extra_flags).unwrap_or(0);
@@ -1672,7 +1675,7 @@ impl App {
                 // During drag: show the drag shape preview
                 match self.build_tool {
                     BuildTool::Place(id) => {
-                        let reg = block_defs::BlockRegistry::load();
+                        let reg = block_defs::BlockRegistry::cached();
                         let shape = reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref());
                         match shape {
                             Some(block_defs::DragShape::Line) => Self::line_tiles(sx, sy, hbx, hby),
@@ -1854,9 +1857,13 @@ impl App {
           let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
           p.set_pipeline(&gfx.thermal_pipeline); p.set_bind_group(0, &gfx.thermal_bind_group, &[]); p.dispatch_workgroups(tw, th, 1); }
 
-        // 11. Power grid voltage relaxation (256x256, 8 iterations for fast convergence)
+        // 11. Power grid voltage relaxation (256x256)
+        #[cfg(target_arch = "wasm32")]
+        let power_iters = 4;
+        #[cfg(not(target_arch = "wasm32"))]
+        let power_iters = 8;
         { let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
-          for _ in 0..8 {
+          for _ in 0..power_iters {
             let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("power"), timestamp_writes: None });
             p.set_pipeline(&gfx.power_pipeline); p.set_bind_group(0, &gfx.power_bind_group, &[]); p.dispatch_workgroups(tw, th, 1);
           }
@@ -2474,7 +2481,7 @@ impl ApplicationHandler for App {
                         let is_shape_tool = match self.build_tool {
                             BuildTool::Destroy | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof => true,
                             BuildTool::Place(id) => {
-                                let reg = block_defs::BlockRegistry::load();
+                                let reg = block_defs::BlockRegistry::cached();
                                 reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref())
                                     .map(|s| *s != block_defs::DragShape::None).unwrap_or(false)
                             }

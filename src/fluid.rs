@@ -6,7 +6,10 @@ pub const FLUID_SIM_W: u32 = 256;
 pub const FLUID_SIM_H: u32 = 256;
 pub const FLUID_DYE_W: u32 = 512;
 pub const FLUID_DYE_H: u32 = 512;
+#[cfg(not(target_arch = "wasm32"))]
 pub const FLUID_PRESSURE_ITERS: u32 = 35;
+#[cfg(target_arch = "wasm32")]
+pub const FLUID_PRESSURE_ITERS: u32 = 20;
 
 /// Fluid simulation uniform. Must match FluidParams in all fluid .wgsl files.
 #[repr(C)]

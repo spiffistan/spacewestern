@@ -1321,7 +1321,7 @@ impl App {
                 let bt = block & 0xFF;
                 let bh = (block >> 8) & 0xFF;
                 let flags = (block >> 16) & 0xFF;
-                let reg = block_defs::BlockRegistry::load();
+                let reg = block_defs::BlockRegistry::cached();
                 let type_name = reg.name(bt as u8);
                 let mut tags = String::new();
                 if flags & 2 != 0 { tags.push_str(" [Roofed]"); }
@@ -1422,7 +1422,7 @@ impl App {
                         Self::filled_rect_tiles(sx, sy, ex, ey)
                     }
                     BuildTool::Place(id) => {
-                        let reg = crate::block_defs::BlockRegistry::load();
+                        let reg = crate::block_defs::BlockRegistry::cached();
                         let shape = reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref());
                         match shape {
                             Some(crate::block_defs::DragShape::Line) => Self::line_tiles(sx, sy, ex, ey),

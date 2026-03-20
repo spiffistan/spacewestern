@@ -86,13 +86,22 @@ pub enum DragShape {
 }
 
 /// Runtime registry of all block definitions, built once at startup.
+/// Cached via OnceLock — TOML is parsed only once, not per-frame.
 pub struct BlockRegistry {
     defs: Vec<Option<BlockDef>>,          // indexed by block ID (0..NUM_MATERIALS)
     pub wall_ids: Vec<u8>,               // all IDs where is_wall=true
     pub placeable: Vec<(u8, PlacementDef)>, // (block_id, placement) for build menu
 }
 
+static REGISTRY_CACHE: std::sync::OnceLock<BlockRegistry> = std::sync::OnceLock::new();
+
 impl BlockRegistry {
+    /// Get the cached registry (parsed once, reused forever).
+    pub fn cached() -> &'static BlockRegistry {
+        REGISTRY_CACHE.get_or_init(Self::load)
+    }
+
+    /// Parse the registry from blocks.toml. Prefer `cached()` for runtime use.
     pub fn load() -> Self {
         let toml_str = include_str!("blocks.toml");
         let file: BlockFile = toml::from_str(toml_str).expect("Failed to parse blocks.toml");
