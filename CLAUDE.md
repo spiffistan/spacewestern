@@ -1,11 +1,13 @@
 # Rayworld
 
-## Version
-The current version number is in the `VERSION` file (integer). Always bump it when committing/pushing.
-Update both `VERSION` and the version label in `src/main.rs` (search for the `format!("v{} |"` pattern).
+## Version & Push Policy
+The current version number is in the `VERSION` file (integer). The version label in `src/main.rs` reads it via `include_str!("../VERSION")`.
+- **Do NOT push** — only commit. The user will say "push it" explicitly when ready.
+- **Bump VERSION only when pushing**, not on every commit.
+- When the user says "push it": bump VERSION, amend/commit, then push.
 
 ## Architecture
-Single-crate Rust project with wgpu. All game logic in `src/main.rs`. Shaders are WGSL files in `src/`.
+Single-crate Rust project with wgpu. All game logic in `src/main.rs`. Shaders are WGSL files in `src/shaders/`.
 Builds native and WASM (via Trunk).
 
 ## Key conventions
