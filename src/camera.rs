@@ -51,5 +51,5 @@ pub struct CameraUniform {
     pub rain_intensity: f32,
     pub cloud_cover: f32,
     pub wind_magnitude: f32,
-    pub _cam_pad1: f32,
+    pub wind_angle: f32,   // wind direction in radians
 }

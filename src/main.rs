@@ -282,7 +282,7 @@ impl App {
                 force_refresh: 1.0,
                 pleb_x: 0.0, pleb_y: 0.0, pleb_angle: 0.0, pleb_selected: 0.0, pleb_torch: 0.0, pleb_headlight: 0.0,
                 prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
-                rain_intensity: 0.0, cloud_cover: 0.0, wind_magnitude: 0.0, _cam_pad1: 0.0,
+                rain_intensity: 0.0, cloud_cover: 0.0, wind_magnitude: 0.0, wind_angle: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -872,6 +872,28 @@ impl App {
                         self.grid_dirty = true;
                         compute_roof_heights(&mut self.grid_data);
                         log::info!("Placed solar panel at ({}, {})", bx, by);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::Place(41) => {
+                    // Wind turbine: 2×2 placement with rotation stored in flags
+                    let tiles = [(bx, by), (bx+1, by), (bx, by+1), (bx+1, by+1)];
+                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
+                    if all_valid {
+                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tblock = self.grid_data[tidx];
+                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
+                            let roof_h = tblock & 0xFF000000;
+                            let col = (i % 2) as u8;
+                            let row = (i / 2) as u8;
+                            // bits 3-4 = col, bits 5-6 = row, bit 7 = rotation (0=N-S, 1=E-W)
+                            let rot_bit = if self.build_rotation % 2 == 1 { 0x40u8 } else { 0u8 };
+                            let seg_flags = roof_flag | (col << 3) | (row << 5) | rot_bit;
+                            self.grid_data[tidx] = make_block(41, 2, seg_flags) | roof_h;
+                        }
+                        self.grid_dirty = true;
+                        compute_roof_heights(&mut self.grid_data);
                         self.build_tool = BuildTool::None;
                     }
                 }
@@ -1504,6 +1526,7 @@ impl App {
                 BuildTool::Place(37) => self.solar_tiles(hbx, hby).to_vec(),
                 BuildTool::Place(39) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
                 BuildTool::Place(40) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
+                BuildTool::Place(41) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
                 _ => vec![(hbx, hby)],
             };
             let on_furniture = self.build_tool == BuildTool::Place(11);
@@ -1537,6 +1560,9 @@ impl App {
                     } else {
                         ((tx, ty), valid)
                     }
+                } else if self.build_tool == BuildTool::Place(36) {
+                    // Wire can go anywhere
+                    ((tx, ty), tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32)
                 } else {
                     ((tx, ty), self.can_place_on(tx, ty, on_furniture))
                 }

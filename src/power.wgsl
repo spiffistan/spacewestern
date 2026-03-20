@@ -17,7 +17,7 @@ struct Camera {
     pleb_x: f32, pleb_y: f32, pleb_angle: f32, pleb_selected: f32,
     pleb_torch: f32, pleb_headlight: f32,
     prev_center_x: f32, prev_center_y: f32, prev_zoom: f32, prev_time: f32,
-    rain_intensity: f32, cloud_cover: f32, wind_magnitude: f32, _cam_pad1: f32,
+    rain_intensity: f32, cloud_cover: f32, wind_magnitude: f32, wind_angle: f32,
 };
 
 @group(0) @binding(0) var<storage, read_write> voltage: array<f32>;
@@ -76,9 +76,23 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
             let solar_output = camera.sun_intensity * (1.0 - camera.cloud_cover * 0.8);
             target_v = solar_output * 12.0;
         } else if bt == 41u {
-            // Wind turbine: output from wind speed (cut-in at 3, rated at 15, max 12V)
-            let wind = camera.wind_magnitude;
-            let wind_factor = clamp((wind - 3.0) / 12.0, 0.0, 1.0);
+            // Wind turbine: output from wind perpendicular to blade axis
+            // Rotation stored in flags bit 6 (0x40): 0=N-S wind, 1=E-W wind
+            let wt_flags = (block >> 16u) & 0xFFu;
+            let wt_ew = (wt_flags & 0x40u) != 0u;
+            // Compute perpendicular wind component (only positive = forward)
+            let wind_x = camera.wind_magnitude * cos(camera.wind_angle);
+            let wind_y = camera.wind_magnitude * sin(camera.wind_angle);
+            var perp_wind = 0.0;
+            if wt_ew {
+                // E-W facing: wind from X axis drives it
+                perp_wind = abs(wind_x);
+            } else {
+                // N-S facing: wind from Y axis drives it
+                perp_wind = abs(wind_y);
+            }
+            // Cut-in at 2, rated at 12, max 12V
+            let wind_factor = clamp((perp_wind - 2.0) / 10.0, 0.0, 1.0);
             target_v = wind_factor * 12.0;
         }
         let current_v = voltage[idx];

@@ -66,8 +66,14 @@ impl App {
                                 if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
                                     self.show_pipe_overlay = !self.show_pipe_overlay;
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::Power, "Power").clicked() {
+                                if ui.selectable_label(*ov == FluidOverlay::Power, "Volts").clicked() {
                                     *ov = if *ov == FluidOverlay::Power { FluidOverlay::None } else { FluidOverlay::Power };
+                                }
+                                if ui.selectable_label(*ov == FluidOverlay::PowerAmps, "Amps").clicked() {
+                                    *ov = if *ov == FluidOverlay::PowerAmps { FluidOverlay::None } else { FluidOverlay::PowerAmps };
+                                }
+                                if ui.selectable_label(*ov == FluidOverlay::PowerWatts, "Watts").clicked() {
+                                    *ov = if *ov == FluidOverlay::PowerWatts { FluidOverlay::None } else { FluidOverlay::PowerWatts };
                                 }
                             });
                         });
@@ -152,11 +158,29 @@ impl App {
                                     ]);
                                 }
                                 FluidOverlay::Power => {
+                                    ui.label(egui::RichText::new("Voltage").size(10.0).strong());
                                     grad(ui, &[
                                         (egui::Color32::from_rgb(25, 76, 25), "Low voltage"),
                                         (egui::Color32::from_rgb(50, 200, 50), "Normal"),
                                         (egui::Color32::from_rgb(230, 200, 25), "High load"),
                                         (egui::Color32::from_rgb(255, 50, 25), "Overload"),
+                                    ]);
+                                }
+                                FluidOverlay::PowerAmps => {
+                                    ui.label(egui::RichText::new("Current (Amps)").size(10.0).strong());
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(15, 15, 30), "No current"),
+                                        (egui::Color32::from_rgb(40, 80, 180), "Low"),
+                                        (egui::Color32::from_rgb(100, 200, 255), "Medium"),
+                                        (egui::Color32::from_rgb(255, 255, 220), "High"),
+                                    ]);
+                                }
+                                FluidOverlay::PowerWatts => {
+                                    ui.label(egui::RichText::new("Power (Watts)").size(10.0).strong());
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(50, 200, 50), "Generating"),
+                                        (egui::Color32::from_rgb(60, 60, 60), "Idle"),
+                                        (egui::Color32::from_rgb(255, 100, 50), "Consuming"),
                                     ]);
                                 }
                                 _ => {}
@@ -628,7 +652,8 @@ impl App {
                         if *tool != BuildTool::None {
                             ui.separator();
                             let hint = match tool {
-                                BuildTool::Place(9) | BuildTool::Place(30) => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
+                                BuildTool::Place(9) | BuildTool::Place(30) | BuildTool::Place(39) => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
+                                BuildTool::Place(41) => { let d = if self.build_rotation % 2 == 0 { "N↔S wind" } else { "E↔W wind" }; format!("Q/E [{}]", d) }
                                 BuildTool::Place(11) => "On bench".to_string(),
                                 BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19) | BuildTool::Place(29) => {
                                     let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" };
@@ -1466,6 +1491,36 @@ impl App {
                     0.0,
                     color,
                 );
+
+                // Wind turbine: show wind direction arrows across the 2x2 area (first tile only)
+                if self.build_tool == BuildTool::Place(41) && tx == blueprint_tiles[0].0.0 && ty == blueprint_tiles[0].0.1 {
+                    // Draw arrows showing wind direction through the turbine
+                    let center = egui::pos2(
+                        (sx0 + sx1) / 2.0 + (sx1 - sx0) * 0.5,
+                        (sy0 + sy1) / 2.0 + (sy1 - sy0) * 0.5,
+                    );
+                    let tile_size = (sx1 - sx0).max(1.0);
+                    let (adx, ady) = if self.build_rotation % 2 == 0 {
+                        (0.0f32, -1.0f32) // N-S wind (blades face E-W)
+                    } else {
+                        (1.0f32, 0.0f32) // E-W wind (blades face N-S)
+                    };
+                    // Two arrows flanking the turbine
+                    for &offset in &[-0.3f32, 0.3] {
+                        let perp_off = egui::Vec2::new(-ady * offset * tile_size * 2.0, adx * offset * tile_size * 2.0);
+                        let arrow_center = center + perp_off;
+                        let arrow_len = tile_size * 1.5;
+                        let tip = arrow_center + egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
+                        let tail = arrow_center - egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
+                        painter.line_segment([tail, tip], egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(100, 200, 255, 180)));
+                        let perp = egui::Vec2::new(-ady, adx) * arrow_len * 0.15;
+                        let head_base = arrow_center + egui::Vec2::new(adx * arrow_len * 0.25, ady * arrow_len * 0.25);
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![tip, head_base + perp, head_base - perp],
+                            egui::Color32::from_rgba_unmultiplied(100, 200, 255, 180), egui::Stroke::NONE,
+                        ));
+                    }
+                }
 
                 // Direction arrow for fan, pump, inlet, outlet
                 if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {

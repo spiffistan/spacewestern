@@ -113,6 +113,7 @@ impl App {
             self.camera.rain_intensity = rain;
             self.camera.cloud_cover = self.weather.cloud_cover();
             self.camera.wind_magnitude = (self.fluid_params.wind_x.powi(2) + self.fluid_params.wind_y.powi(2)).sqrt();
+            self.camera.wind_angle = self.fluid_params.wind_y.atan2(self.fluid_params.wind_x);
             self.fluid_params.rain_intensity = rain;
             // Update wetness
             tick_wetness(
@@ -133,6 +134,8 @@ impl App {
             FluidOverlay::Temp => 7.0,
             FluidOverlay::HeatFlow => 8.0,
             FluidOverlay::Power => 9.0,
+            FluidOverlay::PowerAmps => 10.0,
+            FluidOverlay::PowerWatts => 11.0,
         };
         let prev_glow = self.camera.enable_prox_glow;
         let prev_bleed = self.camera.enable_dir_bleed;

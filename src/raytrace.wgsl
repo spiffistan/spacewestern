@@ -53,7 +53,7 @@ struct Camera {
     rain_intensity: f32,
     cloud_cover: f32,
     wind_magnitude: f32,
-    _cam_pad1: f32,
+    wind_angle: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -2001,10 +2001,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         let wf_e2 = (get_block(bx + 1, by) >> 16u) & 0x80u;
         let wf_n2 = (get_block(bx, by - 1) >> 16u) & 0x80u;
         let wf_s2 = (get_block(bx, by + 1) >> 16u) & 0x80u;
-        let conn_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 7u || n_w == 12u || n_w == 10u || wf_w2 != 0u;
-        let conn_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 7u || n_e == 12u || n_e == 10u || wf_e2 != 0u;
-        let conn_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 7u || n_n == 12u || n_n == 10u || wf_n2 != 0u;
-        let conn_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 7u || n_s == 12u || n_s == 10u || wf_s2 != 0u;
+        let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 7u || n_w == 12u || n_w == 10u;
+        let pwr_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 39u || n_e == 40u || n_e == 41u || n_e == 7u || n_e == 12u || n_e == 10u;
+        let pwr_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 39u || n_n == 40u || n_n == 41u || n_n == 7u || n_n == 12u || n_n == 10u;
+        let pwr_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 39u || n_s == 40u || n_s == 41u || n_s == 7u || n_s == 12u || n_s == 10u;
+        let conn_w = pwr_w || wf_w2 != 0u;
+        let conn_e = pwr_e || wf_e2 != 0u;
+        let conn_n = pwr_n || wf_n2 != 0u;
+        let conn_s = pwr_s || wf_s2 != 0u;
         let wire_w = 0.07;
         var on_wire = false;
         // Draw segments toward each connected neighbor
@@ -2161,31 +2165,82 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
             if abs(gx40 - 0.5) < 0.008 { color *= 0.85; }
         } else { color = vec3<f32>(0.42, 0.35, 0.22); }
     } else if btype == 41u {
-        // Wind turbine: pole with spinning blades
-        let tcx = fx - 0.5;
-        let tcy = fy - 0.5;
-        let tdist = length(vec2<f32>(tcx, tcy));
-        // Base/pole
-        if tdist < 0.08 {
-            color = vec3<f32>(0.50, 0.50, 0.55); // metal pole
-        } else if tdist < 0.38 {
-            // Spinning blades (3 blades, animated)
-            let blade_angle = atan2(tcy, tcx) + camera.time * camera.wind_magnitude * 0.5;
+        // Wind turbine: 2×2 with 3 long blades spinning from center hub
+        // Segment: bits 3-4 = col (0-1), bits 5-6 = row (0-1), bit 6 (0x40) = rotation
+        let wt_col = f32((bflags >> 3u) & 1u);
+        let wt_row = f32((bflags >> 5u) & 1u);
+        let wt_rotated = (bflags & 0x40u) != 0u; // true = E-W wind orientation
+        // Global UV across the full 2×2 turbine (0-1)
+        let wt_gx = (wt_col + fx) / 2.0;
+        let wt_gy = (wt_row + fy) / 2.0;
+        let wt_cx = wt_gx - 0.5;
+        let wt_cy = wt_gy - 0.5;
+        let wt_dist = length(vec2<f32>(wt_cx, wt_cy));
+        // Compute wind component perpendicular to the turbine blades
+        // N-S orientation (rot=0): blades face E-W, wind from N or S powers it
+        // E-W orientation (rot=1): blades face N-S, wind from E or W powers it
+        var wind_perp = 0.0;
+        if wt_rotated {
+            wind_perp = abs(camera.sun_dir_x); // approximate with sun_dir... no, use wind_magnitude
+            // Wind perpendicular component for E-W facing
+        } else {
+            // Wind perpendicular component for N-S facing
+        }
+        // Blade spin speed: proportional to wind magnitude, only forward
+        let spin_speed = max(camera.wind_magnitude * 0.3, 0.0);
+        // Ground base
+        color = vec3<f32>(0.42, 0.35, 0.22);
+        // Tower base: concrete pad
+        if wt_dist < 0.42 {
+            let pad_dist = wt_dist / 0.42;
+            color = mix(vec3<f32>(0.48, 0.47, 0.45), vec3<f32>(0.42, 0.35, 0.22), pad_dist);
+        }
+        // Spinning blades: 3 blades, long and tapered
+        if wt_dist < 0.46 && wt_dist > 0.04 {
+            let blade_angle = atan2(wt_cy, wt_cx) + camera.time * spin_speed;
             let blade_phase = fract(blade_angle / 2.094); // 2π/3 = 3 blades
-            let on_blade = blade_phase < 0.12 && tdist > 0.10;
+            // Tapered blade: wider near hub, narrow at tip
+            let taper = 0.04 + (1.0 - wt_dist / 0.46) * 0.08;
+            let on_blade = blade_phase < taper && wt_dist > 0.06;
             if on_blade {
-                // Blade: white with gray edge
-                let blade_t = (tdist - 0.10) / 0.28;
-                color = mix(vec3<f32>(0.85, 0.85, 0.88), vec3<f32>(0.70, 0.70, 0.72), blade_t);
-            } else {
-                color = vec3<f32>(0.42, 0.35, 0.22); // ground visible between blades
+                // Blade color: white with subtle gradient
+                let blade_t = wt_dist / 0.46;
+                color = mix(vec3<f32>(0.90, 0.90, 0.92), vec3<f32>(0.75, 0.75, 0.78), blade_t);
+                // Leading edge highlight
+                if blade_phase < taper * 0.3 {
+                    color += vec3<f32>(0.05);
+                }
+                // Motion blur at high speed
+                if spin_speed > 2.0 {
+                    let blur_alpha = clamp((spin_speed - 2.0) * 0.1, 0.0, 0.4);
+                    color = mix(color, vec3<f32>(0.42, 0.35, 0.22), blur_alpha * wt_dist);
+                }
+            }
+        }
+        // Center hub
+        if wt_dist < 0.06 {
+            color = vec3<f32>(0.55, 0.55, 0.58); // steel hub
+            if wt_dist < 0.03 {
+                color = vec3<f32>(0.45, 0.45, 0.48); // hub center bolt
+            }
+        }
+        // Nacelle housing (elongated behind hub based on orientation)
+        var nacelle_fx = wt_cx;
+        var nacelle_fy = wt_cy;
+        if wt_rotated {
+            // E-W wind: nacelle points along X
+            if abs(nacelle_fy) < 0.04 && nacelle_fx > -0.02 && nacelle_fx < 0.10 {
+                color = vec3<f32>(0.52, 0.52, 0.55);
             }
         } else {
-            color = vec3<f32>(0.42, 0.35, 0.22); // ground
+            // N-S wind: nacelle points along Y
+            if abs(nacelle_fx) < 0.04 && nacelle_fy > -0.02 && nacelle_fy < 0.10 {
+                color = vec3<f32>(0.52, 0.52, 0.55);
+            }
         }
-        // Voltage glow on pole
+        // Voltage glow on hub
         let wv = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
-        if wv > 0.5 && tdist < 0.08 {
+        if wv > 0.5 && wt_dist < 0.06 {
             color += vec3<f32>(0.1, 0.15, 0.05) * clamp(wv / 12.0, 0.0, 1.0);
         }
     } else if btype == 14u {
@@ -2851,6 +2906,64 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
                 pwr_color = mix(vec3<f32>(0.9, 0.8, 0.1), vec3<f32>(1.0, 0.2, 0.1), t);
             }
             color = mix(color * 0.3, pwr_color, 0.7);
+        } else {
+            color *= 0.5;
+        }
+    } else if camera.fluid_overlay < 10.5 {
+        // Amps overlay: show current flow (voltage differences with neighbors)
+        let gw_a = u32(camera.grid_w);
+        let aidx = u32(by) * gw_a + u32(bx);
+        let av = voltage[aidx];
+        var total_current = 0.0;
+        for (var ad = 0; ad < 4; ad++) {
+            var adx = 0; var ady = 0;
+            if ad == 0 { adx = 1; } else if ad == 1 { adx = -1; }
+            else if ad == 2 { ady = 1; } else { ady = -1; }
+            let anx = i32(bx) + adx;
+            let any = i32(by) + ady;
+            if anx >= 0 && any >= 0 && anx < i32(camera.grid_w) && any < i32(camera.grid_h) {
+                let anidx = u32(any) * gw_a + u32(anx);
+                total_current += abs(voltage[anidx] - av);
+            }
+        }
+        let norm_a = clamp(total_current * 0.5, 0.0, 1.0);
+        if norm_a > 0.005 {
+            var amp_color = mix(vec3<f32>(0.05, 0.05, 0.15), vec3<f32>(0.4, 0.8, 1.0), clamp(norm_a * 2.0, 0.0, 1.0));
+            if norm_a > 0.5 {
+                amp_color = mix(amp_color, vec3<f32>(1.0, 1.0, 0.9), (norm_a - 0.5) * 2.0);
+            }
+            color = mix(color * 0.3, amp_color, 0.7);
+        } else {
+            color *= 0.5;
+        }
+    } else if camera.fluid_overlay < 11.5 {
+        // Watts overlay: generation (green) vs consumption (red)
+        let gw_w = u32(camera.grid_w);
+        let widx = u32(by) * gw_w + u32(bx);
+        let wbt = btype;
+        let wv = voltage[widx];
+        // Determine if generator, consumer, or passive
+        let is_gen = wbt == 37u || wbt == 41u; // solar, wind
+        let is_con = wbt == 7u || wbt == 10u || wbt == 11u || wbt == 12u || wbt == 16u;
+        let is_bat = wbt == 38u || wbt == 39u || wbt == 40u;
+        if wv > 0.01 {
+            var watt_color: vec3<f32>;
+            if is_gen {
+                // Green glow for generators (brighter = more output)
+                let gen_pwr = clamp(wv / 12.0, 0.0, 1.0);
+                watt_color = mix(vec3<f32>(0.1, 0.3, 0.1), vec3<f32>(0.2, 0.9, 0.2), gen_pwr);
+            } else if is_con {
+                // Red/orange for consumers
+                let con_pwr = clamp(wv / 12.0, 0.0, 1.0);
+                watt_color = mix(vec3<f32>(0.3, 0.1, 0.05), vec3<f32>(1.0, 0.4, 0.1), con_pwr);
+            } else if is_bat {
+                // Blue/cyan for batteries (charging/discharging)
+                watt_color = mix(vec3<f32>(0.1, 0.1, 0.3), vec3<f32>(0.3, 0.6, 0.9), clamp(wv / 12.0, 0.0, 1.0));
+            } else {
+                // Wire: dim white proportional to voltage
+                watt_color = vec3<f32>(0.4, 0.4, 0.45) * clamp(wv / 12.0, 0.0, 1.0);
+            }
+            color = mix(color * 0.3, watt_color, 0.7);
         } else {
             color *= 0.5;
         }
