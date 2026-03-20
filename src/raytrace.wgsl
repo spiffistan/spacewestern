@@ -109,7 +109,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 39u)];
+    return materials[min(bt, 41u)];
 }
 
 // --- Sprite constants ---
@@ -470,16 +470,22 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             var light_col = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
             let light_h = mat.light_height;
 
-            // Electric lights: intensity depends on power (voltage)
+            // Electric lights: OFF unless powered above threshold
             if bt == 7u || bt == 10u || bt == 11u {
                 let light_idx = u32(ny) * u32(camera.grid_w) + u32(nx);
                 let lv = voltage[light_idx];
-                let power_factor = clamp(lv / 6.0, 0.0, 1.0); // full brightness at 6V+
-                intensity *= power_factor;
-                // Slight flicker when low power (< 3V)
-                if lv > 0.5 && lv < 3.0 {
-                    let pf = sin(time * 15.0 + f32(light_idx) * 3.7) * 0.3 + 0.7;
-                    intensity *= pf;
+                if lv < 2.0 {
+                    // Below threshold: completely off
+                    intensity = 0.0;
+                } else {
+                    // Above threshold: scale from dim to full (2V=dim, 8V+=full)
+                    let power_factor = clamp((lv - 2.0) / 6.0, 0.0, 1.0);
+                    intensity *= power_factor;
+                    // Flicker when marginal power (2-4V)
+                    if lv < 4.0 {
+                        let pf = sin(time * 15.0 + f32(light_idx) * 3.7) * 0.3 + 0.7;
+                        intensity *= pf;
+                    }
                 }
             }
 
@@ -1990,10 +1996,15 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         let n_e = block_type(get_block(bx + 1, by));
         let n_n = block_type(get_block(bx, by - 1));
         let n_s = block_type(get_block(bx, by + 1));
-        let conn_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 7u || n_w == 12u || n_w == 10u;
-        let conn_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 7u || n_e == 12u || n_e == 10u;
-        let conn_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 7u || n_n == 12u || n_n == 10u;
-        let conn_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 7u || n_s == 12u || n_s == 10u;
+        // Also detect wire overlay flag (bit 7) on neighboring blocks
+        let wf_w2 = (get_block(bx - 1, by) >> 16u) & 0x80u;
+        let wf_e2 = (get_block(bx + 1, by) >> 16u) & 0x80u;
+        let wf_n2 = (get_block(bx, by - 1) >> 16u) & 0x80u;
+        let wf_s2 = (get_block(bx, by + 1) >> 16u) & 0x80u;
+        let conn_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 7u || n_w == 12u || n_w == 10u || wf_w2 != 0u;
+        let conn_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 7u || n_e == 12u || n_e == 10u || wf_e2 != 0u;
+        let conn_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 7u || n_n == 12u || n_n == 10u || wf_n2 != 0u;
+        let conn_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 7u || n_s == 12u || n_s == 10u || wf_s2 != 0u;
         let wire_w = 0.07;
         var on_wire = false;
         // Draw segments toward each connected neighbor
@@ -2098,6 +2109,57 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         } else {
             color = vec3<f32>(0.42, 0.35, 0.22); // ground
         }
+    } else if btype == 39u {
+        // Medium battery (2 tiles): darker green, seamless across tiles
+        let seg = (bflags >> 3u) & 1u;
+        let rot = (bflags >> 5u) & 3u;
+        var gx39 = fx; var gy39 = fy;
+        if rot == 0u { gx39 = (f32(seg) + fx) / 2.0; }
+        else { gy39 = (f32(seg) + fy) / 2.0; }
+        let m39 = 0.06;
+        let on39 = gx39 > m39 && gx39 < (1.0 - m39) && gy39 > m39 && gy39 < (1.0 - m39);
+        if on39 {
+            color = vec3<f32>(0.24, 0.36, 0.22);
+            // Terminals at one end
+            if gy39 < m39 + 0.08 && (abs(gx39 - 0.35) < 0.04 || abs(gx39 - 0.65) < 0.04) {
+                color = vec3<f32>(0.50, 0.50, 0.55);
+            }
+            let v39 = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+            let ch39 = clamp(v39 / 18.0, 0.0, 1.0);
+            let bar39 = (gy39 - m39 - 0.10) / 0.74;
+            if bar39 > 0.0 && bar39 < 1.0 && gx39 > 0.25 && gx39 < 0.75 {
+                if bar39 < ch39 { color = mix(vec3<f32>(0.8, 0.2, 0.1), vec3<f32>(0.2, 0.8, 0.2), ch39); }
+                else { color = vec3<f32>(0.12, 0.12, 0.12); }
+            }
+        } else { color = vec3<f32>(0.42, 0.35, 0.22); }
+    } else if btype == 40u {
+        // Large battery (2×2): industrial green, seamless across 4 tiles
+        let col40 = (bflags >> 3u) & 1u;
+        let row40 = (bflags >> 5u) & 1u;
+        let gx40 = (f32(col40) + fx) / 2.0;
+        let gy40 = (f32(row40) + fy) / 2.0;
+        let m40 = 0.04;
+        let on40 = gx40 > m40 && gx40 < (1.0 - m40) && gy40 > m40 && gy40 < (1.0 - m40);
+        if on40 {
+            color = vec3<f32>(0.20, 0.32, 0.20);
+            // Heavy terminals
+            if gy40 < m40 + 0.06 && (abs(gx40 - 0.30) < 0.04 || abs(gx40 - 0.70) < 0.04) {
+                color = vec3<f32>(0.48, 0.48, 0.52);
+            }
+            // Bolts at corners
+            let cb40 = (gx40 < m40 + 0.06 || gx40 > 1.0 - m40 - 0.06)
+                     && (gy40 < m40 + 0.06 || gy40 > 1.0 - m40 - 0.06);
+            if cb40 { color = vec3<f32>(0.45, 0.45, 0.48); }
+            let v40 = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+            let ch40 = clamp(v40 / 24.0, 0.0, 1.0);
+            let bar40 = (gy40 - m40 - 0.08) / 0.80;
+            if bar40 > 0.0 && bar40 < 1.0 && gx40 > 0.20 && gx40 < 0.80 {
+                if bar40 < ch40 { color = mix(vec3<f32>(0.8, 0.2, 0.1), vec3<f32>(0.1, 0.7, 0.2), ch40); }
+                else { color = vec3<f32>(0.10, 0.10, 0.10); }
+            }
+            // Panel lines
+            if abs(gx40 - 0.5) < 0.008 { color *= 0.85; }
+        } else { color = vec3<f32>(0.42, 0.35, 0.22); }
     } else if btype == 14u {
         // Insulated wall: outer shell with fiberglass insulation core
         let edge = 0.15; // outer shell thickness

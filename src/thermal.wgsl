@@ -38,7 +38,7 @@ fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 39u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 41u)]; }
 
 @compute @workgroup_size(8, 8)
 fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {

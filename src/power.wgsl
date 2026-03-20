@@ -29,10 +29,15 @@ fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 
 // Is this block part of the power network?
 fn is_conductor(bt: u32, flags: u32) -> bool {
-    // Wire=36, Solar=37, Battery=38, Electric light=7, Fan=12, Standing lamp=10
+    // Wire=36, Solar=37, Battery=38/39/40, Electric light=7, Fan=12, Standing lamp=10
     // Also: any block with wire overlay flag (bit 7 of flags)
     let has_wire = (flags & 0x80u) != 0u;
-    return bt == 36u || bt == 37u || bt == 38u || bt == 7u || bt == 12u || bt == 10u || has_wire;
+    return bt == 36u || bt == 37u || bt == 38u || bt == 39u || bt == 40u
+        || bt == 7u || bt == 12u || bt == 10u || bt == 11u || bt == 16u || has_wire;
+}
+
+fn is_battery(bt: u32) -> bool {
+    return bt == 38u || bt == 39u || bt == 40u;
 }
 
 // Is this block a power source?
@@ -65,13 +70,27 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Generators: inject voltage based on sun ---
     if is_generator(bt) {
-        // Solar panel: voltage proportional to sun intensity and cloud cover
         let solar_output = camera.sun_intensity * (1.0 - camera.cloud_cover * 0.8);
-        let target_v = solar_output * 12.0; // max 12V at full sun
-        // Gradually approach target (don't instant-set, allows network to stabilize)
+        let target_v = solar_output * 12.0;
         let current_v = voltage[idx];
         voltage[idx] = mix(current_v, target_v, 0.2);
         return;
+    }
+
+    // --- Batteries: store charge, discharge slowly ---
+    if is_battery(bt) {
+        // Battery capacity: small=12V, medium=18V (1.5x), large=24V (2x)
+        var max_v = 12.0;
+        if bt == 39u { max_v = 18.0; }
+        if bt == 40u { max_v = 24.0; }
+        // Battery acts as a capacitor: slowly absorbs/releases charge
+        // Don't participate in relaxation — just clamp and decay very slowly
+        let current_v = voltage[idx];
+        voltage[idx] = clamp(current_v, 0.0, max_v);
+        // Very slow self-discharge (battery retains charge overnight)
+        voltage[idx] *= 0.9998;
+        // Battery doesn't return here — it still participates in relaxation below
+        // but with high inertia (slow to change)
     }
 
     // --- Consumers: draw current (reduce voltage) ---

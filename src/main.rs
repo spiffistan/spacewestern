@@ -125,6 +125,8 @@ struct App {
     debug_fluid_density: [f32; 4], // last readback: RGBA from dye texture at cursor
     debug_block_temp: f32,         // last readback: block temperature at cursor
     debug_block_temp_pending: bool,
+    debug_voltage: f32,            // last readback: voltage at cursor
+    debug_voltage_pending: bool,
     debug_fluid_readback_pending: bool,
     fluid_mouse_active: bool,  // middle mouse button held
     fluid_mouse_prev: Option<(f32, f32)>, // previous world position for velocity calc
@@ -342,6 +344,8 @@ impl App {
             debug_fluid_density: [0.0; 4],
             debug_block_temp: 15.0,
             debug_block_temp_pending: false,
+            debug_voltage: 0.0,
+            debug_voltage_pending: false,
             debug_fluid_readback_pending: false,
             fluid_dye_phase: 0,
             output_phase: 0,
@@ -868,6 +872,42 @@ impl App {
                         self.grid_dirty = true;
                         compute_roof_heights(&mut self.grid_data);
                         log::info!("Placed solar panel at ({}, {})", bx, by);
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::Place(39) => {
+                    // Medium battery: 2-tile placement (like bed)
+                    let tiles = self.bed_tiles(bx, by, self.build_rotation);
+                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
+                    if all_valid {
+                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tblock = self.grid_data[tidx];
+                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
+                            let roof_h = tblock & 0xFF000000;
+                            let seg_flags = roof_flag | ((i as u8) << 3) | ((self.build_rotation as u8) << 5);
+                            self.grid_data[tidx] = make_block(39, 1, seg_flags) | roof_h;
+                        }
+                        self.grid_dirty = true;
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::Place(40) => {
+                    // Large battery: 2×2 placement
+                    let tiles = [(bx, by), (bx+1, by), (bx, by+1), (bx+1, by+1)];
+                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
+                    if all_valid {
+                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tblock = self.grid_data[tidx];
+                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
+                            let roof_h = tblock & 0xFF000000;
+                            let col = (i % 2) as u8;
+                            let row = (i / 2) as u8;
+                            let seg_flags = roof_flag | (col << 3) | (row << 5);
+                            self.grid_data[tidx] = make_block(40, 1, seg_flags) | roof_h;
+                        }
+                        self.grid_dirty = true;
                         self.build_tool = BuildTool::None;
                     }
                 }
@@ -1462,6 +1502,8 @@ impl App {
                 BuildTool::Place(9) => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
                 BuildTool::Place(30) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
                 BuildTool::Place(37) => self.solar_tiles(hbx, hby).to_vec(),
+                BuildTool::Place(39) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
+                BuildTool::Place(40) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
                 _ => vec![(hbx, hby)],
             };
             let on_furniture = self.build_tool == BuildTool::Place(11);
@@ -1655,11 +1697,17 @@ impl App {
             if btx >= 0 && bty >= 0 && btx < GRID_W as i32 && bty < GRID_H as i32 {
                 let bt_idx = (bty as u32 * GRID_W + btx as u32) as u64;
                 encoder.copy_buffer_to_buffer(
-                    &gfx.block_temp_buffer, bt_idx * 4, // source offset (f32 = 4 bytes)
+                    &gfx.block_temp_buffer, bt_idx * 4,
                     &gfx.block_temp_readback_buffer, 0,
-                    4, // 1 f32
+                    4,
+                );
+                encoder.copy_buffer_to_buffer(
+                    &gfx.voltage_buffer, bt_idx * 4,
+                    &gfx.block_temp_readback_buffer, 4, // second f32
+                    4,
                 );
                 self.debug_block_temp_pending = true;
+                self.debug_voltage_pending = true;
             }
         }
 
@@ -1831,17 +1879,19 @@ impl App {
                 }
             }
 
-            // Block temperature readback processing
+            // Block temperature + voltage readback processing
             if self.debug_block_temp_pending {
                 self.debug_block_temp_pending = false;
+                self.debug_voltage_pending = false;
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    let buffer_slice = gfx.block_temp_readback_buffer.slice(..4);
+                    let buffer_slice = gfx.block_temp_readback_buffer.slice(..8); // 2 f32s
                     buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
                     gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
                     let data = buffer_slice.get_mapped_range();
-                    let temp_data: &[f32] = bytemuck::cast_slice(&data);
-                    self.debug_block_temp = temp_data[0];
+                    let values: &[f32] = bytemuck::cast_slice(&data);
+                    self.debug_block_temp = values[0];
+                    self.debug_voltage = values[1];
                     drop(data);
                     gfx.block_temp_readback_buffer.unmap();
                 }

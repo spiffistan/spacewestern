@@ -592,6 +592,41 @@ thermal = { heat_capacity = 2.0, conductivity = 0.01, solar_absorption = 0.3 }
 [block.placement]
 category = "Power"
 icon = "🔋"
-label = "Battery"
+label = "Small"
 click = "simple"
+place_height = 1
+
+[[block]]
+id = 39
+name = "Battery (Medium)"
+color = [0.30, 0.42, 0.28]
+render_style = 25.0
+walkable = false
+is_removable = true
+is_furniture = true
+light_transmission = 1.0
+thermal = { heat_capacity = 3.0, conductivity = 0.01, solar_absorption = 0.3 }
+[block.placement]
+category = "Power"
+icon = "🔋"
+label = "Medium"
+click = "multi_tile"
+place_height = 1
+rotatable = true
+
+[[block]]
+id = 40
+name = "Battery (Large)"
+color = [0.25, 0.38, 0.25]
+render_style = 26.0
+walkable = false
+is_removable = true
+is_furniture = true
+light_transmission = 1.0
+thermal = { heat_capacity = 5.0, conductivity = 0.01, solar_absorption = 0.3 }
+[block.placement]
+category = "Power"
+icon = "🔋"
+label = "Large"
+click = "multi_tile"
 place_height = 1

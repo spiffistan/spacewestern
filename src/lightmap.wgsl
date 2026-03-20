@@ -41,6 +41,7 @@ struct Camera {
 @group(0) @binding(1) var<uniform> camera: Camera;
 @group(0) @binding(2) var<storage, read> grid: array<u32>;
 @group(0) @binding(3) var<storage, read> materials: array<GpuMaterial>;
+@group(0) @binding(4) var<storage, read> voltage: array<f32>;
 
 struct GpuMaterial {
     color_r: f32, color_g: f32, color_b: f32, render_style: f32,
@@ -51,7 +52,7 @@ struct GpuMaterial {
     ignition_temp: f32, walkable: f32, is_removable: f32, _pad: f32,
 };
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 39u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 41u)]; }
 
 // --- Block unpacking ---
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
@@ -115,6 +116,17 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
     if mat.light_intensity > 0.0 {
         var intensity = mat.light_intensity;
         var color = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
+
+        // Electric lights: OFF without power (voltage < 2V)
+        if bt == 7u || bt == 10u || bt == 11u {
+            let vidx = u32(by) * u32(camera.grid_w) + u32(bx);
+            let lv = voltage[vidx];
+            if lv < 2.0 {
+                intensity = 0.0;
+            } else {
+                intensity *= clamp((lv - 2.0) / 6.0, 0.0, 1.0);
+            }
+        }
 
         // Fireplace: apply flicker
         if bt == 6u {

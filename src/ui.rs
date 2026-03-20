@@ -606,7 +606,9 @@ impl App {
                                 "Power" => {
                                     icon_btn(ui, BuildTool::Place(36), "\u{26a1}", "Wire");
                                     icon_btn(ui, BuildTool::Place(37), "\u{2600}", "Solar");
-                                    icon_btn(ui, BuildTool::Place(38), "\u{1f50b}", "Battery");
+                                    icon_btn(ui, BuildTool::Place(38), "\u{1f50b}", "Bat S");
+                                    icon_btn(ui, BuildTool::Place(39), "\u{1f50b}", "Bat M");
+                                    icon_btn(ui, BuildTool::Place(40), "\u{1f50b}", "Bat L");
                                     icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
                                     icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
                                     icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table");
@@ -1262,12 +1264,15 @@ impl App {
                     let pipe = ibt >= 15 && ibt <= 20;
                     (solid, pipe)
                 } else { (false, false) };
+                let voltage_str = if self.debug_voltage > 0.01 {
+                    format!("\nVoltage: {:.1}V", self.debug_voltage)
+                } else { String::new() };
                 if is_solid_wall {
-                    format!("Smoke: —\nO2: —\nCO2: —\nWall temp: {:.1}°C", self.debug_block_temp)
+                    format!("Smoke: —\nO2: —\nCO2: —\nWall temp: {:.1}°C{}", self.debug_block_temp, voltage_str)
                 } else if is_pipe_block {
-                    format!("Smoke: —\nO2: —\nCO2: —\nPipe temp: {:.1}°C", self.debug_block_temp)
+                    format!("Smoke: —\nO2: —\nCO2: —\nPipe temp: {:.1}°C{}", self.debug_block_temp, voltage_str)
                 } else {
-                    format!("Smoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C", smoke_r, o2, co2, temp)
+                    format!("Smoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C{}", smoke_r, o2, co2, temp, voltage_str)
                 }
             };
             #[cfg(target_arch = "wasm32")]

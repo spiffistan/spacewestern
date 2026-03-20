@@ -264,6 +264,17 @@ impl App {
                     },
                     count: None,
                 },
+                // Voltage buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -275,6 +286,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: material_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: voltage_buffer.as_entire_binding() },
             ],
         });
         let lightmap_seed_bind_group_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -285,6 +297,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: material_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: voltage_buffer.as_entire_binding() },
             ],
         });
 

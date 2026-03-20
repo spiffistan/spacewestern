@@ -5,7 +5,7 @@
 
 use bytemuck::Zeroable;
 
-pub const NUM_MATERIALS: usize = 40;
+pub const NUM_MATERIALS: usize = 42;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]
@@ -347,12 +347,26 @@ pub fn build_material_table() -> Vec<GpuMaterial> {
         m.is_removable = 1.0; m.light_transmission = 0.3;
         m.heat_capacity = 1.0; m.conductivity = 0.02; m.solar_absorption = 0.9;
     }
-    // 38: Battery
+    // 38: Battery (small)
     { let m = &mut mats[38];
         m.color_r = 0.35; m.color_g = 0.45; m.color_b = 0.30;
         m.render_style = 24.0;
         m.is_removable = 1.0; m.is_furniture = 1.0; m.light_transmission = 1.0;
         m.heat_capacity = 2.0; m.conductivity = 0.01; m.solar_absorption = 0.3;
+    }
+    // 39: Battery (medium, 2 tiles)
+    { let m = &mut mats[39];
+        m.color_r = 0.30; m.color_g = 0.42; m.color_b = 0.28;
+        m.render_style = 25.0;
+        m.is_removable = 1.0; m.is_furniture = 1.0; m.light_transmission = 1.0;
+        m.heat_capacity = 3.0; m.conductivity = 0.01; m.solar_absorption = 0.3;
+    }
+    // 40: Battery (large, 2x2)
+    { let m = &mut mats[40];
+        m.color_r = 0.25; m.color_g = 0.38; m.color_b = 0.25;
+        m.render_style = 26.0;
+        m.is_removable = 1.0; m.is_furniture = 1.0; m.light_transmission = 1.0;
+        m.heat_capacity = 5.0; m.conductivity = 0.01; m.solar_absorption = 0.3;
     }
 
     mats
