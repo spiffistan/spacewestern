@@ -171,6 +171,8 @@ struct App {
     wind_target_mag: f32,      // target magnitude
     wind_change_timer: f32,    // seconds until next target shift
     wetness_data: Vec<f32>,  // 256x256 per-tile wetness (0.0-1.0)
+    // Diagonal wall drag preview: (x, y, variant) per tile
+    diag_preview: Vec<(i32, i32, u8)>,
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -380,6 +382,7 @@ impl App {
             wind_target_mag: 10.0,
             wind_change_timer: 15.0,
             wetness_data: vec![0.0; (GRID_W * GRID_H) as usize],
+            diag_preview: Vec::new(),
         }
     }
 
@@ -548,6 +551,71 @@ impl App {
         tiles
     }
 
+    fn diagonal_wall_tiles(x0: i32, y0: i32, x1: i32, y1: i32, rotation: u32) -> Vec<(i32, i32, u8)> {
+        compute_diagonal_wall_tiles(x0, y0, x1, y1, rotation)
+    }
+}
+
+/// Compute tiles for a continuous diagonal wall.
+/// Returns (x, y, variant) for each tile — main diagonal tiles + fill tiles
+/// that tessellate into a solid wall strip.
+/// `rotation` determines which side of the wall is solid (0-3).
+fn compute_diagonal_wall_tiles(x0: i32, y0: i32, x1: i32, y1: i32, rotation: u32) -> Vec<(i32, i32, u8)> {
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        if dx == 0 && dy == 0 { return vec![(x0, y0, rotation as u8)]; }
+        // Force true 45° diagonal: use the shorter axis as step count
+        let steps = dx.abs().min(dy.abs()).max(1);
+        let sx = dx.signum();
+        let sy = dy.signum();
+        // If either axis is zero, pick a default diagonal direction
+        let sx = if sx == 0 { 1 } else { sx };
+        let sy = if sy == 0 { 1 } else { sy };
+
+        // Determine drag direction: \ (same sign) or / (opposite sign)
+        let is_backslash = (sx > 0) == (sy > 0);
+
+        // Auto-adapt rotation to match drag direction.
+        // "below" side = variants 0,1; "above" side = variants 2,3
+        let is_below = rotation < 2;
+        let main_var: u8 = if is_backslash {
+            if is_below { 1 } else { 3 } // \ variants
+        } else {
+            if is_below { 0 } else { 2 } // / variants
+        };
+        let fill_var: u8 = main_var ^ 2; // flip side: 0↔2, 1↔3
+
+        let mut tiles = Vec::new();
+        let mut x = x0;
+        let mut y = y0;
+
+        for i in 0..=steps {
+            tiles.push((x, y, main_var));
+
+            // Fill tile between this step and the previous (closes the gap).
+            // The fill must go toward the solid side of the main variant.
+            // Which of the two candidate positions (x-sx,y) or (x,y-sy) is correct
+            // depends on both the variant and the drag direction.
+            if i > 0 {
+                let use_horizontal = match main_var {
+                    0 | 3 => sx < 0, // right-facing: fill right when going left
+                    _     => sx > 0, // left-facing: fill left when going right
+                };
+                let (fx, fy) = if use_horizontal {
+                    (x - sx, y)
+                } else {
+                    (x, y - sy)
+                };
+                tiles.push((fx, fy, fill_var));
+            }
+
+            x += sx;
+            y += sy;
+        }
+        tiles
+}
+
+impl App {
     /// Compute tiles for a line (pipes) snapped to dominant axis.
     fn line_tiles(x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<(i32, i32)> {
         let dx = (x1 - x0).abs();
@@ -657,6 +725,27 @@ impl App {
             return;
         }
 
+        // Special case: diagonal wall drag places per-tile variants
+        if self.build_tool == BuildTool::Place(44) {
+            let diag_tiles = Self::diagonal_wall_tiles(sx, sy, ex, ey, self.build_rotation);
+            for (tx, ty, variant) in diag_tiles {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                let block = self.grid_data[idx];
+                let bt = block_type_rs(block);
+                let bh = (block >> 8) & 0xFF;
+                if (bt == 0 || bt == 2) && bh == 0 {
+                    let roof_flag = block_flags_rs(block) & 2;
+                    let roof_h = block & 0xFF000000;
+                    let flags = roof_flag | (variant << 3);
+                    self.grid_data[idx] = make_block(44, 3, flags) | roof_h;
+                    self.grid_dirty = true;
+                }
+            }
+            if self.grid_dirty { compute_roof_heights(&mut self.grid_data); }
+            return;
+        }
+
         let reg = block_defs::BlockRegistry::load();
         let (block_type_id, tiles) = match self.build_tool {
             BuildTool::Destroy => (0u8, Self::filled_rect_tiles(sx, sy, ex, ey)),
@@ -685,7 +774,6 @@ impl App {
                 let wire_anywhere = block_type_id == 36;
                 if ((bt == 0 || bt == 2) && bh == 0) || (wire_anywhere && bt != 36) {
                     if wire_anywhere && bt != 0 && bt != 2 {
-                        // Wire on non-ground: add wire flag to existing block
                         self.grid_data[idx] |= 0x80 << 16;
                     } else {
                         let roof_flag = block_flags_rs(block) & 2;
@@ -1543,14 +1631,47 @@ impl App {
             let (hwx, hwy) = self.hover_world;
             let hbx = hwx.floor() as i32;
             let hby = hwy.floor() as i32;
-            let tiles: Vec<(i32, i32)> = match self.build_tool {
-                BuildTool::Place(9) => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
-                BuildTool::Place(30) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
-                BuildTool::Place(37) => self.solar_tiles(hbx, hby).to_vec(),
-                BuildTool::Place(39) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
-                BuildTool::Place(40) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
-                BuildTool::Place(41) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
-                _ => vec![(hbx, hby)],
+            // Diagonal wall drag: compute per-tile variants for triangle preview
+            let diag_drag_tiles: Vec<(i32, i32, u8)> = if self.drag_start.is_some() && self.build_tool == BuildTool::Place(44) {
+                let (sx, sy) = self.drag_start.unwrap();
+                Self::diagonal_wall_tiles(sx, sy, hbx, hby, self.build_rotation)
+            } else {
+                Vec::new()
+            };
+
+            self.diag_preview = diag_drag_tiles.clone();
+            let tiles: Vec<(i32, i32)> = if !diag_drag_tiles.is_empty() {
+                diag_drag_tiles.iter().map(|&(x, y, _)| (x, y)).collect()
+            } else if let Some((sx, sy)) = self.drag_start {
+                // During drag: show the drag shape preview
+                match self.build_tool {
+                    BuildTool::Place(id) => {
+                        let reg = block_defs::BlockRegistry::load();
+                        let shape = reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref());
+                        match shape {
+                            Some(block_defs::DragShape::Line) => Self::line_tiles(sx, sy, hbx, hby),
+                            Some(block_defs::DragShape::FilledRect) => Self::filled_rect_tiles(sx, sy, hbx, hby),
+                            Some(block_defs::DragShape::HollowRect) => Self::hollow_rect_tiles(sx, sy, hbx, hby),
+                            Some(block_defs::DragShape::DiagonalLine) => Self::diagonal_wall_tiles(sx, sy, hbx, hby, self.build_rotation).iter().map(|&(x, y, _)| (x, y)).collect(),
+                            _ => vec![(hbx, hby)],
+                        }
+                    }
+                    BuildTool::Destroy => Self::filled_rect_tiles(sx, sy, hbx, hby),
+                    BuildTool::Roof | BuildTool::RemoveRoof => Self::filled_rect_tiles(sx, sy, hbx, hby),
+                    BuildTool::RemoveFloor => Self::filled_rect_tiles(sx, sy, hbx, hby),
+                    _ => vec![(hbx, hby)],
+                }
+            } else {
+                // No drag: single-tile or multi-tile preview
+                match self.build_tool {
+                    BuildTool::Place(9) => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
+                    BuildTool::Place(30) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
+                    BuildTool::Place(37) => self.solar_tiles(hbx, hby).to_vec(),
+                    BuildTool::Place(39) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
+                    BuildTool::Place(40) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
+                    BuildTool::Place(41) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
+                    _ => vec![(hbx, hby)],
+                }
             };
             let on_furniture = self.build_tool == BuildTool::Place(11);
             let is_physics = self.build_tool == BuildTool::WoodBox;
@@ -2050,7 +2171,7 @@ impl App {
                 }
                 PhysicalKey::Code(KeyCode::KeyQ) => {
                     if self.selected_pleb.is_none() {
-                        if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
+                        if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19) | BuildTool::Place(44)) {
                             self.build_rotation = (self.build_rotation + 3) % 4;
                         } else {
                             self.build_rotation = (self.build_rotation + 1) % 2;
@@ -2059,7 +2180,7 @@ impl App {
                 }
                 PhysicalKey::Code(KeyCode::KeyE) => {
                     if self.selected_pleb.is_none() {
-                        if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
+                        if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19) | BuildTool::Place(44)) {
                             self.build_rotation = (self.build_rotation + 1) % 4;
                         } else {
                             self.build_rotation = (self.build_rotation + 1) % 2;
@@ -2368,3 +2489,132 @@ fn main() {
     let mut app = App::new();
     event_loop.run_app(&mut app).unwrap();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Check if a pixel at (fx, fy) within a tile is on the wall half for a given variant.
+    fn is_wall(fx: f32, fy: f32, variant: u8) -> bool {
+        match variant {
+            0 => fy > (1.0 - fx),
+            1 => fy > fx,
+            2 => fy < (1.0 - fx),
+            3 => fy < fx,
+            _ => false,
+        }
+    }
+
+    /// Check that diagonal wall tiles form a continuous wall with no gaps.
+    /// "No gaps" means: for every pair of adjacent tiles in the result,
+    /// the solid halves share at least one edge pixel.
+    fn assert_no_gaps(tiles: &[(i32, i32, u8)], label: &str) {
+        // Build a set of (x, y, variant) for quick lookup
+        let tile_set: std::collections::HashMap<(i32, i32), u8> = tiles.iter().map(|&(x, y, v)| ((x, y), v)).collect();
+
+        // For each tile, check that it connects to at least one neighbor's solid half
+        for &(tx, ty, tv) in tiles {
+            let neighbors = [(tx - 1, ty), (tx + 1, ty), (tx, ty - 1), (tx, ty + 1)];
+            let mut connected = false;
+
+            for (nx, ny) in neighbors {
+                if let Some(&nv) = tile_set.get(&(nx, ny)) {
+                    // Check if the shared edge has solid pixels on both sides.
+                    // Sample 5 points along the shared edge.
+                    let edge_solid_count = (0..5).filter(|&i| {
+                        let t = (i as f32 + 0.5) / 5.0;
+                        let (tfx, tfy, nfx, nfy) = if nx == tx - 1 {
+                            // neighbor is to the left: shared edge at fx=0 of current, fx=1 of neighbor
+                            (0.0, t, 1.0, t)
+                        } else if nx == tx + 1 {
+                            (1.0, t, 0.0, t)
+                        } else if ny == ty - 1 {
+                            (t, 0.0, t, 1.0)
+                        } else {
+                            (t, 1.0, t, 0.0)
+                        };
+                        is_wall(tfx, tfy, tv) && is_wall(nfx, nfy, nv)
+                    }).count();
+
+                    if edge_solid_count >= 3 {
+                        connected = true;
+                        break;
+                    }
+                }
+            }
+
+            // Every tile except possibly the first/last should connect to another
+            // (first and last are at the ends of the wall)
+            if !connected && tiles.len() > 1 {
+                // Check if it's an endpoint (first or last main tile on the diagonal)
+                let is_endpoint = (tx, ty) == (tiles[0].0, tiles[0].1)
+                    || (tx, ty) == (tiles.last().unwrap().0, tiles.last().unwrap().1);
+                if !is_endpoint {
+                    panic!("{}: tile ({},{}) variant {} has no connected neighbor", label, tx, ty, tv);
+                }
+            }
+        }
+    }
+
+    /// Verify no duplicate tile positions (each grid cell should appear at most once).
+    fn assert_no_duplicates(tiles: &[(i32, i32, u8)], label: &str) {
+        let mut seen = std::collections::HashSet::new();
+        for &(x, y, _) in tiles {
+            if !seen.insert((x, y)) {
+                panic!("{}: duplicate tile at ({},{})", label, x, y);
+            }
+        }
+    }
+
+    #[test]
+    fn test_diagonal_wall_tiles_all_directions() {
+        // Test all 8 combinations: 4 variants × 2 drag orientations (but variant
+        // auto-adapts to drag direction, so we test all 4 rotations × 4 directions)
+        let directions: [(i32, i32, &str); 4] = [
+            (3, 3, "right-down"),    // \ direction
+            (-3, -3, "left-up"),     // \ direction
+            (3, -3, "right-up"),     // / direction
+            (-3, 3, "left-down"),    // / direction
+        ];
+
+        for rotation in 0..4u32 {
+            for &(dx, dy, dir_name) in &directions {
+                let x0 = 10;
+                let y0 = 10;
+                let x1 = x0 + dx;
+                let y1 = y0 + dy;
+                let label = format!("rot={} dir={}", rotation, dir_name);
+
+                let tiles = compute_diagonal_wall_tiles(x0, y0, x1, y1, rotation);
+
+                // Should have main + fill tiles (2*steps - 1 for steps > 0)
+                assert!(!tiles.is_empty(), "{}: no tiles generated", label);
+
+                assert_no_duplicates(&tiles, &label);
+                assert_no_gaps(&tiles, &label);
+            }
+        }
+    }
+
+    #[test]
+    fn test_diagonal_wall_single_tile() {
+        let tiles = compute_diagonal_wall_tiles(5, 5, 5, 5, 0);
+        assert_eq!(tiles.len(), 1);
+        assert_eq!(tiles[0], (5, 5, 0));
+    }
+
+    #[test]
+    fn test_diagonal_wall_tiles_symmetry() {
+        // Dragging from A to B should produce the same tile positions as B to A
+        // (just in a different order), since the wall should look the same.
+        let fwd = compute_diagonal_wall_tiles(5, 5, 8, 8, 1);
+        let rev = compute_diagonal_wall_tiles(8, 8, 5, 5, 1);
+
+        let mut fwd_set: Vec<(i32, i32)> = fwd.iter().map(|&(x, y, _)| (x, y)).collect();
+        let mut rev_set: Vec<(i32, i32)> = rev.iter().map(|&(x, y, _)| (x, y)).collect();
+        fwd_set.sort();
+        rev_set.sort();
+        assert_eq!(fwd_set, rev_set, "forward and reverse drags should cover same tiles");
+    }
+}
+

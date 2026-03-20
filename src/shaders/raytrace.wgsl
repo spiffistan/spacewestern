@@ -109,7 +109,24 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 45u)];
+    return materials[min(bt, 47u)];
+}
+
+// --- Diagonal wall helpers ---
+// Variant 0: / solid below-right, 1: \ solid below-left,
+// 2: / solid above-left, 3: \ solid above-right
+fn diag_is_wall(fx: f32, fy: f32, variant: u32) -> bool {
+    if variant == 0u { return fy > (1.0 - fx); }
+    if variant == 1u { return fy > fx; }
+    if variant == 2u { return fy < (1.0 - fx); }
+    return fy < fx; // variant 3
+}
+
+fn diag_dist_to_edge(fx: f32, fy: f32, variant: u32) -> f32 {
+    if variant == 0u || variant == 2u {
+        return abs(fx + fy - 1.0) * 0.7071; // 1/sqrt(2)
+    }
+    return abs(fy - fx) * 0.7071;
 }
 
 // --- Sprite constants ---
@@ -1125,7 +1142,17 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_rock_block = bt == 34u;
         let is_dimmer_block = bt == 43u; // height = dimmer level, not visual
 
-        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_dimmer_block);
+        // Diagonal wall: only occlude if ray is on the wall half
+        let is_diag_block = bt == 44u;
+        var diag_open = false;
+        if is_diag_block {
+            let sfx = fract(sx);
+            let sfy = fract(sy);
+            let svar = (block_flags(block) >> 3u) & 3u;
+            diag_open = !diag_is_wall(sfx, sfy, svar);
+        }
+
+        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_dimmer_block || diag_open);
         if is_roofed_floor {
             // The roof is a thin plane at height rh. Rather than a hard threshold
             // that flickers, always set effective_h to rh but apply a smooth
@@ -1347,11 +1374,9 @@ fn render_glass_block(wx: f32, wy: f32, fx: f32, fy: f32, bx: i32, by: i32) -> v
     return vec4<f32>(base + vec3<f32>(highlight * 0.15), 1.0);
 }
 
-// Shared memory for workgroup shadow blur (10×10 = 8×8 + 1px border)
-var<workgroup> tile_shadow: array<f32, 100>;
 
 @compute @workgroup_size(8, 8)
-fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let px = gid.x;
     let py = gid.y;
     let sw = u32(camera.screen_w);
@@ -2351,6 +2376,37 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         if dist > 0.38 {
             color *= 0.7;
         }
+    } else if btype == 44u {
+        // Diagonal wall: half-cell wall, half floor
+        let diag_variant = (bflags >> 3u) & 3u;
+        let on_wall = diag_is_wall(fx, fy, diag_variant);
+        if on_wall {
+            // Wall half: stone color with diagonal mortar lines
+            let m44 = get_material(44u);
+            color = vec3(m44.color_r, m44.color_g, m44.color_b);
+            let mortar_coord = select(fx + fy, fy - fx + 1.0, diag_variant < 2u);
+            let mortar = fract(mortar_coord * 3.0);
+            let mortar_line = f32(mortar < 0.06) * 0.04;
+            color -= vec3(mortar_line);
+            // Perpendicular mortar
+            let mortar2 = fract((fx - fy + 1.0) * 3.0);
+            color -= vec3(f32(mortar2 < 0.04) * 0.03);
+        } else {
+            // Open half: show underlying floor
+            color = block_base_color(2u, 0u); // dirt
+            // Diagonal face (oblique along the diagonal edge)
+            let d = diag_dist_to_edge(fx, fy, diag_variant);
+            let face_w = min(f32(bheight) * camera.oblique_strength * 0.5, 0.18);
+            if d < face_w {
+                let ft = d / face_w; // 0=at edge, 1=far from edge
+                let m44 = get_material(44u);
+                var fc = vec3(m44.color_r, m44.color_g, m44.color_b);
+                fc *= (0.55 + 0.45 * ft); // darker near ground
+                let mortar_c = select(fx + fy, fy - fx + 1.0, diag_variant < 2u);
+                fc -= vec3(f32(fract(mortar_c * 3.0) < 0.06) * 0.03);
+                color = fc;
+            }
+        }
     } else {
         color = block_base_color(btype, bflags);
     }
@@ -2364,7 +2420,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     let is_rock = btype == 34u;
     let is_crate = btype == 33u; // crate height = item count, not visual height
     let is_dimmer = btype == 43u; // dimmer height = level, not visual height
-    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_dimmer);
+    let is_diag_open = btype == 44u && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_dimmer || is_diag_open);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)
@@ -2385,7 +2442,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     }
 
     // Wall side faces (3D bevel) — skip for doors and trees
-    if effective_height > 0u && btype != 8u {
+    if effective_height > 0u && btype != 8u && btype != 44u {
         color += wall_side_shade(world_x, world_y, bx, by, effective_height);
     }
 
@@ -3098,50 +3155,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         color = mix(color, prev_color, temporal_blend);
     }
 
-    // --- Workgroup shadow blur: store luminance in shared memory, blur, apply ---
-    {
-    // This smooths shadow edges spatially using fast on-chip shared memory.
-    // We blur the luminance channel only (preserves color, smooths shadow edges).
-    let luma = dot(color, vec3<f32>(0.299, 0.587, 0.114));
-    let lx = lid.x + 1u;
-    let ly = lid.y + 1u;
-    tile_shadow[ly * 10u + lx] = luma;
-    // Border pixels: clamp to edge (threads at workgroup edges fill the 1px border)
-    if lid.x == 0u { tile_shadow[ly * 10u + 0u] = luma; }
-    if lid.x == 7u { tile_shadow[ly * 10u + 9u] = luma; }
-    if lid.y == 0u { tile_shadow[0u * 10u + lx] = luma; }
-    if lid.y == 7u { tile_shadow[9u * 10u + lx] = luma; }
-    // Corners
-    if lid.x == 0u && lid.y == 0u { tile_shadow[0u] = luma; }
-    if lid.x == 7u && lid.y == 0u { tile_shadow[9u] = luma; }
-    if lid.x == 0u && lid.y == 7u { tile_shadow[90u] = luma; }
-    if lid.x == 7u && lid.y == 7u { tile_shadow[99u] = luma; }
-
-    workgroupBarrier();
-
-    // 3×3 Gaussian-weighted blur on luminance
-    let w0 = 1.0 / 16.0; // corners
-    let w1 = 2.0 / 16.0; // edges
-    let w2 = 4.0 / 16.0; // center
-    var blurred_luma = 0.0;
-    blurred_luma += tile_shadow[(ly - 1u) * 10u + (lx - 1u)] * w0;
-    blurred_luma += tile_shadow[(ly - 1u) * 10u + lx] * w1;
-    blurred_luma += tile_shadow[(ly - 1u) * 10u + (lx + 1u)] * w0;
-    blurred_luma += tile_shadow[ly * 10u + (lx - 1u)] * w1;
-    blurred_luma += tile_shadow[ly * 10u + lx] * w2;
-    blurred_luma += tile_shadow[ly * 10u + (lx + 1u)] * w1;
-    blurred_luma += tile_shadow[(ly + 1u) * 10u + (lx - 1u)] * w0;
-    blurred_luma += tile_shadow[(ly + 1u) * 10u + lx] * w1;
-    blurred_luma += tile_shadow[(ly + 1u) * 10u + (lx + 1u)] * w0;
-
-    // Apply blur: adjust color brightness toward blurred luminance
-    // Only apply where there's a difference (shadow edges) to preserve texture detail
-    let luma_diff = abs(blurred_luma - luma);
-    let blur_strength = smoothstep(0.0, 0.08, luma_diff) * 0.7; // only blur at edges
-    if luma > 0.001 {
-        color *= mix(1.0, blurred_luma / luma, blur_strength);
-    }
-    } // end disabled workgroup blur
+    // Workgroup shadow blur removed — workgroupBarrier() requires uniform control flow
+    // which is incompatible with early returns above (roof, emissive, wall face).
+    // Temporal blend provides sufficient shadow smoothing.
 
     textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
 }

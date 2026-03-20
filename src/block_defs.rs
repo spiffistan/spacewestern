@@ -81,6 +81,7 @@ pub enum DragShape {
     HollowRect,
     FilledRect,
     Line,
+    DiagonalLine,
     None,
 }
 

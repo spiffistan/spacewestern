@@ -6,7 +6,7 @@
 
 use bytemuck::Zeroable;
 
-pub const NUM_MATERIALS: usize = 46;
+pub const NUM_MATERIALS: usize = 48;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]

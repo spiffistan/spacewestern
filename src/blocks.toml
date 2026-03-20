@@ -677,3 +677,21 @@ icon = "🎚"
 label = "Dimmer"
 click = "simple"
 place_height = 0
+
+[[block]]
+id = 44
+name = "Diagonal Wall"
+color = [0.52, 0.50, 0.48]
+fluid_obstacle = true
+default_height = 3.0
+is_wall = true
+is_removable = true
+thermal = { heat_capacity = 8.0, conductivity = 0.012, solar_absorption = 0.7 }
+[block.placement]
+category = "Walls"
+icon = "◣"
+label = "Diagonal"
+click = "simple"
+rotations = 4
+place_height = 3
+drag = "diagonal_line"

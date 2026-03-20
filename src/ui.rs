@@ -639,6 +639,7 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(24), "\u{26f0}", "Granite");
                                     icon_btn(ui, BuildTool::Place(25), "\u{1f532}", "Limestone");
                                     icon_btn(ui, BuildTool::Place(35), "\u{1f3da}", "Mud");
+                                    icon_btn(ui, BuildTool::Place(44), "\u{25e3}", "Diagonal");
                                 }
                                 "Floor" => {
                                     icon_btn(ui, BuildTool::Place(26), "\u{1fab5}", "Wood");
@@ -1541,11 +1542,31 @@ impl App {
                 let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
                 let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
 
-                painter.rect_filled(
-                    egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
-                    0.0,
-                    color,
-                );
+                // Diagonal wall: draw triangle showing which half is solid
+                if self.build_tool == BuildTool::Place(44) {
+                    // During drag, use per-tile variant from diag_preview
+                    let variant = self.diag_preview.iter()
+                        .find(|&&(dx, dy, _)| dx == tx && dy == ty)
+                        .map(|&(_, _, v)| v as u32)
+                        .unwrap_or(self.build_rotation % 4);
+                    let tl = egui::pos2(sx0, sy0);
+                    let tr = egui::pos2(sx1, sy0);
+                    let bl = egui::pos2(sx0, sy1);
+                    let br = egui::pos2(sx1, sy1);
+                    let tri = match variant {
+                        0 => vec![tr, bl, br], // / solid below-right
+                        1 => vec![tl, bl, br], // \ solid below-left
+                        2 => vec![tl, tr, bl], // / solid above-left
+                        _ => vec![tl, tr, br], // \ solid above-right
+                    };
+                    painter.add(egui::Shape::convex_polygon(tri, color, egui::Stroke::NONE));
+                } else {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
+                        0.0,
+                        color,
+                    );
+                }
 
                 // Wind turbine: show wind direction arrows across the 2x2 area (first tile only)
                 if self.build_tool == BuildTool::Place(41) && tx == blueprint_tiles[0].0.0 && ty == blueprint_tiles[0].0.1 {
