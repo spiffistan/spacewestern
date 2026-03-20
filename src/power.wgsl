@@ -245,14 +245,29 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     let avg = neighbor_sum / neighbor_count;
     var new_v = mix(voltage[idx], avg, 0.6); // fast relaxation for wires
 
-    // Apply consumer load (small voltage drop per frame)
-    new_v -= load;
-
-    // Dimmer: scale voltage by dimmer level (height byte = 0-10 = 0-100%)
+    // Dimmer: acts as one-way voltage scaler (like battery — handles itself)
     if bt == 43u {
         let dim_level = f32((block >> 8u) & 0xFFu) / 10.0;
-        new_v *= dim_level;
+        // Find highest neighbor voltage (the "input" side)
+        var max_neigh = 0.0;
+        for (var dd = 0; dd < 4; dd++) {
+            var ddx = 0; var ddy = 0;
+            if dd == 0 { ddx = 1; } else if dd == 1 { ddx = -1; }
+            else if dd == 2 { ddy = 1; } else { ddy = -1; }
+            let dnx = bx + ddx;
+            let dny = by + ddy;
+            if dnx >= 0 && dny >= 0 && dnx < i32(gw) && dny < i32(gh) {
+                let dnidx = u32(dny) * gw + u32(dnx);
+                max_neigh = max(max_neigh, voltage[dnidx]);
+            }
+        }
+        // Output = input * level. No relaxation — direct set.
+        voltage[idx] = max_neigh * dim_level;
+        return;
     }
+
+    // Apply consumer load (small voltage drop per frame)
+    new_v -= load;
     new_v = max(new_v, 0.0);
 
     voltage[idx] = new_v;

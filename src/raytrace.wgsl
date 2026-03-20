@@ -1123,8 +1123,9 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_dug_block = bt == 32u;
         let is_crate_block = bt == 33u; // height = item count, not visual
         let is_rock_block = bt == 34u;
+        let is_dimmer_block = bt == 43u; // height = dimmer level, not visual
 
-        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block);
+        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_dimmer_block);
         if is_roofed_floor {
             // The roof is a thin plane at height rh. Rather than a hard threshold
             // that flickers, always set effective_h to rh but apply a smooth
@@ -2362,7 +2363,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
     let is_dug = btype == 32u; // dug ground: height = depth, not visual height
     let is_rock = btype == 34u;
     let is_crate = btype == 33u; // crate height = item count, not visual height
-    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate);
+    let is_dimmer = btype == 43u; // dimmer height = level, not visual height
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_dimmer);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)
