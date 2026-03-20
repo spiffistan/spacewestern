@@ -163,10 +163,11 @@ struct App {
     crate_contents: std::collections::HashMap<u32, CrateInventory>,
     // Rock context menu
     rock_context_menu: Option<(f32, f32, i32, i32)>,
-    // Grenade system
+    // Combat
     grenade_charging: bool,
     grenade_charge: f32,
-    grenade_impacts: Vec<(f32, f32)>, // positions of grenade detonations this frame
+    grenade_impacts: Vec<(f32, f32)>,
+    burst_mode: bool, // false = single shot, true = 3-round burst
     // Weather system
     weather: WeatherState,
     weather_timer: f32,
@@ -363,8 +364,21 @@ impl App {
             fluid_mouse_active: false,
             fluid_mouse_prev: None,
             plebs: {
-                let p = Pleb::new(0, "Jeff".to_string(), 102.5, 100.5, 42);
-                vec![p]
+                let jeff = Pleb::new(0, "Jeff".to_string(), 102.5, 100.5, 42);
+                let mut enemies = vec![
+                    ("Jaff", 115.0, 95.0, 101u32),
+                    ("Juff", 125.0, 110.0, 202),
+                    ("Jif",  95.0, 120.0, 303),
+                    ("Bob",  135.0, 100.0, 404),
+                ];
+                let mut all = vec![jeff];
+                for (i, (name, x, y, seed)) in enemies.iter().enumerate() {
+                    let mut e = Pleb::new(i + 1, name.to_string(), *x, *y, *seed);
+                    e.is_enemy = true;
+                    e.wander_timer = 3.0 + (i as f32) * 2.0;
+                    all.push(e);
+                }
+                all
             },
             selected_pleb: None,
             next_pleb_id: 1,
@@ -383,6 +397,7 @@ impl App {
             grenade_charging: false,
             grenade_charge: 0.0,
             grenade_impacts: Vec::new(),
+            burst_mode: false,
             weather: WeatherState::Clear,
             weather_timer: 45.0,
             wind_target_angle: std::f32::consts::FRAC_PI_4, // ~NE
@@ -2220,12 +2235,44 @@ impl App {
                     self.window.as_ref().unwrap().request_redraw();
                 }
                 PhysicalKey::Code(KeyCode::Space) => {
+                    if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                        // Shoot gun
+                        let dx = pleb.angle.cos();
+                        let dy = pleb.angle.sin();
+                        let sx = pleb.x + dx * 0.4;
+                        let sy = pleb.y + dy * 0.4;
+                        if self.burst_mode {
+                            // 3-round burst with slight spread
+                            for &spread in &[-0.08f32, 0.0, 0.08] {
+                                let bx = (pleb.angle + spread).cos();
+                                let by = (pleb.angle + spread).sin();
+                                self.physics_bodies.push(PhysicsBody::new_bullet(sx, sy, bx, by));
+                            }
+                        } else {
+                            self.physics_bodies.push(PhysicsBody::new_bullet(sx, sy, dx, dy));
+                        }
+                        // Muzzle flash smoke
+                        self.fluid_params.splat_x = sx;
+                        self.fluid_params.splat_y = sy;
+                        self.fluid_params.splat_vx = dx * 15.0;
+                        self.fluid_params.splat_vy = dy * 15.0;
+                        self.fluid_params.splat_radius = 0.5;
+                        self.fluid_params.splat_active = 1.0;
+                    } else {
+                        self.time_paused = !self.time_paused;
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyB) => {
                     if self.selected_pleb.is_some() {
                         // Start charging grenade
                         self.grenade_charging = true;
                         self.grenade_charge = 0.0;
-                    } else {
-                        self.time_paused = !self.time_paused;
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyX) => {
+                    if self.selected_pleb.is_some() {
+                        self.burst_mode = !self.burst_mode;
+                        log::info!("Fire mode: {}", if self.burst_mode { "BURST" } else { "SINGLE" });
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyQ) => {
@@ -2280,9 +2327,9 @@ impl App {
                 _ => {}
             }
         }
-        // Key release: throw grenade on Space release
+        // Key release: throw grenade on B release
         if !event.state.is_pressed() {
-            if let PhysicalKey::Code(KeyCode::Space) = event.physical_key {
+            if let PhysicalKey::Code(KeyCode::KeyB) = event.physical_key {
                 if self.grenade_charging {
                     self.grenade_charging = false;
                     if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {

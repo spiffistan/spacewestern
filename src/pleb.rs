@@ -169,6 +169,8 @@ pub struct Pleb {
     pub inventory: PlebInventory,
     pub harvest_target: Option<(i32, i32)>, // grid coords of bush being harvested
     pub haul_target: Option<(i32, i32)>,    // grid coords of storage crate to deliver to
+    pub is_enemy: bool,
+    pub wander_timer: f32, // seconds until next random walk (enemies only)
 }
 
 impl Pleb {
@@ -188,6 +190,8 @@ impl Pleb {
             inventory: PlebInventory::default(),
             harvest_target: None,
             haul_target: None,
+            is_enemy: false,
+            wander_timer: 0.0,
         }
     }
 

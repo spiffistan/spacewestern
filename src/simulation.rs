@@ -166,6 +166,72 @@ impl App {
             self.grenade_charge = (self.grenade_charge + dt * 0.8).min(1.0); // ~1.25s to full charge
         }
 
+        // --- Enemy random walk AI ---
+        for pleb in self.plebs.iter_mut() {
+            if !pleb.is_enemy { continue; }
+            pleb.wander_timer -= dt * self.time_speed;
+            if pleb.wander_timer <= 0.0 && pleb.path_idx >= pleb.path.len() {
+                // Pick a random nearby walkable tile
+                let seed = ((pleb.x * 137.0 + pleb.y * 311.0 + self.time_of_day * 1000.0) as u32)
+                    .wrapping_mul(2654435761);
+                let dx = ((seed & 0xFF) as f32 / 255.0 - 0.5) * 16.0;
+                let dy = (((seed >> 8) & 0xFF) as f32 / 255.0 - 0.5) * 16.0;
+                let target_x = (pleb.x + dx).clamp(1.0, GRID_W as f32 - 2.0) as i32;
+                let target_y = (pleb.y + dy).clamp(1.0, GRID_H as f32 - 2.0) as i32;
+                let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                let path = astar_path(&self.grid_data, start, (target_x, target_y));
+                if !path.is_empty() {
+                    pleb.path = path;
+                    pleb.path_idx = 0;
+                }
+                // Next wander in 5-15 seconds
+                pleb.wander_timer = 5.0 + ((seed >> 16) & 0xFF) as f32 / 255.0 * 10.0;
+            }
+        }
+
+        // --- Bullet-pleb collision ---
+        {
+            let mut hits: Vec<(usize, usize)> = Vec::new(); // (bullet_idx, pleb_idx)
+            for (bi, body) in self.physics_bodies.iter().enumerate() {
+                if body.body_type != physics::BodyType::Bullet { continue; }
+                for (pi, pleb) in self.plebs.iter().enumerate() {
+                    let dx = body.x - pleb.x;
+                    let dy = body.y - pleb.y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist < 0.4 {
+                        // Don't hit the shooter (first pleb = Jeff when selected)
+                        if Some(pi) == self.selected_pleb { continue; }
+                        hits.push((bi, pi));
+                        break;
+                    }
+                }
+            }
+            // Apply damage and remove bullets
+            let mut bullets_to_remove = std::collections::HashSet::new();
+            for &(bi, pi) in &hits {
+                bullets_to_remove.insert(bi);
+                if let Some(pleb) = self.plebs.get_mut(pi) {
+                    pleb.needs.health -= 0.2; // ~5 shots to kill
+                    // Small smoke puff at impact
+                    self.fluid_params.splat_x = pleb.x;
+                    self.fluid_params.splat_y = pleb.y;
+                    self.fluid_params.splat_radius = 0.3;
+                    self.fluid_params.splat_active = 1.0;
+                }
+            }
+            if !bullets_to_remove.is_empty() {
+                let mut idx = 0;
+                self.physics_bodies.retain(|_| {
+                    let keep = !bullets_to_remove.contains(&idx);
+                    idx += 1;
+                    keep
+                });
+            }
+        }
+
+        // --- Remove dead plebs ---
+        self.plebs.retain(|p| p.needs.health > 0.0);
+
         // --- Pleb update ---
         // --- Cannon rotation (Q/E when cannon is selected) ---
         if let Some(cannon_idx) = self.block_sel.cannon {

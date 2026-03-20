@@ -31,6 +31,7 @@ pub enum BodyType {
     WoodBox,
     Cannonball,
     Grenade,
+    Bullet,
 }
 
 /// Result of a projectile impact.
@@ -97,6 +98,26 @@ impl PhysicsBody {
             size: 0.08,
             render_height: 0.3,
             body_type: BodyType::Grenade, fuse_timer: 12.0,
+        }
+    }
+
+    /// Create a bullet fired from position in a direction.
+    pub fn new_bullet(x: f32, y: f32, dir_x: f32, dir_y: f32) -> Self {
+        let speed = 45.0;
+        let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
+        PhysicsBody {
+            x, y, z: 1.0,
+            vx: dir_x / len * speed,
+            vy: dir_y / len * speed,
+            vz: 0.0, // flat trajectory
+            rot_x: 0.0, rot_y: 0.0, rot_z: dir_y.atan2(dir_x),
+            spin_x: 0.0, spin_y: 0.0, spin_z: 0.0,
+            mass: 0.05,
+            friction: 0.0,
+            bounce: 0.0,
+            size: 0.03,
+            render_height: 0.1,
+            body_type: BodyType::Bullet, fuse_timer: 0.0,
         }
     }
 
@@ -412,6 +433,10 @@ pub fn tick_bodies(
         if b.body_type == BodyType::Grenade {
             let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
             in_bounds && (b.fuse_timer > 0.0 || !b.on_ground())
+        } else if b.body_type == BodyType::Bullet {
+            let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
+            let moving = (b.vx.abs() + b.vy.abs()) > 1.0;
+            in_bounds && moving && b.z > -0.1
         } else if b.body_type == BodyType::Cannonball {
             let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
             let moving = (b.vx.abs() + b.vy.abs()) > 0.3 || b.z > 0.1;

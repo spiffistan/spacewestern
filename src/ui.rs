@@ -1922,6 +1922,18 @@ impl App {
                             );
                         }
                     }
+                    physics::BodyType::Bullet => {
+                        // Bullet: tiny bright tracer
+                        let (gx, gy) = to_screen(body.x, body.y);
+                        let trail_len = 0.3 * tile_px;
+                        let speed = (body.vx * body.vx + body.vy * body.vy).sqrt().max(0.001);
+                        let dx = -body.vx / speed * trail_len;
+                        let dy = -body.vy / speed * trail_len;
+                        painter.line_segment(
+                            [egui::pos2(gx, gy - z_offset), egui::pos2(gx + dx, gy - z_offset + dy)],
+                            egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 240, 150)),
+                        );
+                    }
                     physics::BodyType::Grenade => {
                         let shadow_scale = (1.0 - body.z * 0.15).max(0.2);
                         let shadow_r = 0.08 * shadow_scale * tile_px;
@@ -2113,7 +2125,9 @@ impl App {
                     let pos = to_screen(pleb.x, pleb.y + 0.7);
 
                     // Name label (always visible)
-                    let name_color = if pleb.activity.is_crisis() {
+                    let name_color = if pleb.is_enemy {
+                        egui::Color32::from_rgb(255, 50, 50)
+                    } else if pleb.activity.is_crisis() {
                         egui::Color32::from_rgb(255, 80, 80)
                     } else {
                         egui::Color32::from_rgb(220, 220, 220)
@@ -2159,6 +2173,19 @@ impl App {
                                 egui::Color32::from_rgb(255, 60, 60),
                             );
                         }
+                    }
+                }
+
+                // Fire mode indicator above selected pleb
+                if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                    if !pleb.is_enemy {
+                        let mode_pos = to_screen(pleb.x, pleb.y - 0.8);
+                        let mode_text = if self.burst_mode { "BURST" } else { "SINGLE" };
+                        label_painter.text(
+                            mode_pos, egui::Align2::CENTER_BOTTOM, mode_text,
+                            egui::FontId::proportional(7.0),
+                            egui::Color32::from_rgb(180, 180, 100),
+                        );
                     }
                 }
 
