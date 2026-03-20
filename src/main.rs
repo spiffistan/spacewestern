@@ -162,7 +162,11 @@ struct App {
     // Storage crate inventories: grid_idx → stored items
     crate_contents: std::collections::HashMap<u32, CrateInventory>,
     // Rock context menu
-    rock_context_menu: Option<(f32, f32, i32, i32)>, // (screen_x, screen_y, grid_x, grid_y)
+    rock_context_menu: Option<(f32, f32, i32, i32)>,
+    // Grenade system
+    grenade_charging: bool,
+    grenade_charge: f32,
+    grenade_impacts: Vec<(f32, f32)>, // positions of grenade detonations this frame
     // Weather system
     weather: WeatherState,
     weather_timer: f32,
@@ -376,6 +380,9 @@ impl App {
             context_menu: None,
             crate_contents: std::collections::HashMap::new(),
             rock_context_menu: None,
+            grenade_charging: false,
+            grenade_charge: 0.0,
+            grenade_impacts: Vec::new(),
             weather: WeatherState::Clear,
             weather_timer: 45.0,
             wind_target_angle: std::f32::consts::FRAC_PI_4, // ~NE
@@ -2032,6 +2039,51 @@ impl App {
                 }
             }
 
+            // Grenade toxic gas injection: write high smoke + CO2 to dye texture
+            for &(gx, gy) in &self.grenade_impacts {
+                let dye_scale = (FLUID_DYE_W / FLUID_SIM_W) as i32;
+                let radius = 3i32; // 3-tile radius toxic cloud
+                for oy in -radius..=radius {
+                    for ox in -radius..=radius {
+                        let dist = ((ox * ox + oy * oy) as f32).sqrt();
+                        if dist > radius as f32 { continue; }
+                        let strength = 1.0 - dist / (radius as f32 + 0.5);
+                        let wx = (gx as i32 + ox).clamp(0, GRID_W as i32 - 1);
+                        let wy = (gy as i32 + oy).clamp(0, GRID_H as i32 - 1);
+                        let dye_bx = wx * dye_scale;
+                        let dye_by = wy * dye_scale;
+                        // Toxic: high smoke (R) + high CO2 (B), low O2 (G)
+                        let pixel: [u16; 4] = [
+                            f32_to_f16(1.5 * strength),  // smoke
+                            f32_to_f16(0.3),              // low O2
+                            f32_to_f16(1.2 * strength),  // high CO2
+                            f32_to_f16(20.0),             // ambient temp
+                        ];
+                        let bytes: &[u8] = bytemuck::cast_slice(&pixel);
+                        for dy_off in 0..dye_scale {
+                            for dx_off in 0..dye_scale {
+                                let tx = (dye_bx + dx_off).clamp(0, FLUID_DYE_W as i32 - 1) as u32;
+                                let ty = (dye_by + dy_off).clamp(0, FLUID_DYE_H as i32 - 1) as u32;
+                                for dye_idx in 0..2 {
+                                    gfx.queue.write_texture(
+                                        wgpu::TexelCopyTextureInfo {
+                                            texture: &gfx.fluid_dye[dye_idx],
+                                            mip_level: 0,
+                                            origin: wgpu::Origin3d { x: tx, y: ty, z: 0 },
+                                            aspect: wgpu::TextureAspect::All,
+                                        },
+                                        bytes,
+                                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
+                                        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            self.grenade_impacts.clear();
+
             // Debug: read back the dye texel
             // Debug readback processing
             if self.debug.fluid_pending {
@@ -2167,7 +2219,13 @@ impl App {
                     self.window.as_ref().unwrap().request_redraw();
                 }
                 PhysicalKey::Code(KeyCode::Space) => {
-                    self.time_paused = !self.time_paused;
+                    if self.selected_pleb.is_some() {
+                        // Start charging grenade
+                        self.grenade_charging = true;
+                        self.grenade_charge = 0.0;
+                    } else {
+                        self.time_paused = !self.time_paused;
+                    }
                 }
                 PhysicalKey::Code(KeyCode::KeyQ) => {
                     if self.selected_pleb.is_none() {
@@ -2219,6 +2277,25 @@ impl App {
                     }
                 }
                 _ => {}
+            }
+        }
+        // Key release: throw grenade on Space release
+        if !event.state.is_pressed() {
+            if let PhysicalKey::Code(KeyCode::Space) = event.physical_key {
+                if self.grenade_charging {
+                    self.grenade_charging = false;
+                    if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                        let dx = pleb.angle.cos();
+                        let dy = pleb.angle.sin();
+                        let spawn_x = pleb.x + dx * 0.5;
+                        let spawn_y = pleb.y + dy * 0.5;
+                        let power = self.grenade_charge.clamp(0.0, 1.0);
+                        self.physics_bodies.push(PhysicsBody::new_grenade(
+                            spawn_x, spawn_y, dx, dy, power,
+                        ));
+                    }
+                    self.grenade_charge = 0.0;
+                }
             }
         }
     }

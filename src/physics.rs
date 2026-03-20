@@ -29,15 +29,17 @@ pub struct PhysicsBody {
 pub enum BodyType {
     WoodBox,
     Cannonball,
+    Grenade,
 }
 
-/// Result of a cannonball impact.
+/// Result of a projectile impact.
 #[derive(Debug)]
 pub struct Impact {
     pub x: f32, pub y: f32,
     pub block_x: i32, pub block_y: i32,
     pub kinetic_energy: f32,
     pub destroy_block: bool,
+    pub is_grenade: bool,
 }
 
 impl PhysicsBody {
@@ -74,6 +76,26 @@ impl PhysicsBody {
             size: 0.12,
             render_height: 0.5,
             body_type: BodyType::Cannonball,
+        }
+    }
+
+    /// Create a toxic grenade thrown from position in a direction with given power (0-1).
+    pub fn new_grenade(x: f32, y: f32, dir_x: f32, dir_y: f32, power: f32) -> Self {
+        let speed = 8.0 + power * 14.0; // 8-22 tiles/sec based on charge
+        let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
+        PhysicsBody {
+            x, y, z: 1.2,
+            vx: dir_x / len * speed,
+            vy: dir_y / len * speed,
+            vz: 4.0 + power * 6.0, // higher arc with more power
+            rot_x: 0.0, rot_y: 0.0, rot_z: 0.0,
+            spin_x: 3.0, spin_y: 2.0, spin_z: 5.0, // tumbles
+            mass: 0.8,
+            friction: 0.8,
+            bounce: 0.3,
+            size: 0.08,
+            render_height: 0.3,
+            body_type: BodyType::Grenade,
         }
     }
 
@@ -345,6 +367,7 @@ pub fn tick_bodies(
                     block_x: hit_bx, block_y: hit_by,
                     kinetic_energy: ke,
                     destroy_block: destroy,
+                    is_grenade: false,
                 });
             }
         } else {
@@ -366,9 +389,25 @@ pub fn tick_bodies(
         }
     }
 
-    // Remove cannonballs that are out of bounds or stopped
+    // Grenade detonation: explode on ground contact or wall impact
+    for body in bodies.iter() {
+        if body.body_type == BodyType::Grenade && body.on_ground() {
+            impacts.push(Impact {
+                x: body.x, y: body.y,
+                block_x: body.x.floor() as i32, block_y: body.y.floor() as i32,
+                kinetic_energy: 0.0,
+                destroy_block: false,
+                is_grenade: true,
+            });
+        }
+    }
+
+    // Remove projectiles that are out of bounds or stopped
     bodies.retain(|b| {
-        if b.body_type == BodyType::Cannonball {
+        if b.body_type == BodyType::Grenade {
+            let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
+            in_bounds && !b.on_ground() // remove when it hits ground (detonated above)
+        } else if b.body_type == BodyType::Cannonball {
             let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
             let moving = (b.vx.abs() + b.vy.abs()) > 0.3 || b.z > 0.1;
             in_bounds && moving

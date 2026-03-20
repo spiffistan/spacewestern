@@ -417,6 +417,13 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
         }
     }
 
+    // Toxic gas: when low O2 AND high CO2 simultaneously (grenade cloud).
+    // Damages even while holding breath (skin/eye contact).
+    if needs.air_co2 > 0.5 && needs.air_o2 < 0.5 {
+        let toxic_str = ((needs.air_co2 - 0.5) * 2.0).min(1.0);
+        damage += 0.06 * toxic_str; // ~17s to kill at full concentration
+    }
+
     if needs.warmth < 0.15 {
         damage += FREEZE_DAMAGE * (1.0 - needs.warmth / 0.15);
     }

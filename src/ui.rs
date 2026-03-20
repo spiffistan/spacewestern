@@ -1922,6 +1922,23 @@ impl App {
                             );
                         }
                     }
+                    physics::BodyType::Grenade => {
+                        let shadow_scale = (1.0 - body.z * 0.15).max(0.2);
+                        let shadow_r = 0.08 * shadow_scale * tile_px;
+                        let (gx, gy) = to_screen(body.x, body.y);
+                        let shadow_alpha = (150.0 * (1.0 - body.z * 0.06).max(0.15)) as u8;
+                        painter.circle_filled(
+                            egui::pos2(gx, gy), shadow_r,
+                            egui::Color32::from_rgba_unmultiplied(15, 15, 15, shadow_alpha),
+                        );
+                        let ball_r = 0.07 * tile_px;
+                        let ball_pos = egui::pos2(gx, gy - z_offset);
+                        painter.circle_filled(ball_pos, ball_r, egui::Color32::from_rgb(40, 60, 30));
+                        painter.circle_filled(
+                            ball_pos + egui::Vec2::new(-ball_r * 0.2, -ball_r * 0.2),
+                            ball_r * 0.3, egui::Color32::from_rgb(70, 90, 50),
+                        );
+                    }
                 }
             }
         }
@@ -2142,6 +2159,28 @@ impl App {
                                 egui::Color32::from_rgb(255, 60, 60),
                             );
                         }
+                    }
+                }
+
+                // Grenade charge bar above selected pleb
+                if self.grenade_charging {
+                    if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                        let bar_pos = to_screen(pleb.x - 0.4, pleb.y - 0.6);
+                        let bar_w = tile_px * 0.8;
+                        let bar_h = tile_px * 0.08;
+                        let charge = self.grenade_charge.clamp(0.0, 1.0);
+                        // Background
+                        label_painter.rect_filled(
+                            egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w, bar_h)),
+                            1.0, egui::Color32::from_rgb(30, 30, 30),
+                        );
+                        // Fill (green to red as charge increases)
+                        let r = (charge * 255.0) as u8;
+                        let g = ((1.0 - charge) * 200.0) as u8;
+                        label_painter.rect_filled(
+                            egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w * charge, bar_h)),
+                            1.0, egui::Color32::from_rgb(r, g, 40),
+                        );
                     }
                 }
             }

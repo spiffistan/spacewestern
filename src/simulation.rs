@@ -161,6 +161,11 @@ impl App {
             self.camera.force_refresh -= 1.0;
         }
 
+        // --- Grenade charge ---
+        if self.grenade_charging {
+            self.grenade_charge = (self.grenade_charge + dt * 0.8).min(1.0); // ~1.25s to full charge
+        }
+
         // --- Pleb update ---
         // --- Cannon rotation (Q/E when cannon is selected) ---
         if let Some(cannon_idx) = self.block_sel.cannon {
@@ -489,20 +494,26 @@ impl App {
                 pleb_data,
             );
 
-            // Handle cannonball impacts — destroy blocks, inject smoke
+            // Handle projectile impacts — destroy blocks, inject smoke/toxic gas
             for impact in &impacts {
                 if impact.destroy_block {
                     self.destroy_block_at(impact.block_x, impact.block_y);
                     log::info!("Cannonball destroyed block at ({}, {}) KE={:.0}",
                         impact.block_x, impact.block_y, impact.kinetic_energy);
                 }
-                // Inject smoke burst at impact point
-                self.fluid_params.splat_x = impact.x;
-                self.fluid_params.splat_y = impact.y;
-                self.fluid_params.splat_vx = 0.0;
-                self.fluid_params.splat_vy = 0.0;
-                self.fluid_params.splat_radius = 2.0;
-                self.fluid_params.splat_active = 1.0;
+                if impact.is_grenade {
+                    // Grenade: inject toxic cloud (high smoke + CO2) via direct dye write
+                    // Stored in grenade_impacts for the render pass to write to dye texture
+                    self.grenade_impacts.push((impact.x, impact.y));
+                } else {
+                    // Cannonball: inject smoke burst via splat
+                    self.fluid_params.splat_x = impact.x;
+                    self.fluid_params.splat_y = impact.y;
+                    self.fluid_params.splat_vx = 0.0;
+                    self.fluid_params.splat_vy = 0.0;
+                    self.fluid_params.splat_radius = 2.0;
+                    self.fluid_params.splat_active = 1.0;
+                }
             }
         }
         dt
