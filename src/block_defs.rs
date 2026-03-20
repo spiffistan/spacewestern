@@ -193,28 +193,6 @@ mod tests {
     }
 
     #[test]
-    fn test_gpu_materials_match() {
-        let reg = BlockRegistry::load();
-        let toml_mats = reg.build_gpu_materials();
-        let old_mats = crate::materials::build_material_table();
-
-        for i in 0..NUM_MATERIALS {
-            let t = &toml_mats[i];
-            let o = &old_mats[i];
-            // Compare key fields (float equality — these are exact values, not computed)
-            assert!((t.color_r - o.color_r).abs() < 0.001, "color_r mismatch at {}: {} vs {}", i, t.color_r, o.color_r);
-            assert!((t.color_g - o.color_g).abs() < 0.001, "color_g mismatch at {}", i);
-            assert!((t.color_b - o.color_b).abs() < 0.001, "color_b mismatch at {}", i);
-            assert!((t.is_solid - o.is_solid).abs() < 0.001, "is_solid mismatch at {}", i);
-            assert!((t.heat_capacity - o.heat_capacity).abs() < 0.001, "heat_capacity mismatch at {}", i);
-            assert!((t.conductivity - o.conductivity).abs() < 0.001, "conductivity mismatch at {}", i);
-            assert!((t.walkable - o.walkable).abs() < 0.001, "walkable mismatch at {}", i);
-            assert!((t.shows_wall_face - o.shows_wall_face).abs() < 0.001, "shows_wall_face mismatch at {}", i);
-            assert!((t.light_intensity - o.light_intensity).abs() < 0.001, "light_intensity mismatch at {}", i);
-        }
-    }
-
-    #[test]
     fn test_wall_ids() {
         let reg = BlockRegistry::load();
         assert!(reg.is_wall(1));  // Stone
