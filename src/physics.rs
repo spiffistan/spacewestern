@@ -197,6 +197,80 @@ pub fn nearest_body(bodies: &[PhysicsBody], x: f32, y: f32, range: f32) -> Optio
     best
 }
 
+/// DDA ray march through the grid from (x0,y0) to (x1,y1).
+/// Returns the hit point if a solid wall is encountered, None if path is clear.
+/// Steps through every grid cell the line segment crosses — no skips at any speed.
+fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<(f32, f32)> {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist < 0.001 { return None; }
+
+    let dir_x = dx / dist;
+    let dir_y = dy / dist;
+
+    let mut ix = x0.floor() as i32;
+    let mut iy = y0.floor() as i32;
+
+    let step_x: i32 = if dir_x >= 0.0 { 1 } else { -1 };
+    let step_y: i32 = if dir_y >= 0.0 { 1 } else { -1 };
+
+    let t_delta_x = if dir_x.abs() > 1e-6 { (1.0 / dir_x).abs() } else { f32::MAX };
+    let t_delta_y = if dir_y.abs() > 1e-6 { (1.0 / dir_y).abs() } else { f32::MAX };
+
+    let mut t_max_x = if dir_x > 1e-6 {
+        ((ix as f32 + 1.0) - x0) / dir_x
+    } else if dir_x < -1e-6 {
+        (ix as f32 - x0) / dir_x
+    } else {
+        f32::MAX
+    };
+
+    let mut t_max_y = if dir_y > 1e-6 {
+        ((iy as f32 + 1.0) - y0) / dir_y
+    } else if dir_y < -1e-6 {
+        (iy as f32 - y0) / dir_y
+    } else {
+        f32::MAX
+    };
+
+    // Check cells along the ray until we reach the endpoint or hit something
+    for _ in 0..256 { // safety limit
+        // Out of bounds = hit
+        if ix < 0 || iy < 0 || ix >= GRID_W as i32 || iy >= GRID_H as i32 {
+            let t = t_max_x.min(t_max_y).min(dist);
+            return Some((x0 + dir_x * t, y0 + dir_y * t));
+        }
+
+        let block = grid[(iy as u32 * GRID_W + ix as u32) as usize];
+        let bt = block_type_rs(block);
+        let bh = (block >> 8) & 0xFF;
+        let is_door = (block >> 16) & 1 != 0;
+        let is_open = (block >> 16) & 4 != 0;
+
+        // Bullet stops on: solid blocks with height, except trees/fire/lights/bushes/open doors
+        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 31
+            && !(is_door && is_open)
+        {
+            let t = t_max_x.min(t_max_y).max(0.0);
+            return Some((x0 + dir_x * t, y0 + dir_y * t));
+        }
+
+        // Step to next cell
+        if t_max_x < t_max_y {
+            if t_max_x > dist { break; }
+            ix += step_x;
+            t_max_x += t_delta_x;
+        } else {
+            if t_max_y > dist { break; }
+            iy += step_y;
+            t_max_y += t_delta_y;
+        }
+    }
+
+    None // clear path
+}
+
 /// Tick all physics bodies. Returns list of cannonball impacts for block destruction.
 pub fn tick_bodies(
     bodies: &mut Vec<PhysicsBody>,
@@ -210,26 +284,19 @@ pub fn tick_bodies(
     let wind_threshold = 5.0; // minimum wind speed to push a box
 
     for body in bodies.iter_mut() {
-        // --- Bullet fast path: no physics, just straight-line movement + wall check ---
+        // --- Bullet fast path: DDA ray march through grid (no skipped cells) ---
         if body.body_type == BodyType::Bullet {
-            let nx = body.x + body.vx * dt;
-            let ny = body.y + body.vy * dt;
-            let bx = nx.floor() as i32;
-            let by = ny.floor() as i32;
-            if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
+            let x0 = body.x;
+            let y0 = body.y;
+            let x1 = body.x + body.vx * dt;
+            let y1 = body.y + body.vy * dt;
+
+            if let Some((_hx, _hy)) = dda_bullet_trace(grid, x0, y0, x1, y1) {
                 body.vx = 0.0; body.vy = 0.0; // mark for removal
-                continue;
+            } else {
+                body.x = x1;
+                body.y = y1;
             }
-            let block = grid[(by as u32 * GRID_W + bx as u32) as usize];
-            let bt = block_type_rs(block);
-            let bh = (block >> 8) & 0xFF;
-            // Hit any solid block with height
-            if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 31 {
-                body.vx = 0.0; body.vy = 0.0; // mark for removal
-                continue;
-            }
-            body.x = nx;
-            body.y = ny;
             continue;
         }
 
