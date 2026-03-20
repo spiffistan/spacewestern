@@ -170,7 +170,7 @@ pub fn generate_test_grid() -> Vec<u32> {
     };
 
     // === House 1: Stone cottage ===
-    let h1_h = 3u8;
+    let h1_h = 4u8;
     let roof_flag = 2u8;
     for x in 10..30 { oset(&mut grid, x, 10, make_block(1, h1_h, 0)); oset(&mut grid, x, 25, make_block(1, h1_h, 0)); }
     for y in 10..26 { oset(&mut grid, 10, y, make_block(1, h1_h, 0)); oset(&mut grid, 29, y, make_block(1, h1_h, 0)); }
@@ -191,7 +191,7 @@ pub fn generate_test_grid() -> Vec<u32> {
     oset(&mut grid, 12, 15, make_block(33, 0, roof_flag));
 
     // === House 2: Tall building ===
-    let h2_h = 5u8;
+    let h2_h = 4u8;
     for x in 35..55 { oset(&mut grid, x, 30, make_block(1, h2_h, 0)); oset(&mut grid, x, 50, make_block(1, h2_h, 0)); }
     for y in 30..51 { oset(&mut grid, 35, y, make_block(1, h2_h, 0)); oset(&mut grid, 54, y, make_block(1, h2_h, 0)); }
     for &wx in &[38u32, 41, 44, 47, 50] { oset(&mut grid, wx, 30, make_block(5, h2_h, 0)); oset(&mut grid, wx, 50, make_block(5, h2_h, 0)); }
@@ -205,7 +205,7 @@ pub fn generate_test_grid() -> Vec<u32> {
     }}
 
     // === Small shed ===
-    let h3_h = 2u8;
+    let h3_h = 4u8;
     for x in 45..52 { oset(&mut grid, x, 8, make_block(1, h3_h, 0)); oset(&mut grid, x, 14, make_block(1, h3_h, 0)); }
     for y in 8..15 { oset(&mut grid, 45, y, make_block(1, h3_h, 0)); oset(&mut grid, 51, y, make_block(1, h3_h, 0)); }
     for &(wx, wy) in &[(48u32, 8u32), (48, 14), (45, 11), (51, 11)] { oset(&mut grid, wx, wy, make_block(5, h3_h, 0)); }
