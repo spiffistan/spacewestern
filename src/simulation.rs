@@ -161,6 +161,36 @@ impl App {
             self.camera.force_refresh -= 1.0;
         }
 
+        // --- Burst fire tick ---
+        if self.burst_queue > 0 {
+            self.burst_delay -= dt;
+            if self.burst_delay <= 0.0 {
+                if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                    let dx = pleb.angle.cos();
+                    let dy = pleb.angle.sin();
+                    let sx = pleb.x + dx * 0.4;
+                    let sy = pleb.y + dy * 0.4;
+                    // Small random spread per shot
+                    let spread = if self.burst_mode {
+                        let seed = (self.burst_queue as f32 * 137.0 + self.time_of_day * 1000.0) as u32;
+                        ((seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0 - 0.5) * 0.06
+                    } else { 0.0 };
+                    let bx = (pleb.angle + spread).cos();
+                    let by = (pleb.angle + spread).sin();
+                    self.physics_bodies.push(PhysicsBody::new_bullet(sx, sy, bx, by));
+                    // Muzzle smoke
+                    self.fluid_params.splat_x = sx;
+                    self.fluid_params.splat_y = sy;
+                    self.fluid_params.splat_vx = dx * 15.0;
+                    self.fluid_params.splat_vy = dy * 15.0;
+                    self.fluid_params.splat_radius = 0.3;
+                    self.fluid_params.splat_active = 1.0;
+                }
+                self.burst_queue -= 1;
+                self.burst_delay = 0.07; // ~70ms between burst shots (~14 rounds/sec)
+            }
+        }
+
         // --- Grenade charge ---
         if self.grenade_charging {
             self.grenade_charge = (self.grenade_charge + dt * 0.8).min(1.0); // ~1.25s to full charge

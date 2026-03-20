@@ -103,20 +103,20 @@ impl PhysicsBody {
 
     /// Create a bullet fired from position in a direction.
     pub fn new_bullet(x: f32, y: f32, dir_x: f32, dir_y: f32) -> Self {
-        let speed = 45.0;
+        let speed = 120.0; // very fast — crosses screen in ~2s
         let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
         PhysicsBody {
             x, y, z: 1.0,
             vx: dir_x / len * speed,
             vy: dir_y / len * speed,
-            vz: 0.0, // flat trajectory
+            vz: 0.0,
             rot_x: 0.0, rot_y: 0.0, rot_z: dir_y.atan2(dir_x),
             spin_x: 0.0, spin_y: 0.0, spin_z: 0.0,
-            mass: 0.05,
+            mass: 0.01,
             friction: 0.0,
             bounce: 0.0,
-            size: 0.03,
-            render_height: 0.1,
+            size: 0.02,
+            render_height: 0.05,
             body_type: BodyType::Bullet, fuse_timer: 0.0,
         }
     }
@@ -210,6 +210,29 @@ pub fn tick_bodies(
     let wind_threshold = 5.0; // minimum wind speed to push a box
 
     for body in bodies.iter_mut() {
+        // --- Bullet fast path: no physics, just straight-line movement + wall check ---
+        if body.body_type == BodyType::Bullet {
+            let nx = body.x + body.vx * dt;
+            let ny = body.y + body.vy * dt;
+            let bx = nx.floor() as i32;
+            let by = ny.floor() as i32;
+            if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
+                body.vx = 0.0; body.vy = 0.0; // mark for removal
+                continue;
+            }
+            let block = grid[(by as u32 * GRID_W + bx as u32) as usize];
+            let bt = block_type_rs(block);
+            let bh = (block >> 8) & 0xFF;
+            // Hit any solid block with height
+            if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 31 {
+                body.vx = 0.0; body.vy = 0.0; // mark for removal
+                continue;
+            }
+            body.x = nx;
+            body.y = ny;
+            continue;
+        }
+
         // --- Wind force ---
         // Use global wind as approximation (actual fluid velocity sampling would need GPU readback)
         let wind_speed = (wind_x * wind_x + wind_y * wind_y).sqrt();

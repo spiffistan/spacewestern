@@ -167,7 +167,9 @@ struct App {
     grenade_charging: bool,
     grenade_charge: f32,
     grenade_impacts: Vec<(f32, f32)>,
-    burst_mode: bool, // false = single shot, true = 3-round burst
+    burst_mode: bool,
+    burst_queue: u8,       // remaining burst shots to fire (0 = none)
+    burst_delay: f32,      // seconds until next burst shot
     // Weather system
     weather: WeatherState,
     weather_timer: f32,
@@ -398,6 +400,8 @@ impl App {
             grenade_charge: 0.0,
             grenade_impacts: Vec::new(),
             burst_mode: false,
+            burst_queue: 0,
+            burst_delay: 0.0,
             weather: WeatherState::Clear,
             weather_timer: 45.0,
             wind_target_angle: std::f32::consts::FRAC_PI_4, // ~NE
@@ -2235,30 +2239,15 @@ impl App {
                     self.window.as_ref().unwrap().request_redraw();
                 }
                 PhysicalKey::Code(KeyCode::Space) => {
-                    if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
-                        // Shoot gun
-                        let dx = pleb.angle.cos();
-                        let dy = pleb.angle.sin();
-                        let sx = pleb.x + dx * 0.4;
-                        let sy = pleb.y + dy * 0.4;
+                    if self.selected_pleb.is_some() && self.burst_queue == 0 {
                         if self.burst_mode {
-                            // 3-round burst with slight spread
-                            for &spread in &[-0.08f32, 0.0, 0.08] {
-                                let bx = (pleb.angle + spread).cos();
-                                let by = (pleb.angle + spread).sin();
-                                self.physics_bodies.push(PhysicsBody::new_bullet(sx, sy, bx, by));
-                            }
+                            self.burst_queue = 3;
+                            self.burst_delay = 0.0; // fire first shot immediately
                         } else {
-                            self.physics_bodies.push(PhysicsBody::new_bullet(sx, sy, dx, dy));
+                            self.burst_queue = 1;
+                            self.burst_delay = 0.0;
                         }
-                        // Muzzle flash smoke
-                        self.fluid_params.splat_x = sx;
-                        self.fluid_params.splat_y = sy;
-                        self.fluid_params.splat_vx = dx * 15.0;
-                        self.fluid_params.splat_vy = dy * 15.0;
-                        self.fluid_params.splat_radius = 0.5;
-                        self.fluid_params.splat_active = 1.0;
-                    } else {
+                    } else if self.selected_pleb.is_none() {
                         self.time_paused = !self.time_paused;
                     }
                 }
