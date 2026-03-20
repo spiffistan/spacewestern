@@ -29,10 +29,14 @@ fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 
 // Is this block part of the power network?
 fn is_conductor(bt: u32, flags: u32) -> bool {
-    // Wire=36, Solar=37, Battery=38/39/40, Wind=41, Electric light=7, Fan=12, Standing lamp=10
+    // Wire=36, Solar=37, Battery=38/39/40, Wind=41, Switch=42, Dimmer=43
+    // Electric light=7, Fan=12, Standing lamp=10, Table lamp=11, Pump=16
     // Also: any block with wire overlay flag (bit 7 of flags)
     let has_wire = (flags & 0x80u) != 0u;
-    return bt == 36u || bt == 37u || bt == 38u || bt == 39u || bt == 40u || bt == 41u
+    // Switch (42): only conducts when ON (flag bit 2)
+    if bt == 42u { return (flags & 4u) != 0u; }
+    // Dimmer (43): always conducts (voltage scaling handled separately)
+    return bt == 36u || bt == 37u || bt == 38u || bt == 39u || bt == 40u || bt == 41u || bt == 43u
         || bt == 7u || bt == 12u || bt == 10u || bt == 11u || bt == 16u || has_wire;
 }
 
@@ -100,35 +104,34 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // --- Batteries: actual energy storage with charge/discharge dynamics ---
-    // All batteries output 12V max. Capacity = how slowly they drain.
-    // Charge rate: slow (takes time to fill from solar)
-    // Discharge rate: moderate (responsive as power source)
-    // Self-discharge: very slow (holds charge overnight)
+    // --- Batteries: voltage source with stored charge ---
+    // A real battery maintains constant voltage until depleted (flat discharge curve).
+    // Instead of mix() relaxation (which acts like a resistor), the battery:
+    // 1. Maintains its stored voltage as long as it has charge
+    // 2. Loses charge proportionally to actual current drawn by neighbors
+    // 3. Charges slowly when a generator pushes higher voltage
     if is_battery(bt) {
-        // Capacity scaling via charge/discharge rates
-        // Small (38):  fast drain  — runs a few lights for a short while
-        // Medium (39): 1.8x capacity — good for a small base
-        // Large (40):  3.5x capacity — powers a full colony overnight
-        var charge_rate = 0.02;       // how fast it absorbs energy
-        var discharge_rate = 0.15;    // how fast it supplies energy (must keep up with consumers)
-        var self_discharge = 0.99995; // per-frame voltage retention
+        // Drain rate: how fast the battery depletes under load
+        // Lower = more capacity (lasts longer)
+        var drain_rate = 0.0008;      // small battery
+        var charge_rate = 0.02;       // how fast it charges from solar
+        var self_discharge = 0.99995;
         if bt == 39u {
+            drain_rate = 0.00044;     // medium: 1.8x capacity
             charge_rate = 0.011;
-            discharge_rate = 0.083;
             self_discharge = 0.99998;
         }
         if bt == 40u {
+            drain_rate = 0.00023;     // large: 3.5x capacity
             charge_rate = 0.006;
-            discharge_rate = 0.043;
             self_discharge = 0.99999;
         }
 
-        // Find average neighbor voltage (same scan as below but battery-specific)
         let bbx = i32(gid.x);
         let bby = i32(gid.y);
         var bneigh_sum = 0.0;
         var bneigh_count = 0.0;
+        var bneigh_max = 0.0;
         for (var bd = 0; bd < 4; bd++) {
             var bndx = 0; var bndy = 0;
             if bd == 0 { bndx = 1; } else if bd == 1 { bndx = -1; }
@@ -143,36 +146,41 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
             if is_conductor(bnbt, bnflags) {
                 bneigh_sum += voltage[bnidx];
                 bneigh_count += 1.0;
+                bneigh_max = max(bneigh_max, voltage[bnidx]);
             }
         }
 
         var bat_v = voltage[idx];
+
         if bneigh_count > 0.0 {
             let bavg = bneigh_sum / bneigh_count;
-            if bavg > bat_v {
-                // Charging: network voltage higher than battery → absorb slowly
-                bat_v = mix(bat_v, bavg, charge_rate);
+            if bneigh_max > bat_v {
+                // Charging: a generator is pushing higher voltage → absorb slowly
+                bat_v = mix(bat_v, bneigh_max, charge_rate);
             } else {
-                // Discharging: battery voltage higher than network → supply power
-                bat_v = mix(bat_v, bavg, discharge_rate);
+                // Discharging: battery is the voltage source
+                // Drain charge proportional to current flowing out
+                let current_out = max(bat_v - bavg, 0.0) * bneigh_count;
+                bat_v -= current_out * drain_rate;
+                // DON'T relax toward neighbors — maintain voltage (voltage source behavior)
             }
         }
 
-        // Self-discharge (very slow — retains ~95% overnight at 60fps)
+        // Self-discharge
         bat_v *= self_discharge;
 
         voltage[idx] = clamp(bat_v, 0.0, 12.0);
-        return; // batteries handle their own relaxation, skip the generic path
+        return;
     }
 
     // --- Consumers: draw current (reduce voltage) ---
-    // Load in watts (relative units). Applied as small voltage drop per frame.
+    // Load divided by 8 iterations per frame to keep total drain constant
     var load = 0.0;
-    if bt == 7u { load = 0.05; }   // Ceiling light: 5W
-    if bt == 10u { load = 0.05; }  // Standing lamp: 5W
-    if bt == 11u { load = 0.03; }  // Table lamp: 3W
-    if bt == 12u { load = 0.10; }  // Fan: 10W
-    if bt == 16u { load = 0.08; }  // Pump: 8W
+    if bt == 7u { load = 0.006; }   // Ceiling light: ~5W
+    if bt == 10u { load = 0.006; }  // Standing lamp: ~5W
+    if bt == 11u { load = 0.004; }  // Table lamp: ~3W
+    if bt == 12u { load = 0.012; }  // Fan: ~10W
+    if bt == 16u { load = 0.010; }  // Pump: ~8W
 
     // --- Voltage relaxation ---
     // Wires connect to direct 4-neighbors only.
@@ -239,6 +247,12 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Apply consumer load (small voltage drop per frame)
     new_v -= load;
+
+    // Dimmer: scale voltage by dimmer level (height byte = 0-10 = 0-100%)
+    if bt == 43u {
+        let dim_level = f32((block >> 8u) & 0xFFu) / 10.0;
+        new_v *= dim_level;
+    }
     new_v = max(new_v, 0.0);
 
     voltage[idx] = new_v;

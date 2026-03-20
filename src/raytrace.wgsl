@@ -109,7 +109,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 43u)];
+    return materials[min(bt, 45u)];
 }
 
 // --- Sprite constants ---
@@ -2001,10 +2001,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         let wf_e2 = (get_block(bx + 1, by) >> 16u) & 0x80u;
         let wf_n2 = (get_block(bx, by - 1) >> 16u) & 0x80u;
         let wf_s2 = (get_block(bx, by + 1) >> 16u) & 0x80u;
-        let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 7u || n_w == 12u || n_w == 10u;
-        let pwr_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 39u || n_e == 40u || n_e == 41u || n_e == 7u || n_e == 12u || n_e == 10u;
-        let pwr_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 39u || n_n == 40u || n_n == 41u || n_n == 7u || n_n == 12u || n_n == 10u;
-        let pwr_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 39u || n_s == 40u || n_s == 41u || n_s == 7u || n_s == 12u || n_s == 10u;
+        let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 42u || n_w == 43u || n_w == 7u || n_w == 12u || n_w == 10u;
+        let pwr_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 39u || n_e == 40u || n_e == 41u || n_e == 42u || n_e == 43u || n_e == 7u || n_e == 12u || n_e == 10u;
+        let pwr_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 39u || n_n == 40u || n_n == 41u || n_n == 42u || n_n == 43u || n_n == 7u || n_n == 12u || n_n == 10u;
+        let pwr_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 39u || n_s == 40u || n_s == 41u || n_s == 42u || n_s == 43u || n_s == 7u || n_s == 12u || n_s == 10u;
         let conn_w = pwr_w || wf_w2 != 0u;
         let conn_e = pwr_e || wf_e2 != 0u;
         let conn_n = pwr_n || wf_n2 != 0u;
@@ -2242,6 +2242,55 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         let wv = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
         if wv > 0.5 && wt_dist < 0.06 {
             color += vec3<f32>(0.1, 0.15, 0.05) * clamp(wv / 12.0, 0.0, 1.0);
+        }
+    } else if btype == 42u {
+        // Switch: toggle box on wire
+        let ground = vec3<f32>(0.42, 0.35, 0.22);
+        let sw_on = (bflags & 4u) != 0u;
+        let sw_cdist = length(vec2<f32>(fx - 0.5, fy - 0.5));
+        let on_sw_wire = abs(fy - 0.5) < 0.06 || abs(fx - 0.5) < 0.06 || sw_cdist < 0.10;
+        let box_size = 0.18;
+        let in_box = abs(fx - 0.5) < box_size && abs(fy - 0.5) < box_size;
+        if in_box {
+            color = vec3<f32>(0.40, 0.38, 0.35);
+            let toggle_y = select(0.5 + 0.08, 0.5 - 0.08, sw_on);
+            let toggle_dist = length(vec2<f32>(fx - 0.5, fy - toggle_y));
+            if toggle_dist < 0.06 {
+                color = select(vec3<f32>(0.4, 0.15, 0.15), vec3<f32>(0.2, 0.8, 0.2), sw_on);
+            }
+            if abs(fx - 0.5) > box_size - 0.025 || abs(fy - 0.5) > box_size - 0.025 {
+                color = vec3<f32>(0.30, 0.28, 0.25);
+            }
+        } else if on_sw_wire {
+            var wc = vec3<f32>(0.55, 0.38, 0.20);
+            let sv = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+            wc = mix(wc, vec3<f32>(1.0, 0.85, 0.3), clamp(sv / 12.0, 0.0, 1.0) * 0.5);
+            color = wc;
+        } else {
+            color = ground;
+        }
+    } else if btype == 43u {
+        // Dimmer: rotary knob on wire
+        let ground = vec3<f32>(0.42, 0.35, 0.22);
+        let dim_level = f32(bheight) / 10.0;
+        let dm_cdist = length(vec2<f32>(fx - 0.5, fy - 0.5));
+        let on_dm_wire = abs(fy - 0.5) < 0.06 || abs(fx - 0.5) < 0.06 || dm_cdist < 0.10;
+        if dm_cdist < 0.20 {
+            color = vec3<f32>(0.32, 0.30, 0.28);
+            let knob_angle = atan2(fy - 0.5, fx - 0.5);
+            let norm_angle = (knob_angle + 3.14159) / 6.28318;
+            if norm_angle < dim_level && dm_cdist > 0.08 && dm_cdist < 0.17 {
+                color = mix(vec3<f32>(0.3, 0.15, 0.05), vec3<f32>(1.0, 0.7, 0.2), dim_level);
+            }
+            if dm_cdist < 0.05 { color = vec3<f32>(0.50, 0.48, 0.45); }
+            if dm_cdist > 0.17 { color = vec3<f32>(0.25, 0.23, 0.20); }
+        } else if on_dm_wire {
+            var wc = vec3<f32>(0.55, 0.38, 0.20);
+            let dv = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+            wc = mix(wc, vec3<f32>(1.0, 0.85, 0.3), clamp(dv / 12.0, 0.0, 1.0) * 0.5);
+            color = wc;
+        } else {
+            color = ground;
         }
     } else if btype == 14u {
         // Insulated wall: outer shell with fiberglass insulation core

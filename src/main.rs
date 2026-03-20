@@ -121,6 +121,8 @@ struct App {
     selected_pump_world: (f32, f32), // world position for pump slider
     selected_fan: Option<u32>,       // grid index of fan being adjusted
     selected_fan_world: (f32, f32),  // world position for fan slider
+    selected_dimmer: Option<u32>,    // grid index of dimmer being adjusted
+    selected_dimmer_world: (f32, f32),
     build_category: Option<&'static str>, // selected build category, None = collapsed
     debug_fluid_density: [f32; 4], // last readback: RGBA from dye texture at cursor
     debug_block_temp: f32,         // last readback: block temperature at cursor
@@ -340,6 +342,8 @@ impl App {
             selected_pump_world: (0.0, 0.0),
             selected_fan: None,
             selected_fan_world: (0.0, 0.0),
+            selected_dimmer: None,
+            selected_dimmer_world: (0.0, 0.0),
             build_category: None,
             debug_fluid_density: [0.0; 4],
             debug_block_temp: 15.0,
@@ -1033,7 +1037,8 @@ impl App {
 
                     let can_place = self.can_place_at(bx, by)
                         || (id == 16 && bt == 15) // pump on pipe
-                        || (id == 36 && bt != 36); // wire can go anywhere except on existing wire
+                        || (id == 36 && bt != 36) // wire can go anywhere except on existing wire
+                        || ((id == 42 || id == 43) && (bt == 36 || bt == 0 || bt == 2)); // switch/dimmer on wire or ground
                     if can_place && click_mode != block_defs::ClickMode::None {
                         if id == 36 && bt != 0 && bt != 2 {
                             // Wire on non-ground: add wire flag to existing block (bit 7)
@@ -1041,9 +1046,14 @@ impl App {
                         } else {
                             let roof_flag = flags & 2;
                             let rot_flags = (self.build_rotation as u8) << 3;
-                            let combined_flags = roof_flag | rot_flags | extra_flags;
+                            let mut combined_flags = roof_flag | rot_flags | extra_flags;
+                            let mut final_height = place_height;
+                            // Switch starts ON (flag bit 2)
+                            if id == 42 { combined_flags |= 4; }
+                            // Dimmer starts at 100% (height = 10)
+                            if id == 43 { final_height = 10; }
                             let roof_h = block & 0xFF000000;
-                            self.grid_data[idx] = make_block(id, place_height, combined_flags) | roof_h;
+                            self.grid_data[idx] = make_block(id, final_height, combined_flags) | roof_h;
                         }
                         self.grid_dirty = true;
                         compute_roof_heights(&mut self.grid_data);
@@ -1190,6 +1200,25 @@ impl App {
             self.grid_dirty = true;
             let open = (new_flags & 4) != 0;
             log::info!("Valve at ({}, {}): {}", bx, by, if open { "open" } else { "closed" });
+            return;
+        }
+
+        // Toggle switch on/off
+        if bt == 42 && self.build_tool != BuildTool::Destroy {
+            let new_flags = flags ^ 4; // toggle bit2
+            let new_block = (block & 0xFF00FFFF) | ((new_flags as u32) << 16);
+            self.grid_data[idx] = new_block;
+            self.grid_dirty = true;
+            let on = (new_flags & 4) != 0;
+            log::info!("Switch at ({}, {}): {}", bx, by, if on { "ON" } else { "OFF" });
+            return;
+        }
+
+        // Click dimmer: show slider popup
+        if bt == 43 && self.build_tool != BuildTool::Destroy {
+            let didx = by as u32 * GRID_W + bx as u32;
+            self.selected_dimmer = if self.selected_dimmer == Some(didx) { None } else { Some(didx) };
+            self.selected_dimmer_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
 

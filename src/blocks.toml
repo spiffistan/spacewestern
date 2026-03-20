@@ -647,3 +647,33 @@ label = "Wind"
 click = "multi_tile"
 place_height = 2
 rotatable = true
+
+[[block]]
+id = 42
+name = "Switch"
+color = [0.50, 0.48, 0.42]
+render_style = 28.0
+walkable = true
+is_removable = true
+light_transmission = 1.0
+[block.placement]
+category = "Power"
+icon = "🔘"
+label = "Switch"
+click = "simple"
+place_height = 0
+
+[[block]]
+id = 43
+name = "Dimmer"
+color = [0.48, 0.45, 0.40]
+render_style = 29.0
+walkable = true
+is_removable = true
+light_transmission = 1.0
+[block.placement]
+category = "Power"
+icon = "🎚"
+label = "Dimmer"
+click = "simple"
+place_height = 0

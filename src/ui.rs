@@ -634,6 +634,8 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(39), "\u{1f50b}", "Bat M");
                                     icon_btn(ui, BuildTool::Place(40), "\u{1f50b}", "Bat L");
                                     icon_btn(ui, BuildTool::Place(41), "\u{1f300}", "Wind");
+                                    icon_btn(ui, BuildTool::Place(42), "\u{1f518}", "Switch");
+                                    icon_btn(ui, BuildTool::Place(43), "\u{1f39a}", "Dimmer");
                                     icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
                                     icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
                                     icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table");
@@ -1901,6 +1903,46 @@ impl App {
                 });
             if !still_valid {
                 self.selected_fan = None;
+            }
+        }
+
+        // Dimmer slider popup
+        if let Some(dimmer_idx) = self.selected_dimmer {
+            let (dwx, dwy) = self.selected_dimmer_world;
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let sx = ((dwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
+            let sy = ((dwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
+            let mut still_valid = true;
+            // Read current dimmer level from block height (0-10 = 0-100%)
+            let didx = dimmer_idx as usize;
+            let dblock = if didx < self.grid_data.len() { self.grid_data[didx] } else { 0 };
+            if (dblock & 0xFF) != 43 { still_valid = false; }
+            if still_valid {
+                let mut level = ((dblock >> 8) & 0xFF) as i32;
+                egui::Area::new(egui::Id::new("dimmer_slider"))
+                    .fixed_pos(egui::pos2(sx, sy))
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Dimmer").strong().size(11.0));
+                            let pct = level as f32 * 10.0;
+                            ui.label(egui::RichText::new(format!("{:.0}%", pct)).size(10.0));
+                            ui.add(egui::Slider::new(&mut level, 0..=10)
+                                .text("Level")
+                                .step_by(1.0));
+                            // Write back to block height
+                            let new_block = (dblock & 0xFFFF00FF) | ((level as u32 & 0xFF) << 8);
+                            if new_block != dblock {
+                                self.grid_data[didx] = new_block;
+                                self.grid_dirty = true;
+                            }
+                            if ui.small_button("Close").clicked() {
+                                still_valid = false;
+                            }
+                        });
+                    });
+            }
+            if !still_valid {
+                self.selected_dimmer = None;
             }
         }
 

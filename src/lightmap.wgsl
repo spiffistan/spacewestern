@@ -52,7 +52,7 @@ struct GpuMaterial {
     ignition_temp: f32, walkable: f32, is_removable: f32, _pad: f32,
 };
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 43u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 45u)]; }
 
 // --- Block unpacking ---
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
