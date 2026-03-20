@@ -2016,6 +2016,91 @@ impl App {
 
         self.window.as_ref().unwrap().request_redraw();
     }
+
+    fn handle_keyboard(&mut self, event: &winit::event::KeyEvent) {
+        if let PhysicalKey::Code(code) = event.physical_key {
+            if event.state.is_pressed() {
+                self.pressed_keys.insert(code);
+            } else {
+                self.pressed_keys.remove(&code);
+            }
+        }
+        if event.state.is_pressed() {
+            match event.physical_key {
+                PhysicalKey::Code(KeyCode::Escape) => {
+                    self.placing_pleb = false;
+                    if self.debug.mode {
+                        self.debug.mode = false;
+                    } else if self.selected_pleb.is_some() {
+                        self.selected_pleb = None;
+                    } else if self.build_tool != BuildTool::None {
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyR) => {
+                    if self.camera.show_roofs < 0.5 {
+                        self.camera.show_roofs = 1.0;
+                    } else {
+                        self.camera.show_roofs = 0.0;
+                    }
+                    self.window.as_ref().unwrap().request_redraw();
+                }
+                PhysicalKey::Code(KeyCode::Space) => {
+                    self.time_paused = !self.time_paused;
+                }
+                PhysicalKey::Code(KeyCode::KeyQ) => {
+                    if self.selected_pleb.is_none() {
+                        if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
+                            self.build_rotation = (self.build_rotation + 3) % 4;
+                        } else {
+                            self.build_rotation = (self.build_rotation + 1) % 2;
+                        }
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyE) => {
+                    if self.selected_pleb.is_none() {
+                        if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
+                            self.build_rotation = (self.build_rotation + 1) % 4;
+                        } else {
+                            self.build_rotation = (self.build_rotation + 1) % 2;
+                        }
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyT) => {
+                    if let Some(idx) = self.selected_pleb {
+                        if let Some(pleb) = self.plebs.get_mut(idx) {
+                            pleb.torch_on = !pleb.torch_on;
+                        }
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyG) => {
+                    if let Some(idx) = self.selected_pleb {
+                        if let Some(pleb) = self.plebs.get_mut(idx) {
+                            pleb.headlight_on = !pleb.headlight_on;
+                        }
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyI) => {
+                    if self.selected_pleb.is_some() {
+                        self.show_inventory = !self.show_inventory;
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyF) => {
+                    if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                        let px = pleb.x;
+                        let py = pleb.y;
+                        let angle = pleb.angle;
+                        if let Some(idx) = nearest_body(&self.physics_bodies, px, py, 1.2) {
+                            let dx = angle.cos();
+                            let dy = angle.sin();
+                            self.physics_bodies[idx].throw(dx, dy, 18.0);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -2130,99 +2215,7 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::KeyboardInput { event, .. } => {
-                // Track pressed keys for pleb WASD movement
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    if event.state.is_pressed() {
-                        self.pressed_keys.insert(code);
-                    } else {
-                        self.pressed_keys.remove(&code);
-                    }
-                }
-                if event.state.is_pressed() {
-                    match event.physical_key {
-                        PhysicalKey::Code(KeyCode::Escape) => {
-                            self.placing_pleb = false;
-                            if self.debug.mode {
-                                self.debug.mode = false;
-                            } else if self.selected_pleb.is_some() {
-                                self.selected_pleb = None;
-                            } else if self.build_tool != BuildTool::None {
-                                self.build_tool = BuildTool::None;
-                            }
-                            // Do NOT exit the app — only window close (CloseRequested) should do that
-                        }
-                        PhysicalKey::Code(KeyCode::KeyR) => {
-                            if self.camera.show_roofs < 0.5 {
-                                self.camera.show_roofs = 1.0;
-                                log::info!("Roofs: opaque");
-                            } else {
-                                self.camera.show_roofs = 0.0;
-                                log::info!("Roofs: transparent (see interior)");
-                            }
-                            self.window.as_ref().unwrap().request_redraw();
-                        }
-                        PhysicalKey::Code(KeyCode::Space) => {
-                            self.time_paused = !self.time_paused;
-                            log::info!("Time: {}", if self.time_paused { "paused" } else { "playing" });
-                        }
-                        PhysicalKey::Code(KeyCode::KeyQ) => {
-                            if !self.selected_pleb.is_some() {
-                                if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
-                                    self.build_rotation = (self.build_rotation + 3) % 4;
-                                } else {
-                                    self.build_rotation = (self.build_rotation + 1) % 2;
-                                }
-                            }
-                        }
-                        PhysicalKey::Code(KeyCode::KeyE) => {
-                            if !self.selected_pleb.is_some() {
-                                if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
-                                    self.build_rotation = (self.build_rotation + 1) % 4;
-                                } else {
-                                    self.build_rotation = (self.build_rotation + 1) % 2;
-                                }
-                            }
-                        }
-                        PhysicalKey::Code(KeyCode::KeyT) => {
-                            if let Some(idx) = self.selected_pleb {
-                                if let Some(pleb) = self.plebs.get_mut(idx) {
-                                    pleb.torch_on = !pleb.torch_on;
-                                    log::info!("{} torch {}", pleb.name, if pleb.torch_on { "ON" } else { "OFF" });
-                                }
-                            }
-                        }
-                        PhysicalKey::Code(KeyCode::KeyG) => {
-                            if let Some(idx) = self.selected_pleb {
-                                if let Some(pleb) = self.plebs.get_mut(idx) {
-                                    pleb.headlight_on = !pleb.headlight_on;
-                                    log::info!("{} headlight {}", pleb.name, if pleb.headlight_on { "ON" } else { "OFF" });
-                                }
-                            }
-                        }
-                        PhysicalKey::Code(KeyCode::KeyI) => {
-                            if self.selected_pleb.is_some() {
-                                self.show_inventory = !self.show_inventory;
-                            }
-                        }
-                        PhysicalKey::Code(KeyCode::KeyF) => {
-                            // Throw nearest box in selected pleb's facing direction
-                            if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
-                                let px = pleb.x;
-                                let py = pleb.y;
-                                let angle = pleb.angle;
-                                if let Some(idx) = nearest_body(&self.physics_bodies, px, py, 1.2) {
-                                    let dx = angle.cos();
-                                    let dy = angle.sin();
-                                    self.physics_bodies[idx].throw(dx, dy, 18.0);
-                                    log::info!("Jeff threw a box!");
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            WindowEvent::KeyboardInput { event, .. } => self.handle_keyboard(&event),
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64,
