@@ -640,10 +640,10 @@ impl App {
                 });
             });
 
-        // --- Build items panel (vertical column, rightward of category bar) ---
+        // --- Build items panel (horizontal row, right of category bar) ---
         if let Some(cat) = self.build_category {
             egui::Area::new(egui::Id::new("build_items"))
-                .anchor(egui::Align2::LEFT_BOTTOM, [145.0, -10.0])
+                .anchor(egui::Align2::LEFT_BOTTOM, [160.0, -10.0])
                 .show(ctx, |ui| {
                     egui::Frame::window(ui.style()).show(ui, |ui| {
                         let tool = &mut self.build_tool;
@@ -676,8 +676,8 @@ impl App {
                             }
                         };
 
-                        // Items flow vertically in single column
-                        ui.vertical(|ui| {
+                        // Items flow horizontally (rightward)
+                        ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = egui::Vec2::new(4.0, 4.0);
                             match cat {
                                 "Walls" => {
@@ -2836,6 +2836,21 @@ impl App {
                                     self.destroy_block_at(x, y);
                                 }
                                 self.world_sel = WorldSelection::none();
+                            }
+                        }
+
+                        // Harvest: available if any selected items are harvestable
+                        let any_harvestable = items.iter().any(|item| {
+                            item.pleb_idx.is_none() && reg.get(item.block_type as u8).map_or(false, |d| d.is_harvestable)
+                        });
+                        if any_harvestable {
+                            if ui.small_button("Harvest").clicked() {
+                                for item in &items {
+                                    if item.pleb_idx.is_some() { continue; }
+                                    if reg.get(item.block_type as u8).map_or(false, |d| d.is_harvestable) {
+                                        self.manual_tasks.push(zones::WorkTask::HarvestBush(item.x, item.y));
+                                    }
+                                }
                             }
                         }
 

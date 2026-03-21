@@ -484,6 +484,8 @@ color = [0.20, 0.40, 0.15]
 render_style = 18.0
 light_transmission = 0.6
 walkable = true
+is_plant = true
+is_harvestable = true
 thermal = { heat_capacity = 1.5, conductivity = 0.001, solar_absorption = 0.3 }
 [block.placement]
 category = "Build"
@@ -736,5 +738,6 @@ name = "Crop"
 color = [0.30, 0.55, 0.15]
 render_style = 32.0
 walkable = true
+is_plant = true
 light_transmission = 0.8
 thermal = { heat_capacity = 1.0, conductivity = 0.001, solar_absorption = 0.3 }

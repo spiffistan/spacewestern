@@ -30,6 +30,8 @@ pub struct BlockDef {
     #[serde(default)] pub is_flammable: bool,
     #[serde(default)] pub ignition_temp: f32,
     #[serde(default)] pub is_wall: bool,
+    #[serde(default)] pub is_plant: bool,     // plants: no shadow casting, harvestable
+    #[serde(default)] pub is_harvestable: bool, // can be harvested via work queue
 
     #[serde(default)] pub light: Option<LightDef>,
     #[serde(default)] pub thermal: Option<ThermalDef>,

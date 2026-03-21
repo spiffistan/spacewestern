@@ -701,9 +701,16 @@ impl App {
             for idx in matured { self.crop_timers.remove(&idx); }
         }
 
-        // --- Work queue: assign idle friendly plebs to farming tasks ---
+        // --- Work queue: assign idle friendly plebs to tasks ---
         {
-            let tasks = generate_work_tasks(&self.zones, &self.grid_data, GRID_W, &self.active_work);
+            let mut tasks = generate_work_tasks(&self.zones, &self.grid_data, GRID_W, &self.active_work);
+            // Add manual (player-ordered) tasks
+            for task in self.manual_tasks.drain(..) {
+                let pos = task.position();
+                if !self.active_work.contains(&pos) {
+                    tasks.push(task);
+                }
+            }
             for pleb in self.plebs.iter_mut() {
                 if pleb.is_enemy { continue; }
                 if pleb.activity != PlebActivity::Idle { continue; }
@@ -713,7 +720,7 @@ impl App {
                 let is_preferred = |t: &WorkTask| -> bool {
                     match self.work_priority {
                         WorkPriority::PlantFirst => matches!(t, WorkTask::Plant(_, _)),
-                        WorkPriority::HarvestFirst => matches!(t, WorkTask::Harvest(_, _)),
+                        WorkPriority::HarvestFirst => matches!(t, WorkTask::Harvest(_, _) | WorkTask::HarvestBush(_, _)),
                     }
                 };
                 let mut best_task: Option<(WorkTask, f32)> = None;
@@ -772,13 +779,16 @@ impl App {
                                     self.crop_timers.insert(tidx as u32, 0.0);
                                     self.grid_dirty = true;
                                 } else if tbt == BT_CROP {
-                                    // Harvest: revert to dirt, give food
+                                    // Harvest crop: revert to dirt, give food
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = (tblock >> 16) & 0xFF;
                                     self.grid_data[tidx] = make_block(BT_DIRT as u8, 0, fflags as u8) | roof_h;
                                     self.crop_timers.remove(&(tidx as u32));
                                     self.grid_dirty = true;
-                                    pleb.inventory.berries += 2; // harvest yields food
+                                    pleb.inventory.berries += 2;
+                                } else if tbt == BT_BERRY_BUSH {
+                                    // Harvest berry bush: collect berries (bush stays)
+                                    pleb.inventory.berries += 3;
                                 }
                             }
                             self.active_work.remove(&(tx, ty));

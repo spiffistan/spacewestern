@@ -23,8 +23,9 @@ impl Zone {
 /// Global work task that a pleb can claim.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WorkTask {
-    Plant(i32, i32),    // plant a crop at this position
-    Harvest(i32, i32),  // harvest mature crop at this position
+    Plant(i32, i32),        // plant a crop at this position
+    Harvest(i32, i32),      // harvest mature crop at this position
+    HarvestBush(i32, i32),  // harvest berry bush at this position
 }
 
 /// Work priority ordering.
@@ -37,7 +38,7 @@ pub enum WorkPriority {
 impl WorkTask {
     pub fn position(&self) -> (i32, i32) {
         match self {
-            WorkTask::Plant(x, y) | WorkTask::Harvest(x, y) => (*x, *y),
+            WorkTask::Plant(x, y) | WorkTask::Harvest(x, y) | WorkTask::HarvestBush(x, y) => (*x, *y),
         }
     }
 }
