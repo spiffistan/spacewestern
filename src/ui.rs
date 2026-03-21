@@ -1923,23 +1923,63 @@ impl App {
             }
         }
 
-        // Voltage label at cursor when power overlay is active
-        if matches!(self.fluid_overlay, FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts) {
-            if self.debug.voltage > 0.01 {
-                let (hwx, hwy) = self.hover_world;
-                let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
-                let hsx = ((hwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                let hsy = ((hwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+        // Per-tile voltage labels when power overlay is active
+        if matches!(self.fluid_overlay, FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts)
+            && !self.voltage_data.is_empty()
+        {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            if tile_px > 6.0 { // only show labels when zoomed in enough
                 let label_painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Foreground, egui::Id::new("voltage_label"),
+                    egui::Order::Foreground, egui::Id::new("voltage_labels"),
                 ));
-                label_painter.text(
-                    egui::pos2(hsx, hsy - 10.0),
-                    egui::Align2::CENTER_BOTTOM,
-                    format!("{:.1}V", self.debug.voltage),
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::from_rgb(220, 255, 220),
-                );
+                let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    egui::pos2(sx, sy)
+                };
+                // Visible tile range
+                let min_x = ((cam_cx - cam_sw * 0.5 / cam_zoom).floor() as i32).max(0);
+                let max_x = ((cam_cx + cam_sw * 0.5 / cam_zoom).ceil() as i32).min(GRID_W as i32);
+                let min_y = ((cam_cy - cam_sh * 0.5 / cam_zoom).floor() as i32).max(0);
+                let max_y = ((cam_cy + cam_sh * 0.5 / cam_zoom).ceil() as i32).min(GRID_H as i32);
+                for ty in min_y..max_y {
+                    for tx in min_x..max_x {
+                        let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        if idx >= self.voltage_data.len() { continue; }
+                        let v = self.voltage_data[idx];
+                        if v < 0.05 { continue; }
+                        let b = self.grid_data[idx];
+                        let bt = b & 0xFF;
+                        let flags = (b >> 16) & 0xFF;
+                        // Only label conductors
+                        let is_cond = bt == 36 || bt == 37 || bt == 38 || bt == 39
+                            || bt == 40 || bt == 41 || bt == 42 || bt == 43 || bt == 45
+                            || bt == 7 || bt == 10 || bt == 11 || bt == 12 || bt == 16
+                            || (flags & 0x80) != 0;
+                        if !is_cond { continue; }
+                        let center = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
+                        let text = if v >= 10.0 {
+                            format!("{:.0}V", v)
+                        } else {
+                            format!("{:.1}V", v)
+                        };
+                        let color = if v > 15.0 {
+                            egui::Color32::from_rgb(255, 120, 120) // red for overvoltage
+                        } else if v > 1.0 {
+                            egui::Color32::from_rgb(220, 255, 220) // green for normal
+                        } else {
+                            egui::Color32::from_rgb(150, 150, 150) // dim for trace
+                        };
+                        label_painter.text(
+                            center,
+                            egui::Align2::CENTER_CENTER,
+                            text,
+                            egui::FontId::proportional(8.0),
+                            color,
+                        );
+                    }
+                }
             }
         }
 

@@ -1178,6 +1178,14 @@ impl App {
             mapped_at_creation: false,
         });
 
+        // Full voltage readback buffer for per-tile labels (only used when power overlay active)
+        let voltage_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("voltage-readback"),
+            size: (GRID_W * GRID_H * 4) as u64, // 256x256 f32
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
         // Per-pleb air readback: 16 plebs × 256 bytes each (alignment)
         let pleb_air_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pleb-air-readback"),
@@ -1321,6 +1329,7 @@ impl App {
             fluid_bg_advect_dye: [fluid_bg_advect_dye_0, fluid_bg_advect_dye_1],
             debug_readback_buffer,
             block_temp_readback_buffer,
+            voltage_readback_buffer,
             pleb_air_readback_buffer,
             block_temp_buffer,
             thermal_pipeline: thermal_pipeline_val,

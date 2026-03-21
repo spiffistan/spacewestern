@@ -171,7 +171,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Self-discharge
         bat_v *= self_discharge;
 
-        voltage[idx] = clamp(bat_v, 0.0, 12.0);
+        voltage[idx] = clamp(bat_v, 0.0, 250.0);
         return;
     }
 
@@ -298,6 +298,12 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Apply consumer load (small voltage drop per frame)
     new_v -= load;
+
+    // Resistive decay: wire resistance dissipates energy as heat.
+    // Generators/batteries re-inject each iteration so they're unaffected,
+    // but transient surges (lightning) decay naturally over ~3 seconds.
+    new_v *= 0.998;
+
     new_v = max(new_v, 0.0);
 
     voltage[idx] = new_v;

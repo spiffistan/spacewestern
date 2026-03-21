@@ -194,6 +194,9 @@ struct App {
     wetness_data: Vec<f32>,  // 256x256 per-tile wetness (0.0-1.0)
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
+    // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
+    voltage_data: Vec<f32>,
+    voltage_readback_pending: bool,
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -271,6 +274,7 @@ struct GfxState {
     // Debug readback
     debug_readback_buffer: wgpu::Buffer,            // staging buffer for single texel readback
     block_temp_readback_buffer: wgpu::Buffer,       // staging buffer for block temp readback
+    voltage_readback_buffer: wgpu::Buffer,         // full grid voltage readback for per-tile labels
     // Pleb air readback — one texel per pleb, each at 256-byte aligned offset
     pleb_air_readback_buffer: wgpu::Buffer,
 }
@@ -433,6 +437,8 @@ impl App {
             wind_change_timer: 15.0,
             wetness_data: vec![0.0; (GRID_W * GRID_H) as usize],
             diag_preview: Vec::new(),
+            voltage_data: Vec::new(),
+            voltage_readback_pending: false,
         }
     }
 
@@ -924,7 +930,7 @@ impl App {
             // Trigger lightning at clicked location
             self.lightning_flash = 1.0;
             self.lightning_strike = Some((wx, wy));
-            self.lightning_surge_done = false;
+            self.lightning_surge_done = true; // surge injected immediately below
             // Heat/smoke at impact
             self.fluid_params.splat_x = wx;
             self.fluid_params.splat_y = wy;
@@ -932,6 +938,54 @@ impl App {
             self.fluid_params.splat_vy = 0.0;
             self.fluid_params.splat_radius = 1.5;
             self.fluid_params.splat_active = 1.0;
+            // Inject voltage surge immediately into the voltage buffer
+            if let Some(gfx) = &self.gfx {
+                let lcx = wx.floor() as i32;
+                let lcy = wy.floor() as i32;
+                let radius = 12i32;
+                let mut surge_count = 0u32;
+                for dy in -radius..=radius {
+                    for dx in -radius..=radius {
+                        let nx = lcx + dx;
+                        let ny = lcy + dy;
+                        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                        let dist_sq = (dx * dx + dy * dy) as f32;
+                        if dist_sq > (radius * radius) as f32 { continue; }
+                        let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                        let bt = block_type_rs(self.grid_data[nidx]);
+                        let lflags = block_flags_rs(self.grid_data[nidx]);
+                        let is_cond = bt == 36 || bt == 37 || bt == 38 || bt == 39
+                            || bt == 40 || bt == 41 || bt == 42 || bt == 43 || bt == 45
+                            || bt == 7 || bt == 10 || bt == 11 || bt == 12 || bt == 16
+                            || (lflags & 0x80) != 0;
+                        if is_cond {
+                            let dist = dist_sq.sqrt();
+                            let surge = 200.0 * (1.0 - dist / radius as f32).max(0.0);
+                            gfx.queue.write_buffer(
+                                &gfx.voltage_buffer,
+                                (nidx as u64) * 4,
+                                bytemuck::bytes_of(&surge),
+                            );
+                            surge_count += 1;
+                        }
+                    }
+                }
+                log::warn!("LIGHTNING SURGE (click): center=({},{}) hit {} conductors, max=200V", lcx, lcy, surge_count);
+                // Trip breakers
+                for dy in -20..=20i32 {
+                    for dx in -20..=20i32 {
+                        let bnx = lcx + dx;
+                        let bny = lcy + dy;
+                        if bnx < 0 || bny < 0 || bnx >= GRID_W as i32 || bny >= GRID_H as i32 { continue; }
+                        let bnidx = (bny as u32 * GRID_W + bnx as u32) as usize;
+                        let cb = self.grid_data[bnidx];
+                        if (cb & 0xFF) == 45 && ((cb >> 16) & 4) != 0 {
+                            self.grid_data[bnidx] = cb & !(4u32 << 16);
+                            self.grid_dirty = true;
+                        }
+                    }
+                }
+            }
             log::info!("Sandbox: Lightning strike at ({:.0}, {:.0})", wx, wy);
             return;
         }
@@ -1720,6 +1774,44 @@ impl App {
             self.pipe_network.rebuild(&self.grid_data);
         }
 
+        // Lightning voltage surge: also handle natural lightning (heavy rain) via deferred injection
+        if let Some((lx, ly)) = self.lightning_strike {
+            if !self.lightning_surge_done {
+                self.lightning_surge_done = true;
+                let cx = lx.floor() as i32;
+                let cy = ly.floor() as i32;
+                let radius = 12i32;
+                let mut surge_count = 0u32;
+                for dy in -radius..=radius {
+                    for dx in -radius..=radius {
+                        let nx = cx + dx;
+                        let ny = cy + dy;
+                        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                        let dist_sq = (dx * dx + dy * dy) as f32;
+                        if dist_sq > (radius * radius) as f32 { continue; }
+                        let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                        let bt = block_type_rs(self.grid_data[nidx]);
+                        let flags = block_flags_rs(self.grid_data[nidx]);
+                        let is_conductor = bt == 36 || bt == 37 || bt == 38 || bt == 39
+                            || bt == 40 || bt == 41 || bt == 42 || bt == 43 || bt == 45
+                            || bt == 7 || bt == 10 || bt == 11 || bt == 12 || bt == 16
+                            || (flags & 0x80) != 0;
+                        if is_conductor {
+                            let dist = dist_sq.sqrt();
+                            let surge = 200.0 * (1.0 - dist / radius as f32).max(0.0);
+                            gfx.queue.write_buffer(
+                                &gfx.voltage_buffer,
+                                (nidx as u64) * 4,
+                                bytemuck::bytes_of(&surge),
+                            );
+                            surge_count += 1;
+                        }
+                    }
+                }
+                log::warn!("LIGHTNING SURGE (natural): center=({},{}) hit {} conductors", cx, cy, surge_count);
+            }
+        }
+
         // Tick pipe network simulation — store outlet injections for post-shader application
         let pipe_injections = self.pipe_network.tick(dt, &self.grid_data, self.pipe_width);
 
@@ -2049,6 +2141,16 @@ impl App {
             }
         }
 
+        // Copy full voltage buffer for per-tile labels (only when power overlay active)
+        if matches!(self.fluid_overlay, FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts) {
+            encoder.copy_buffer_to_buffer(
+                &gfx.voltage_buffer, 0,
+                &gfx.voltage_readback_buffer, 0,
+                (GRID_W * GRID_H * 4) as u64,
+            );
+            self.voltage_readback_pending = true;
+        }
+
         // Copy dye texels at each pleb position for air readback
         if !self.plebs.is_empty() {
             let dye_idx = self.fluid_dye_phase;
@@ -2143,56 +2245,6 @@ impl App {
                     (idx as u64) * 4,
                     bytemuck::bytes_of(&pipe_temp),
                 );
-            }
-
-            // Lightning voltage surge: inject into ALL conductors within radius (natural propagation)
-            if let Some((lx, ly)) = self.lightning_strike {
-                if !self.lightning_surge_done {
-                    self.lightning_surge_done = true;
-                    let cx = lx.floor() as i32;
-                    let cy = ly.floor() as i32;
-                    let radius = 8i32;
-                    for dy in -radius..=radius {
-                        for dx in -radius..=radius {
-                            let nx = cx + dx;
-                            let ny = cy + dy;
-                            if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
-                            let dist_sq = (dx * dx + dy * dy) as f32;
-                            if dist_sq > (radius * radius) as f32 { continue; }
-                            let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
-                            let bt = block_type_rs(self.grid_data[nidx]);
-                            let flags = block_flags_rs(self.grid_data[nidx]);
-                            let is_conductor = bt == 36 || bt == 37 || bt == 38 || bt == 39
-                                || bt == 40 || bt == 41 || bt == 42 || bt == 43 || bt == 45
-                                || bt == 7 || bt == 10 || bt == 11 || bt == 12 || bt == 16
-                                || (flags & 0x80) != 0;
-                            if is_conductor {
-                                // Voltage decreases with distance from strike
-                                let dist = dist_sq.sqrt();
-                                let surge = 50.0 * (1.0 - dist / radius as f32).max(0.0);
-                                gfx.queue.write_buffer(
-                                    &gfx.voltage_buffer,
-                                    (nidx as u64) * 4,
-                                    bytemuck::bytes_of(&surge),
-                                );
-                            }
-                        }
-                    }
-                    // Also trip any breakers within the surge radius
-                    for dy in -20..=20i32 {
-                        for dx in -20..=20i32 {
-                            let bnx = cx + dx;
-                            let bny = cy + dy;
-                            if bnx < 0 || bny < 0 || bnx >= GRID_W as i32 || bny >= GRID_H as i32 { continue; }
-                            let bnidx = (bny as u32 * GRID_W + bnx as u32) as usize;
-                            let cb = self.grid_data[bnidx];
-                            if (cb & 0xFF) == 45 && ((cb >> 16) & 4) != 0 {
-                                self.grid_data[bnidx] = cb & !(4u32 << 16);
-                                self.grid_dirty = true;
-                            }
-                        }
-                    }
-                }
             }
 
             // Apply pipe outlet injections to dye texture (AFTER shader runs)
@@ -2328,6 +2380,24 @@ impl App {
                     self.debug.voltage = values[1];
                     drop(data);
                     gfx.block_temp_readback_buffer.unmap();
+                }
+            }
+
+            // Voltage grid readback for per-tile labels
+            if self.voltage_readback_pending {
+                self.voltage_readback_pending = false;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let buf_size = (GRID_W * GRID_H * 4) as u64;
+                    let buffer_slice = gfx.voltage_readback_buffer.slice(..buf_size);
+                    buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+                    gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                    let data = buffer_slice.get_mapped_range();
+                    let values: &[f32] = bytemuck::cast_slice(&data);
+                    self.voltage_data.clear();
+                    self.voltage_data.extend_from_slice(values);
+                    drop(data);
+                    gfx.voltage_readback_buffer.unmap();
                 }
             }
 
