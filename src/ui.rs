@@ -2600,18 +2600,35 @@ impl App {
                         name_color,
                     );
 
-                    // Activity label (when not idle and zoomed in enough)
-                    if tile_px > 12.0 {
+                    // Activity label + intent (when not idle)
+                    if tile_px > 10.0 {
                         let inner = pleb.activity.inner();
-                        let act_text = match inner {
-                            PlebActivity::Idle => None,
-                            PlebActivity::Walking => None, // too noisy
-                            PlebActivity::Sleeping => Some("Zzz..."),
-                            PlebActivity::Harvesting(_) => Some("Harvesting"),
-                            PlebActivity::Eating => Some("Eating"),
-                            PlebActivity::Hauling => Some("Hauling"),
-                            PlebActivity::Farming(_) => Some("Farming"),
-                            PlebActivity::Crisis(_, _) => None,
+                        let (act_text, act_color) = match inner {
+                            PlebActivity::Idle => {
+                                // Show intent when idle with work target
+                                if pleb.work_target.is_some() {
+                                    (Some("Going to farm"), egui::Color32::from_rgb(120, 200, 80))
+                                } else {
+                                    (None, egui::Color32::GRAY)
+                                }
+                            }
+                            PlebActivity::Walking => {
+                                if pleb.work_target.is_some() {
+                                    (Some("Walking to farm"), egui::Color32::from_rgb(120, 200, 80))
+                                } else if pleb.harvest_target.is_some() {
+                                    (Some("Walking to harvest"), egui::Color32::from_rgb(200, 180, 60))
+                                } else if pleb.haul_target.is_some() {
+                                    (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80))
+                                } else {
+                                    (None, egui::Color32::GRAY)
+                                }
+                            }
+                            PlebActivity::Sleeping => (Some("Zzz..."), egui::Color32::from_rgb(120, 140, 200)),
+                            PlebActivity::Harvesting(_) => (Some("Harvesting"), egui::Color32::from_rgb(200, 180, 60)),
+                            PlebActivity::Eating => (Some("Eating"), egui::Color32::from_rgb(200, 160, 80)),
+                            PlebActivity::Hauling => (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80)),
+                            PlebActivity::Farming(_) => (Some("Farming"), egui::Color32::from_rgb(80, 200, 80)),
+                            PlebActivity::Crisis(_, _) => (None, egui::Color32::GRAY),
                         };
                         if let Some(text) = act_text {
                             let act_pos = to_screen(pleb.x, pleb.y + 0.95);
@@ -2620,7 +2637,37 @@ impl App {
                                 egui::Align2::CENTER_TOP,
                                 text,
                                 egui::FontId::proportional(7.0),
-                                egui::Color32::from_rgb(180, 180, 140),
+                                act_color,
+                            );
+                        }
+
+                        // Progress bar for farming/harvesting
+                        let progress = match inner {
+                            PlebActivity::Farming(p) => Some(*p),
+                            PlebActivity::Harvesting(p) => Some(*p),
+                            _ => None,
+                        };
+                        if let Some(prog) = progress {
+                            let bar_pos = to_screen(pleb.x - 0.35, pleb.y + 1.1);
+                            let bar_w = tile_px * 0.7;
+                            let bar_h = tile_px * 0.06;
+                            label_painter.rect_filled(
+                                egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w, bar_h)),
+                                1.0, egui::Color32::from_rgb(30, 30, 30),
+                            );
+                            label_painter.rect_filled(
+                                egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w * prog, bar_h)),
+                                1.0, egui::Color32::from_rgb(80, 200, 80),
+                            );
+                        }
+
+                        // Work target line: show where pleb is heading
+                        if let Some((tx, ty)) = pleb.work_target {
+                            let target_pos = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
+                            let pleb_pos = to_screen(pleb.x, pleb.y);
+                            label_painter.line_segment(
+                                [pleb_pos, target_pos],
+                                egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(80, 200, 80, 100)),
                             );
                         }
                         // Crisis reason
