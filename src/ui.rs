@@ -73,9 +73,6 @@ impl App {
                                 if ui.selectable_label(*ov == FluidOverlay::Temp, "Temp").clicked() {
                                     *ov = if *ov == FluidOverlay::Temp { FluidOverlay::None } else { FluidOverlay::Temp };
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::HeatFlow, "Heat").clicked() {
-                                    *ov = if *ov == FluidOverlay::HeatFlow { FluidOverlay::None } else { FluidOverlay::HeatFlow };
-                                }
                             });
                         });
                         ui.separator();
@@ -119,6 +116,9 @@ impl App {
                             ui.horizontal(|ui| {
                                 if ui.selectable_label(*ov == FluidOverlay::Water, "Water").clicked() {
                                     *ov = if *ov == FluidOverlay::Water { FluidOverlay::None } else { FluidOverlay::Water };
+                                }
+                                if ui.selectable_label(self.show_velocity_arrows, "Arrows").clicked() {
+                                    self.show_velocity_arrows = !self.show_velocity_arrows;
                                 }
                             });
                         });
@@ -184,11 +184,6 @@ impl App {
                                         (egui::Color32::from_rgb(217, 25, 25), "80-100\u{b0}C"),
                                         (egui::Color32::from_rgb(255, 255, 153), "> 200\u{b0}C"),
                                     ]);
-                                }
-                                FluidOverlay::HeatFlow => {
-                                    dot(ui, egui::Color32::from_rgb(255, 100, 50), "Hot flow");
-                                    dot(ui, egui::Color32::from_rgb(50, 100, 255), "Cold flow");
-                                    dot(ui, egui::Color32::from_rgb(180, 180, 180), "Neutral");
                                 }
                                 FluidOverlay::Velocity => {
                                     grad(ui, &[

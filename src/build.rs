@@ -25,7 +25,6 @@ pub enum FluidOverlay {
     O2,        // show O2 levels (blue=high, red=depleted)
     CO2,       // show CO2 levels (dark=none, yellow-green=high)
     Temp,      // show temperature (blue=cold, white=ambient, red=hot)
-    HeatFlow,  // show velocity colored by temperature (convection patterns)
     Power,     // show voltage in power grid (dark=none, green=normal, red=overload)
     PowerAmps, // show current flow (brightness = current magnitude)
     PowerWatts, // show power consumption/generation (green=gen, red=consume)

@@ -194,12 +194,15 @@ impl App {
             FluidOverlay::O2 => 5.0,
             FluidOverlay::CO2 => 6.0,
             FluidOverlay::Temp => 7.0,
-            FluidOverlay::HeatFlow => 8.0,
             FluidOverlay::Power => 9.0,
             FluidOverlay::PowerAmps => 10.0,
             FluidOverlay::PowerWatts => 11.0,
             FluidOverlay::Water => 12.0,
         };
+        // Pack velocity arrows flag as +0.25 on the overlay value
+        if self.show_velocity_arrows && self.camera.fluid_overlay > 0.5 {
+            self.camera.fluid_overlay += 0.25;
+        }
         let prev_glow = self.camera.enable_prox_glow;
         let prev_bleed = self.camera.enable_dir_bleed;
         self.camera.enable_prox_glow = if self.enable_prox_glow { 1.0 } else { 0.0 };

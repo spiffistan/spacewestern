@@ -232,6 +232,7 @@ struct App {
     sandbox_tool: SandboxTool,    // current sandbox action
     show_pipe_overlay: bool,       // draw pipe gas contents as egui overlay
     show_flow_overlay: bool,       // draw flow arrows on pipes (pressure) and wires (current)
+    show_velocity_arrows: bool,    // draw fluid velocity vector field on overlays
     pipe_width: f32,               // pipe conductance multiplier (1=narrow, 10=wide)
     drag_start: Option<(i32, i32)>, // grid coords where drag started (for shape building)
     block_sel: BlockSelection,      // which popup/slider is open
@@ -484,6 +485,7 @@ impl App {
             drag_start: None,
             show_pipe_overlay: false,
             show_flow_overlay: false,
+            show_velocity_arrows: false,
             pipe_width: 5.0,
             block_sel: BlockSelection::default(),
             build_category: None,

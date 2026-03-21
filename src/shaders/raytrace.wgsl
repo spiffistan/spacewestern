@@ -3196,23 +3196,6 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             temp_color = mix(vec3(0.85, 0.1, 0.1), vec3(1.0, 1.0, 0.6), t);
         }
         color = mix(color * 0.3, temp_color, 0.7);
-    } else if camera.fluid_overlay < 8.5 {
-        // Heat Flow overlay (8): velocity colored by temperature (convection)
-        let hf_vel_cell = vec2<i32>(i32(world_x), i32(world_y));
-        let hf_vel = textureLoad(fluid_vel_tex, hf_vel_cell, 0).xy;
-        let hf_mag = length(hf_vel);
-        let hf_temp = smoke.a; // temperature from dye.a
-        let hf_norm_t = clamp((hf_temp - 10.0) / 60.0, 0.0, 1.0);
-        // Color: blue (cold flow) → white (neutral) → red (hot flow)
-        var hf_color = mix(vec3(0.2, 0.3, 0.8), vec3(0.8, 0.8, 0.8), clamp(hf_norm_t * 2.0, 0.0, 1.0));
-        hf_color = mix(hf_color, vec3(0.9, 0.2, 0.1), clamp((hf_norm_t - 0.5) * 2.0, 0.0, 1.0));
-        // Brightness from velocity magnitude
-        let hf_brightness = clamp(hf_mag * 0.3, 0.0, 1.0);
-        if hf_brightness > 0.01 {
-            color = mix(color * 0.3, hf_color, hf_brightness * 0.8);
-        } else {
-            color *= 0.3;
-        }
     } else if camera.fluid_overlay < 9.5 {
         // Power overlay (9): show voltage, highlight infrastructure, dim terrain
         let grid_idx_p = u32(by) * u32(camera.grid_w) + u32(bx);
@@ -3320,6 +3303,30 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             color = mix(color * 0.4, water_ov_color, 0.6 + wl * 0.3);
         } else {
             color *= 0.3;
+        }
+    }
+
+    // Velocity arrow overlay (when fractional part of fluid_overlay > 0.1)
+    let show_arrows = fract(camera.fluid_overlay) > 0.1;
+    if show_arrows && camera.fluid_overlay > 0.5 {
+        let vel_cell = vec2<i32>(bx, by);
+        let vel = textureLoad(fluid_vel_tex, vel_cell, 0).xy;
+        let vel_mag = length(vel);
+        if vel_mag > 0.5 {
+            let dir = vel / vel_mag;
+            let afx = fx - 0.5;
+            let afy = fy - 0.5;
+            // Arrow shaft
+            let along = afx * dir.x + afy * dir.y;
+            let perp = abs(-afx * dir.y + afy * dir.x);
+            let arrow_len = clamp(vel_mag * 0.015, 0.08, 0.35);
+            let on_shaft = along > -0.02 && along < arrow_len && perp < 0.04;
+            // Arrowhead
+            let head_t = (along - arrow_len + 0.08) / 0.08;
+            let on_head = head_t > 0.0 && head_t < 1.0 && perp < 0.12 * (1.0 - head_t);
+            if on_shaft || on_head {
+                color = mix(color, vec3(1.0, 1.0, 1.0), 0.7);
+            }
         }
     }
 
