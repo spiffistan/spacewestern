@@ -1252,6 +1252,11 @@ impl App {
             }
         }
 
+        self.draw_rock_context_menu(ctx, bp_ppp);
+        self.draw_popups(ctx, bp_cam);
+    }
+
+    fn draw_rock_context_menu(&mut self, ctx: &egui::Context, bp_ppp: f32) {
         // --- Rock context menu (right-click or ctrl-click on a rock) ---
         if let Some((mx, my, rx, ry)) = self.rock_context_menu {
             let mut close_rock_menu = false;
@@ -1384,6 +1389,11 @@ impl App {
                     );
                 });
         }
+
+    }
+
+    fn draw_popups(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32)) {
+        let bp_ppp = self.ppp();
 
         // Info tool: hold Shift to inspect any block
         let shift_held = self.pressed_keys.contains(&KeyCode::ShiftLeft)
