@@ -776,14 +776,17 @@ impl App {
                     }
                 }
 
-                // Walking to work target: start farming when arrived
-                if pleb.activity == PlebActivity::Walking && pleb.path_idx >= pleb.path.len() {
+                // Arrived at work target: start farming (checks Walking OR Idle with work target)
+                let has_work = pleb.work_target.is_some();
+                let path_done = pleb.path_idx >= pleb.path.len();
+                let is_walking_or_idle = pleb.activity == PlebActivity::Walking || pleb.activity == PlebActivity::Idle;
+                if has_work && path_done && is_walking_or_idle {
                     if let Some((tx, ty)) = pleb.work_target {
                         let dist = ((pleb.x - tx as f32 - 0.5).powi(2) + (pleb.y - ty as f32 - 0.5).powi(2)).sqrt();
                         if dist < 1.5 {
                             pleb.activity = PlebActivity::Farming(0.0);
                         } else {
-                            // Too far — release task
+                            // Too far — release task and retry
                             self.active_work.remove(&(tx, ty));
                             pleb.work_target = None;
                             pleb.activity = PlebActivity::Idle;

@@ -2659,7 +2659,9 @@ impl App {
                             );
                         }
 
-                        // Work target line: show where pleb is heading
+                        // Work target line: show where pleb is heading (selected pleb only)
+                        let is_selected = self.selected_pleb.map_or(false, |si| si < self.plebs.len() && std::ptr::eq(&self.plebs[si], pleb));
+                        if is_selected {
                         if let Some((tx, ty)) = pleb.work_target {
                             let target_pos = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
                             let pleb_pos = to_screen(pleb.x, pleb.y);
@@ -2668,6 +2670,7 @@ impl App {
                                 egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(80, 200, 80, 100)),
                             );
                         }
+                        } // is_selected
                         // Crisis reason
                         if let Some(reason) = pleb.activity.crisis_reason() {
                             let crisis_pos = to_screen(pleb.x, pleb.y + 0.95);
