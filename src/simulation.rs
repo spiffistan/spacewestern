@@ -221,6 +221,24 @@ impl App {
                 &mut self.wetness_data, &self.grid_data,
                 rain, self.camera.sun_intensity, dt, self.time_speed, GRID_W,
             );
+            // Rain boosts CPU-side water table temporarily (so crops see moisture)
+            if rain > 0.0 {
+                let rain_boost = rain * 0.002 * dt * self.time_speed;
+                for (i, wt) in self.water_table.iter_mut().enumerate() {
+                    let b = self.grid_data[i];
+                    let roof = (b >> 24) & 0xFF;
+                    if roof == 0 { // outdoor only
+                        *wt = (*wt + rain_boost).min(0.5);
+                    }
+                }
+            }
+            // Evaporation lowers water table back toward base
+            if rain == 0.0 && self.camera.sun_intensity > 0.1 {
+                let evap = 0.0001 * self.camera.sun_intensity * dt * self.time_speed;
+                for wt in self.water_table.iter_mut() {
+                    *wt = (*wt - evap).max(-3.0);
+                }
+            }
         }
 
         let prev_overlay = self.camera.fluid_overlay;

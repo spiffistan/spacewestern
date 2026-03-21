@@ -1265,6 +1265,11 @@ impl App {
                                 wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
                             );
                         }
+                        // Also raise CPU-side water table so crop growth sees it immediately
+                        let widx = (ny as u32 * GRID_W + nx as u32) as usize;
+                        if widx < self.water_table.len() {
+                            self.water_table[widx] = self.water_table[widx].max(water_val * 0.5);
+                        }
                     }
                 }
                 self.log_event(EventCategory::General, format!("Injected water at ({}, {})", cx, cy));
