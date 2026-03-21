@@ -1,6 +1,6 @@
 //! Pleb (colonist) — struct, appearance, movement, A* pathfinding, activity.
 
-use crate::grid::{GRID_W, GRID_H};
+use crate::grid::*;
 use crate::needs::PlebNeeds;
 use crate::materials::{build_material_table, NUM_MATERIALS};
 use std::sync::OnceLock;
@@ -237,10 +237,10 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        let is_dug_shallow = bt == 32 && bh <= 1;
-        let is_pipe = (bt >= 15 && bt <= 20 || bt == 46) && bh <= 1; // ground-level pipes only
+        let is_dug_shallow = bt == BT_DUG_GROUND && bh <= 1;
+        let is_pipe = (bt >= 15 && bt <= 20 || bt == BT_RESTRICTOR) && bh <= 1; // ground-level pipes only
         // Diagonal wall: check which side of the diagonal this corner is on
-        if bt == 44 {
+        if bt == BT_DIAGONAL {
             let variant = ((b >> 19) & 3) as u32;
             let lfx = cx - (cx.floor());
             let lfy = cy - (cy.floor());
@@ -285,8 +285,8 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == 32 && bh <= 1) || (bt >= 15 && bt <= 20 && bh <= 1)
-            || bt == 44 // diagonal wall: partially walkable (continuous check handles collision)
+        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == BT_DUG_GROUND && bh <= 1) || (bt >= 15 && bt <= 20 && bh <= 1)
+            || bt == BT_DIAGONAL // diagonal wall: partially walkable (continuous check handles collision)
     };
 
     if !is_walk(goal.0, goal.1) { return vec![]; }

@@ -1,5 +1,7 @@
 //! Weather system — global state machine with rain, wetness, and environmental effects.
 
+use crate::grid::*;
+
 /// Global weather state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WeatherState {
@@ -92,7 +94,7 @@ pub fn tick_wetness(
         let roof_h = (b >> 24) & 0xFF;
         let bt = b & 0xFF;
         let is_outdoor = roof_h == 0;
-        let is_ground = bt == 2 || bt == 26 || bt == 27 || bt == 28 || bt == 32;
+        let is_ground = bt == BT_DIRT || bt == BT_WOOD_FLOOR || bt == BT_STONE_FLOOR || bt == BT_CONCRETE_FLOOR || bt == BT_DUG_GROUND;
 
         if is_ground {
             if is_outdoor && rain_intensity > 0.0 {

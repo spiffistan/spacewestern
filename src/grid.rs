@@ -185,8 +185,8 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
                     // Wire(36), dimmer(43), varistor(47), restrictor(46) use height for level, not visual
                     // Crate(33) uses height for item count
                     if nbh > 0 && (nb_flags & 2) == 0
-                        && nbt != 8 && nbt != 6 && nbt != 7
-                        && nbt != 33 && nbt != 36 && nbt != 43 && nbt != 46
+                        && nbt as u32 != BT_TREE && nbt as u32 != BT_FIREPLACE && nbt as u32 != BT_CEILING_LIGHT
+                        && nbt as u32 != BT_CRATE && nbt as u32 != BT_WIRE && nbt as u32 != BT_DIMMER && nbt as u32 != BT_RESTRICTOR
                     {
                         max_h = max_h.max(nbh);
                         break; // found nearest wall in this direction

@@ -1,5 +1,7 @@
 //! Fluid simulation — parameters and obstacle field generation.
 
+use crate::grid::*;
+
 // Fluid simulation resolution. Set HIRES_FLUID to true for 512x512 velocity
 // (4x compute cost but smoother convection patterns).
 pub const FLUID_SIM_W: u32 = 256;
@@ -32,7 +34,7 @@ pub fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
         let is_open = (b >> 16) & 4 != 0;
         // Inlets (20) and outlets (19) block gas like walls (they suck/push through the pipe system)
         // Other pipe components (15-18) are passable
-        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 11 && bt != 12 && bt != 13
+        if bh > 0 && bt != BT_TREE && bt != BT_FIREPLACE && bt != BT_CEILING_LIGHT && bt != BT_FLOOR_LAMP && bt != BT_TABLE_LAMP && bt != BT_FAN && bt != BT_COMPOST
             && !(bt >= 15 && bt <= 18) && !(is_door && is_open) { 255 } else { 0 }
     }).collect()
 }

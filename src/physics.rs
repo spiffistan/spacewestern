@@ -1,6 +1,6 @@
 //! Physics bodies — moveable objects that interact with the fluid sim and plebs.
 
-use crate::grid::{GRID_W, GRID_H, block_type_rs};
+use crate::grid::*;
 
 /// A physics body in the world (continuous position, not grid-aligned).
 #[derive(Clone, Debug)]
@@ -157,7 +157,7 @@ pub fn body_can_move(grid: &[u32], x: f32, y: f32, size: f32) -> bool {
         let by = cy.floor() as i32;
         if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return false; }
         let b = grid[(by as u32 * GRID_W + bx as u32) as usize];
-        let bt = block_type_rs(b);
+        let bt = block_type_rs(b) as u32;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         let is_open = (b >> 16) & 4 != 0;
@@ -258,13 +258,13 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
         }
 
         let block = grid[(iy as u32 * GRID_W + ix as u32) as usize];
-        let bt = block_type_rs(block);
+        let bt = block_type_rs(block) as u32;
         let bh = (block >> 8) & 0xFF;
         let is_door = (block >> 16) & 1 != 0;
         let is_open = (block >> 16) & 4 != 0;
 
         // Bullet stops on: solid blocks with height, except trees/fire/lights/bushes/open doors
-        if bh > 0 && bt != 8 && bt != 6 && bt != 7 && bt != 10 && bt != 31
+        if bh > 0 && bt != BT_TREE && bt != BT_FIREPLACE && bt != BT_CEILING_LIGHT && bt != BT_FLOOR_LAMP && bt != BT_BERRY_BUSH
             && !(is_door && is_open)
         {
             let t = t_max_x.min(t_max_y).max(0.0);
@@ -363,8 +363,8 @@ pub fn tick_bodies(
                 let ny = by + dy;
                 if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
                 let b = grid[(ny as u32 * GRID_W + nx as u32) as usize];
-                let bt = block_type_rs(b);
-                if bt == 12 { // fan
+                let bt = block_type_rs(b) as u32;
+                if bt == BT_FAN { // fan
                     let dist = ((nx as f32 + 0.5 - body.x).powi(2) + (ny as f32 + 0.5 - body.y).powi(2)).sqrt();
                     if dist < 2.5 {
                         let dir_bits = ((b >> 16) >> 3) & 3;
@@ -504,7 +504,7 @@ pub fn tick_bodies(
                 let mut destroy = false;
                 if hit_bx >= 0 && hit_by >= 0 && hit_bx < GRID_W as i32 && hit_by < GRID_H as i32 {
                     let b = grid[(hit_by as u32 * GRID_W + hit_bx as u32) as usize];
-                    let bt = block_type_rs(b);
+                    let bt = block_type_rs(b) as u32;
                     let strength = match bt {
                         5 => 5.0,    // glass: very fragile
                         9 => 10.0,   // bench: fragile

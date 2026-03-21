@@ -5,7 +5,7 @@
 //! Oxygen is driven by GPU fluid sim readback (O2/CO2 at pleb position).
 //! Plebs can hold their breath when air is bad, and flee toward good air.
 
-use crate::grid::{GRID_W, GRID_H, block_type_rs, roof_height_rs};
+use crate::grid::*;
 use crate::pleb::is_walkable_pos;
 
 // --- Breathing constants (realistic human physiology) ---
@@ -133,7 +133,7 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
             if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
 
             let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
-            let bt = block_type_rs(b);
+            let bt = block_type_rs(b) as u32;
             let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
 
             match bt {
@@ -529,8 +529,8 @@ pub fn find_cool_tile(grid: &[u32], bx: i32, by: i32, max_radius: i32) -> Option
                 // Outdoors (no roof) = likely cooler, and walkable
                 if roof_height_rs(b) == 0 && is_walkable_pos(grid, sx as f32 + 0.5, sy as f32 + 0.5) {
                     // Also check no fire nearby
-                    let bt = block_type_rs(b);
-                    if bt != 6 { // not a fireplace
+                    let bt = block_type_rs(b) as u32;
+                    if bt != BT_FIREPLACE { // not a fireplace
                         return Some((sx, sy));
                     }
                 }
