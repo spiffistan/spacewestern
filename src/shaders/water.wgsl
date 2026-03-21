@@ -29,18 +29,16 @@ struct Camera {
 @group(0) @binding(1) var water_out: texture_storage_2d<r32float, write>;
 @group(0) @binding(2) var<storage, read> grid: array<u32>;
 @group(0) @binding(3) var<uniform> camera: Camera;
+@group(0) @binding(4) var<storage, read> water_table: array<f32>;
 
 const W: u32 = 256u;
 const H: u32 = 256u;
 
-// Flow rate per frame (lower = more viscous). Tuned for running every 4 frames.
 const FLOW_RATE: f32 = 0.12;
-// Rain input rate (water units per frame per outdoor tile)
 const RAIN_RATE: f32 = 0.003;
-// Base evaporation rate (very slow — realistic)
 const EVAP_BASE: f32 = 0.00005;
-// Water table seep rate for deep dug ground
-const SEEP_RATE: f32 = 0.0005;
+// Seep rate factor: how fast water wells up from the water table
+const SEEP_FACTOR: f32 = 0.002;
 
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
@@ -93,9 +91,11 @@ fn main_water(@builtin(global_invocation_id) gid: vec3<u32>) {
         water += RAIN_RATE * camera.rain_intensity;
     }
 
-    // Water table seep: deep dug ground slowly fills from below
-    if bt == 32u && block_height(block) >= 2u {
-        water += SEEP_RATE;
+    // Water table seep: water wells up where water table > elevation
+    let wt = water_table[idx];
+    let seep_head = wt - elev; // positive = water table above this tile's ground
+    if seep_head > 0.0 {
+        water += seep_head * SEEP_FACTOR;
     }
 
     // --- Sinks ---

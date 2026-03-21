@@ -2,6 +2,7 @@
 //! Extracted from main.rs to keep it manageable.
 
 use crate::*;
+use crate::grid::generate_water_table;
 
 impl App {
     pub(crate) async fn init_gfx_async(&mut self, window: Arc<Window>) {
@@ -988,6 +989,17 @@ impl App {
         let fv_water_a = water_a.create_view(&wgpu::TextureViewDescriptor::default());
         let fv_water_b = water_b.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Water table: static height map generated from terrain
+        let water_table_data = generate_water_table(&self.grid_data);
+        self.water_table = water_table_data.clone();
+        let water_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("water-table"),
+            size: (GRID_W * GRID_H * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&water_table_buffer, 0, bytemuck::cast_slice(&self.water_table));
+
         // Fluid dye sampler (bilinear for smooth smoke overlay)
         let fluid_dye_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("fluid-dye-sampler"),
@@ -1354,6 +1366,7 @@ impl App {
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::R32Float, view_dimension: wgpu::TextureViewDimension::D2 }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         });
         let water_bg_ab = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1363,6 +1376,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_water_b) },
                 wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: water_table_buffer.as_entire_binding() },
             ],
         });
         let water_bg_ba = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1372,6 +1386,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
                 wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: water_table_buffer.as_entire_binding() },
             ],
         });
         let water_pipeline_val = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -1447,6 +1462,7 @@ impl App {
             power_pipeline: power_pipeline_val,
             power_bind_group: power_bind_group_val,
             water_textures: [water_a, water_b],
+            water_table_buffer,
             water_pipeline: water_pipeline_val,
             water_bind_groups: [water_bg_ab, water_bg_ba],
         });

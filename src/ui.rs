@@ -1525,14 +1525,19 @@ impl App {
                 if in_growing { "\n\u{1f33e} Growing Zone".to_string() } else { String::new() }
             } else { String::new() };
 
-            // Ground elevation + water hint
+            // Ground water info
             let ground_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
-                let gb = self.grid_data[(by as u32 * GRID_W + bx as u32) as usize];
+                let gidx = (by as u32 * GRID_W + bx as u32) as usize;
+                let gb = self.grid_data[gidx];
                 let gbt = gb & 0xFF;
                 let gbh = (gb >> 8) & 0xFF;
+                let wt = if gidx < self.water_table.len() { self.water_table[gidx] } else { -2.0 };
+                let wt_label = if wt > 0.0 { "spring" } else if wt > -0.5 { "wet" } else if wt > -1.5 { "moderate" } else { "dry" };
+                let mut info = format!("\n\u{1f4a7} Water table: {:.1} ({})", wt, wt_label);
                 if gbt == BT_DUG_GROUND {
-                    format!("\n\u{1f4a7} Dug depth: {} | Water table: {}", gbh, if gbh >= 2 { "seeping" } else { "dry" })
-                } else { String::new() }
+                    info += &format!(" | Dug depth: {}", gbh);
+                }
+                info
             } else { String::new() };
 
             let tip = format!(
@@ -1757,6 +1762,45 @@ impl App {
                 sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(0.0, -bl)], stroke);
                 sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(-bl, 0.0)], stroke);
                 sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(0.0, -bl)], stroke);
+            }
+        }
+
+        // Water table heatmap (when Water overlay is active)
+        if self.fluid_overlay == FluidOverlay::Water && !self.water_table.is_empty() {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            // Only render when tiles are large enough to see
+            if tile_px > 2.0 {
+                let wt_painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Background, egui::Id::new("water_table"),
+                ));
+                // Determine visible tile range
+                let vx0 = ((cam_cx - cam_sw * 0.5 / cam_zoom).floor() as i32).max(0);
+                let vy0 = ((cam_cy - cam_sh * 0.5 / cam_zoom).floor() as i32).max(0);
+                let vx1 = ((cam_cx + cam_sw * 0.5 / cam_zoom).ceil() as i32 + 1).min(GRID_W as i32);
+                let vy1 = ((cam_cy + cam_sh * 0.5 / cam_zoom).ceil() as i32 + 1).min(GRID_H as i32);
+                for ty in vy0..vy1 {
+                    for tx in vx0..vx1 {
+                        let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        if idx >= self.water_table.len() { continue; }
+                        let wt = self.water_table[idx];
+                        // Map water table to color: dry (brown) → wet (blue)
+                        let norm = ((wt + 2.5) / 3.0).clamp(0.0, 1.0); // -2.5→0, 0.5→1
+                        if norm < 0.01 { continue; }
+                        let alpha = (norm * 40.0).min(30.0) as u8;
+                        let r = ((1.0 - norm) * 80.0) as u8;
+                        let g = (norm * 40.0) as u8;
+                        let b = (norm * 160.0) as u8;
+                        let sx0 = ((tx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                        let sy0 = ((ty as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                        let sx1 = ((tx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                        let sy1 = ((ty as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                        wt_painter.rect_filled(
+                            egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
+                            0.0, egui::Color32::from_rgba_unmultiplied(r, g, b, alpha),
+                        );
+                    }
+                }
             }
         }
 

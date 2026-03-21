@@ -292,8 +292,9 @@ struct App {
     manual_tasks: Vec<zones::WorkTask>, // player-ordered tasks (harvest bush, etc.)
     work_priority: zones::WorkPriority,
     crop_timers: std::collections::HashMap<u32, f32>,
-    water_phase: usize, // ping-pong for water sim (0 or 1)
-    water_frame: u32,   // frame counter for water sim throttling
+    water_phase: usize,
+    water_frame: u32,
+    water_table: Vec<f32>, // static water table height map (CPU copy for info overlay)
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
@@ -343,9 +344,10 @@ struct GfxState {
     power_pipeline: wgpu::ComputePipeline,
     power_bind_group: wgpu::BindGroup,
     // Ground water simulation
-    water_textures: [wgpu::Texture; 2],    // ping-pong water level (R32Float, 256x256)
+    water_textures: [wgpu::Texture; 2],
+    water_table_buffer: wgpu::Buffer,  // static water table height map (256x256 f32)
     water_pipeline: wgpu::ComputePipeline,
-    water_bind_groups: [wgpu::BindGroup; 2], // [0]: read A write B, [1]: read B write A
+    water_bind_groups: [wgpu::BindGroup; 2],
     // Fluid simulation GPU resources
     fluid_params_buffer: wgpu::Buffer,
     fluid_vel: [wgpu::Texture; 2],
@@ -555,6 +557,7 @@ impl App {
             crop_timers: std::collections::HashMap::new(),
             water_phase: 0,
             water_frame: 0,
+            water_table: Vec::new(), // populated after grid gen in init_gfx_async
             diag_preview: Vec::new(),
             voltage_data: Vec::new(),
             voltage_readback_pending: false,

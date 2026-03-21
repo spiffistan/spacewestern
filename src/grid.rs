@@ -434,6 +434,66 @@ pub fn generate_test_grid() -> Vec<u32> {
     grid
 }
 
+/// Generate the water table height map (256x256).
+/// Values represent depth below ground: negative = below surface, positive = above (springs).
+/// Uses multi-octave noise with hotspots near the pond area.
+pub fn generate_water_table(grid: &[u32]) -> Vec<f32> {
+    let w = GRID_W;
+    let h = GRID_H;
+    let mut table = vec![-2.0f32; (w * h) as usize];
+
+    // Same noise function as tree generation
+    let noise = |x: f32, y: f32| -> f32 {
+        let ix = x.floor() as i32;
+        let iy = y.floor() as i32;
+        let fx = x - x.floor();
+        let fy = y - y.floor();
+        let hash = |ix: i32, iy: i32| -> f32 {
+            let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
+                .wrapping_add(1013904223);
+            (h & 0xFFFF) as f32 / 65535.0
+        };
+        let a = hash(ix, iy);
+        let b = hash(ix + 1, iy);
+        let c = hash(ix, iy + 1);
+        let d = hash(ix + 1, iy + 1);
+        let sx = fx * fx * (3.0 - 2.0 * fx);
+        let sy = fy * fy * (3.0 - 2.0 * fy);
+        a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
+    };
+
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+
+            // Multi-octave noise for natural variation
+            let scale1 = 0.03; // large-scale features (~30 tile wavelength)
+            let scale2 = 0.08; // medium detail
+            let n1 = noise(x as f32 * scale1 + 50.0, y as f32 * scale1 + 50.0);
+            let n2 = noise(x as f32 * scale2 + 200.0, y as f32 * scale2 + 200.0) * 0.4;
+            let base = n1 + n2; // 0.0 to 1.4 range
+
+            // Map to water table depth: -3.0 (deep/dry) to -0.3 (near surface/wet)
+            let depth = -3.0 + base * 2.0; // range: -3.0 to -0.2
+
+            // Hotspot near the pond area (world gen offset is 90, 84)
+            let pond_cx = 90.0 + 17.0; // center of the pond
+            let pond_cy = 84.0 + 44.0;
+            let pond_dist = ((x as f32 - pond_cx).powi(2) + (y as f32 - pond_cy).powi(2)).sqrt();
+            let pond_boost = (1.0 - (pond_dist / 20.0).min(1.0)) * 2.5; // raises water table near pond
+
+            // Also boost near dug ground (it was dug because there's water)
+            let block = grid[idx];
+            let bt = block & 0xFF;
+            let dug_boost = if bt == BT_DUG_GROUND { 1.0 } else { 0.0 };
+
+            table[idx] = (depth + pond_boost + dug_boost).min(0.5); // cap at 0.5 (strong spring)
+        }
+    }
+
+    table
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

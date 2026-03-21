@@ -705,7 +705,15 @@ impl App {
                     0.0
                 };
 
-                *timer += grow_dt * temp_factor;
+                // Water requirement: need water table near surface or surface moisture
+                let water_ok = if idx < self.water_table.len() {
+                    self.water_table[idx] > -0.5 // water table near surface
+                } else {
+                    false
+                };
+                let water_factor = if water_ok { 1.0 } else { 0.0 };
+
+                *timer += grow_dt * temp_factor * water_factor;
                 if *timer >= CROP_GROW_TIME {
                     *timer = 0.0;
                     let new_stage = (stage + 1).min(CROP_MATURE);
