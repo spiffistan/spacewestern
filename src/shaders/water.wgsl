@@ -37,8 +37,8 @@ const H: u32 = 256u;
 const FLOW_RATE: f32 = 0.12;
 // Rain input rate (water units per frame per outdoor tile)
 const RAIN_RATE: f32 = 0.003;
-// Evaporation rate multiplier (scaled by sun_intensity)
-const EVAP_RATE: f32 = 0.001;
+// Base evaporation rate (very slow — realistic)
+const EVAP_BASE: f32 = 0.00005;
 // Water table seep rate for deep dug ground
 const SEEP_RATE: f32 = 0.0005;
 
@@ -99,9 +99,20 @@ fn main_water(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // --- Sinks ---
-    // Evaporation: sun removes surface water (not underground)
+    // Evaporation: temperature-dependent, mostly daytime.
+    // Approximate air temperature from day cycle (matches fluid_dye.wgsl ambient).
+    // Real evaporation rate roughly doubles per 10°C (Clausius-Clapeyron).
     if elev >= 0.0 && !has_roof(block) {
-        water -= EVAP_RATE * camera.sun_intensity;
+        let day_frac = fract(camera.time / 60.0);
+        let sun_t = clamp((day_frac - 0.15) / 0.7, 0.0, 1.0);
+        let sun_curve = sin(sun_t * 3.14159);
+        let approx_temp = 5.0 + 20.0 * sun_curve; // 5°C night, 25°C midday
+        // Exponential scaling: near-zero below 5°C, ramps up above 15°C
+        let temp_factor = max(approx_temp - 5.0, 0.0) / 20.0; // 0 at 5°C, 1 at 25°C
+        let evap = EVAP_BASE * temp_factor * temp_factor * camera.sun_intensity;
+        // Wind increases evaporation
+        let wind_factor = 1.0 + camera.wind_magnitude * 0.05;
+        water -= evap * wind_factor;
     }
 
     // --- Flow: water moves from high to low total height ---
