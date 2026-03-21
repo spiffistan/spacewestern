@@ -198,6 +198,7 @@ impl App {
             FluidOverlay::Power => 9.0,
             FluidOverlay::PowerAmps => 10.0,
             FluidOverlay::PowerWatts => 11.0,
+            FluidOverlay::Water => 12.0,
         };
         let prev_glow = self.camera.enable_prox_glow;
         let prev_bleed = self.camera.enable_dir_bleed;

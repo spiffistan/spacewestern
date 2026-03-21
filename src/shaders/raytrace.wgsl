@@ -71,7 +71,8 @@ struct Camera {
 @group(0) @binding(12) var<storage, read> plebs: array<GpuPleb>;
 @group(0) @binding(13) var<storage, read> block_temps: array<f32>;
 @group(0) @binding(14) var<storage, read> voltage: array<f32>;
-@group(0) @binding(15) var<storage, read> pipe_flow: array<f32>; // 2 f32 per tile: [flow_x, flow_y]
+@group(0) @binding(15) var<storage, read> pipe_flow: array<f32>;
+@group(0) @binding(16) var water_tex: texture_2d<f32>; // 2 f32 per tile: [flow_x, flow_y]
 
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
@@ -2608,17 +2609,35 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color += vec3<f32>(effective_fheight * 0.03);
     }
 
-    // Wet soil darkening: outdoor ground tiles darken in rain
-    let is_ground_tile = btype == 2u || btype == 26u || btype == 27u || btype == 28u;
-    if is_ground_tile && effective_height == 0u && camera.rain_intensity > 0.0 {
-        let roof_h_wet = (block >> 24u) & 0xFFu;
-        if roof_h_wet == 0u { // outdoor only
-            let wet = camera.rain_intensity * 0.7;
+    // Ground water rendering: read water level from simulation
+    let water_level = textureLoad(water_tex, vec2<i32>(bx, by), 0).r;
+    let is_ground_tile = btype == 2u || btype == 26u || btype == 27u || btype == 28u || btype == 32u;
+    if is_ground_tile && effective_height == 0u {
+        // Combine water sim level with rain for immediate visual feedback
+        let wet = clamp(water_level + camera.rain_intensity * 0.3, 0.0, 1.0);
+        if wet > 0.01 {
+            // Darken soil with moisture
             color *= 1.0 - wet * 0.3;
-            // Slight blue tint from water
-            color = mix(color, vec3(color.r * 0.7, color.g * 0.75, color.b * 0.9), wet * 0.15);
+            // Blue tint from water
+            color = mix(color, vec3(color.r * 0.6, color.g * 0.65, color.b * 0.85), wet * 0.2);
+
+            // Puddle effect: when water level is significant, show reflective surface
+            if water_level > 0.15 {
+                let puddle_strength = clamp((water_level - 0.15) * 3.0, 0.0, 1.0);
+                // Animated ripples
+                let rip1 = sin(world_x * 8.0 + world_y * 5.0 + camera.time * 2.0) * 0.015;
+                let rip2 = sin(world_x * 4.0 - world_y * 9.0 + camera.time * 1.3) * 0.01;
+                // Sky reflection
+                let sky_ref = vec3(0.4, 0.5, 0.7) * (camera.sun_intensity * 0.4 + 0.15);
+                color = mix(color, sky_ref, puddle_strength * 0.4);
+                // Specular
+                let spec = pow(max(rip1 + rip2 + 0.5, 0.0), 8.0) * camera.sun_intensity * 0.15;
+                color += vec3(spec) * puddle_strength;
+            }
         }
     }
+
+    // Water overlay is rendered in the main overlay chain below (layer 12)
 
     // Wall side faces (3D bevel) — skip for doors and trees
     if effective_height > 0u && btype != 8u && btype != 44u {
@@ -3177,8 +3196,25 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             temp_color = mix(vec3(0.85, 0.1, 0.1), vec3(1.0, 1.0, 0.6), t);
         }
         color = mix(color * 0.3, temp_color, 0.7);
+    } else if camera.fluid_overlay < 8.5 {
+        // Heat Flow overlay (8): velocity colored by temperature (convection)
+        let hf_vel_cell = vec2<i32>(i32(world_x), i32(world_y));
+        let hf_vel = textureLoad(fluid_vel_tex, hf_vel_cell, 0).xy;
+        let hf_mag = length(hf_vel);
+        let hf_temp = smoke.a; // temperature from dye.a
+        let hf_norm_t = clamp((hf_temp - 10.0) / 60.0, 0.0, 1.0);
+        // Color: blue (cold flow) → white (neutral) → red (hot flow)
+        var hf_color = mix(vec3(0.2, 0.3, 0.8), vec3(0.8, 0.8, 0.8), clamp(hf_norm_t * 2.0, 0.0, 1.0));
+        hf_color = mix(hf_color, vec3(0.9, 0.2, 0.1), clamp((hf_norm_t - 0.5) * 2.0, 0.0, 1.0));
+        // Brightness from velocity magnitude
+        let hf_brightness = clamp(hf_mag * 0.3, 0.0, 1.0);
+        if hf_brightness > 0.01 {
+            color = mix(color * 0.3, hf_color, hf_brightness * 0.8);
+        } else {
+            color *= 0.3;
+        }
     } else if camera.fluid_overlay < 9.5 {
-        // Power overlay: show voltage, highlight infrastructure, dim terrain
+        // Power overlay (9): show voltage, highlight infrastructure, dim terrain
         let grid_idx_p = u32(by) * u32(camera.grid_w) + u32(bx);
         let v = voltage[grid_idx_p];
         let norm_v = clamp(v / 12.0, 0.0, 1.0);
@@ -3240,7 +3276,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             color *= 0.25;
         }
     } else if camera.fluid_overlay < 11.5 {
-        // Watts overlay: generation (green) vs consumption (red)
+        // Watts overlay (11): generation (green) vs consumption (red)
         let gw_w = u32(camera.grid_w);
         let widx = u32(by) * gw_w + u32(bx);
         let wbt = btype;
@@ -3276,56 +3312,15 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 color *= 0.25;
             }
         }
-    } else {
-        // Heat Flow: velocity magnitude colored by temperature (convection patterns)
-        let hf_vel_cell = vec2<i32>(i32(world_x), i32(world_y));
-        let vel_raw = textureLoad(fluid_vel_tex, hf_vel_cell, 0).xy;
-        let vel_mag = length(vel_raw);
-        let temp_hf = smoke.a;
-        let temp_delta_hf = temp_hf - 15.0; // delta from ~ambient
-
-        // Background: dim terrain
-        var hf_color = color * 0.2;
-
-        if vel_mag > 0.5 {
-            // Direction as hue, temperature as saturation, magnitude as brightness
-            let dir_angle = atan2(vel_raw.y, vel_raw.x);
-            let hue = (dir_angle / 6.283 + 0.5); // 0..1
-
-            // Temperature coloring: cool flow = blue, warm flow = orange/red
-            var flow_color: vec3<f32>;
-            if temp_delta_hf > 5.0 {
-                // Hot convection: orange → yellow
-                let heat = clamp(temp_delta_hf / 200.0, 0.0, 1.0);
-                flow_color = mix(vec3(1.0, 0.5, 0.1), vec3(1.0, 1.0, 0.3), heat);
-            } else if temp_delta_hf < -3.0 {
-                // Cold flow: blue → cyan
-                let cold = clamp(-temp_delta_hf / 20.0, 0.0, 1.0);
-                flow_color = mix(vec3(0.3, 0.5, 1.0), vec3(0.1, 0.8, 1.0), cold);
-            } else {
-                // Neutral flow: white/gray
-                flow_color = vec3(0.7, 0.7, 0.7);
-            }
-
-            let brightness = clamp(vel_mag * 0.03, 0.0, 1.0);
-            hf_color = mix(hf_color, flow_color, brightness);
-
-            // Per-block arrow showing flow direction
-            let hf_fx = fract(world_x) - 0.5;
-            let hf_fy = fract(world_y) - 0.5;
-            let hf_dir = vel_raw / vel_mag;
-            let hf_along = hf_fx * hf_dir.x + hf_fy * hf_dir.y;
-            let hf_perp = abs(-hf_fx * hf_dir.y + hf_fy * hf_dir.x);
-            let hf_arrow_len = clamp(vel_mag * 0.02, 0.1, 0.4);
-            let hf_on_shaft = hf_along > -0.05 && hf_along < hf_arrow_len && hf_perp < 0.06;
-            let hf_head_t = (hf_along - hf_arrow_len + 0.12) / 0.12;
-            let hf_on_head = hf_head_t > 0.0 && hf_head_t < 1.0 && hf_perp < 0.15 * (1.0 - hf_head_t);
-            if hf_on_shaft || hf_on_head {
-                hf_color = mix(hf_color, flow_color * 1.5, 0.8);
-            }
+    } else if camera.fluid_overlay < 12.5 {
+        // Water overlay (12): show ground water level
+        let wl = clamp(water_level * 2.0, 0.0, 1.0);
+        if wl > 0.01 {
+            let water_ov_color = mix(vec3(0.08, 0.12, 0.25), vec3(0.15, 0.45, 0.9), wl);
+            color = mix(color * 0.4, water_ov_color, 0.6 + wl * 0.3);
+        } else {
+            color *= 0.3;
         }
-
-        color = hf_color;
     }
 
     // Rain overlay: animated streaks

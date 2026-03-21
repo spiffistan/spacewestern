@@ -69,6 +69,7 @@ use winit::{
 enum SandboxTool {
     None,
     Lightning,
+    InjectWater,
 }
 
 const WORKGROUP_SIZE: u32 = 8;
@@ -289,7 +290,9 @@ struct App {
     active_work: std::collections::HashSet<(i32, i32)>,
     manual_tasks: Vec<zones::WorkTask>, // player-ordered tasks (harvest bush, etc.)
     work_priority: zones::WorkPriority,
-    crop_timers: std::collections::HashMap<u32, f32>,    // grid_idx → growth timer
+    crop_timers: std::collections::HashMap<u32, f32>,
+    water_phase: usize, // ping-pong for water sim (0 or 1)
+    water_frame: u32,   // frame counter for water sim throttling
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
@@ -338,6 +341,10 @@ struct GfxState {
     voltage_buffer: wgpu::Buffer,
     power_pipeline: wgpu::ComputePipeline,
     power_bind_group: wgpu::BindGroup,
+    // Ground water simulation
+    water_textures: [wgpu::Texture; 2],    // ping-pong water level (R32Float, 256x256)
+    water_pipeline: wgpu::ComputePipeline,
+    water_bind_groups: [wgpu::BindGroup; 2], // [0]: read A write B, [1]: read B write A
     // Fluid simulation GPU resources
     fluid_params_buffer: wgpu::Buffer,
     fluid_vel: [wgpu::Texture; 2],
@@ -544,6 +551,8 @@ impl App {
             manual_tasks: Vec::new(),
             work_priority: zones::WorkPriority::PlantFirst,
             crop_timers: std::collections::HashMap::new(),
+            water_phase: 0,
+            water_frame: 0,
             diag_preview: Vec::new(),
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
@@ -1163,7 +1172,43 @@ impl App {
                     }
                 }
             }
-            log::info!("Sandbox: Lightning strike at ({:.0}, {:.0})", wx, wy);
+            self.log_event(EventCategory::Weather, format!("Lightning strike at ({:.0}, {:.0})", wx, wy));
+            return;
+        }
+        if self.sandbox_tool == SandboxTool::InjectWater {
+            // Inject water into the water texture at clicked position (3-tile radius)
+            if let Some(gfx) = &self.gfx {
+                let cx = bx;
+                let cy = by;
+                let radius = 3i32;
+                for dy in -radius..=radius {
+                    for dx in -radius..=radius {
+                        let nx = cx + dx;
+                        let ny = cy + dy;
+                        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                        let dist = ((dx * dx + dy * dy) as f32).sqrt();
+                        if dist > radius as f32 { continue; }
+                        let strength = 1.0 - dist / (radius as f32 + 0.5);
+                        let water_val = (strength * 2.0) as f32;
+                        let pixel = water_val.to_le_bytes();
+                        // Write to both ping-pong textures
+                        for ti in 0..2 {
+                            gfx.queue.write_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &gfx.water_textures[ti],
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d { x: nx as u32, y: ny as u32, z: 0 },
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                &pixel,
+                                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+                                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                            );
+                        }
+                    }
+                }
+                self.log_event(EventCategory::General, format!("Injected water at ({}, {})", cx, cy));
+            }
             return;
         }
 
@@ -1876,6 +1921,7 @@ impl App {
         let fv_dye_b = gfx.fluid_dye[1].create_view(&wgpu::TextureViewDescriptor::default());
         let fv_vel_a_view = gfx.fluid_vel[0].create_view(&wgpu::TextureViewDescriptor::default());
         let fv_pres_b_view = gfx.fluid_pres[1].create_view(&wgpu::TextureViewDescriptor::default());
+        let water_view = gfx.water_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
         gfx.compute_bind_groups = [
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("compute-bg-0"), // dye_A, write output_A, read prev output_B
@@ -1892,6 +1938,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1914,6 +1961,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1936,6 +1984,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1958,6 +2007,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2377,6 +2427,18 @@ impl App {
             let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("power"), timestamp_writes: None });
             p.set_pipeline(&gfx.power_pipeline); p.set_bind_group(0, &gfx.power_bind_group, &[]); p.dispatch_workgroups(tw, th, 1);
           }
+        }
+
+        // 12. Ground water simulation (256x256, every 4 frames)
+        self.water_frame += 1;
+        if self.water_frame % 4 == 0 && !self.time_paused {
+            let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("water"), timestamp_writes: None });
+            p.set_pipeline(&gfx.water_pipeline);
+            p.set_bind_group(0, &gfx.water_bind_groups[self.water_phase], &[]);
+            p.dispatch_workgroups(tw, th, 1);
+            drop(p);
+            self.water_phase = 1 - self.water_phase;
         }
 
         // Debug: copy one dye texel at cursor position for readback

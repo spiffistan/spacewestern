@@ -113,6 +113,15 @@ impl App {
                                 }
                             });
                         });
+                        // Environment group
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Environ").size(9.0).weak());
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(*ov == FluidOverlay::Water, "Water").clicked() {
+                                    *ov = if *ov == FluidOverlay::Water { FluidOverlay::None } else { FluidOverlay::Water };
+                                }
+                            });
+                        });
                     });
                 });
             });
@@ -781,6 +790,25 @@ impl App {
                                     "Lightning", egui::FontId::proportional(11.0), egui::Color32::from_gray(190));
                                 if response.clicked() {
                                     self.sandbox_tool = if sel { SandboxTool::None } else { SandboxTool::Lightning };
+                                    if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
+                                }
+                                // Water inject button
+                                let sel_w = self.sandbox_tool == SandboxTool::InjectWater;
+                                let (rect_w, resp_w) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(60.0), egui::Sense::click(),
+                                );
+                                let pw = ui.painter_at(rect_w);
+                                let bg_w = if sel_w { egui::Color32::from_rgb(40, 70, 110) }
+                                    else if resp_w.hovered() { egui::Color32::from_rgb(55, 58, 65) }
+                                    else { egui::Color32::from_rgb(40, 42, 48) };
+                                pw.rect_filled(rect_w, 4.0, bg_w);
+                                pw.rect_stroke(rect_w, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
+                                pw.text(rect_w.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
+                                    "\u{1f4a7}", egui::FontId::proportional(24.0), egui::Color32::from_rgb(80, 150, 255));
+                                pw.text(rect_w.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
+                                    "Water", egui::FontId::proportional(11.0), egui::Color32::from_gray(190));
+                                if resp_w.clicked() {
+                                    self.sandbox_tool = if sel_w { SandboxTool::None } else { SandboxTool::InjectWater };
                                     if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
                                 }
                             });

@@ -945,11 +945,48 @@ impl App {
                         },
                         count: None,
                     },
+                    // Water level texture (read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 16,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
         // Raytrace shader samples the final lightmap result (texture A after even iterations)
         let lightmap_sample_view = lightmap_a.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Water texture view for raytrace shader (created early for bind group)
+        let water_tex_desc_early = wgpu::TextureDescriptor {
+            label: Some("water-level-a"),
+            size: wgpu::Extent3d { width: GRID_W, height: GRID_H, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        };
+        let water_a = device.create_texture(&water_tex_desc_early);
+        let water_b = device.create_texture(&wgpu::TextureDescriptor { label: Some("water-level-b"), ..water_tex_desc_early });
+        let water_zeros = vec![0u8; (GRID_W * GRID_H * 4) as usize];
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &water_a, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &water_zeros, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(GRID_W * 4), rows_per_image: Some(GRID_H) },
+            wgpu::Extent3d { width: GRID_W, height: GRID_H, depth_or_array_layers: 1 },
+        );
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &water_b, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &water_zeros, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(GRID_W * 4), rows_per_image: Some(GRID_H) },
+            wgpu::Extent3d { width: GRID_W, height: GRID_H, depth_or_array_layers: 1 },
+        );
+        let fv_water_a = water_a.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_water_b = water_b.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Fluid dye sampler (bilinear for smooth smoke overlay)
         let fluid_dye_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -978,6 +1015,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1000,6 +1038,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1022,6 +1061,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1044,6 +1084,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1301,6 +1342,49 @@ impl App {
             cache: None,
         });
 
+        // --- Ground water simulation pipeline (textures already created above) ---
+        let water_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("water-compute"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/water.wgsl").into()),
+        });
+        let water_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("water-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::R32Float, view_dimension: wgpu::TextureViewDimension::D2 }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+        let water_bg_ab = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("water-bg-ab"), layout: &water_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_water_b) },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: camera_buffer.as_entire_binding() },
+            ],
+        });
+        let water_bg_ba = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("water-bg-ba"), layout: &water_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_water_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: camera_buffer.as_entire_binding() },
+            ],
+        });
+        let water_pipeline_val = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("water-pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("water-pl"), bind_group_layouts: &[&water_bgl], push_constant_ranges: &[],
+            })),
+            module: &water_shader,
+            entry_point: Some("main_water"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         self.gfx = Some(GfxState {
             surface,
             device,
@@ -1362,6 +1446,9 @@ impl App {
             pipe_flow_buffer,
             power_pipeline: power_pipeline_val,
             power_bind_group: power_bind_group_val,
+            water_textures: [water_a, water_b],
+            water_pipeline: water_pipeline_val,
+            water_bind_groups: [water_bg_ab, water_bg_ba],
         });
 
         self.window = Some(window);
