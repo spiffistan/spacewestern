@@ -1573,9 +1573,23 @@ impl App {
                 info
             } else { String::new() };
 
+            // Crop growth info
+            let crop_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                let cidx = (by as u32 * GRID_W + bx as u32) as usize;
+                let cb = self.grid_data[cidx];
+                let wt = if cidx < self.water_table.len() { self.water_table[cidx] } else { -3.0 };
+                let timer = self.crop_timers.get(&(cidx as u32)).copied().unwrap_or(0.0);
+                if let Some(cs) = zones::crop_status(cb, cidx as u32, timer,
+                    self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt) {
+                    format!("\n\u{1f331} {} ({:.0}%) | Rate: {:.0}% | {}\n  Temp:{:.0}% Sun:{:.0}% Water:{:.0}%",
+                        cs.stage_name, cs.progress * 100.0, cs.growth_rate * 100.0, cs.limiting,
+                        cs.temp_factor * 100.0, cs.sun_factor * 100.0, cs.water_factor * 100.0)
+                } else { String::new() }
+            } else { String::new() };
+
             let tip = format!(
-                "\u{1f4cd} ({:.1}, {:.1})\n{}{}{}{}{}{}",
-                wx, wy, block_info, gas_info, mat_info, pipe_info, zone_info, ground_info
+                "\u{1f4cd} ({:.1}, {:.1})\n{}{}{}{}{}{}{}",
+                wx, wy, block_info, gas_info, mat_info, pipe_info, zone_info, ground_info, crop_info
             );
 
             // Position tooltip near cursor
@@ -2944,6 +2958,60 @@ impl App {
                             }
                         }
                     });
+
+                    // Detail section below actions (for plants, plebs, etc.)
+                    if count == 1 && items[0].pleb_idx.is_none() {
+                        let item = &items[0];
+                        let tidx = (item.y as u32 * GRID_W + item.x as u32) as usize;
+                        if tidx < self.grid_data.len() {
+                            let tblock = self.grid_data[tidx];
+                            let wt = if tidx < self.water_table.len() { self.water_table[tidx] } else { -3.0 };
+                            let timer = self.crop_timers.get(&(tidx as u32)).copied().unwrap_or(0.0);
+                            if let Some(cs) = zones::crop_status(tblock, tidx as u32, timer,
+                                self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt) {
+                                ui.separator();
+                                // Growth progress bar
+                                let total_progress = (cs.stage as f32 + cs.progress) / 4.0;
+                                let bar_w = 190.0;
+                                let bar_h = 8.0;
+                                let (bar_rect, _) = ui.allocate_exact_size(egui::Vec2::new(bar_w, bar_h), egui::Sense::hover());
+                                let bp = ui.painter_at(bar_rect);
+                                bp.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
+                                bp.rect_filled(
+                                    egui::Rect::from_min_size(bar_rect.min, egui::Vec2::new(bar_w * total_progress, bar_h)),
+                                    2.0, egui::Color32::from_rgb(60, 180, 60),
+                                );
+                                bp.text(bar_rect.center(), egui::Align2::CENTER_CENTER,
+                                    &format!("{} {:.0}%", cs.stage_name, total_progress * 100.0),
+                                    egui::FontId::proportional(7.0), egui::Color32::WHITE);
+
+                                // Factor bars
+                                ui.horizontal(|ui| {
+                                    let factor_bar = |ui: &mut egui::Ui, label: &str, val: f32, col: egui::Color32| {
+                                        ui.vertical(|ui| {
+                                            ui.label(egui::RichText::new(label).size(8.0).color(egui::Color32::GRAY));
+                                            let (r, _) = ui.allocate_exact_size(egui::Vec2::new(50.0, 4.0), egui::Sense::hover());
+                                            let p = ui.painter_at(r);
+                                            p.rect_filled(r, 1.0, egui::Color32::from_rgb(30, 30, 30));
+                                            let fill_col = if val < 0.15 { egui::Color32::from_rgb(200, 50, 50) } else { col };
+                                            p.rect_filled(
+                                                egui::Rect::from_min_size(r.min, egui::Vec2::new(50.0 * val, 4.0)),
+                                                1.0, fill_col,
+                                            );
+                                        });
+                                    };
+                                    factor_bar(ui, "Temp", cs.temp_factor, egui::Color32::from_rgb(200, 120, 40));
+                                    factor_bar(ui, "Sun", cs.sun_factor, egui::Color32::from_rgb(220, 200, 60));
+                                    factor_bar(ui, "Water", cs.water_factor, egui::Color32::from_rgb(60, 140, 220));
+                                });
+
+                                if cs.growth_rate < 0.01 {
+                                    ui.label(egui::RichText::new(format!("\u{26a0} {}", cs.limiting))
+                                        .size(9.0).color(egui::Color32::from_rgb(255, 80, 80)));
+                                }
+                            }
+                        }
+                    }
                 });
             });
     }
