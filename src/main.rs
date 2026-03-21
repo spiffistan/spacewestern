@@ -107,16 +107,25 @@ struct BlockSelection {
     crate_world: (f32, f32),
 }
 
-/// What's currently selected in the world (Rimworld-style).
+/// A single selected item in the world.
 #[derive(Clone, Debug)]
-enum WorldSelection {
-    None,
-    Block { x: i32, y: i32, w: i32, h: i32 }, // grid position + size (multi-tile blocks)
-    Pleb(usize), // index into plebs vec
+struct SelectedItem {
+    x: i32, y: i32, w: i32, h: i32, // bounding box
+    block_type: u32,
 }
 
-impl Default for WorldSelection {
-    fn default() -> Self { WorldSelection::None }
+/// What's currently selected in the world (Rimworld-style).
+#[derive(Clone, Debug, Default)]
+struct WorldSelection {
+    items: Vec<SelectedItem>,
+}
+
+impl WorldSelection {
+    fn none() -> Self { WorldSelection { items: Vec::new() } }
+    fn single(x: i32, y: i32, w: i32, h: i32, block_type: u32) -> Self {
+        WorldSelection { items: vec![SelectedItem { x, y, w, h, block_type }] }
+    }
+    fn is_empty(&self) -> bool { self.items.is_empty() }
 }
 
 // --- Application state ---
@@ -454,7 +463,7 @@ impl App {
             pleb_air_data: Vec::new(),
             pleb_air_readback_pending: false,
             context_menu: None,
-            world_sel: WorldSelection::None,
+            world_sel: WorldSelection::none(),
             select_drag_start: None,
             crate_contents: std::collections::HashMap::new(),
             rock_context_menu: None,
@@ -1216,16 +1225,16 @@ impl App {
             }
 
             // World selection: click non-ground blocks to select
-            let is_ground = bt_is!(bt as u32, BT_AIR, BT_DIRT, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR);
+            let is_ground = bt_is!(bt as u32, BT_AIR, BT_DIRT, BT_WATER, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR, BT_DUG_GROUND);
             if !is_ground {
                 // Determine block size (multi-tile blocks)
                 let (sel_x, sel_y, sel_w, sel_h) = self.get_block_bounds(bx, by, bt, flags);
-                self.world_sel = WorldSelection::Block { x: sel_x, y: sel_y, w: sel_w, h: sel_h };
+                self.world_sel = WorldSelection::single(sel_x, sel_y, sel_w, sel_h, bt as u32);
                 self.selected_pleb = None;
                 return;
             } else {
                 // Clicked empty ground — deselect
-                self.world_sel = WorldSelection::None;
+                self.world_sel = WorldSelection::none();
                 self.selected_pleb = None;
             }
         }
@@ -2970,16 +2979,32 @@ impl ApplicationHandler for App {
                             let (ex, ey) = (wx.floor() as i32, wy.floor() as i32);
                             self.apply_drag_shape(sx, sy, ex, ey);
                         } else if self.select_drag_start.is_some() {
-                            // Complete selection rectangle
+                            // Complete selection rectangle — find individual items
                             let (sx, sy) = self.select_drag_start.unwrap();
                             let (ex, ey) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             let min_x = sx.min(ex).floor() as i32;
                             let min_y = sy.min(ey).floor() as i32;
                             let max_x = sx.max(ex).ceil() as i32;
                             let max_y = sy.max(ey).ceil() as i32;
-                            let w = (max_x - min_x).max(1);
-                            let h = (max_y - min_y).max(1);
-                            self.world_sel = WorldSelection::Block { x: min_x, y: min_y, w, h };
+                            let mut items = Vec::new();
+                            let mut seen = std::collections::HashSet::new();
+                            for gy in min_y..max_y {
+                                for gx in min_x..max_x {
+                                    if gx < 0 || gy < 0 || gx >= GRID_W as i32 || gy >= GRID_H as i32 { continue; }
+                                    let bidx = (gy as u32 * GRID_W + gx as u32) as usize;
+                                    let b = self.grid_data[bidx];
+                                    let bbt = block_type_rs(b);
+                                    let bflags = block_flags_rs(b);
+                                    let is_gnd = bt_is!(bbt as u32, BT_AIR, BT_DIRT, BT_WATER, BT_WOOD_FLOOR,
+                                        BT_STONE_FLOOR, BT_CONCRETE_FLOOR, BT_DUG_GROUND);
+                                    if is_gnd { continue; }
+                                    let (ox, oy, ow, oh) = self.get_block_bounds(gx, gy, bbt, bflags);
+                                    if seen.insert((ox, oy)) {
+                                        items.push(SelectedItem { x: ox, y: oy, w: ow, h: oh, block_type: bbt as u32 });
+                                    }
+                                }
+                            }
+                            self.world_sel = WorldSelection { items };
                             self.selected_pleb = None;
                         } else if !self.mouse_dragged {
                             let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);

@@ -1690,28 +1690,26 @@ impl App {
             }
         }
 
-        // World selection brackets (Rimworld-style corner markers)
-        if let WorldSelection::Block { x, y, w, h } = &self.world_sel {
+        // World selection brackets (Rimworld-style corner markers per item)
+        if !self.world_sel.is_empty() {
             let sel_painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground, egui::Id::new("world_selection"),
             ));
-            let p0 = self.world_to_screen_ui(*x as f32, *y as f32, bp_cam);
-            let p1 = self.world_to_screen_ui((*x + w) as f32, (*y + h) as f32, bp_cam);
-            let rect = egui::Rect::from_min_max(p0, p1);
-            let bracket_len = (rect.width().min(rect.height()) * 0.3).max(3.0);
             let stroke = egui::Stroke::new(2.0, egui::Color32::WHITE);
-            // Top-left corner
-            sel_painter.line_segment([rect.left_top(), rect.left_top() + egui::Vec2::new(bracket_len, 0.0)], stroke);
-            sel_painter.line_segment([rect.left_top(), rect.left_top() + egui::Vec2::new(0.0, bracket_len)], stroke);
-            // Top-right corner
-            sel_painter.line_segment([rect.right_top(), rect.right_top() + egui::Vec2::new(-bracket_len, 0.0)], stroke);
-            sel_painter.line_segment([rect.right_top(), rect.right_top() + egui::Vec2::new(0.0, bracket_len)], stroke);
-            // Bottom-left corner
-            sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(bracket_len, 0.0)], stroke);
-            sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(0.0, -bracket_len)], stroke);
-            // Bottom-right corner
-            sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(-bracket_len, 0.0)], stroke);
-            sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(0.0, -bracket_len)], stroke);
+            for item in &self.world_sel.items {
+                let p0 = self.world_to_screen_ui(item.x as f32, item.y as f32, bp_cam);
+                let p1 = self.world_to_screen_ui((item.x + item.w) as f32, (item.y + item.h) as f32, bp_cam);
+                let rect = egui::Rect::from_min_max(p0, p1);
+                let bl = (rect.width().min(rect.height()) * 0.3).max(3.0);
+                sel_painter.line_segment([rect.left_top(), rect.left_top() + egui::Vec2::new(bl, 0.0)], stroke);
+                sel_painter.line_segment([rect.left_top(), rect.left_top() + egui::Vec2::new(0.0, bl)], stroke);
+                sel_painter.line_segment([rect.right_top(), rect.right_top() + egui::Vec2::new(-bl, 0.0)], stroke);
+                sel_painter.line_segment([rect.right_top(), rect.right_top() + egui::Vec2::new(0.0, bl)], stroke);
+                sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(bl, 0.0)], stroke);
+                sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(0.0, -bl)], stroke);
+                sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(-bl, 0.0)], stroke);
+                sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(0.0, -bl)], stroke);
+            }
         }
 
         // Growing zone overlay — green tint on designated tiles
@@ -2781,47 +2779,62 @@ impl App {
         }
     }
 
-    /// Draw action bar for the currently selected world item (bottom-right, flows left).
+    /// Draw action bar for the currently selected world items (bottom-right, flows left).
     fn draw_selection_actions(&mut self, ctx: &egui::Context) {
-        if let WorldSelection::Block { x, y, w: _, h: _ } = self.world_sel {
-            let idx = (y as u32 * GRID_W + x as u32) as usize;
-            if idx >= self.grid_data.len() { return; }
-            let block = self.grid_data[idx];
-            let bt = block_type_rs(block);
-            let reg = block_defs::BlockRegistry::cached();
-            let name = reg.name(bt);
+        if self.world_sel.is_empty() { return; }
 
-            egui::Area::new(egui::Id::new("selection_actions"))
-                .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -60.0])
-                .show(ctx, |ui| {
-                    egui::Frame::window(ui.style()).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(name).strong().size(11.0));
-                            ui.separator();
+        let reg = block_defs::BlockRegistry::cached();
+        let items: Vec<SelectedItem> = self.world_sel.items.clone();
+        let count = items.len();
+        if count == 0 { return; }
 
-                            // Destroy action (always available for removable blocks)
-                            let is_removable = reg.get(bt).map_or(false, |d| d.is_removable);
-                            if is_removable {
-                                if ui.small_button("Destroy").clicked() {
+        // Determine common properties
+        let all_removable = items.iter().all(|item| {
+            reg.get(item.block_type as u8).map_or(false, |d| d.is_removable)
+        });
+        let all_same_type = items.iter().all(|item| item.block_type == items[0].block_type);
+
+        // Label
+        let label = if count == 1 {
+            reg.name(items[0].block_type as u8).to_string()
+        } else if all_same_type {
+            format!("{}x {}", count, reg.name(items[0].block_type as u8))
+        } else {
+            format!("{} items selected", count)
+        };
+
+        egui::Area::new(egui::Id::new("selection_actions"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -60.0])
+            .show(ctx, |ui| {
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&label).strong().size(11.0));
+                        ui.separator();
+
+                        // Destroy: available if all items are removable
+                        if all_removable {
+                            if ui.small_button("Destroy").clicked() {
+                                let positions: Vec<(i32, i32)> = items.iter().map(|i| (i.x, i.y)).collect();
+                                for (x, y) in positions {
                                     self.destroy_block_at(x, y);
-                                    self.world_sel = WorldSelection::None;
                                 }
+                                self.world_sel = WorldSelection::none();
                             }
+                        }
 
-                            // Block-specific actions
-                            match bt as u32 {
-                                BT_CRATE => {
-                                    if ui.small_button("Inspect").clicked() {
-                                        let cidx = y as u32 * GRID_W + x as u32;
-                                        self.block_sel.crate_idx = Some(cidx);
-                                        self.block_sel.crate_world = (x as f32 + 0.5, y as f32 + 0.5);
-                                    }
+                        // Single-item actions
+                        if count == 1 {
+                            let item = &items[0];
+                            if item.block_type == BT_CRATE {
+                                if ui.small_button("Inspect").clicked() {
+                                    let cidx = item.y as u32 * GRID_W + item.x as u32;
+                                    self.block_sel.crate_idx = Some(cidx);
+                                    self.block_sel.crate_world = (item.x as f32 + 0.5, item.y as f32 + 0.5);
                                 }
-                                _ => {}
                             }
-                        });
+                        }
                     });
                 });
-        }
+            });
     }
 }
