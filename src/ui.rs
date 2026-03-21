@@ -1564,9 +1564,11 @@ impl App {
                 let gbh = (gb >> 8) & 0xFF;
                 let wt = if gidx < self.water_table.len() { self.water_table[gidx] } else { -2.0 };
                 let wt_label = if wt > 0.0 { "spring" } else if wt > -0.5 { "wet" } else if wt > -1.5 { "moderate" } else { "dry" };
-                let mut info = format!("\n\u{1f4a7} Water table: {:.1} ({})", wt, wt_label);
+                let sw = self.debug.water_level;
+                let sw_label = if sw > 0.5 { "flooded" } else if sw > 0.15 { "puddle" } else if sw > 0.01 { "moist" } else { "dry" };
+                let mut info = format!("\n\u{1f4a7} Surface: {:.2} ({}) | Table: {:.1} ({})", sw, sw_label, wt, wt_label);
                 if gbt == BT_DUG_GROUND {
-                    info += &format!(" | Dug depth: {}", gbh);
+                    info += &format!(" | Dug: {}", gbh);
                 }
                 info
             } else { String::new() };

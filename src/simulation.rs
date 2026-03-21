@@ -734,26 +734,46 @@ impl App {
                 let stage = (block >> 8) & 0xFF;
                 if bt != BT_CROP || stage >= CROP_MATURE { continue; }
 
-                // Temperature affects growth: optimal 10-35°C, zero outside
-                // Use ambient temp approximation (dye readback not available per-tile)
+                // --- Multi-factor growth model ---
                 let day_frac = self.time_of_day / DAY_DURATION;
                 let sun_t = ((day_frac - 0.15) / 0.7).clamp(0.0, 1.0);
-                let approx_temp = 5.0 + 20.0 * (sun_t * std::f32::consts::PI).sin();
-                let temp_factor = if approx_temp >= CROP_MIN_TEMP && approx_temp <= CROP_MAX_TEMP {
-                    1.0
-                } else {
+                let sun_curve = (sun_t * std::f32::consts::PI).sin();
+                let approx_temp = 5.0 + 20.0 * sun_curve;
+
+                // Temperature: bell curve, optimal 15-28°C, zero outside 5-40°C
+                let temp_factor = if approx_temp < CROP_TEMP_MIN || approx_temp > CROP_TEMP_MAX {
                     0.0
-                };
-
-                // Water requirement: need water table near surface or surface moisture
-                let water_ok = if idx < self.water_table.len() {
-                    self.water_table[idx] > -0.5 // water table near surface
+                } else if approx_temp >= CROP_OPTIMAL_LOW && approx_temp <= CROP_OPTIMAL_HIGH {
+                    1.0
+                } else if approx_temp < CROP_OPTIMAL_LOW {
+                    (approx_temp - CROP_TEMP_MIN) / (CROP_OPTIMAL_LOW - CROP_TEMP_MIN)
                 } else {
-                    false
+                    (CROP_TEMP_MAX - approx_temp) / (CROP_TEMP_MAX - CROP_OPTIMAL_HIGH)
                 };
-                let water_factor = if water_ok { 1.0 } else { 0.0 };
 
-                *timer += grow_dt * temp_factor * water_factor;
+                // Sunlight: plants need light to photosynthesize
+                let sun_factor = (self.camera.sun_intensity * 1.2).clamp(0.0, 1.0);
+
+                // Water: combines water table depth + rain moisture
+                let wt = if idx < self.water_table.len() { self.water_table[idx] } else { -3.0 };
+                let wt_moisture = ((wt + 2.0) / 2.5).clamp(0.0, 1.0); // -2→0, 0.5→1
+                let rain_moisture = (self.camera.rain_intensity * 0.5).min(0.3);
+                let water_avail = (wt_moisture + rain_moisture).clamp(0.0, 1.0);
+                // Water response curve: ramps up to optimal, slight penalty if waterlogged
+                let water_factor = if water_avail < 0.1 {
+                    water_avail * 2.0 // very dry: severely limited
+                } else if water_avail < 0.7 {
+                    0.2 + water_avail * 1.14 // normal: linear ramp to ~1.0
+                } else {
+                    1.0 - (water_avail - 0.7) * 0.3 // waterlogged: slight penalty
+                };
+
+                // Per-tile randomness: 0.7-1.3 variation (deterministic from position)
+                let hash = (grid_idx.wrapping_mul(2654435761).wrapping_add(stage * 1013904223)) & 0xFFFF;
+                let random_factor = 0.7 + (hash as f32 / 65535.0) * 0.6;
+
+                let growth_rate = temp_factor * sun_factor * water_factor * random_factor;
+                *timer += grow_dt * growth_rate;
                 if *timer >= CROP_GROW_TIME {
                     *timer = 0.0;
                     let new_stage = (stage + 1).min(CROP_MATURE);

@@ -48,12 +48,17 @@ pub const CROP_SPROUT: u32 = 1;
 pub const CROP_GROWING: u32 = 2;
 pub const CROP_MATURE: u32 = 3;
 
-/// Game seconds for a crop to advance one growth stage at comfortable temperature.
-pub const CROP_GROW_TIME: f32 = 20.0;
+/// Game seconds for a crop to advance one growth stage under ideal conditions.
+/// With environmental factors < 1.0, effective time is much longer.
+/// 60s × 4 stages = 240 game seconds (~4 game-days at 50% speed).
+pub const CROP_GROW_TIME: f32 = 60.0;
 
-/// Temperature range for optimal crop growth (°C).
-pub const CROP_MIN_TEMP: f32 = 10.0;
-pub const CROP_MAX_TEMP: f32 = 35.0;
+/// Optimal temperature range for crop growth (°C). Bell curve peaks here.
+pub const CROP_OPTIMAL_LOW: f32 = 15.0;
+pub const CROP_OPTIMAL_HIGH: f32 = 28.0;
+/// Absolute limits — zero growth outside these.
+pub const CROP_TEMP_MIN: f32 = 5.0;
+pub const CROP_TEMP_MAX: f32 = 40.0;
 
 /// Generate work tasks from zones + grid state.
 /// Returns tasks that are not yet being worked on.

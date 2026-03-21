@@ -981,7 +981,7 @@ impl App {
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         };
         let water_a = device.create_texture(&water_tex_desc_early);
@@ -1010,6 +1010,13 @@ impl App {
             mapped_at_creation: false,
         });
         queue.write_buffer(&water_table_buffer, 0, bytemuck::cast_slice(&self.water_table));
+
+        let water_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("water-readback"),
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
 
         // Fluid dye sampler (bilinear for smooth smoke overlay)
         let fluid_dye_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1478,6 +1485,7 @@ impl App {
             power_bind_group: power_bind_group_val,
             water_textures: [water_a, water_b],
             water_table_buffer,
+            water_readback_buffer,
             water_pipeline: water_pipeline_val,
             water_bind_groups: [water_bg_ab, water_bg_ba],
         });

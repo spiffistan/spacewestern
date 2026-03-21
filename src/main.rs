@@ -44,7 +44,7 @@ mod physics;
 use physics::{PhysicsBody, tick_bodies, pleb_body_collision, nearest_body};
 
 mod zones;
-use zones::{Zone, ZoneKind, WorkTask, generate_work_tasks, CROP_GROW_TIME, CROP_MIN_TEMP, CROP_MAX_TEMP, CROP_PLANTED, CROP_SPROUT, CROP_GROWING, CROP_MATURE};
+use zones::{Zone, ZoneKind, WorkTask, generate_work_tasks, CROP_GROW_TIME, CROP_TEMP_MIN, CROP_TEMP_MAX, CROP_OPTIMAL_LOW, CROP_OPTIMAL_HIGH, CROP_PLANTED, CROP_SPROUT, CROP_GROWING, CROP_MATURE};
 
 mod weather;
 use weather::{WeatherState, tick_weather, tick_wetness};
@@ -129,11 +129,13 @@ struct DebugReadback {
     voltage: f32,
     voltage_pending: bool,
     fluid_pending: bool,
+    water_level: f32,
+    water_pending: bool,
 }
 
 impl Default for DebugReadback {
     fn default() -> Self {
-        Self { mode: false, fluid_density: [0.0; 4], block_temp: 15.0, block_temp_pending: false, voltage: 0.0, voltage_pending: false, fluid_pending: false }
+        Self { mode: false, fluid_density: [0.0; 4], block_temp: 15.0, block_temp_pending: false, voltage: 0.0, voltage_pending: false, fluid_pending: false, water_level: 0.0, water_pending: false }
     }
 }
 
@@ -393,7 +395,8 @@ struct GfxState {
     power_bind_group: wgpu::BindGroup,
     // Ground water simulation
     water_textures: [wgpu::Texture; 2],
-    water_table_buffer: wgpu::Buffer,  // static water table height map (256x256 f32)
+    water_table_buffer: wgpu::Buffer,
+    water_readback_buffer: wgpu::Buffer, // single-texel readback for info overlay
     water_pipeline: wgpu::ComputePipeline,
     water_bind_groups: [wgpu::BindGroup; 2],
     // Fluid simulation GPU resources
@@ -2565,6 +2568,25 @@ impl App {
             );
             self.debug.fluid_pending = true;
 
+            // Also copy water level at cursor
+            let water_bx = wx.floor().clamp(0.0, (GRID_W - 1) as f32) as u32;
+            let water_by = wy.floor().clamp(0.0, (GRID_H - 1) as f32) as u32;
+            let water_read_idx = self.water_phase; // current readable water texture
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gfx.water_textures[water_read_idx],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: water_bx, y: water_by, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &gfx.water_readback_buffer,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(1) },
+                },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+            self.debug.water_pending = true;
+
             // Also copy block temperature at cursor position from block_temp_buffer
             let btx = wx.floor() as i32;
             let bty = wy.floor() as i32;
@@ -2808,6 +2830,22 @@ impl App {
                     }
                     drop(data);
                     gfx.debug_readback_buffer.unmap();
+                }
+            }
+
+            // Water level readback
+            if self.debug.water_pending {
+                self.debug.water_pending = false;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let buffer_slice = gfx.water_readback_buffer.slice(..);
+                    buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+                    gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                    let data = buffer_slice.get_mapped_range();
+                    let f32_data: &[f32] = bytemuck::cast_slice(&data);
+                    self.debug.water_level = f32_data[0];
+                    drop(data);
+                    gfx.water_readback_buffer.unmap();
                 }
             }
 
