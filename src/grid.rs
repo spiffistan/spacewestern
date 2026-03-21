@@ -3,6 +3,55 @@
 pub const GRID_W: u32 = 256;
 pub const GRID_H: u32 = 256;
 
+// Block type IDs (must match blocks.toml). u32 for direct comparison with extracted block types.
+pub const BT_AIR: u32 = 0;
+pub const BT_STONE: u32 = 1;
+pub const BT_DIRT: u32 = 2;
+pub const BT_WATER: u32 = 3;
+pub const BT_WALL: u32 = 4;
+pub const BT_GLASS: u32 = 5;
+pub const BT_FIREPLACE: u32 = 6;
+pub const BT_CEILING_LIGHT: u32 = 7;
+pub const BT_TREE: u32 = 8;
+pub const BT_BENCH: u32 = 9;
+pub const BT_FLOOR_LAMP: u32 = 10;
+pub const BT_TABLE_LAMP: u32 = 11;
+pub const BT_FAN: u32 = 12;
+pub const BT_COMPOST: u32 = 13;
+pub const BT_INSULATED: u32 = 14;
+pub const BT_PIPE: u32 = 15;
+pub const BT_PUMP: u32 = 16;
+pub const BT_TANK: u32 = 17;
+pub const BT_VALVE: u32 = 18;
+pub const BT_OUTLET: u32 = 19;
+pub const BT_INLET: u32 = 20;
+pub const BT_WOOD_WALL: u32 = 21;
+pub const BT_STEEL_WALL: u32 = 22;
+pub const BT_SANDSTONE: u32 = 23;
+pub const BT_GRANITE: u32 = 24;
+pub const BT_LIMESTONE: u32 = 25;
+pub const BT_WOOD_FLOOR: u32 = 26;
+pub const BT_STONE_FLOOR: u32 = 27;
+pub const BT_CONCRETE_FLOOR: u32 = 28;
+pub const BT_CANNON: u32 = 29;
+pub const BT_BED: u32 = 30;
+pub const BT_BERRY_BUSH: u32 = 31;
+pub const BT_DUG_GROUND: u32 = 32;
+pub const BT_CRATE: u32 = 33;
+pub const BT_ROCK: u32 = 34;
+pub const BT_MUD_WALL: u32 = 35;
+pub const BT_WIRE: u32 = 36;
+pub const BT_SOLAR: u32 = 37;
+pub const BT_BATTERY_S: u32 = 38;
+pub const BT_BATTERY_M: u32 = 39;
+pub const BT_BATTERY_L: u32 = 40;
+pub const BT_WIND_TURBINE: u32 = 41;
+pub const BT_SWITCH: u32 = 42;
+pub const BT_DIMMER: u32 = 43;
+pub const BT_DIAGONAL: u32 = 44;
+pub const BT_BREAKER: u32 = 45;
+pub const BT_RESTRICTOR: u32 = 46;
+
 /// Pack a block into a u32: [type:8 | height:8 | flags:8 | roof_height:8]
 pub fn make_block(block_type: u8, height: u8, flags: u8) -> u32 {
     (block_type as u32) | ((height as u32) << 8) | ((flags as u32) << 16)
