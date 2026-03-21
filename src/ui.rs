@@ -1580,7 +1580,7 @@ impl App {
                 let wt = if cidx < self.water_table.len() { self.water_table[cidx] } else { -3.0 };
                 let timer = self.crop_timers.get(&(cidx as u32)).copied().unwrap_or(0.0);
                 if let Some(cs) = zones::crop_status(cb, cidx as u32, timer,
-                    self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt) {
+                    self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt, self.debug.water_level) {
                     format!("\n\u{1f331} {} ({:.0}%) | Rate: {:.0}% | {}\n  Temp:{:.0}% Sun:{:.0}% Water:{:.0}%",
                         cs.stage_name, cs.progress * 100.0, cs.growth_rate * 100.0, cs.limiting,
                         cs.temp_factor * 100.0, cs.sun_factor * 100.0, cs.water_factor * 100.0)
@@ -2968,7 +2968,7 @@ impl App {
                             let wt = if tidx < self.water_table.len() { self.water_table[tidx] } else { -3.0 };
                             let timer = self.crop_timers.get(&(tidx as u32)).copied().unwrap_or(0.0);
                             if let Some(cs) = zones::crop_status(tblock, tidx as u32, timer,
-                                self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt) {
+                                self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt, self.debug.water_level) {
                                 ui.separator();
                                 // Growth progress bar
                                 let total_progress = (cs.stage as f32 + cs.progress) / 4.0;

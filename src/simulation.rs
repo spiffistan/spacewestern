@@ -756,9 +756,12 @@ impl App {
 
                 // Water: combines water table depth + rain moisture
                 let wt = if idx < self.water_table.len() { self.water_table[idx] } else { -3.0 };
-                let wt_moisture = ((wt + 2.0) / 2.5).clamp(0.0, 1.0); // -2→0, 0.5→1
+                let wt_moisture = ((wt + 2.0) / 2.5).clamp(0.0, 1.0);
                 let rain_moisture = (self.camera.rain_intensity * 0.5).min(0.3);
-                let water_avail = (wt_moisture + rain_moisture).clamp(0.0, 1.0);
+                // Approximate surface water: tiles with high water table or rain have it
+                // (actual GPU water level not available per-tile on CPU)
+                let surface_approx = if wt > -0.3 { 0.3 } else { rain_moisture };
+                let water_avail = (wt_moisture + rain_moisture + surface_approx).clamp(0.0, 1.0);
                 // Water response curve: ramps up to optimal, slight penalty if waterlogged
                 let water_factor = if water_avail < 0.1 {
                     water_avail * 2.0 // very dry: severely limited

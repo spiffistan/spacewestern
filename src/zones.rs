@@ -76,7 +76,7 @@ pub struct CropStatus {
 pub fn crop_status(
     block: u32, grid_idx: u32, timer: f32,
     time_of_day: f32, sun_intensity: f32, rain_intensity: f32,
-    water_table: f32,
+    water_table: f32, surface_water: f32,
 ) -> Option<CropStatus> {
     let bt = block & 0xFF;
     if bt != 47 { return None; } // BT_CROP
@@ -116,7 +116,8 @@ pub fn crop_status(
 
     let wt_moisture = ((water_table + 2.0) / 2.5).clamp(0.0, 1.0);
     let rain_moisture = (rain_intensity * 0.5).min(0.3);
-    let water_avail = (wt_moisture + rain_moisture).clamp(0.0, 1.0);
+    let surface_moisture = (surface_water * 2.0).clamp(0.0, 0.8); // surface water is very effective
+    let water_avail = (wt_moisture + rain_moisture + surface_moisture).clamp(0.0, 1.0);
     let water_factor = if water_avail < 0.1 {
         water_avail * 2.0
     } else if water_avail < 0.7 {
