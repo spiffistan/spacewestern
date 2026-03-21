@@ -2848,7 +2848,7 @@ impl App {
                                 for item in &items {
                                     if item.pleb_idx.is_some() { continue; }
                                     if reg.get(item.block_type as u8).map_or(false, |d| d.is_harvestable) {
-                                        self.manual_tasks.push(zones::WorkTask::HarvestBush(item.x, item.y));
+                                        self.manual_tasks.push(zones::WorkTask::Harvest(item.x, item.y));
                                     }
                                 }
                             }

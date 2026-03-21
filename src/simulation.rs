@@ -720,7 +720,7 @@ impl App {
                 let is_preferred = |t: &WorkTask| -> bool {
                     match self.work_priority {
                         WorkPriority::PlantFirst => matches!(t, WorkTask::Plant(_, _)),
-                        WorkPriority::HarvestFirst => matches!(t, WorkTask::Harvest(_, _) | WorkTask::HarvestBush(_, _)),
+                        WorkPriority::HarvestFirst => matches!(t, WorkTask::Harvest(_, _)),
                     }
                 };
                 let mut best_task: Option<(WorkTask, f32)> = None;
