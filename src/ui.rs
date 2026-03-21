@@ -707,6 +707,7 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(31), "\u{1fad0}", "Berries");
                                     icon_btn(ui, BuildTool::Place(29), "\u{1f4a5}", "Cannon");
                                     icon_btn(ui, BuildTool::Dig, "\u{26cf}", "Dig");
+                                    icon_btn(ui, BuildTool::GrowingZone, "\u{1f33f}", "Farm Zone");
                                 }
                                 "Opening" => {
                                     icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Window");
@@ -857,6 +858,7 @@ impl App {
                             PlebActivity::Harvesting(pr) => format!("Harvesting {:.0}%", pr * 100.0),
                             PlebActivity::Eating => "Eating".to_string(),
                             PlebActivity::Hauling => "Hauling".to_string(),
+                            PlebActivity::Farming(pr) => format!("Farming {:.0}%", pr * 100.0),
                             PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                         };
                         if let Some(reason) = p.activity.crisis_reason() {
@@ -1648,6 +1650,30 @@ impl App {
 
     fn draw_world_overlays(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: &[((i32,i32), bool)]) {
         let bp_ppp = self.ppp();
+
+        // Growing zone overlay — green tint on designated tiles
+        if !self.zones.is_empty() {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let zone_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background, egui::Id::new("zones"),
+            ));
+            for zone in &self.zones {
+                let color = match zone.kind {
+                    zones::ZoneKind::Growing => egui::Color32::from_rgba_unmultiplied(40, 160, 40, 35),
+                };
+                for &(tx, ty) in &zone.tiles {
+                    let sx0 = ((tx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                    let sy0 = ((ty as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    let sx1 = ((tx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                    let sy1 = ((ty as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    zone_painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
+                        0.0, color,
+                    );
+                }
+            }
+        }
+
         // Blueprint preview — draw ghost overlay for placement
         if !blueprint_tiles.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
@@ -2584,6 +2610,7 @@ impl App {
                             PlebActivity::Harvesting(_) => Some("Harvesting"),
                             PlebActivity::Eating => Some("Eating"),
                             PlebActivity::Hauling => Some("Hauling"),
+                            PlebActivity::Farming(_) => Some("Farming"),
                             PlebActivity::Crisis(_, _) => None,
                         };
                         if let Some(text) = act_text {

@@ -37,6 +37,7 @@ pub enum PlebActivity {
     Harvesting(f32),  // progress 0-1, harvesting a berry bush at nearby tile
     Eating,           // consuming food (quick action)
     Hauling,          // carrying item to a storage crate
+    Farming(f32),     // progress 0-1, planting or harvesting a crop
     /// Crisis override — pleb acts autonomously, ignoring player input.
     /// Inner activity is what they're doing (Walking to food/bed, Harvesting, Eating, Sleeping).
     Crisis(Box<PlebActivity>, &'static str), // (inner_activity, reason_label)
@@ -170,7 +171,8 @@ pub struct Pleb {
     pub harvest_target: Option<(i32, i32)>, // grid coords of bush being harvested
     pub haul_target: Option<(i32, i32)>,    // grid coords of storage crate to deliver to
     pub is_enemy: bool,
-    pub wander_timer: f32, // seconds until next random walk (enemies only)
+    pub wander_timer: f32,
+    pub work_target: Option<(i32, i32)>, // position of current work task
 }
 
 impl Pleb {
@@ -192,6 +194,7 @@ impl Pleb {
             haul_target: None,
             is_enemy: false,
             wander_timer: 0.0,
+            work_target: None,
         }
     }
 

@@ -12,6 +12,7 @@ pub enum BuildTool {
     Door,         // special: placed on existing walls, toggles door flag
     Window,       // special: placed on existing walls, replaces with glass
     WoodBox,      // special: spawns physics body, not grid block
+    GrowingZone,  // paint growing zone overlay on dirt tiles
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -51,6 +51,7 @@ pub const BT_DIMMER: u32 = 43;
 pub const BT_DIAGONAL: u32 = 44;
 pub const BT_BREAKER: u32 = 45;
 pub const BT_RESTRICTOR: u32 = 46;
+pub const BT_CROP: u32 = 47;
 
 /// Pack a block into a u32: [type:8 | height:8 | flags:8 | roof_height:8]
 pub fn make_block(block_type: u8, height: u8, flags: u8) -> u32 {

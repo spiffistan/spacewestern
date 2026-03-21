@@ -17,7 +17,7 @@ mod block_defs;
 
 use materials::{GpuMaterial, build_material_table};
 use block_defs::BlockRegistry;
-use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_conductor_rs, is_door_rs, compute_roof_heights, generate_test_grid};
+use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_conductor_rs, is_door_rs, compute_roof_heights, generate_test_grid, BT_DIRT, BT_CROP, BT_CRATE, BT_CANNON, BT_ROCK};
 use sprites::generate_tree_sprites;
 
 mod pleb;
@@ -42,6 +42,9 @@ use pipes::PipeNetwork;
 
 mod physics;
 use physics::{PhysicsBody, tick_bodies, pleb_body_collision, nearest_body};
+
+mod zones;
+use zones::{Zone, ZoneKind, WorkTask, generate_work_tasks, CROP_GROW_TIME, CROP_MIN_TEMP, CROP_MAX_TEMP, CROP_PLANTED, CROP_SPROUT, CROP_GROWING, CROP_MATURE};
 
 mod weather;
 use weather::{WeatherState, tick_weather, tick_wetness};
@@ -201,7 +204,11 @@ struct App {
     wind_target_angle: f32,    // target angle in radians
     wind_target_mag: f32,      // target magnitude
     wind_change_timer: f32,    // seconds until next target shift
-    wetness_data: Vec<f32>,  // 256x256 per-tile wetness (0.0-1.0)
+    wetness_data: Vec<f32>,
+    // Zones & work queue
+    zones: Vec<Zone>,
+    active_work: std::collections::HashSet<(i32, i32)>, // positions claimed by plebs
+    crop_timers: std::collections::HashMap<u32, f32>,    // grid_idx → growth timer
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
@@ -448,6 +455,9 @@ impl App {
             wind_target_mag: 10.0,
             wind_change_timer: 15.0,
             wetness_data: vec![0.0; (GRID_W * GRID_H) as usize],
+            zones: Vec::new(),
+            active_work: std::collections::HashSet::new(),
+            crop_timers: std::collections::HashMap::new(),
             diag_preview: Vec::new(),
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
@@ -748,6 +758,26 @@ impl App {
 
     /// Apply the drag shape when mouse is released.
     fn apply_drag_shape(&mut self, sx: i32, sy: i32, ex: i32, ey: i32) {
+        // Growing zone: paint zone on dirt tiles
+        if self.build_tool == BuildTool::GrowingZone {
+            let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
+            for (tx, ty) in tiles {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                let bt = self.grid_data[idx] & 0xFF;
+                if bt == BT_DIRT {
+                    if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing) {
+                        zone.tiles.insert((tx, ty));
+                    } else {
+                        let mut zone = Zone::new(ZoneKind::Growing);
+                        zone.tiles.insert((tx, ty));
+                        self.zones.push(zone);
+                    }
+                }
+            }
+            return;
+        }
+
         // Roof tool: special handling — sets flag, doesn't change block type
         if self.build_tool == BuildTool::Roof {
             let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
@@ -1496,6 +1526,21 @@ impl App {
                             }
                         }
                     }
+                }
+                BuildTool::GrowingZone => {
+                    // Paint growing zone on dirt tiles
+                    if bt == BT_DIRT as u8 {
+                        // Find or create a growing zone and add this tile
+                        if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing) {
+                            zone.tiles.insert((bx, by));
+                        } else {
+                            let mut zone = Zone::new(ZoneKind::Growing);
+                            zone.tiles.insert((bx, by));
+                            self.zones.push(zone);
+                        }
+                    }
+                    // Don't deselect tool — drag to paint
+                    return;
                 }
                 BuildTool::None | BuildTool::Destroy
                 | BuildTool::Roof => {}
@@ -2835,7 +2880,7 @@ impl ApplicationHandler for App {
                         self.mouse_dragged = false;
                         // Start drag for shape-building tools
                         let is_shape_tool = match self.build_tool {
-                            BuildTool::Destroy | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof => true,
+                            BuildTool::Destroy | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof | BuildTool::GrowingZone => true,
                             BuildTool::Place(id) => {
                                 let reg = block_defs::BlockRegistry::cached();
                                 reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref())

@@ -2537,6 +2537,51 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 color = fc;
             }
         }
+    } else if btype == 47u {
+        // Crop: growth stages shown as increasingly green/tall plants
+        let stage = bheight; // 0=planted, 1=sprout, 2=growing, 3=mature
+        let ground = vec3<f32>(0.40, 0.32, 0.18); // tilled soil (darker than dirt)
+        var crop_color = ground;
+
+        let cx = fx - 0.5;
+        let cy = fy - 0.5;
+
+        if stage == 0u {
+            // Planted: just tilled soil with seed dots
+            let seed = fract(sin(world_x * 17.3 + world_y * 31.7) * 43758.5);
+            if seed > 0.85 {
+                crop_color = vec3(0.35, 0.30, 0.15);
+            }
+        } else if stage == 1u {
+            // Sprout: tiny green dots
+            let sprout_r = 0.12;
+            let dist = length(vec2(cx, cy));
+            if dist < sprout_r {
+                crop_color = vec3(0.25, 0.50, 0.15);
+            }
+        } else if stage == 2u {
+            // Growing: larger green cross shape
+            let on_plant = (abs(cx) < 0.08 || abs(cy) < 0.08) && length(vec2(cx, cy)) < 0.25;
+            if on_plant {
+                crop_color = vec3(0.20, 0.55, 0.12);
+            } else {
+                // Leaves around the stem
+                let leaf_dist = length(vec2(cx, cy));
+                if leaf_dist < 0.2 {
+                    crop_color = mix(ground, vec3(0.22, 0.45, 0.15), 0.5);
+                }
+            }
+        } else {
+            // Mature: full green with golden wheat tips
+            let on_plant = length(vec2(cx, cy)) < 0.35;
+            if on_plant {
+                let gold = fract(sin(world_x * 23.0 + world_y * 41.0) * 43758.5);
+                let plant_green = vec3(0.22, 0.55, 0.10);
+                let plant_gold = vec3(0.65, 0.55, 0.20);
+                crop_color = mix(plant_green, plant_gold, gold * 0.4);
+            }
+        }
+        color = crop_color;
     } else {
         color = block_base_color(btype, bflags);
     }
@@ -2552,8 +2597,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_wire = btype == 36u; // wire height = connection mask, not visual
     let is_dimmer = btype == 43u; // dimmer/varistor height = level, not visual
     let is_breaker = btype == 45u; // breaker height = threshold, not visual
+    let is_crop = btype == 47u; // crop height = growth stage, not visual
     let is_diag_open = btype == 44u && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
-    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_diag_open);
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_crop || is_diag_open);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)

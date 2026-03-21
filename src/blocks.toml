@@ -729,3 +729,12 @@ click = "simple"
 rotations = 4
 place_height = 3
 drag = "diagonal_line"
+
+[[block]]
+id = 47
+name = "Crop"
+color = [0.30, 0.55, 0.15]
+render_style = 32.0
+walkable = true
+light_transmission = 0.8
+thermal = { heat_capacity = 1.0, conductivity = 0.001, solar_absorption = 0.3 }

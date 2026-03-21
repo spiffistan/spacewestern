@@ -2,6 +2,8 @@
 //! Extracted from render() to keep main.rs manageable.
 
 use crate::*;
+use crate::grid::*;
+use crate::zones::*;
 
 impl App {
     /// Update all simulation state. Returns frame delta time.
@@ -655,6 +657,138 @@ impl App {
                     self.fluid_params.splat_vy = 0.0;
                     self.fluid_params.splat_radius = 2.0;
                     self.fluid_params.splat_active = 1.0;
+                }
+            }
+        }
+
+        // --- Crop growth ---
+        if !self.time_paused {
+            let grow_dt = dt * self.time_speed;
+            let mut matured = Vec::new();
+            for (&grid_idx, timer) in self.crop_timers.iter_mut() {
+                let idx = grid_idx as usize;
+                if idx >= self.grid_data.len() { continue; }
+                let block = self.grid_data[idx];
+                let bt = block & 0xFF;
+                let stage = (block >> 8) & 0xFF;
+                if bt != BT_CROP || stage >= CROP_MATURE { continue; }
+
+                // Temperature affects growth: optimal 10-35°C, zero outside
+                // Use ambient temp approximation (dye readback not available per-tile)
+                let day_frac = self.time_of_day / DAY_DURATION;
+                let sun_t = ((day_frac - 0.15) / 0.7).clamp(0.0, 1.0);
+                let approx_temp = 5.0 + 20.0 * (sun_t * std::f32::consts::PI).sin();
+                let temp_factor = if approx_temp >= CROP_MIN_TEMP && approx_temp <= CROP_MAX_TEMP {
+                    1.0
+                } else {
+                    0.0
+                };
+
+                *timer += grow_dt * temp_factor;
+                if *timer >= CROP_GROW_TIME {
+                    *timer = 0.0;
+                    let new_stage = (stage + 1).min(CROP_MATURE);
+                    let roof_h = block & 0xFF000000;
+                    let flags_bits = (block >> 16) & 0xFF;
+                    self.grid_data[idx] = make_block(BT_CROP as u8, new_stage as u8, flags_bits as u8) | roof_h;
+                    self.grid_dirty = true;
+                    if new_stage == CROP_MATURE {
+                        matured.push(grid_idx);
+                    }
+                }
+            }
+            // Remove timers for matured crops
+            for idx in matured { self.crop_timers.remove(&idx); }
+        }
+
+        // --- Work queue: assign idle friendly plebs to farming tasks ---
+        {
+            let tasks = generate_work_tasks(&self.zones, &self.grid_data, GRID_W, &self.active_work);
+            for pleb in self.plebs.iter_mut() {
+                if pleb.is_enemy { continue; }
+                if pleb.activity != PlebActivity::Idle { continue; }
+                if pleb.work_target.is_some() { continue; }
+
+                // Find nearest task
+                let mut best_task: Option<(WorkTask, f32)> = None;
+                for task in &tasks {
+                    let (tx, ty) = task.position();
+                    let dx = pleb.x - tx as f32 - 0.5;
+                    let dy = pleb.y - ty as f32 - 0.5;
+                    let dist = dx * dx + dy * dy;
+                    if best_task.is_none() || dist < best_task.as_ref().unwrap().1 {
+                        best_task = Some((task.clone(), dist));
+                    }
+                }
+
+                if let Some((task, _)) = best_task {
+                    let (tx, ty) = task.position();
+                    self.active_work.insert((tx, ty));
+                    pleb.work_target = Some((tx, ty));
+                    // Path to the task
+                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                    let path = astar_path(&self.grid_data, start, (tx, ty));
+                    if !path.is_empty() {
+                        pleb.path = path;
+                        pleb.path_idx = 0;
+                        pleb.activity = PlebActivity::Walking;
+                    }
+                }
+            }
+
+            // Handle Farming activity: pleb arrived at work target
+            for pleb in self.plebs.iter_mut() {
+                if pleb.is_enemy { continue; }
+
+                // Check if pleb is doing Farming
+                if let PlebActivity::Farming(progress) = &pleb.activity {
+                    let new_progress = progress + dt * self.time_speed * 0.4; // ~2.5s to plant/harvest
+                    if new_progress >= 1.0 {
+                        // Complete the task
+                        if let Some((tx, ty)) = pleb.work_target {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            if tidx < self.grid_data.len() {
+                                let tblock = self.grid_data[tidx];
+                                let tbt = tblock & 0xFF;
+                                if tbt == BT_DIRT {
+                                    // Plant: convert dirt to crop stage 0
+                                    let roof_h = tblock & 0xFF000000;
+                                    let fflags = (tblock >> 16) & 0xFF;
+                                    self.grid_data[tidx] = make_block(BT_CROP as u8, CROP_PLANTED as u8, fflags as u8) | roof_h;
+                                    self.crop_timers.insert(tidx as u32, 0.0);
+                                    self.grid_dirty = true;
+                                } else if tbt == BT_CROP {
+                                    // Harvest: revert to dirt, give food
+                                    let roof_h = tblock & 0xFF000000;
+                                    let fflags = (tblock >> 16) & 0xFF;
+                                    self.grid_data[tidx] = make_block(BT_DIRT as u8, 0, fflags as u8) | roof_h;
+                                    self.crop_timers.remove(&(tidx as u32));
+                                    self.grid_dirty = true;
+                                    pleb.inventory.berries += 2; // harvest yields food
+                                }
+                            }
+                            self.active_work.remove(&(tx, ty));
+                            pleb.work_target = None;
+                        }
+                        pleb.activity = PlebActivity::Idle;
+                    } else {
+                        pleb.activity = PlebActivity::Farming(new_progress);
+                    }
+                }
+
+                // Walking to work target: start farming when arrived
+                if pleb.activity == PlebActivity::Walking && pleb.path_idx >= pleb.path.len() {
+                    if let Some((tx, ty)) = pleb.work_target {
+                        let dist = ((pleb.x - tx as f32 - 0.5).powi(2) + (pleb.y - ty as f32 - 0.5).powi(2)).sqrt();
+                        if dist < 1.5 {
+                            pleb.activity = PlebActivity::Farming(0.0);
+                        } else {
+                            // Too far — release task
+                            self.active_work.remove(&(tx, ty));
+                            pleb.work_target = None;
+                            pleb.activity = PlebActivity::Idle;
+                        }
+                    }
                 }
             }
         }
