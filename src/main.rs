@@ -1215,8 +1215,9 @@ impl App {
                 }
             }
 
-            // World selection: click any non-air block to select it
-            if bt != 0 {
+            // World selection: click non-ground blocks to select
+            let is_ground = bt_is!(bt as u32, BT_AIR, BT_DIRT, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR);
+            if !is_ground {
                 // Determine block size (multi-tile blocks)
                 let (sel_x, sel_y, sel_w, sel_h) = self.get_block_bounds(bx, by, bt, flags);
                 self.world_sel = WorldSelection::Block { x: sel_x, y: sel_y, w: sel_w, h: sel_h };
