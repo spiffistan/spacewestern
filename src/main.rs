@@ -17,7 +17,7 @@ mod block_defs;
 
 use materials::{GpuMaterial, build_material_table};
 use block_defs::BlockRegistry;
-use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_conductor_rs, is_door_rs, compute_roof_heights, generate_test_grid, BT_DIRT, BT_CROP, BT_CRATE, BT_CANNON, BT_ROCK};
+use grid::*;
 use sprites::generate_tree_sprites;
 
 mod pleb;
@@ -107,6 +107,18 @@ struct BlockSelection {
     crate_world: (f32, f32),
 }
 
+/// What's currently selected in the world (Rimworld-style).
+#[derive(Clone, Debug)]
+enum WorldSelection {
+    None,
+    Block { x: i32, y: i32, w: i32, h: i32 }, // grid position + size (multi-tile blocks)
+    Pleb(usize), // index into plebs vec
+}
+
+impl Default for WorldSelection {
+    fn default() -> Self { WorldSelection::None }
+}
+
 // --- Application state ---
 struct App {
     window: Option<Arc<Window>>,
@@ -180,7 +192,9 @@ struct App {
     pleb_air_data: Vec<AirReadback>,
     pleb_air_readback_pending: bool,
     // Context menu for pleb actions
-    context_menu: Option<(f32, f32)>, // screen position for context menu popup
+    context_menu: Option<(f32, f32)>,
+    // World selection (Rimworld-style: click anything to inspect)
+    world_sel: WorldSelection,
     // Storage crate inventories: grid_idx → stored items
     crate_contents: std::collections::HashMap<u32, CrateInventory>,
     // Rock context menu
@@ -438,6 +452,7 @@ impl App {
             pleb_air_data: Vec::new(),
             pleb_air_readback_pending: false,
             context_menu: None,
+            world_sel: WorldSelection::None,
             crate_contents: std::collections::HashMap::new(),
             rock_context_menu: None,
             grenade_charging: false,
@@ -1196,6 +1211,19 @@ impl App {
                     return;
                 }
             }
+
+            // World selection: click any non-air block to select it
+            if bt != 0 {
+                // Determine block size (multi-tile blocks)
+                let (sel_x, sel_y, sel_w, sel_h) = self.get_block_bounds(bx, by, bt, flags);
+                self.world_sel = WorldSelection::Block { x: sel_x, y: sel_y, w: sel_w, h: sel_h };
+                self.selected_pleb = None;
+                return;
+            } else {
+                // Clicked empty ground — deselect
+                self.world_sel = WorldSelection::None;
+                self.selected_pleb = None;
+            }
         }
 
         // Build tool placement (delegated to keep handle_click manageable)
@@ -1209,6 +1237,32 @@ impl App {
     }
 
     /// Handle build tool placement at grid position.
+    /// Get the bounding box (origin + size) for a block, accounting for multi-tile items.
+    fn get_block_bounds(&self, bx: i32, by: i32, bt: u8, flags: u8) -> (i32, i32, i32, i32) {
+        let seg = (flags >> 3) & 3;
+        let rot = (flags >> 5) & 3;
+        let bt32 = bt as u32;
+        if bt32 == BT_BENCH {
+            let ox = if rot == 0 { bx - seg as i32 } else { bx };
+            let oy = if rot == 0 { by } else { by - seg as i32 };
+            if rot == 0 { (ox, oy, 3, 1) } else { (ox, oy, 1, 3) }
+        } else if bt32 == BT_BED || bt32 == BT_BATTERY_M {
+            let ox = if rot == 0 { bx - seg as i32 } else { bx };
+            let oy = if rot == 0 { by } else { by - seg as i32 };
+            if rot == 0 { (ox, oy, 2, 1) } else { (ox, oy, 1, 2) }
+        } else if bt32 == BT_SOLAR {
+            let row = (flags >> 5) & 3;
+            let col = (flags >> 3) & 3;
+            (bx - col as i32, by - row as i32, 3, 3)
+        } else if bt32 == BT_BATTERY_L || bt32 == BT_WIND_TURBINE {
+            let col = seg & 1;
+            let row = (flags >> 5) & 1;
+            (bx - col as i32, by - row as i32, 2, 2)
+        } else {
+            (bx, by, 1, 1)
+        }
+    }
+
     fn handle_build_placement(&mut self, wx: f32, wy: f32, bx: i32, by: i32, idx: usize, block: u32, bt: u8, flags: u8) {
         if self.build_tool == BuildTool::None { return; }
         {

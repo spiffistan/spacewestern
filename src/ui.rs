@@ -34,6 +34,7 @@ impl App {
         self.draw_context_menus(ctx, bp_ppp, bp_cam);
         self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
         self.draw_world_labels(ctx, bp_cam);
+        self.draw_selection_actions(ctx);
     }
 
     fn draw_layers_bar(&mut self, ctx: &egui::Context) {
@@ -592,20 +593,31 @@ impl App {
     }
 
     fn draw_build_bar(&mut self, ctx: &egui::Context) {
-        // --- Build categories (bottom bar, horizontal, Rimworld-style) ---
-        let cat_s = 18.0; // category font size
+        // --- Build categories (bottom-left, vertical 2-column grid, flows upward) ---
+        let cat_s = 14.0;
+        let mut categories: Vec<(&str, &str)> = vec![
+            ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
+            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Vent", "\u{1f4a8}"),
+            ("Power", "\u{26a1}"), ("Zones", "\u{1f33e}"), ("Physics", "\u{1f4e6}"),
+        ];
+        if self.sandbox_mode {
+            categories.push(("Sandbox", "\u{1f9ea}"));
+        }
+
         egui::Area::new(egui::Id::new("build_categories"))
             .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
             .show(ctx, |ui| {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        let categories = [
-                            ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
-                            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Vent", "\u{1f4a8}"),
-                            ("Power", "\u{26a1}"), ("Zones", "\u{1f33e}"), ("Physics", "\u{1f4e6}"),
-                        ];
-                        for &(name, icon) in &categories {
+                    // Destroy button at top
+                    if ui.selectable_label(self.build_tool == BuildTool::Destroy,
+                        egui::RichText::new("\u{274c} Destroy").size(cat_s)).clicked() {
+                        self.build_tool = if self.build_tool == BuildTool::Destroy { BuildTool::None } else { BuildTool::Destroy };
+                        self.build_category = None;
+                    }
+                    ui.separator();
+                    // 2-column category grid
+                    egui::Grid::new("build_cat_grid").num_columns(2).spacing([4.0, 2.0]).show(ui, |ui| {
+                        for (i, &(name, icon)) in categories.iter().enumerate() {
                             let selected = self.build_category == Some(name);
                             let label = format!("{} {}", icon, name);
                             if ui.selectable_label(selected, egui::RichText::new(label).size(cat_s)).clicked() {
@@ -615,37 +627,23 @@ impl App {
                                     self.sandbox_tool = SandboxTool::None;
                                 } else {
                                     self.build_category = Some(name);
-                                    self.sandbox_tool = SandboxTool::None;
+                                    if name == "Sandbox" {
+                                        self.build_tool = BuildTool::None;
+                                    } else {
+                                        self.sandbox_tool = SandboxTool::None;
+                                    }
                                 }
                             }
-                        }
-                        // Sandbox category (only visible in sandbox mode)
-                        if self.sandbox_mode {
-                            let selected = self.build_category == Some("Sandbox");
-                            let label = format!("\u{1f9ea} Sandbox");
-                            if ui.selectable_label(selected, egui::RichText::new(label).size(cat_s)).clicked() {
-                                if selected {
-                                    self.build_category = None;
-                                    self.sandbox_tool = SandboxTool::None;
-                                } else {
-                                    self.build_category = Some("Sandbox");
-                                    self.build_tool = BuildTool::None;
-                                }
-                            }
-                        }
-                        ui.separator();
-                        if ui.selectable_label(self.build_tool == BuildTool::Destroy, egui::RichText::new("\u{274c} Destroy").size(cat_s)).clicked() {
-                            self.build_tool = if self.build_tool == BuildTool::Destroy { BuildTool::None } else { BuildTool::Destroy };
-                            self.build_category = None;
+                            if i % 2 == 1 { ui.end_row(); }
                         }
                     });
                 });
             });
 
-        // --- Build items panel (horizontal squares flowing right, above categories) ---
+        // --- Build items panel (vertical column, rightward of category bar) ---
         if let Some(cat) = self.build_category {
             egui::Area::new(egui::Id::new("build_items"))
-                .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -55.0])
+                .anchor(egui::Align2::LEFT_BOTTOM, [145.0, -10.0])
                 .show(ctx, |ui| {
                     egui::Frame::window(ui.style()).show(ui, |ui| {
                         let tool = &mut self.build_tool;
@@ -678,8 +676,8 @@ impl App {
                             }
                         };
 
-                        // Items flow horizontally
-                        ui.horizontal_wrapped(|ui| {
+                        // Items flow vertically in single column
+                        ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing = egui::Vec2::new(4.0, 4.0);
                             match cat {
                                 "Walls" => {
@@ -1664,6 +1662,30 @@ impl App {
 
     fn draw_world_overlays(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: &[((i32,i32), bool)]) {
         let bp_ppp = self.ppp();
+
+        // World selection brackets (Rimworld-style corner markers)
+        if let WorldSelection::Block { x, y, w, h } = &self.world_sel {
+            let sel_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground, egui::Id::new("world_selection"),
+            ));
+            let p0 = self.world_to_screen_ui(*x as f32, *y as f32, bp_cam);
+            let p1 = self.world_to_screen_ui((*x + w) as f32, (*y + h) as f32, bp_cam);
+            let rect = egui::Rect::from_min_max(p0, p1);
+            let bracket_len = (rect.width().min(rect.height()) * 0.3).max(3.0);
+            let stroke = egui::Stroke::new(2.0, egui::Color32::WHITE);
+            // Top-left corner
+            sel_painter.line_segment([rect.left_top(), rect.left_top() + egui::Vec2::new(bracket_len, 0.0)], stroke);
+            sel_painter.line_segment([rect.left_top(), rect.left_top() + egui::Vec2::new(0.0, bracket_len)], stroke);
+            // Top-right corner
+            sel_painter.line_segment([rect.right_top(), rect.right_top() + egui::Vec2::new(-bracket_len, 0.0)], stroke);
+            sel_painter.line_segment([rect.right_top(), rect.right_top() + egui::Vec2::new(0.0, bracket_len)], stroke);
+            // Bottom-left corner
+            sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(bracket_len, 0.0)], stroke);
+            sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(0.0, -bracket_len)], stroke);
+            // Bottom-right corner
+            sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(-bracket_len, 0.0)], stroke);
+            sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(0.0, -bracket_len)], stroke);
+        }
 
         // Growing zone overlay — green tint on designated tiles
         if !self.zones.is_empty() {
@@ -2729,6 +2751,50 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Draw action bar for the currently selected world item (bottom-right, flows left).
+    fn draw_selection_actions(&mut self, ctx: &egui::Context) {
+        if let WorldSelection::Block { x, y, w: _, h: _ } = self.world_sel {
+            let idx = (y as u32 * GRID_W + x as u32) as usize;
+            if idx >= self.grid_data.len() { return; }
+            let block = self.grid_data[idx];
+            let bt = block_type_rs(block);
+            let reg = block_defs::BlockRegistry::cached();
+            let name = reg.name(bt);
+
+            egui::Area::new(egui::Id::new("selection_actions"))
+                .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -60.0])
+                .show(ctx, |ui| {
+                    egui::Frame::window(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(name).strong().size(11.0));
+                            ui.separator();
+
+                            // Destroy action (always available for removable blocks)
+                            let is_removable = reg.get(bt).map_or(false, |d| d.is_removable);
+                            if is_removable {
+                                if ui.small_button("Destroy").clicked() {
+                                    self.destroy_block_at(x, y);
+                                    self.world_sel = WorldSelection::None;
+                                }
+                            }
+
+                            // Block-specific actions
+                            match bt as u32 {
+                                BT_CRATE => {
+                                    if ui.small_button("Inspect").clicked() {
+                                        let cidx = y as u32 * GRID_W + x as u32;
+                                        self.block_sel.crate_idx = Some(cidx);
+                                        self.block_sel.crate_world = (x as f32 + 0.5, y as f32 + 0.5);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        });
+                    });
+                });
         }
     }
 }
