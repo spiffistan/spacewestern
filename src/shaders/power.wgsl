@@ -275,7 +275,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     let avg = neighbor_sum / neighbor_count;
     var new_v = mix(voltage[idx], avg, 0.6); // fast relaxation for wires
 
-    // Dimmer: acts as one-way voltage scaler (like battery — handles itself)
+    // Dimmer/rheostat: variable resistor that scales voltage and emits heat from the drop
     if bt == 43u {
         let dim_level = f32((block >> 8u) & 0xFFu) / 10.0;
         // Find highest neighbor voltage (the "input" side)
@@ -291,18 +291,24 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
                 max_neigh = max(max_neigh, voltage[dnidx]);
             }
         }
-        // Output = input * level. No relaxation — direct set.
-        voltage[idx] = max_neigh * dim_level;
+        // Output = input × level. Dropped voltage dissipated as heat.
+        let out_v = max_neigh * dim_level;
+        let v_drop = max_neigh - out_v;
+        let current = v_drop * 0.1; // approximate current from voltage drop
+        block_temps[idx] += v_drop * current * 0.005; // P = V_drop × I → heat
+        voltage[idx] = out_v;
         return;
     }
 
     // Apply consumer load (small voltage drop per frame)
     new_v -= load;
 
-    // Resistive decay: wire resistance dissipates energy as heat.
-    // Generators/batteries re-inject each iteration so they're unaffected,
-    // but transient surges (lightning) decay naturally over ~3 seconds.
-    new_v *= 0.998;
+    // Overvoltage decay: lightning surges (>13V) drain back to normal over ~3 seconds.
+    // Normal operating voltages (≤13V) are unaffected — real wire resistance is negligible.
+    // V_n = 13 + (V_0 - 13) * 0.995^n → 200V reaches ~14V in 3 seconds.
+    if new_v > 13.0 {
+        new_v = mix(new_v, 13.0, 0.005);
+    }
 
     new_v = max(new_v, 0.0);
 

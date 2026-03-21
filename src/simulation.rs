@@ -107,10 +107,7 @@ impl App {
                         // Voltage surge: if strike hits a wire/conductor, inject massive voltage
                         let bt = block_type_rs(block);
                         let flags = block_flags_rs(block);
-                        let is_conductor = bt == 36 || bt == 37 || bt == 38 || bt == 39
-                            || bt == 40 || bt == 41 || bt == 42 || bt == 43
-                            || (flags & 0x80) != 0; // wire overlay
-                        if is_conductor {
+                        if is_conductor_rs(bt, flags) {
                             log::info!("Lightning hit power grid at ({}, {})! Voltage surge!", sx, sy);
                         }
                         // Voltage surge injection + breaker tripping happens in render pass

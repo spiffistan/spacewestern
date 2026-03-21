@@ -13,6 +13,8 @@ pub struct PipeCell {
     pub gas: [f32; 4],         // [smoke, O2, CO2, temperature]
     pub volume: f32,           // effective volume (tank=10, pipe=1)
     pub pump_rate: f32,        // for pumps/inlets: adjustable flow rate (0-20)
+    pub flow_x: f32,           // net flow direction X (positive = east)
+    pub flow_y: f32,           // net flow direction Y (positive = south)
 }
 
 impl Default for PipeCell {
@@ -22,6 +24,8 @@ impl Default for PipeCell {
             gas: [0.0, 1.0, 0.0, 15.0],
             volume: 1.0,
             pump_rate: 24.0, // default pump speed (3x previous)
+            flow_x: 0.0,
+            flow_y: 0.0,
         }
     }
 }
@@ -49,7 +53,7 @@ impl PipeConnections {
 
 /// Check if a block type is part of the pipe network.
 pub fn is_pipe_component(bt: u8) -> bool {
-    bt >= 15 && bt <= 20
+    (bt >= 15 && bt <= 20) || bt == 46
 }
 
 /// Compute connections for a pipe block at (x, y) by checking neighbors.
@@ -119,6 +123,7 @@ impl PipeNetwork {
         // Phase 1: compute flows between connected cells
         let mut pressure_delta: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
         let mut gas_delta: std::collections::HashMap<u32, [f32; 4]> = std::collections::HashMap::new();
+        let mut flow_accum: std::collections::HashMap<u32, (f32, f32)> = std::collections::HashMap::new();
 
         for &idx in &indices {
             let x = (idx % GRID_W) as i32;
@@ -133,7 +138,13 @@ impl PipeNetwork {
             }
 
             let cell = &self.cells[&idx];
-            let conductance = if bt == 17 { pipe_width * 2.0 } else { pipe_width };
+            let conductance = if bt == 17 { pipe_width * 2.0 }
+                else if bt == 46 {
+                    // Restrictor: adjustable flow restriction (height lower nibble = level 1-10)
+                    let level = ((block >> 8) & 0x0F) as f32;
+                    pipe_width * (level / 10.0).max(0.05) * 0.3 // 0.3x max, down to near-zero
+                }
+                else { pipe_width };
 
             // Connection mask for directional pipes (height byte bits 4-7: N=0x10,E=0x20,S=0x40,W=0x80)
             let pipe_h = (block >> 8) & 0xFF;
@@ -142,7 +153,7 @@ impl PipeNetwork {
 
             for &(dx, dy, dmask) in &dir_masks {
                 // If pipe has a connection mask, only flow in connected directions
-                if bt == 15 && conn_mask != 0 && (conn_mask & dmask) == 0 { continue; }
+                if (bt == 15 || bt == 46) && conn_mask != 0 && (conn_mask & dmask) == 0 { continue; }
 
                 let nx = x + dx;
                 let ny = y + dy;
@@ -162,9 +173,28 @@ impl PipeNetwork {
                         continue;
                     }
 
-                    // Flow proportional to pressure difference
+                    // Flow uses the minimum conductance of both endpoints (bottleneck)
+                    let neighbor_cond = if nbt == 17 { pipe_width * 2.0 }
+                        else if nbt == 46 {
+                            let nlevel = ((nb >> 8) & 0x0F) as f32;
+                            pipe_width * (nlevel / 10.0).max(0.05) * 0.3
+                        }
+                        else { pipe_width };
+                    let eff_cond = conductance.min(neighbor_cond);
                     let dp = cell.pressure - neighbor.pressure;
-                    let flow = dp * conductance * dt * 2.0;
+                    let flow = dp * eff_cond * dt * 2.0;
+
+                    // Accumulate flow direction (outflow = positive dp → flow toward neighbor)
+                    if dp > 0.001 {
+                        let fa = flow_accum.entry(idx).or_insert((0.0, 0.0));
+                        fa.0 += dx as f32 * flow;
+                        fa.1 += dy as f32 * flow;
+                    } else if dp < -0.001 {
+                        // Inflow from neighbor
+                        let fa = flow_accum.entry(idx).or_insert((0.0, 0.0));
+                        fa.0 += dx as f32 * flow; // flow is negative here
+                        fa.1 += dy as f32 * flow;
+                    }
 
                     // Pressure transfer
                     *pressure_delta.entry(idx).or_insert(0.0) -= flow / cell.volume;
@@ -274,6 +304,21 @@ impl PipeNetwork {
                 cell.gas[1] = cell.gas[1].min(1.0);   // O2
                 cell.gas[2] = cell.gas[2].min(2.0);   // CO2
                 cell.gas[3] = cell.gas[3].clamp(-20.0, 500.0); // temp
+            }
+        }
+
+        // Apply flow vectors (smoothed to avoid jitter)
+        for (&idx, &(fx, fy)) in &flow_accum {
+            if let Some(cell) = self.cells.get_mut(&idx) {
+                cell.flow_x = cell.flow_x * 0.8 + fx * 0.2;
+                cell.flow_y = cell.flow_y * 0.8 + fy * 0.2;
+            }
+        }
+        // Decay flow on cells with no current flow
+        for (&idx, cell) in self.cells.iter_mut() {
+            if !flow_accum.contains_key(&idx) {
+                cell.flow_x *= 0.9;
+                cell.flow_y *= 0.9;
             }
         }
 

@@ -694,6 +694,25 @@ click = "simple"
 place_height = 0
 
 [[block]]
+id = 46
+name = "Pipe Restrictor"
+color = [0.55, 0.48, 0.42]
+render_style = 31.0
+is_solid = true
+fluid_obstacle = true
+is_removable = true
+thermal = { heat_capacity = 1.0, conductivity = 0.03, solar_absorption = 0.5 }
+[block.placement]
+category = "Piping"
+icon = "⊘"
+label = "Restrictor"
+click = "simple"
+place_height = 1
+stays_selected = true
+drag = "line"
+
+
+[[block]]
 id = 44
 name = "Diagonal Wall"
 color = [0.52, 0.50, 0.48]

@@ -172,6 +172,15 @@ impl App {
         });
         queue.write_buffer(&voltage_buffer, 0, bytemuck::cast_slice(&voltage_data));
 
+        // Pipe flow direction buffer (2 f32 per tile: flow_x, flow_y)
+        let pipe_flow_data = vec![0.0f32; (GRID_W * GRID_H * 2) as usize];
+        let pipe_flow_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pipe-flow-buffer"),
+            size: (pipe_flow_data.len() * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let block_temp_data = vec![15.0f32; (GRID_W * GRID_H) as usize];
         let block_temp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("block-temp-buffer"),
@@ -925,6 +934,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Pipe flow buffer (storage buffer, read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -957,6 +977,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -978,6 +999,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -999,6 +1021,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1020,6 +1043,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 12, resource: pleb_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 13, resource: block_temp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1335,6 +1359,7 @@ impl App {
             thermal_pipeline: thermal_pipeline_val,
             thermal_bind_group: thermal_bind_group_val,
             voltage_buffer,
+            pipe_flow_buffer,
             power_pipeline: power_pipeline_val,
             power_bind_group: power_bind_group_val,
         });

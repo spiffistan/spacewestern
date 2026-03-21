@@ -24,6 +24,12 @@ pub fn roof_height_rs(b: u32) -> u8 {
     ((b >> 24) & 0xFF) as u8
 }
 
+/// Is this block type part of the electrical power network?
+/// Checks block type and wire overlay flag. Matches the GPU-side is_conductor() in power.wgsl.
+pub fn is_conductor_rs(bt: u8, flags: u8) -> bool {
+    matches!(bt, 36..=43 | 45 | 7 | 10..=12 | 16) || (flags & 0x80) != 0
+}
+
 // --- Grid index helpers ---
 
 /// Convert grid (x, y) to flat index. Returns None if out of bounds.
@@ -127,11 +133,11 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
                     let nbt = (nb & 0xFF) as u8;
                     let nb_flags = ((nb >> 16) & 0xFF) as u8;
                     // Wall: has height, not roofed floor, not tree/fire/light/wire/dimmer/crate
-                    // Wire(36), dimmer(43) use height for connection mask/level, not visual height
+                    // Wire(36), dimmer(43), varistor(47), restrictor(46) use height for level, not visual
                     // Crate(33) uses height for item count
                     if nbh > 0 && (nb_flags & 2) == 0
                         && nbt != 8 && nbt != 6 && nbt != 7
-                        && nbt != 33 && nbt != 36 && nbt != 43
+                        && nbt != 33 && nbt != 36 && nbt != 43 && nbt != 46
                     {
                         max_h = max_h.max(nbh);
                         break; // found nearest wall in this direction

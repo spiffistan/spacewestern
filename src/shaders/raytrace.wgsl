@@ -71,6 +71,7 @@ struct Camera {
 @group(0) @binding(12) var<storage, read> plebs: array<GpuPleb>;
 @group(0) @binding(13) var<storage, read> block_temps: array<f32>;
 @group(0) @binding(14) var<storage, read> voltage: array<f32>;
+@group(0) @binding(15) var<storage, read> pipe_flow: array<f32>; // 2 f32 per tile: [flow_x, flow_y]
 
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
@@ -418,10 +419,10 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
         if get_material(sbt).light_intensity > 0.0 { continue; } // skip light sources
 
         if sbh == 0u { continue; } // open floor
-        if sbt >= 15u && sbt <= 20u { continue; } // pipe components don't block light
+        if (sbt >= 15u && sbt <= 20u) || sbt == 46u { continue; } // pipe components don't block light
         if sbt == 32u { continue; } // dug ground doesn't block light
         if sbt == 36u { continue; } // wire (height = connection mask, not visual)
-        if sbt == 43u { continue; } // dimmer (height = level, not visual)
+        if sbt == 43u { continue; } // dimmer/varistor (height = level, not visual)
         if sbt == 45u { continue; } // breaker (height = threshold, not visual)
 
         // Doors: open = pass through, closed = block (regardless of height)
@@ -490,20 +491,20 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             var light_col = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
             let light_h = mat.light_height;
 
-            // Electric lights: OFF unless powered above threshold
+            // Electric lights: brightness proportional to voltage, off only at 0V
             if bt == 7u || bt == 10u || bt == 11u {
                 let light_idx = u32(ny) * u32(camera.grid_w) + u32(nx);
                 let lv = voltage[light_idx];
-                if lv < 2.0 {
-                    // Below threshold: completely off
+                if lv < 0.1 {
                     intensity = 0.0;
                 } else {
-                    // Above threshold: scale from dim to full (2V=dim, 8V+=full)
-                    let power_factor = clamp((lv - 2.0) / 6.0, 0.0, 1.0);
-                    intensity *= power_factor;
-                    // Flicker when marginal power (2-4V)
-                    if lv < 4.0 {
-                        let pf = sin(time * 15.0 + f32(light_idx) * 3.7) * 0.3 + 0.7;
+                    // Smooth ramp: dim glow at low voltage, full brightness at 8V+
+                    let power_factor = clamp(lv / 8.0, 0.0, 1.0);
+                    // Square curve so low voltage is noticeably dimmer
+                    intensity *= power_factor * power_factor;
+                    // Flicker when voltage is marginal (<2V)
+                    if lv < 2.0 {
+                        let pf = sin(time * 15.0 + f32(light_idx) * 3.7) * 0.4 + 0.6;
                         intensity *= pf;
                     }
                 }
@@ -1139,12 +1140,12 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_roofed_floor = has_roof(block) && bh < 0.5;
 
         // Pipe components (15-20), dug ground (32), crates (33), rocks (34) don't cast shadows
-        let is_pipe_block = bt >= 15u && bt <= 20u;
+        let is_pipe_block = (bt >= 15u && bt <= 20u) || bt == 46u;
         let is_dug_block = bt == 32u;
         let is_crate_block = bt == 33u; // height = item count, not visual
         let is_rock_block = bt == 34u;
         let is_wire_block = bt == 36u; // height = connection mask, not visual
-        let is_dimmer_block = bt == 43u; // height = dimmer level, not visual
+        let is_dimmer_block = bt == 43u; // height = dimmer/varistor level, not visual
         let is_breaker_block = bt == 45u; // height = trip threshold, not visual
 
         // Diagonal wall: only occlude if ray is on the wall half
@@ -1721,7 +1722,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Slight steam wisps
         let wisp = sin(world_x * 31.0 + camera.time * 2.0) * sin(world_y * 29.0 + camera.time * 1.7);
         color += vec3(0.05) * max(wisp, 0.0) * heap;
-    } else if btype >= 15u && btype <= 20u {
+    } else if (btype >= 15u && btype <= 20u) || btype == 46u {
         // Piping system: auto-connected thin pipe rendering
         // Inlet/outlet on walls: use wall-like background. Ground pipes: use dirt.
         if (btype == 19u || btype == 20u) && bheight > 1u {
@@ -1737,11 +1738,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let n_e = block_type(get_block(bx + 1, by));
         let n_w = block_type(get_block(bx - 1, by));
         // If mask is set, use it; otherwise auto-detect (backward compatible)
-        var cn = n_n >= 15u && n_n <= 20u;
-        var cs = n_s >= 15u && n_s <= 20u;
-        var ce = n_e >= 15u && n_e <= 20u;
-        var cw = n_w >= 15u && n_w <= 20u;
-        if pipe_conn_mask != 0u && btype == 15u {
+        var cn = (n_n >= 15u && n_n <= 20u) || n_n == 46u;
+        var cs = (n_s >= 15u && n_s <= 20u) || n_s == 46u;
+        var ce = (n_e >= 15u && n_e <= 20u) || n_e == 46u;
+        var cw = (n_w >= 15u && n_w <= 20u) || n_w == 46u;
+        if pipe_conn_mask != 0u && (btype == 15u || btype == 46u) {
             cn = cn && (pipe_conn_mask & 1u) != 0u; // N
             ce = ce && (pipe_conn_mask & 2u) != 0u; // E
             cs = cs && (pipe_conn_mask & 4u) != 0u; // S
@@ -1809,8 +1810,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             // else: background (dirt floor) already set above
         } else {
-            // --- Pipe / Pump / Valve / Outlet / Inlet: thin round pipe ---
-            let pipe_r = 0.10; // pipe radius (thin)
+            // --- Pipe / Pump / Valve / Outlet / Inlet / Restrictor: thin round pipe ---
+            var pipe_r = 0.10; // pipe radius (thin)
+            // Restrictor (46): constriction — narrower in the middle
+            let is_restrictor = btype == 46u;
+            if is_restrictor {
+                // Narrow in center, wider at edges (hourglass shape)
+                let center_dist = length(vec2(cx, cy));
+                let constrict = smoothstep(0.0, 0.35, center_dist);
+                let r_level_vis = f32(bheight & 0xFu) / 10.0;
+                let narrow_r = 0.04 + r_level_vis * 0.04; // min 0.04, max 0.08
+                pipe_r = mix(narrow_r, 0.10, constrict);
+            }
             var on_pipe = false;
             var pipe_dist = 1.0; // distance from pipe center (for rounded shading)
 
@@ -1818,18 +1829,33 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             if ce || cw {
                 let x_min = select(-pipe_r, -0.5, cw);
                 let x_max = select(pipe_r, 0.5, ce);
-                if cx >= x_min && cx <= x_max && abs(cy) < pipe_r {
+                // For restrictor, compute local pipe_r at this x position
+                var local_r = pipe_r;
+                if is_restrictor {
+                    let along_dist = abs(cx);
+                    let constrict_h = smoothstep(0.0, 0.35, along_dist);
+                    let r_lv = f32(bheight & 0xFu) / 10.0;
+                    local_r = mix(0.04 + r_lv * 0.04, 0.10, constrict_h);
+                }
+                if cx >= x_min && cx <= x_max && abs(cy) < local_r {
                     on_pipe = true;
-                    pipe_dist = abs(cy) / pipe_r;
+                    pipe_dist = abs(cy) / local_r;
                 }
             }
             // Vertical segment (N-S)
             if cn || cs {
                 let y_min = select(-pipe_r, -0.5, cn);
                 let y_max = select(pipe_r, 0.5, cs);
-                if cy >= y_min && cy <= y_max && abs(cx) < pipe_r {
+                var local_r = pipe_r;
+                if is_restrictor {
+                    let along_dist = abs(cy);
+                    let constrict_v = smoothstep(0.0, 0.35, along_dist);
+                    let r_lv = f32(bheight & 0xFu) / 10.0;
+                    local_r = mix(0.04 + r_lv * 0.04, 0.10, constrict_v);
+                }
+                if cy >= y_min && cy <= y_max && abs(cx) < local_r {
                     on_pipe = true;
-                    pipe_dist = min(pipe_dist, abs(cx) / pipe_r);
+                    pipe_dist = min(pipe_dist, abs(cx) / local_r);
                 }
             }
             // Center hub (junction)
@@ -1847,31 +1873,38 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             if on_pipe {
                 // Rounded pipe shading: bright center, dark edges (cylindrical)
                 let shade = 1.0 - pipe_dist * pipe_dist;
-                let pipe_base = vec3<f32>(0.40, 0.42, 0.46);
-                let pipe_bright = vec3<f32>(0.62, 0.65, 0.70);
+                // Restrictor: copper/brass tint
+                var pipe_base = vec3<f32>(0.40, 0.42, 0.46);
+                var pipe_bright = vec3<f32>(0.62, 0.65, 0.70);
+                if is_restrictor {
+                    pipe_base = vec3<f32>(0.55, 0.40, 0.25);
+                    pipe_bright = vec3<f32>(0.75, 0.58, 0.35);
+                }
                 color = mix(pipe_base, pipe_bright, shade);
 
-                // Traveling circles along pipes — visible gray dots moving with flow
-                let anim_speed = camera.time * 2.0;
-                let dot_r = pipe_r * 0.6; // radius of each traveling dot
-                // Horizontal pipe dots
-                if (ce || cw) && abs(cy) < pipe_r {
-                    // 3 dots spread across the tile, traveling east
-                    for (var di: i32 = 0; di < 3; di++) {
-                        let dot_x = fract(anim_speed + f32(di) * 0.333 + world_x * 0.1) - 0.5;
-                        let d = length(vec2(cx - dot_x, cy));
-                        if d < dot_r {
-                            color = mix(color, vec3(0.28, 0.30, 0.33), 0.7);
-                        }
-                    }
-                }
-                // Vertical pipe dots
-                if (cn || cs) && abs(cx) < pipe_r {
-                    for (var di: i32 = 0; di < 3; di++) {
-                        let dot_y = fract(anim_speed + f32(di) * 0.333 + world_y * 0.1) - 0.5;
-                        let d = length(vec2(cx, cy - dot_y));
-                        if d < dot_r {
-                            color = mix(color, vec3(0.28, 0.30, 0.33), 0.7);
+                // Traveling dots along pipes — direction follows actual gas/liquid flow
+                let flow_idx = (u32(by) * u32(camera.grid_w) + u32(bx)) * 2u;
+                let flow_x = pipe_flow[flow_idx];
+                let flow_y = pipe_flow[flow_idx + 1u];
+                let flow_mag = length(vec2(flow_x, flow_y));
+                // Only animate when there's actual flow
+                if flow_mag > 0.001 {
+                    let dot_r = pipe_r * 0.55;
+                    let flow_speed = clamp(flow_mag * 0.5, 0.3, 4.0);
+                    let norm_fx = flow_x / flow_mag;
+                    let norm_fy = flow_y / flow_mag;
+                    // Project pixel position onto flow direction
+                    let along = cx * norm_fx + cy * norm_fy;
+                    let perp = abs(cx * (-norm_fy) + cy * norm_fx);
+                    // Only draw dots within the pipe cross-section
+                    if perp < pipe_r {
+                        for (var di: i32 = 0; di < 3; di++) {
+                            let dot_pos = fract(camera.time * flow_speed + f32(di) * 0.333) - 0.5;
+                            let d = abs(along - dot_pos);
+                            if d < dot_r {
+                                let alpha = smoothstep(dot_r, dot_r * 0.3, d) * 0.6;
+                                color = mix(color, vec3(0.28, 0.30, 0.33), alpha);
+                            }
                         }
                     }
                 }
@@ -2512,12 +2545,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let door_is_open = is_door(block) && is_open(block);
     // Trees: transparent sprite pixels are ground-level; canopy keeps height for shadows
     let is_tree_ground = (btype == 8u || btype == 31u) && !is_tree_pixel;
-    let is_pipe = btype >= 15u && btype <= 20u;
+    let is_pipe = (btype >= 15u && btype <= 20u) || btype == 46u;
     let is_dug = btype == 32u; // dug ground: height = depth, not visual height
     let is_rock = btype == 34u;
     let is_crate = btype == 33u; // crate height = item count, not visual height
     let is_wire = btype == 36u; // wire height = connection mask, not visual
-    let is_dimmer = btype == 43u; // dimmer height = level, not visual height
+    let is_dimmer = btype == 43u; // dimmer/varistor height = level, not visual
     let is_breaker = btype == 45u; // breaker height = threshold, not visual
     let is_diag_open = btype == 44u && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
     let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_diag_open);
@@ -3036,7 +3069,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let bh_for_temp = bheight;
         let is_solid_block = bh_for_temp > 0u && (bt_for_temp == 1u || bt_for_temp == 4u || bt_for_temp == 5u
             || bt_for_temp == 14u || (bt_for_temp >= 21u && bt_for_temp <= 25u) || bt_for_temp == 35u);
-        let is_pipe_block_t = bt_for_temp >= 15u && bt_for_temp <= 20u;
+        let is_pipe_block_t = (bt_for_temp >= 15u && bt_for_temp <= 20u) || bt_for_temp == 46u;
         let temp = select(smoke.a, block_temps[grid_idx], is_solid_block || is_pipe_block_t);
         // Remap: -30→0, 0→0.15, 15→0.30, 25→0.40, 40→0.55, 60→0.70, 100→0.85, 500→1.0
         var temp_norm: f32;

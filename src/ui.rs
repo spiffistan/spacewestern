@@ -97,6 +97,9 @@ impl App {
                                 if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
                                     self.show_pipe_overlay = !self.show_pipe_overlay;
                                 }
+                                if ui.selectable_label(self.show_flow_overlay, "Flow").clicked() {
+                                    self.show_flow_overlay = !self.show_flow_overlay;
+                                }
                                 if ui.selectable_label(*ov == FluidOverlay::Power, "Volts").clicked() {
                                     *ov = if *ov == FluidOverlay::Power { FluidOverlay::None } else { FluidOverlay::Power };
                                 }
@@ -130,7 +133,7 @@ impl App {
                     dot(ui, col, label);
                 }
             };
-            let show_legend = self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay;
+            let show_legend = self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay || self.show_flow_overlay;
             if show_legend {
                 egui::Area::new(egui::Id::new("layer_legend"))
                     .anchor(egui::Align2::RIGHT_TOP, [-10.0, 80.0])
@@ -230,6 +233,20 @@ impl App {
                                 dot(ui, egui::Color32::from_rgb(128, 128, 128), "Smoke");
                                 dot(ui, egui::Color32::from_rgb(230, 50, 30), "Hot gas");
                                 ui.label(egui::RichText::new("Brighter = more pressure").size(9.0).weak());
+                            }
+                            if self.show_flow_overlay {
+                                if self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay {
+                                    ui.separator();
+                                }
+                                ui.label(egui::RichText::new("Pipe Flow").strong().size(10.0));
+                                dot(ui, egui::Color32::from_rgb(80, 155, 255), "Slow");
+                                dot(ui, egui::Color32::from_rgb(200, 255, 100), "Medium");
+                                dot(ui, egui::Color32::from_rgb(255, 100, 0), "Fast");
+                                ui.add_space(4.0);
+                                ui.label(egui::RichText::new("Wire Current").strong().size(10.0));
+                                dot(ui, egui::Color32::from_rgb(140, 100, 230), "Low");
+                                dot(ui, egui::Color32::from_rgb(200, 255, 155), "Medium");
+                                dot(ui, egui::Color32::from_rgb(255, 200, 255), "High");
                             }
                         });
                     });
@@ -697,6 +714,7 @@ impl App {
                                 }
                                 "Piping" => {
                                     icon_btn(ui, BuildTool::Place(15), "\u{1f4a7}", "Pipe");
+                                    icon_btn(ui, BuildTool::Place(46), "\u{2298}", "Restrictor");
                                     icon_btn(ui, BuildTool::Place(16), "\u{2699}", "Pump");
                                     icon_btn(ui, BuildTool::Place(17), "\u{1f6e2}", "Tank");
                                     icon_btn(ui, BuildTool::Place(18), "\u{1f504}", "Valve");
@@ -1826,6 +1844,177 @@ impl App {
             }
         }
 
+        // Flow overlay: arrows on pipes (pressure flow) and wires (current flow)
+        if self.show_flow_overlay {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            let flow_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("flow_overlay"),
+            ));
+            let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                egui::pos2(sx, sy)
+            };
+
+            // Helper: draw a flow arrow at screen center with given direction, normalized magnitude, and tile_px
+            let draw_arrow = |painter: &egui::Painter, center: egui::Pos2, dir_x: f32, dir_y: f32,
+                              norm_mag: f32, tile_px: f32, label: Option<String>, is_wire: bool| {
+                let arrow_len = norm_mag * 0.4 * tile_px;
+                if arrow_len < 1.0 { return; }
+                // Color ramp: pipe=blue→cyan→yellow→red, wire=purple→cyan→yellow→white
+                let color = if is_wire {
+                    if norm_mag < 0.33 {
+                        let t = norm_mag / 0.33;
+                        egui::Color32::from_rgba_unmultiplied(
+                            (120.0 + t * 40.0) as u8, (60.0 + t * 140.0) as u8, (200.0 + t * 55.0) as u8, 210,
+                        )
+                    } else if norm_mag < 0.66 {
+                        let t = (norm_mag - 0.33) / 0.33;
+                        egui::Color32::from_rgba_unmultiplied(
+                            (160.0 + t * 95.0) as u8, 255, (255.0 - t * 100.0) as u8, 210,
+                        )
+                    } else {
+                        let t = (norm_mag - 0.66) / 0.34;
+                        egui::Color32::from_rgba_unmultiplied(
+                            255, (255.0 - t * 55.0) as u8, (155.0 + t * 100.0) as u8, 210,
+                        )
+                    }
+                } else {
+                    if norm_mag < 0.33 {
+                        let t = norm_mag / 0.33;
+                        egui::Color32::from_rgba_unmultiplied(
+                            (30.0 + t * 50.0) as u8, (100.0 + t * 155.0) as u8, 255, 200,
+                        )
+                    } else if norm_mag < 0.66 {
+                        let t = (norm_mag - 0.33) / 0.33;
+                        egui::Color32::from_rgba_unmultiplied(
+                            (80.0 + t * 175.0) as u8, 255, (255.0 - t * 155.0) as u8, 200,
+                        )
+                    } else {
+                        let t = (norm_mag - 0.66) / 0.34;
+                        egui::Color32::from_rgba_unmultiplied(
+                            255, (255.0 - t * 155.0) as u8, (100.0 - t * 100.0) as u8, 200,
+                        )
+                    }
+                };
+                let tip = egui::pos2(center.x + dir_x * arrow_len, center.y + dir_y * arrow_len);
+                let tail = egui::pos2(center.x - dir_x * arrow_len * 0.3, center.y - dir_y * arrow_len * 0.3);
+                let stroke_w = (1.0 + norm_mag * 2.0).min(3.0);
+                painter.line_segment([tail, tip], egui::Stroke::new(stroke_w, color));
+                let head_len = arrow_len * 0.35;
+                let px = -dir_y; let py = dir_x;
+                let h1 = egui::pos2(tip.x - dir_x * head_len + px * head_len * 0.5,
+                                    tip.y - dir_y * head_len + py * head_len * 0.5);
+                let h2 = egui::pos2(tip.x - dir_x * head_len - px * head_len * 0.5,
+                                    tip.y - dir_y * head_len - py * head_len * 0.5);
+                painter.line_segment([tip, h1], egui::Stroke::new(stroke_w, color));
+                painter.line_segment([tip, h2], egui::Stroke::new(stroke_w, color));
+                if let Some(lbl) = label {
+                    painter.text(
+                        egui::pos2(center.x, center.y + tile_px * 0.3),
+                        egui::Align2::CENTER_TOP,
+                        lbl,
+                        egui::FontId::proportional(7.0),
+                        egui::Color32::from_rgba_unmultiplied(200, 200, 200, 180),
+                    );
+                }
+            };
+
+            // --- Pipe flow arrows ---
+            if !self.pipe_network.cells.is_empty() {
+                let max_flow = self.pipe_network.cells.values()
+                    .map(|c| (c.flow_x * c.flow_x + c.flow_y * c.flow_y).sqrt())
+                    .fold(0.001f32, f32::max);
+                for (&idx, cell) in &self.pipe_network.cells {
+                    let mag = (cell.flow_x * cell.flow_x + cell.flow_y * cell.flow_y).sqrt();
+                    if mag < 0.001 { continue; }
+                    let x = (idx % GRID_W) as f32;
+                    let y = (idx / GRID_W) as f32;
+                    let center = to_screen(x + 0.5, y + 0.5);
+                    let norm_mag = (mag / max_flow).clamp(0.0, 1.0);
+                    let label = if tile_px > 8.0 { Some(format!("{:.2}", mag)) } else { None };
+                    draw_arrow(&flow_painter, center, cell.flow_x / mag, cell.flow_y / mag,
+                               norm_mag, tile_px, label, false);
+                }
+            }
+
+            // --- Wire current arrows (from voltage gradient) ---
+            if !self.voltage_data.is_empty() {
+                let gw = GRID_W as i32;
+                let gh = GRID_H as i32;
+                // Visible tile range
+                let min_x = ((cam_cx - cam_sw * 0.5 / cam_zoom).floor() as i32).max(0);
+                let max_x = ((cam_cx + cam_sw * 0.5 / cam_zoom).ceil() as i32).min(gw);
+                let min_y = ((cam_cy - cam_sh * 0.5 / cam_zoom).floor() as i32).max(0);
+                let max_y = ((cam_cy + cam_sh * 0.5 / cam_zoom).ceil() as i32).min(gh);
+                // Find max current in visible area for normalization
+                let mut max_current = 0.001f32;
+                for ty in min_y..max_y {
+                    for tx in min_x..max_x {
+                        let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        let b = self.grid_data[idx];
+                        let bt = b & 0xFF;
+                        let fl = (b >> 16) & 0xFF;
+                        let is_cond = is_conductor_rs(bt as u8, fl as u8);
+                        if !is_cond { continue; }
+                        let v = self.voltage_data[idx];
+                        if v < 0.01 { continue; }
+                        // Compute current vector: flows from high to low voltage
+                        let mut cx_f = 0.0f32;
+                        let mut cy_f = 0.0f32;
+                        for &(dx, dy) in &[(1i32,0i32),(-1,0),(0,1),(0,-1)] {
+                            let nx = tx + dx;
+                            let ny = ty + dy;
+                            if nx < 0 || ny < 0 || nx >= gw || ny >= gh { continue; }
+                            let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                            let nv = self.voltage_data[nidx];
+                            let dv = v - nv; // positive = current flows toward neighbor
+                            cx_f += dx as f32 * dv;
+                            cy_f += dy as f32 * dv;
+                        }
+                        let cmag = (cx_f * cx_f + cy_f * cy_f).sqrt();
+                        if cmag > max_current { max_current = cmag; }
+                    }
+                }
+                // Draw arrows
+                for ty in min_y..max_y {
+                    for tx in min_x..max_x {
+                        let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        let b = self.grid_data[idx];
+                        let bt = b & 0xFF;
+                        let fl = (b >> 16) & 0xFF;
+                        // Skip pipe tiles (already drawn above)
+                        if bt >= 15 && bt <= 20 { continue; }
+                        let is_cond = is_conductor_rs(bt as u8, fl as u8);
+                        if !is_cond { continue; }
+                        let v = self.voltage_data[idx];
+                        if v < 0.01 { continue; }
+                        let mut cx_f = 0.0f32;
+                        let mut cy_f = 0.0f32;
+                        for &(dx, dy) in &[(1i32,0i32),(-1,0),(0,1),(0,-1)] {
+                            let nx = tx + dx;
+                            let ny = ty + dy;
+                            if nx < 0 || ny < 0 || nx >= gw || ny >= gh { continue; }
+                            let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                            let nv = self.voltage_data[nidx];
+                            let dv = v - nv;
+                            cx_f += dx as f32 * dv;
+                            cy_f += dy as f32 * dv;
+                        }
+                        let cmag = (cx_f * cx_f + cy_f * cy_f).sqrt();
+                        if cmag < 0.01 { continue; }
+                        let center = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
+                        let norm_mag = (cmag / max_current).clamp(0.0, 1.0);
+                        let label = if tile_px > 8.0 { Some(format!("{:.1}A", cmag)) } else { None };
+                        draw_arrow(&flow_painter, center, cx_f / cmag, cy_f / cmag,
+                                   norm_mag, tile_px, label, true);
+                    }
+                }
+            }
+        }
+
         // Render cannon barrel direction overlays
         {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
@@ -1952,11 +2141,7 @@ impl App {
                         let b = self.grid_data[idx];
                         let bt = b & 0xFF;
                         let flags = (b >> 16) & 0xFF;
-                        // Only label conductors
-                        let is_cond = bt == 36 || bt == 37 || bt == 38 || bt == 39
-                            || bt == 40 || bt == 41 || bt == 42 || bt == 43 || bt == 45
-                            || bt == 7 || bt == 10 || bt == 11 || bt == 12 || bt == 16
-                            || (flags & 0x80) != 0;
+                        let is_cond = is_conductor_rs(bt as u8, flags as u8);
                         if !is_cond { continue; }
                         let center = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
                         let text = if v >= 10.0 {
@@ -2233,31 +2418,46 @@ impl App {
             }
         }
 
-        // Dimmer slider popup
+        // Dimmer / Restrictor slider popup (shared)
         if let Some(dimmer_idx) = self.block_sel.dimmer {
             let (dwx, dwy) = self.block_sel.dimmer_world;
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let sx = ((dwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
             let sy = ((dwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
             let mut still_valid = true;
-            // Read current dimmer level from block height (0-10 = 0-100%)
             let didx = dimmer_idx as usize;
             let dblock = if didx < self.grid_data.len() { self.grid_data[didx] } else { 0 };
-            if (dblock & 0xFF) != 43 { still_valid = false; }
+            let dbt = dblock & 0xFF;
+            if dbt != 43 && dbt != 46 { still_valid = false; }
             if still_valid {
-                let mut level = ((dblock >> 8) & 0xFF) as i32;
+                let (title, unit, max_val, mask) = match dbt {
+                    43 => ("Dimmer", "%", 10i32, 0xFFu32),
+                    46 => ("Restrictor", "%", 10i32, 0x0Fu32),       // lower nibble only
+                    _  => ("", "", 10i32, 0xFFu32),
+                };
+                let mut level = (((dblock >> 8) & mask) as i32).min(max_val);
                 egui::Area::new(egui::Id::new("dimmer_slider"))
                     .fixed_pos(egui::pos2(sx, sy))
                     .show(ctx, |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Dimmer").strong().size(11.0));
-                            let pct = level as f32 * 10.0;
-                            ui.label(egui::RichText::new(format!("{:.0}%", pct)).size(10.0));
-                            ui.add(egui::Slider::new(&mut level, 0..=10)
+                            ui.label(egui::RichText::new(title).strong().size(11.0));
+                            let display = if dbt == 46 {
+                                format!("{:.0}{} open", level as f32 * 10.0, unit)
+                            } else {
+                                format!("{:.0}{}", level as f32 * 10.0, unit)
+                            };
+                            ui.label(egui::RichText::new(display).size(10.0));
+                            ui.add(egui::Slider::new(&mut level, 0..=max_val)
                                 .text("Level")
                                 .step_by(1.0));
-                            // Write back to block height
-                            let new_block = (dblock & 0xFFFF00FF) | ((level as u32 & 0xFF) << 8);
+                            // Write back: for restrictor preserve upper nibble (conn mask)
+                            let new_h = if dbt == 46 {
+                                let existing_upper = (dblock >> 8) & 0xF0;
+                                existing_upper | (level as u32 & 0x0F)
+                            } else {
+                                level as u32 & 0xFF
+                            };
+                            let new_block = (dblock & 0xFFFF00FF) | (new_h << 8);
                             if new_block != dblock {
                                 self.grid_data[didx] = new_block;
                                 self.grid_dirty = true;

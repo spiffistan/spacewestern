@@ -8,7 +8,7 @@ mod block_defs;
 
 use materials::{GpuMaterial, build_material_table};
 use block_defs::BlockRegistry;
-use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_door_rs, compute_roof_heights, generate_test_grid};
+use grid::{GRID_W, GRID_H, make_block, block_type_rs, block_flags_rs, is_conductor_rs, is_door_rs, compute_roof_heights, generate_test_grid};
 use sprites::generate_tree_sprites;
 
 mod pleb;
@@ -145,6 +145,7 @@ struct App {
     sandbox_mode: bool,           // enables sandbox build category + debug tools
     sandbox_tool: SandboxTool,    // current sandbox action
     show_pipe_overlay: bool,       // draw pipe gas contents as egui overlay
+    show_flow_overlay: bool,       // draw flow arrows on pipes (pressure) and wires (current)
     pipe_width: f32,               // pipe conductance multiplier (1=narrow, 10=wide)
     drag_start: Option<(i32, i32)>, // grid coords where drag started (for shape building)
     block_sel: BlockSelection,      // which popup/slider is open
@@ -275,6 +276,7 @@ struct GfxState {
     debug_readback_buffer: wgpu::Buffer,            // staging buffer for single texel readback
     block_temp_readback_buffer: wgpu::Buffer,       // staging buffer for block temp readback
     voltage_readback_buffer: wgpu::Buffer,         // full grid voltage readback for per-tile labels
+    pipe_flow_buffer: wgpu::Buffer,               // per-tile flow direction (2 f32 per tile: flow_x, flow_y)
     // Pleb air readback — one texel per pleb, each at 256-byte aligned offset
     pleb_air_readback_buffer: wgpu::Buffer,
 }
@@ -373,10 +375,11 @@ impl App {
             enable_dir_bleed: true,
             enable_temporal: true,
             enable_ricochets: true,
-            sandbox_mode: false,
+            sandbox_mode: true,
             sandbox_tool: SandboxTool::None,
             drag_start: None,
             show_pipe_overlay: false,
+            show_flow_overlay: false,
             pipe_width: 5.0,
             block_sel: BlockSelection::default(),
             build_category: None,
@@ -831,7 +834,7 @@ impl App {
         const CONN_E: u8 = 0x20;
         const CONN_S: u8 = 0x40;
         const CONN_W: u8 = 0x80;
-        let is_line_type = block_type_id == 15 || block_type_id == 36; // pipe or wire
+        let is_line_type = block_type_id == 15 || block_type_id == 36 || block_type_id == 46; // pipe, wire, or restrictor
 
         for (ti, &(tx, ty)) in tiles.iter().enumerate() {
             if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
@@ -843,7 +846,8 @@ impl App {
                 let bt = block_type_rs(block);
                 let bh = (block >> 8) & 0xFF;
                 let wire_anywhere = block_type_id == 36;
-                let same_type = bt == block_type_id; // allow connecting to existing pipe/wire
+                let pipe_compat = (block_type_id == 15 || block_type_id == 46) && (bt == 15 || bt == 46);
+                let same_type = bt == block_type_id || pipe_compat; // allow pipe↔restrictor
                 if ((bt == 0 || bt == 2) && bh == 0) || (wire_anywhere && bt != 36) || (is_line_type && same_type) {
                     // Compute connection mask from neighbors in the line
                     let mut conn: u8 = 0;
@@ -863,17 +867,38 @@ impl App {
                             if ny > ty { conn |= CONN_S; }
                             if ny < ty { conn |= CONN_N; }
                         }
-                        // To connect to existing wires, drag onto them (same_type merge handles it)
+                        // Also connect to existing adjacent same-type pipes/wires outside the drag
+                        for &(ndx, ndy, mask) in &[(0i32,-1i32,CONN_N),(0,1,CONN_S),(1,0,CONN_E),(-1,0,CONN_W)] {
+                            let anx = tx + ndx;
+                            let any = ty + ndy;
+                            if anx < 0 || any < 0 || anx >= GRID_W as i32 || any >= GRID_H as i32 { continue; }
+                            let aidx = (any as u32 * GRID_W + anx as u32) as usize;
+                            let abt = block_type_rs(self.grid_data[aidx]);
+                            let adj_pipe_match = (block_type_id == 15 || block_type_id == 46) && (abt == 15 || abt == 46);
+                            if abt == block_type_id || adj_pipe_match {
+                                conn |= mask;
+                            }
+                        }
                     } else if is_line_type {
                         // Single tile: connect all directions (auto-detect)
                         conn = CONN_N | CONN_E | CONN_S | CONN_W;
                     }
 
                     if is_line_type && same_type {
-                        // Existing pipe/wire: just merge new connections into existing mask
-                        let existing_h = ((block >> 8) & 0xFF) as u8;
-                        let merged = existing_h | conn;
-                        self.grid_data[idx] = (block & 0xFFFF00FF) | ((merged as u32) << 8);
+                        if bt == block_type_id {
+                            // Same type: just merge new connections into existing mask
+                            let existing_h = ((block >> 8) & 0xFF) as u8;
+                            let merged = existing_h | conn;
+                            self.grid_data[idx] = (block & 0xFFFF00FF) | ((merged as u32) << 8);
+                        } else {
+                            // Cross-type (pipe↔restrictor): replace block type, inherit connections
+                            let existing_conn = ((block >> 8) & 0xF0) as u8;
+                            let roof_flag = block_flags_rs(block) & 2;
+                            let roof_h = block & 0xFF000000;
+                            let base_h = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(1);
+                            let height = base_h | existing_conn | conn;
+                            self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
+                        }
                     } else if wire_anywhere && bt != 0 && bt != 2 {
                         self.grid_data[idx] |= 0x80 << 16; // wire overlay flag
                     } else {
@@ -883,6 +908,37 @@ impl App {
                         // Encode connection mask in upper nibble of height byte
                         let height = if is_line_type { base_h | conn } else { base_h };
                         self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
+                    }
+
+                    // Update adjacent existing pipes/wires with reciprocal connection
+                    if is_line_type {
+                        let neighbors: [(i32, i32, u8, u8); 4] = [
+                            (0, -1, CONN_N, CONN_S), // if we connect N, neighbor to N gets S
+                            (0,  1, CONN_S, CONN_N),
+                            (1,  0, CONN_E, CONN_W),
+                            (-1, 0, CONN_W, CONN_E),
+                        ];
+                        let final_h = ((self.grid_data[idx] >> 8) & 0xFF) as u8;
+                        let final_mask = final_h & 0xF0;
+                        for &(ndx, ndy, our_bit, their_bit) in &neighbors {
+                            if (final_mask & our_bit) == 0 { continue; }
+                            let nnx = tx + ndx;
+                            let nny = ty + ndy;
+                            if nnx < 0 || nny < 0 || nnx >= GRID_W as i32 || nny >= GRID_H as i32 { continue; }
+                            let nidx = (nny as u32 * GRID_W + nnx as u32) as usize;
+                            let nb = self.grid_data[nidx];
+                            let nbt = block_type_rs(nb);
+                            // Update same-type (or pipe↔restrictor) neighbors with connection mask
+                            let recip_match = nbt == block_type_id
+                                || ((block_type_id == 15 || block_type_id == 46) && (nbt == 15 || nbt == 46));
+                            if recip_match {
+                                let nh = ((nb >> 8) & 0xFF) as u8;
+                                if (nh & 0xF0) != 0 && (nh & their_bit) == 0 {
+                                    let updated = nh | their_bit;
+                                    self.grid_data[nidx] = (nb & 0xFFFF00FF) | ((updated as u32) << 8);
+                                }
+                            }
+                        }
                     }
 
                     self.grid_dirty = true;
@@ -954,11 +1010,7 @@ impl App {
                         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                         let bt = block_type_rs(self.grid_data[nidx]);
                         let lflags = block_flags_rs(self.grid_data[nidx]);
-                        let is_cond = bt == 36 || bt == 37 || bt == 38 || bt == 39
-                            || bt == 40 || bt == 41 || bt == 42 || bt == 43 || bt == 45
-                            || bt == 7 || bt == 10 || bt == 11 || bt == 12 || bt == 16
-                            || (lflags & 0x80) != 0;
-                        if is_cond {
+                        if is_conductor_rs(bt, lflags) {
                             let dist = dist_sq.sqrt();
                             let surge = 200.0 * (1.0 - dist / radius as f32).max(0.0);
                             gfx.queue.write_buffer(
@@ -1290,6 +1342,7 @@ impl App {
                         || (id == 16 && bt == 15) // pump on pipe
                         || (id == 36 && bt != 36) // wire can go anywhere except on existing wire
                         || (id == 15 && bt == 15) // pipe on pipe = merge connections
+                        || (id == 46 && (bt == 15 || bt == 46)) // restrictor on pipe or restrictor
                         || ((id == 42 || id == 43 || id == 45) && (bt == 36 || bt == 0 || bt == 2)); // switch/dimmer/breaker on wire or ground
                     if can_place && click_mode != block_defs::ClickMode::None {
                         if id == 36 && bt != 0 && bt != 2 {
@@ -1306,8 +1359,10 @@ impl App {
                             if id == 43 { final_height = 10; }
                             // Circuit breaker starts ON (flag bit 2), threshold in height = 15V
                             if id == 45 { combined_flags |= 4; final_height = 15; }
+                            // Restrictor starts at 50% opening (height lower nibble = 5)
+                            if id == 46 { final_height = 5; }
                             // Single-click pipe/wire: auto-detect connections from adjacent matching blocks
-                            if id == 15 || id == 36 {
+                            if id == 15 || id == 36 || id == 46 {
                                 let mut conn: u8 = 0;
                                 for &(ndx, ndy, mask) in &[(0i32,-1i32,0x10u8),(0,1,0x40),(1,0,0x20),(-1,0,0x80)] {
                                     let nx = bx + ndx;
@@ -1315,12 +1370,17 @@ impl App {
                                     if nx >= 0 && ny >= 0 && nx < GRID_W as i32 && ny < GRID_H as i32 {
                                         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                                         let nbt = block_type_rs(self.grid_data[nidx]);
-                                        if nbt == id {
+                                        // Connect to same type, or pipes↔restrictors
+                                        let is_pipe_match = (id == 15 || id == 46) && (nbt == 15 || nbt == 46);
+                                        if nbt == id || is_pipe_match {
                                             conn |= mask;
                                             // Also update neighbor's connection toward us
+                                            // Skip if neighbor has mask=0 (auto-detect mode — already connects all directions)
                                             let opp_mask: u8 = match mask { 0x10 => 0x40, 0x40 => 0x10, 0x20 => 0x80, _ => 0x20 };
                                             let nb_h = ((self.grid_data[nidx] >> 8) & 0xFF) as u8;
-                                            self.grid_data[nidx] = (self.grid_data[nidx] & 0xFFFF00FF) | (((nb_h | opp_mask) as u32) << 8);
+                                            if (nb_h & 0xF0) != 0 {
+                                                self.grid_data[nidx] = (self.grid_data[nidx] & 0xFFFF00FF) | (((nb_h | opp_mask) as u32) << 8);
+                                            }
                                         }
                                     }
                                 }
@@ -1490,8 +1550,8 @@ impl App {
             return;
         }
 
-        // Click dimmer: show slider popup
-        if bt == 43 && self.build_tool != BuildTool::Destroy {
+        // Click dimmer, varistor, or restrictor: show slider popup (shared UI)
+        if (bt == 43 || bt == 46) && self.build_tool != BuildTool::Destroy {
             let didx = by as u32 * GRID_W + bx as u32;
             self.block_sel.dimmer = if self.block_sel.dimmer == Some(didx) { None } else { Some(didx) };
             self.block_sel.dimmer_world = (bx as f32 + 0.5, by as f32 + 0.5);
@@ -1623,6 +1683,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1644,6 +1705,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1665,6 +1727,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1686,6 +1749,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1792,11 +1856,7 @@ impl App {
                         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                         let bt = block_type_rs(self.grid_data[nidx]);
                         let flags = block_flags_rs(self.grid_data[nidx]);
-                        let is_conductor = bt == 36 || bt == 37 || bt == 38 || bt == 39
-                            || bt == 40 || bt == 41 || bt == 42 || bt == 43 || bt == 45
-                            || bt == 7 || bt == 10 || bt == 11 || bt == 12 || bt == 16
-                            || (flags & 0x80) != 0;
-                        if is_conductor {
+                        if is_conductor_rs(bt, flags) {
                             let dist = dist_sq.sqrt();
                             let surge = 200.0 * (1.0 - dist / radius as f32).max(0.0);
                             gfx.queue.write_buffer(
@@ -1814,6 +1874,16 @@ impl App {
 
         // Tick pipe network simulation — store outlet injections for post-shader application
         let pipe_injections = self.pipe_network.tick(dt, &self.grid_data, self.pipe_width);
+
+        // Write pipe flow directions to GPU buffer for shader animation
+        for (&idx, cell) in &self.pipe_network.cells {
+            let flow_data: [f32; 2] = [cell.flow_x, cell.flow_y];
+            gfx.queue.write_buffer(
+                &gfx.pipe_flow_buffer,
+                (idx as u64) * 8, // 2 f32 per tile
+                bytemuck::cast_slice(&flow_data),
+            );
+        }
 
         // Upload fluid params
         self.fluid_params.time = self.time_of_day;
@@ -1952,12 +2022,20 @@ impl App {
                 } else if self.build_tool == BuildTool::Place(36) {
                     // Wire can go anywhere
                     ((tx, ty), tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32)
-                } else if self.build_tool == BuildTool::Place(15) {
-                    // Pipe: can go on empty ground OR existing pipe (merge connections)
+                } else if matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(46)) {
+                    // Pipe/Restrictor: can go on empty ground OR existing pipe/restrictor
                     let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                         let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || tbt == 15
+                        self.can_place_on(tx, ty, false) || tbt == 15 || tbt == 46
+                    } else { false };
+                    ((tx, ty), ok)
+                } else if matches!(self.build_tool, BuildTool::Place(42) | BuildTool::Place(43) | BuildTool::Place(45)) {
+                    // Switch/Dimmer/Breaker/Varistor: on empty ground or on wire
+                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        let tbt = self.grid_data[tidx] & 0xFF;
+                        self.can_place_on(tx, ty, false) || tbt == 36
                     } else { false };
                     ((tx, ty), ok)
                 } else {
@@ -2141,8 +2219,10 @@ impl App {
             }
         }
 
-        // Copy full voltage buffer for per-tile labels (only when power overlay active)
-        if matches!(self.fluid_overlay, FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts) {
+        // Copy full voltage buffer for per-tile labels (power overlay or flow overlay)
+        if matches!(self.fluid_overlay, FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts)
+            || self.show_flow_overlay
+        {
             encoder.copy_buffer_to_buffer(
                 &gfx.voltage_buffer, 0,
                 &gfx.voltage_readback_buffer, 0,
