@@ -241,7 +241,10 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         let is_dug_shallow = bt == BT_DUG_GROUND && bh <= 1;
-        let is_pipe = (bt >= 15 && bt <= 20 || bt == BT_RESTRICTOR) && bh <= 1; // ground-level pipes only
+        let bt32 = bt as u32;
+        let is_pipe = ((bt32 >= 15 && bt32 <= 20) || bt32 == BT_RESTRICTOR
+            || bt32 == BT_LIQUID_PIPE || bt32 == BT_PIPE_BRIDGE
+            || bt32 == BT_LIQUID_INTAKE || bt32 == BT_LIQUID_PUMP || bt32 == BT_LIQUID_OUTPUT) && bh <= 1;
         // Diagonal wall: check which side of the diagonal this corner is on
         if bt == BT_DIAGONAL {
             let variant = ((b >> 19) & 3) as u32;
@@ -288,8 +291,12 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == BT_DUG_GROUND && bh <= 1) || (bt >= 15 && bt <= 20 && bh <= 1)
-            || bt == BT_DIAGONAL // diagonal wall: partially walkable (continuous check handles collision)
+        let bt32 = bt as u32;
+        let is_any_pipe = (bt32 >= 15 && bt32 <= 20) || bt32 == BT_RESTRICTOR
+            || bt32 == BT_LIQUID_PIPE || bt32 == BT_PIPE_BRIDGE
+            || bt32 == BT_LIQUID_INTAKE || bt32 == BT_LIQUID_PUMP || bt32 == BT_LIQUID_OUTPUT;
+        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == BT_DUG_GROUND && bh <= 1) || (is_any_pipe && bh <= 1)
+            || bt32 == BT_DIAGONAL // diagonal wall: partially walkable (continuous check handles collision)
     };
 
     if !is_walk(goal.0, goal.1) { return vec![]; }

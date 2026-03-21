@@ -131,7 +131,7 @@ render_style = 6.0
 is_emissive = true
 walkable = true
 is_removable = true
-light = { intensity = 1.0, color = [0.95, 0.85, 0.60], radius = 6.0, height = 2.0 }
+light = { intensity = 1.4, color = [0.95, 0.85, 0.60], radius = 7.0, height = 2.0 }
 [block.placement]
 category = "Build"
 icon = "🧴"
@@ -694,6 +694,121 @@ icon = "🛑"
 label = "Breaker"
 click = "simple"
 place_height = 0
+
+[[block]]
+id = 48
+name = "Floodlight"
+color = [0.50, 0.50, 0.55]
+render_style = 33.0
+is_emissive = true
+walkable = true
+is_removable = true
+light = { intensity = 3.0, color = [1.0, 0.98, 0.95], radius = 14.0, height = 2.0 }
+[block.placement]
+category = "Power"
+icon = "🔦"
+label = "Flood"
+click = "simple"
+place_height = 1
+rotatable = true
+
+[[block]]
+id = 49
+name = "Liquid Pipe"
+color = [0.35, 0.45, 0.60]
+render_style = 34.0
+walkable = true
+is_removable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.05, solar_absorption = 0.3 }
+[block.placement]
+category = "Liquid"
+icon = "🌊"
+label = "Water"
+click = "simple"
+place_height = 1
+stays_selected = true
+drag = "line"
+
+[[block]]
+id = 52
+name = "Liquid Intake"
+color = [0.30, 0.45, 0.65]
+render_style = 37.0
+walkable = true
+is_removable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.05, solar_absorption = 0.3 }
+[block.placement]
+category = "Liquid"
+icon = "🚰"
+label = "Intake"
+click = "multi_tile"
+place_height = 1
+rotatable = true
+
+[[block]]
+id = 53
+name = "Liquid Pump"
+color = [0.30, 0.50, 0.55]
+render_style = 38.0
+walkable = true
+is_removable = true
+thermal = { heat_capacity = 1.5, conductivity = 0.04, solar_absorption = 0.3 }
+[block.placement]
+category = "Liquid"
+icon = "⚙"
+label = "Pump"
+click = "simple"
+place_height = 1
+rotatable = true
+
+[[block]]
+id = 54
+name = "Liquid Output"
+color = [0.35, 0.50, 0.60]
+render_style = 39.0
+walkable = true
+is_removable = true
+thermal = { heat_capacity = 1.5, conductivity = 0.04, solar_absorption = 0.3 }
+[block.placement]
+category = "Liquid"
+icon = "💦"
+label = "Output"
+click = "simple"
+place_height = 1
+rotatable = true
+
+[[block]]
+id = 50
+name = "Pipe Bridge"
+color = [0.50, 0.52, 0.55]
+render_style = 35.0
+is_solid = true
+fluid_obstacle = true
+is_removable = true
+thermal = { heat_capacity = 1.0, conductivity = 0.03, solar_absorption = 0.5 }
+[block.placement]
+category = "Piping"
+icon = "⤫"
+label = "Bridge"
+click = "simple"
+place_height = 1
+rotatable = true
+
+[[block]]
+id = 51
+name = "Wire Bridge"
+color = [0.45, 0.42, 0.35]
+render_style = 36.0
+walkable = true
+is_removable = true
+light_transmission = 1.0
+[block.placement]
+category = "Power"
+icon = "⤫"
+label = "Bridge"
+click = "simple"
+place_height = 0
+rotatable = true
 
 [[block]]
 id = 46

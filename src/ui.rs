@@ -95,8 +95,11 @@ impl App {
                         ui.vertical(|ui| {
                             ui.label(egui::RichText::new("Infra").size(9.0).weak());
                             ui.horizontal(|ui| {
-                                if ui.selectable_label(self.show_pipe_overlay, "Pipes").clicked() {
+                                if ui.selectable_label(self.show_pipe_overlay, "Vent").clicked() {
                                     self.show_pipe_overlay = !self.show_pipe_overlay;
+                                }
+                                if ui.selectable_label(self.show_liquid_overlay, "Liquid").clicked() {
+                                    self.show_liquid_overlay = !self.show_liquid_overlay;
                                 }
                                 if ui.selectable_label(self.show_flow_overlay, "Flow").clicked() {
                                     self.show_flow_overlay = !self.show_flow_overlay;
@@ -149,7 +152,7 @@ impl App {
                     dot(ui, col, label);
                 }
             };
-            let show_legend = self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay || self.show_flow_overlay;
+            let show_legend = self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay || self.show_liquid_overlay || self.show_flow_overlay;
             if show_legend {
                 egui::Area::new(egui::Id::new("layer_legend"))
                     .anchor(egui::Align2::RIGHT_TOP, [-10.0, 80.0])
@@ -233,20 +236,29 @@ impl App {
                                 }
                                 _ => {}
                             }
-                            // Pipe overlay legend (can be active alongside fluid overlays)
+                            // Ventilation overlay legend
                             if self.show_pipe_overlay {
                                 if self.fluid_overlay != FluidOverlay::None {
                                     ui.separator();
                                 }
-                                ui.label(egui::RichText::new("Pipes").strong().size(10.0));
+                                ui.label(egui::RichText::new("Ventilation").strong().size(10.0));
                                 dot(ui, egui::Color32::from_rgb(50, 100, 230), "O\u{2082} rich");
                                 dot(ui, egui::Color32::from_rgb(200, 180, 25), "CO\u{2082}");
                                 dot(ui, egui::Color32::from_rgb(128, 128, 128), "Smoke");
                                 dot(ui, egui::Color32::from_rgb(230, 50, 30), "Hot gas");
                                 ui.label(egui::RichText::new("Brighter = more pressure").size(9.0).weak());
                             }
-                            if self.show_flow_overlay {
+                            // Liquid overlay legend
+                            if self.show_liquid_overlay {
                                 if self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay {
+                                    ui.separator();
+                                }
+                                ui.label(egui::RichText::new("Liquid").strong().size(10.0));
+                                dot(ui, egui::Color32::from_rgb(50, 120, 200), "Low pressure");
+                                dot(ui, egui::Color32::from_rgb(100, 180, 255), "High pressure");
+                            }
+                            if self.show_flow_overlay {
+                                if self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay || self.show_liquid_overlay {
                                     ui.separator();
                                 }
                                 ui.label(egui::RichText::new("Pipe Flow").strong().size(10.0));
@@ -607,8 +619,8 @@ impl App {
         let cat_s = 14.0;
         let mut categories: Vec<(&str, &str)> = vec![
             ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
-            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Vent", "\u{1f4a8}"),
-            ("Power", "\u{26a1}"), ("Zones", "\u{1f33e}"), ("Physics", "\u{1f4e6}"),
+            ("Opening", "\u{1f6aa}"), ("Gas", "\u{1f4a8}"), ("Liquid", "\u{1f4a7}"),
+            ("Vent", "\u{1f32c}"), ("Power", "\u{26a1}"), ("Zones", "\u{1f33e}"), ("Physics", "\u{1f4e6}"),
         ];
         if self.sandbox_mode {
             categories.push(("Sandbox", "\u{1f9ea}"));
@@ -721,14 +733,22 @@ impl App {
                                     icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Window");
                                     icon_btn(ui, BuildTool::Door, "\u{1f6aa}", "Door");
                                 }
-                                "Piping" => {
-                                    icon_btn(ui, BuildTool::Place(15), "\u{1f4a7}", "Pipe");
+                                "Gas" => {
+                                    icon_btn(ui, BuildTool::Place(15), "\u{1f4a8}", "Pipe");
                                     icon_btn(ui, BuildTool::Place(46), "\u{2298}", "Restrictor");
                                     icon_btn(ui, BuildTool::Place(16), "\u{2699}", "Pump");
                                     icon_btn(ui, BuildTool::Place(17), "\u{1f6e2}", "Tank");
                                     icon_btn(ui, BuildTool::Place(18), "\u{1f504}", "Valve");
                                     icon_btn(ui, BuildTool::Place(19), "\u{27a1}", "Outlet");
                                     icon_btn(ui, BuildTool::Place(20), "\u{2b05}", "Inlet");
+                                    icon_btn(ui, BuildTool::Place(50), "\u{2a2f}", "Bridge");
+                                }
+                                "Liquid" => {
+                                    icon_btn(ui, BuildTool::Place(49), "\u{1f4a7}", "Pipe");
+                                    icon_btn(ui, BuildTool::Place(52), "\u{1f6b0}", "Intake");
+                                    icon_btn(ui, BuildTool::Place(53), "\u{2699}", "Pump");
+                                    icon_btn(ui, BuildTool::Place(54), "\u{1f4a6}", "Output");
+                                    icon_btn(ui, BuildTool::Place(50), "\u{2a2f}", "Bridge");
                                 }
                                 "Power" => {
                                     icon_btn(ui, BuildTool::Place(36), "\u{26a1}", "Wire");
@@ -743,6 +763,8 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
                                     icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
                                     icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table");
+                                    icon_btn(ui, BuildTool::Place(48), "\u{1f526}", "Flood");
+                                    icon_btn(ui, BuildTool::Place(51), "\u{2a2f}", "Bridge");
                                 }
                                 "Vent" => {
                                     icon_btn(ui, BuildTool::Place(12), "\u{1f4a8}", "Fan");
@@ -1497,7 +1519,7 @@ impl App {
                     let ibt = ib & 0xFF;
                     let ibh = (ib >> 8) & 0xFF;
                     let solid = ibh > 0 && (ibt == 1 || ibt == 4 || ibt == 5 || ibt == 14 || (ibt >= 21 && ibt <= 25) || ibt == 35);
-                    let pipe = ibt >= 15 && ibt <= 20;
+                    let pipe = (ibt >= 15 && ibt <= 20) || ibt == 46 || ibt == 49 || ibt == 50 || ibt == 52 || ibt == 53 || ibt == 54;
                     (solid, pipe)
                 } else { (false, false) };
                 let voltage_str = if self.debug.voltage > 0.01 {
@@ -1519,21 +1541,23 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             let gas_info = String::from("(gas readback: native only)");
 
-            // Show pipe state if hovering over a pipe component
+            // Show pipe state if hovering over any pipe/liquid component
             let pipe_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                 let pidx = by as u32 * GRID_W + bx as u32;
-                let b = self.grid_data[pidx as usize];
-                let pbt = b & 0xFF;
-                if pbt >= 15 && pbt <= 20 {
+                let pbt = (self.grid_data[pidx as usize] & 0xFF) as u8;
+                let is_gas = pipes::is_gas_pipe_component(pbt);
+                let is_liq = pipes::is_liquid_pipe_component(pbt);
+                if is_gas {
                     if let Some(cell) = self.pipe_network.cells.get(&pidx) {
-                        format!("\n--- Pipe ---\nPressure: {:.2}\nSmoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C\nVol: {:.0}",
-                            cell.pressure, cell.gas[0], cell.gas[1], cell.gas[2], cell.gas[3], cell.volume)
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                }
+                        format!("\n--- Gas Pipe ---\nPressure: {:.2}\nSmoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C",
+                            cell.pressure, cell.gas[0], cell.gas[1], cell.gas[2], cell.gas[3])
+                    } else { String::new() }
+                } else if is_liq {
+                    if let Some(cell) = self.liquid_network.cells.get(&pidx) {
+                        format!("\n--- Liquid Pipe ---\nPressure: {:.2}\nTemp: {:.1}°C",
+                            cell.pressure, cell.gas[3])
+                    } else { String::new() }
+                } else { String::new() }
             } else {
                 String::new()
             };
@@ -2029,6 +2053,44 @@ impl App {
                 );
                 // Pressure indicator: small text
                 if cam_zoom > 10.0 { // only show text when zoomed in enough
+                    let center = egui::pos2((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
+                    painter.text(
+                        center,
+                        egui::Align2::CENTER_CENTER,
+                        format!("{:.1}", cell.pressure),
+                        egui::FontId::proportional(8.0),
+                        egui::Color32::WHITE,
+                    );
+                }
+            }
+        }
+
+        // Liquid pipe overlay: draw liquid contents as blue-tinted blocks
+        if self.show_liquid_overlay && !self.liquid_network.cells.is_empty() {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("liquid_overlay"),
+            ));
+            let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                egui::pos2(sx, sy)
+            };
+            for (&idx, cell) in &self.liquid_network.cells {
+                if idx >= GRID_W * GRID_H { continue; }
+                let x = (idx % GRID_W) as f32;
+                let y = (idx / GRID_W) as f32;
+                let p0 = to_screen(x + 0.15, y + 0.15);
+                let p1 = to_screen(x + 0.85, y + 0.85);
+                let pres = (cell.pressure / 2.0).clamp(0.0, 1.0);
+                let r = (50.0 + pres * 50.0) as u8;
+                let g = (100.0 + pres * 80.0) as u8;
+                let b = (180.0 + pres * 75.0) as u8;
+                let alpha = (80.0 + pres * 120.0) as u8;
+                let color = egui::Color32::from_rgba_unmultiplied(r, g, b, alpha);
+                painter.rect_filled(egui::Rect::from_min_max(p0, p1), 2.0, color);
+                if cam_zoom > 10.0 {
                     let center = egui::pos2((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
                     painter.text(
                         center,
@@ -3009,6 +3071,28 @@ impl App {
                                     ui.label(egui::RichText::new(format!("\u{26a0} {}", cs.limiting))
                                         .size(9.0).color(egui::Color32::from_rgb(255, 80, 80)));
                                 }
+                            }
+                        }
+
+                        // Pipe/liquid network pressure detail
+                        let pidx = item.y as u32 * GRID_W + item.x as u32;
+                        let pbt = (item.block_type & 0xFF) as u8;
+                        if pipes::is_gas_pipe_component(pbt) {
+                            if let Some(cell) = self.pipe_network.cells.get(&pidx) {
+                                ui.separator();
+                                ui.label(egui::RichText::new(format!(
+                                    "Gas: P={:.2}  Smoke={:.2}  O\u{2082}={:.2}  CO\u{2082}={:.2}  T={:.1}°C",
+                                    cell.pressure, cell.gas[0], cell.gas[1], cell.gas[2], cell.gas[3]
+                                )).size(9.0));
+                            }
+                        }
+                        if pipes::is_liquid_pipe_component(pbt) {
+                            if let Some(cell) = self.liquid_network.cells.get(&pidx) {
+                                ui.separator();
+                                ui.label(egui::RichText::new(format!(
+                                    "Liquid: P={:.2}  T={:.1}°C",
+                                    cell.pressure, cell.gas[3]
+                                )).size(9.0));
                             }
                         }
                     }

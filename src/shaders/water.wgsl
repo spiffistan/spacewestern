@@ -55,7 +55,9 @@ fn get_elevation(b: u32) -> f32 {
     // Walls and solid blocks: treated as very high (water can't flow onto them)
     if bh > 0u && bt != 8u && bt != 6u && bt != 7u && bt != 10u && bt != 31u
         && bt != 33u && bt != 34u && bt != 36u && bt != 43u && bt != 47u
-        && bt != 45u && bt != 46u {
+        && bt != 45u && bt != 46u
+        && !(bt >= 15u && bt <= 20u) // gas pipe components
+        && bt != 49u && bt != 50u && bt != 52u && bt != 53u && bt != 54u {
         return 10.0; // effectively a wall — water won't flow here
     }
     return 0.0; // ground level

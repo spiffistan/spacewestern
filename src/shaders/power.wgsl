@@ -38,8 +38,9 @@ fn is_conductor(bt: u32, flags: u32) -> bool {
     // Circuit breaker (45): only conducts when ON (flag bit 2)
     if bt == 45u { return (flags & 4u) != 0u; }
     // Dimmer (43): always conducts (voltage scaling handled separately)
-    return bt == 36u || bt == 37u || bt == 38u || bt == 39u || bt == 40u || bt == 41u || bt == 43u
-        || bt == 7u || bt == 12u || bt == 10u || bt == 11u || bt == 16u || has_wire;
+    // Wire bridge (51): always conducts (axis-restricted in relaxation)
+    return bt == 36u || bt == 37u || bt == 38u || bt == 39u || bt == 40u || bt == 41u || bt == 43u || bt == 51u
+        || bt == 7u || bt == 12u || bt == 10u || bt == 11u || bt == 16u || bt == 48u || has_wire;
 }
 
 fn is_battery(bt: u32) -> bool {
@@ -53,8 +54,8 @@ fn is_generator(bt: u32) -> bool {
 
 // Is this block a power consumer?
 fn is_consumer(bt: u32) -> bool {
-    // Electric light=7, Standing lamp=10, Table lamp=11, Fan=12, Pump=16
-    return bt == 7u || bt == 10u || bt == 11u || bt == 12u || bt == 16u;
+    // Electric light=7, Standing lamp=10, Table lamp=11, Fan=12, Pump=16, Floodlight=48
+    return bt == 7u || bt == 10u || bt == 11u || bt == 12u || bt == 16u || bt == 48u;
 }
 
 @compute @workgroup_size(8, 8)
@@ -204,6 +205,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     if bt == 11u { load = 0.004; }  // Table lamp: ~3W
     if bt == 12u { load = 0.012; }  // Fan: ~10W
     if bt == 16u { load = 0.010; }  // Pump: ~8W
+    if bt == 48u { load = 0.030; }  // Floodlight: ~25W
 
     // --- Voltage relaxation ---
     // Wires connect to direct 4-neighbors only.
@@ -214,14 +216,59 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     var neighbor_count = 0.0;
 
     let has_wire = (flags & 0x80u) != 0u;
-    if bt == 36u || has_wire {
-        // Wire: respect connection mask in height byte bits 4-7 (N=1,E=2,S=4,W=8)
+    if bt == 36u || bt == 51u || has_wire {
+        // Wire / Wire Bridge: directional relaxation
         let height_byte = (block >> 8u) & 0xFFu;
         let conn_mask = height_byte >> 4u;
-        // Direction bits: d=0→E(ndx=1), d=1→W(ndx=-1), d=2→S(ndy=1), d=3→N(ndy=-1)
-        // Mask bits: bit0=N, bit1=E, bit2=S, bit3=W
+        let wb_seg = (flags >> 3u) & 3u; // bridge segment: 0=entry, 1=middle, 2=exit
+        let wb_rot = (flags >> 5u) & 3u; // bridge rotation
+
+        // Wire bridge entry/exit: also connect to partner tile (teleport across middle)
+        if bt == 51u && (wb_seg == 0u || wb_seg == 2u) {
+            let sign = select(2, -2, wb_seg == 2u);
+            var pdx = 0; var pdy = 0;
+            if wb_rot == 0u { pdy = sign; }
+            else if wb_rot == 1u { pdx = sign; }
+            else if wb_rot == 2u { pdy = -sign; }
+            else { pdx = -sign; }
+            let px = bx + pdx;
+            let py = by + pdy;
+            if px >= 0 && py >= 0 && px < i32(gw) && py < i32(gh) {
+                let pidx = u32(py) * gw + u32(px);
+                let pb = grid[pidx];
+                let pbt = block_type(pb);
+                let pflags = (pb >> 16u) & 0xFFu;
+                if is_conductor(pbt, pflags) {
+                    neighbor_sum += voltage[pidx];
+                    neighbor_count += 1.0;
+                }
+            }
+        }
+
         let dir_mask = array<u32, 4>(2u, 8u, 4u, 1u); // E, W, S, N
         for (var d = 0; d < 4; d++) {
+            // Wire bridge: restrict which adjacent tiles can connect
+            if bt == 51u {
+                let is_ew = d < 2; // d=0,1 are E,W
+                let is_ns = d >= 2; // d=2,3 are S,N
+                let bridge_is_ns = wb_rot % 2u == 0u;
+                if wb_seg == 1u {
+                    // Middle: only perpendicular to bridge direction
+                    if bridge_is_ns && is_ns { continue; }
+                    if !bridge_is_ns && is_ew { continue; }
+                } else {
+                    // Entry/exit: only outward (away from middle)
+                    var out_dx = 0; var out_dy = 0;
+                    if wb_rot == 0u { out_dy = select(-1, 1, wb_seg == 2u); }
+                    else if wb_rot == 1u { out_dx = select(-1, 1, wb_seg == 2u); }
+                    else if wb_rot == 2u { out_dy = select(1, -1, wb_seg == 2u); }
+                    else { out_dx = select(1, -1, wb_seg == 2u); }
+                    var ddx = 0; var ddy = 0;
+                    if d == 0 { ddx = 1; } else if d == 1 { ddx = -1; }
+                    else if d == 2 { ddy = 1; } else { ddy = -1; }
+                    if ddx != out_dx || ddy != out_dy { continue; }
+                }
+            }
             // If mask is set (>0), only connect in specified directions
             if conn_mask != 0u && (conn_mask & dir_mask[d]) == 0u { continue; }
             var ndx = 0; var ndy = 0;

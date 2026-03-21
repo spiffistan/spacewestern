@@ -52,7 +52,7 @@ struct GpuMaterial {
     ignition_temp: f32, walkable: f32, is_removable: f32, _pad: f32,
 };
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 47u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 54u)]; }
 
 // --- Block unpacking ---
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
@@ -118,7 +118,7 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
         var color = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
 
         // Electric lights: OFF without power (voltage < 2V)
-        if bt == 7u || bt == 10u || bt == 11u {
+        if bt == 7u || bt == 10u || bt == 11u || bt == 48u {
             let vidx = u32(by) * u32(camera.grid_w) + u32(bx);
             let lv = voltage[vidx];
             if lv < 2.0 {

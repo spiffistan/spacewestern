@@ -112,7 +112,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 47u)];
+    return materials[min(bt, 54u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -169,6 +169,11 @@ fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 fn is_glass(b: u32) -> bool { return block_type(b) == 5u; }
+// Structural wall types that form the building envelope (not equipment/furniture)
+fn matches_wall_type(bt: u32) -> bool {
+    return bt == 1u || bt == 4u || bt == 5u || bt == 14u
+        || (bt >= 21u && bt <= 25u) || bt == 35u || bt == 44u;
+}
 
 fn get_block(x: i32, y: i32) -> u32 {
     if x < 0 || y < 0 || x >= i32(camera.grid_w) || y >= i32(camera.grid_h) {
@@ -421,7 +426,8 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
         if get_material(sbt).light_intensity > 0.0 { continue; } // skip light sources
 
         if sbh == 0u { continue; } // open floor
-        if (sbt >= 15u && sbt <= 20u) || sbt == 46u { continue; } // pipe components don't block light
+        if (sbt >= 15u && sbt <= 20u) || sbt == 46u || sbt == 49u || sbt == 50u || sbt == 52u || sbt == 53u || sbt == 54u { continue; }
+        if sbt == 51u { continue; } // wire bridge
         if sbt == 32u { continue; } // dug ground doesn't block light
         if sbt == 36u { continue; } // wire (height = connection mask, not visual)
         if sbt == 43u { continue; } // dimmer/varistor (height = level, not visual)
@@ -464,7 +470,7 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
 // lightmap propagation can't capture.
 fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
     var glow = vec3<f32>(0.0);
-    let max_search = 6; // capped for performance
+    let max_search = 8; // covers floodlight range (directional, most energy within 8 tiles)
     let bx = i32(floor(wx));
     let by = i32(floor(wy));
 
@@ -494,16 +500,16 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             let light_h = mat.light_height;
 
             // Electric lights: brightness proportional to voltage, off only at 0V
-            if bt == 7u || bt == 10u || bt == 11u {
+            if bt == 7u || bt == 10u || bt == 11u || bt == 48u {
                 let light_idx = u32(ny) * u32(camera.grid_w) + u32(nx);
                 let lv = voltage[light_idx];
                 if lv < 0.1 {
                     intensity = 0.0;
                 } else {
-                    // Smooth ramp: dim glow at low voltage, full brightness at 8V+
-                    let power_factor = clamp(lv / 8.0, 0.0, 1.0);
-                    // Square curve so low voltage is noticeably dimmer
-                    intensity *= power_factor * power_factor;
+                    // Smooth ramp: sqrt curve gives visible light even at low voltage
+                    // 3.3V → 64%, 6V → 87%, 8V+ → 100%
+                    let power_factor = sqrt(clamp(lv / 8.0, 0.0, 1.0));
+                    intensity *= power_factor;
                     // Flicker when voltage is marginal (<2V)
                     if lv < 2.0 {
                         let pf = sin(time * 15.0 + f32(light_idx) * 3.7) * 0.4 + 0.6;
@@ -523,13 +529,37 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
 
             if dist > radius { continue; }
 
+            // Floodlight: directional cone (rotation in flags bits 3-4)
+            var dir_atten = 1.0;
+            if bt == 48u {
+                let fl_flags = block_flags(nb);
+                let fl_dir = (fl_flags >> 3u) & 3u;
+                var light_dx = 0.0;
+                var light_dy = 0.0;
+                if fl_dir == 0u { light_dy = -1.0; } // N
+                else if fl_dir == 1u { light_dx = 1.0; } // E
+                else if fl_dir == 2u { light_dy = 1.0; } // S
+                else { light_dx = -1.0; } // W
+                // Cosine cone: dot product of normalized pixel direction with light direction
+                if dist > 0.3 {
+                    let to_pixel_x = fdx / dist;
+                    let to_pixel_y = fdy / dist;
+                    let cos_angle = to_pixel_x * light_dx + to_pixel_y * light_dy;
+                    // Narrow cone: ~70° half-angle, sharp falloff at edges
+                    dir_atten = smoothstep(-0.1, 0.4, cos_angle);
+                    // Extra intensity boost in the center of the beam
+                    dir_atten *= 1.0 + max(cos_angle, 0.0) * 0.5;
+                }
+                if dir_atten < 0.01 { continue; }
+            }
+
             let vis = trace_glow_visibility(wx, wy, lcx, lcy, light_h);
             if vis < 0.01 { continue; }
 
             let atten = (1.0 / (1.0 + dist * 0.6 + dist * dist * 0.15))
                       * smoothstep(radius, radius * 0.15, dist);
 
-            glow += light_col * intensity * atten * vis;
+            glow += light_col * intensity * atten * vis * dir_atten;
         }
     }
 
@@ -1142,11 +1172,11 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_roofed_floor = has_roof(block) && bh < 0.5;
 
         // Pipe components (15-20), dug ground (32), crates (33), rocks (34) don't cast shadows
-        let is_pipe_block = (bt >= 15u && bt <= 20u) || bt == 46u;
+        let is_pipe_block = (bt >= 15u && bt <= 20u) || bt == 46u || bt == 49u || bt == 50u || bt == 52u || bt == 53u || bt == 54u;
         let is_dug_block = bt == 32u;
         let is_crate_block = bt == 33u; // height = item count, not visual
         let is_rock_block = bt == 34u;
-        let is_wire_block = bt == 36u; // height = connection mask, not visual
+        let is_wire_block = bt == 36u || bt == 51u; // height = connection mask, not visual
         let is_dimmer_block = bt == 43u; // height = dimmer/varistor level, not visual
         let is_breaker_block = bt == 45u; // height = trip threshold, not visual
         let is_plant_block = bt == 31u || bt == 47u; // berry bush + crop: no shadow
@@ -1611,7 +1641,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if is_roofed {
             let face_glow = compute_proximity_glow(world_x, world_y, camera.time);
             let night_boost = 1.0 - camera.sun_intensity * 0.7;
-            color += face_glow * camera.indoor_glow_mul * (0.5 + night_boost);
+            let face_glow_mul = camera.indoor_glow_mul * (0.5 + night_boost);
+            color = color * (vec3(1.0) + face_glow * face_glow_mul * 3.0)
+                  + face_glow * face_glow_mul * 0.08;
         }
 
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -1680,6 +1712,47 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let tl = render_table_lamp(fx, fy);
         color = tl.xyz;
         is_table_lamp_bulb = tl.w > 0.5;
+    } else if btype == 48u {
+        // Floodlight: compact housing with bright directional lens
+        let fl_cx = fx - 0.5;
+        let fl_cy = fy - 0.5;
+        let fl_dist = length(vec2(fl_cx, fl_cy));
+        let fl_dir = (bflags >> 3u) & 3u;
+        // Direction vector
+        var fl_dx = 0.0; var fl_dy = 0.0;
+        if fl_dir == 0u { fl_dy = -1.0; }
+        else if fl_dir == 1u { fl_dx = 1.0; }
+        else if fl_dir == 2u { fl_dy = 1.0; }
+        else { fl_dx = -1.0; }
+        // Housing: dark metallic box
+        let body_r = 0.22;
+        if fl_dist < body_r {
+            color = vec3(0.30, 0.32, 0.35);
+            // Metallic sheen
+            let sheen = 1.0 - fl_dist / body_r;
+            color += vec3(0.08) * sheen;
+            // Lens: bright when powered
+            let lens_cx = fl_cx - fl_dx * 0.08;
+            let lens_cy = fl_cy - fl_dy * 0.08;
+            let lens_dist = length(vec2(lens_cx, lens_cy));
+            if lens_dist < 0.12 {
+                let fl_v = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+                let fl_power = sqrt(clamp(fl_v / 8.0, 0.0, 1.0));
+                let lens_t = 1.0 - lens_dist / 0.12;
+                color = mix(vec3(0.4, 0.4, 0.45), vec3(1.0, 0.98, 0.95) * (0.5 + fl_power), lens_t * lens_t);
+            }
+            // Direction indicator: small notch on the front edge
+            let front_dot = fl_cx * fl_dx + fl_cy * fl_dy;
+            if front_dot > body_r - 0.06 && abs(fl_cx * (-fl_dy) + fl_cy * fl_dx) < 0.05 {
+                color = vec3(0.7, 0.7, 0.75);
+            }
+            // Rim
+            if fl_dist > body_r - 0.03 {
+                color = vec3(0.22, 0.22, 0.25);
+            }
+        } else {
+            color = block_base_color(2u, 0u); // ground
+        }
     } else if btype == 12u {
         // Fan: metallic gray housing with grille and bold direction arrow
         // Outer frame (dark steel border)
@@ -1725,11 +1798,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Slight steam wisps
         let wisp = sin(world_x * 31.0 + camera.time * 2.0) * sin(world_y * 29.0 + camera.time * 1.7);
         color += vec3(0.05) * max(wisp, 0.0) * heap;
-    } else if (btype >= 15u && btype <= 20u) || btype == 46u {
-        // Piping system: auto-connected thin pipe rendering
-        // Inlet/outlet on walls: use wall-like background. Ground pipes: use dirt.
+    } else if (btype >= 15u && btype <= 20u) || btype == 46u || btype == 49u || btype == 50u || btype == 52u || btype == 53u || btype == 54u {
+        // Piping system: auto-connected thin pipe rendering (gas, liquid, bridge, liquid equipment)
+        // Background: wall-mounted inlets on stone, liquid intake water-side on water, rest on dirt
         if (btype == 19u || btype == 20u) && bheight > 1u {
             color = block_base_color(1u, 0u); // stone wall background for wall-mounted
+        } else if btype == 52u && ((bflags >> 3u) & 3u) == 1u {
+            // Liquid intake water-side segment: render water underneath
+            color = block_base_color(3u, 0u); // water background
+            // Animated water surface
+            let wave1 = sin(world_x * 6.0 + camera.time * 1.5) * 0.02;
+            let wave2 = sin(world_y * 8.0 + camera.time * 2.1) * 0.015;
+            color += vec3(wave1 + wave2, (wave1 + wave2) * 1.5, (wave1 + wave2) * 2.0);
         } else {
             color = block_base_color(2u, 0u); // dirt floor for ground pipes
         }
@@ -1741,11 +1821,22 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let n_e = block_type(get_block(bx + 1, by));
         let n_w = block_type(get_block(bx - 1, by));
         // If mask is set, use it; otherwise auto-detect (backward compatible)
-        var cn = (n_n >= 15u && n_n <= 20u) || n_n == 46u;
-        var cs = (n_s >= 15u && n_s <= 20u) || n_s == 46u;
-        var ce = (n_e >= 15u && n_e <= 20u) || n_e == 46u;
-        var cw = (n_w >= 15u && n_w <= 20u) || n_w == 46u;
-        if pipe_conn_mask != 0u && (btype == 15u || btype == 46u) {
+        // Liquid pipes only connect to liquid pipes/bridges; gas to gas/restrictors/bridges
+        let is_liquid = btype == 49u || btype == 52u || btype == 53u || btype == 54u;
+        // Gas neighbors: standard pipe types. Liquid neighbors: liquid pipe types.
+        let ln_n = n_n == 49u || n_n == 50u || n_n == 52u || n_n == 53u || n_n == 54u;
+        let ln_s = n_s == 49u || n_s == 50u || n_s == 52u || n_s == 53u || n_s == 54u;
+        let ln_e = n_e == 49u || n_e == 50u || n_e == 52u || n_e == 53u || n_e == 54u;
+        let ln_w = n_w == 49u || n_w == 50u || n_w == 52u || n_w == 53u || n_w == 54u;
+        let gn_n = (n_n >= 15u && n_n <= 20u) || n_n == 46u || n_n == 50u;
+        let gn_s = (n_s >= 15u && n_s <= 20u) || n_s == 46u || n_s == 50u;
+        let gn_e = (n_e >= 15u && n_e <= 20u) || n_e == 46u || n_e == 50u;
+        let gn_w = (n_w >= 15u && n_w <= 20u) || n_w == 46u || n_w == 50u;
+        var cn = select(gn_n, ln_n, is_liquid);
+        var cs = select(gn_s, ln_s, is_liquid);
+        var ce = select(gn_e, ln_e, is_liquid);
+        var cw = select(gn_w, ln_w, is_liquid);
+        if pipe_conn_mask != 0u && (btype == 15u || btype == 46u || btype == 49u) {
             cn = cn && (pipe_conn_mask & 1u) != 0u; // N
             ce = ce && (pipe_conn_mask & 2u) != 0u; // E
             cs = cs && (pipe_conn_mask & 4u) != 0u; // S
@@ -1758,12 +1849,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if btype == 16u {
             // --- Pump: square block connected to pipes ---
             let pump_r = 0.30;
-            let pipe_r = 0.10;
+            let pipe_r = 0.15;
             // Draw pipe stubs connecting to neighbors BEHIND the pump
-            if cn && abs(cx) < pipe_r && cy < -pump_r { color = vec3(0.50, 0.52, 0.55); }
-            if cs && abs(cx) < pipe_r && cy > pump_r { color = vec3(0.50, 0.52, 0.55); }
-            if ce && abs(cy) < pipe_r && cx > pump_r { color = vec3(0.50, 0.52, 0.55); }
-            if cw && abs(cy) < pipe_r && cx < -pump_r { color = vec3(0.50, 0.52, 0.55); }
+            if cn && abs(cx) < pipe_r && cy < -pump_r { color = vec3(0.38, 0.40, 0.43); }
+            if cs && abs(cx) < pipe_r && cy > pump_r { color = vec3(0.38, 0.40, 0.43); }
+            if ce && abs(cy) < pipe_r && cx > pump_r { color = vec3(0.38, 0.40, 0.43); }
+            if cw && abs(cy) < pipe_r && cx < -pump_r { color = vec3(0.38, 0.40, 0.43); }
             // Pump body on top
             if abs(cx) < pump_r && abs(cy) < pump_r {
                 let shade = 1.0 - max(abs(cx), abs(cy)) / pump_r * 0.3;
@@ -1788,10 +1879,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 color = mix(body, highlight, rim * rim);
 
                 // Pipe connections: thin lines extending from tank edges
-                if cn && abs(cx) < 0.06 && cy < -tank_ry + 0.1 { color = vec3(0.50, 0.52, 0.55); }
-                if cs && abs(cx) < 0.06 && cy > tank_ry - 0.1 { color = vec3(0.50, 0.52, 0.55); }
-                if ce && abs(cy) < 0.06 && cx > tank_rx - 0.1 { color = vec3(0.50, 0.52, 0.55); }
-                if cw && abs(cy) < 0.06 && cx < -tank_rx + 0.1 { color = vec3(0.50, 0.52, 0.55); }
+                if cn && abs(cx) < 0.08 && cy < -tank_ry + 0.1 { color = vec3(0.38, 0.40, 0.43); }
+                if cs && abs(cx) < 0.08 && cy > tank_ry - 0.1 { color = vec3(0.38, 0.40, 0.43); }
+                if ce && abs(cy) < 0.08 && cx > tank_rx - 0.1 { color = vec3(0.38, 0.40, 0.43); }
+                if cw && abs(cy) < 0.08 && cx < -tank_rx + 0.1 { color = vec3(0.38, 0.40, 0.43); }
 
                 // Fill level indicator (vertical bar on the left side)
                 // TODO: read actual pressure from pipe state buffer
@@ -1813,8 +1904,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             // else: background (dirt floor) already set above
         } else {
-            // --- Pipe / Pump / Valve / Outlet / Inlet / Restrictor: thin round pipe ---
-            var pipe_r = 0.10; // pipe radius (thin)
+            // --- Pipe / Pump / Valve / Outlet / Inlet / Restrictor: round pipe ---
+            var pipe_r = select(0.15, 0.12, btype == 49u); // gas pipes wider, liquid slightly thinner
             // Restrictor (46): constriction — narrower in the middle
             let is_restrictor = btype == 46u;
             if is_restrictor {
@@ -1822,8 +1913,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let center_dist = length(vec2(cx, cy));
                 let constrict = smoothstep(0.0, 0.35, center_dist);
                 let r_level_vis = f32(bheight & 0xFu) / 10.0;
-                let narrow_r = 0.04 + r_level_vis * 0.04; // min 0.04, max 0.08
-                pipe_r = mix(narrow_r, 0.10, constrict);
+                let narrow_r = 0.05 + r_level_vis * 0.05; // min 0.05, max 0.10
+                pipe_r = mix(narrow_r, 0.15, constrict);
             }
             var on_pipe = false;
             var pipe_dist = 1.0; // distance from pipe center (for rounded shading)
@@ -1838,7 +1929,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let along_dist = abs(cx);
                     let constrict_h = smoothstep(0.0, 0.35, along_dist);
                     let r_lv = f32(bheight & 0xFu) / 10.0;
-                    local_r = mix(0.04 + r_lv * 0.04, 0.10, constrict_h);
+                    local_r = mix(0.05 + r_lv * 0.05, 0.15, constrict_h);
                 }
                 if cx >= x_min && cx <= x_max && abs(cy) < local_r {
                     on_pipe = true;
@@ -1854,7 +1945,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let along_dist = abs(cy);
                     let constrict_v = smoothstep(0.0, 0.35, along_dist);
                     let r_lv = f32(bheight & 0xFu) / 10.0;
-                    local_r = mix(0.04 + r_lv * 0.04, 0.10, constrict_v);
+                    local_r = mix(0.05 + r_lv * 0.05, 0.15, constrict_v);
                 }
                 if cy >= y_min && cy <= y_max && abs(cx) < local_r {
                     on_pipe = true;
@@ -1876,12 +1967,20 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             if on_pipe {
                 // Rounded pipe shading: bright center, dark edges (cylindrical)
                 let shade = 1.0 - pipe_dist * pipe_dist;
-                // Restrictor: copper/brass tint
-                var pipe_base = vec3<f32>(0.40, 0.42, 0.46);
-                var pipe_bright = vec3<f32>(0.62, 0.65, 0.70);
+                // Pipe color varies by type — gas pipes are darker/industrial
+                var pipe_base = vec3<f32>(0.30, 0.32, 0.35);
+                var pipe_bright = vec3<f32>(0.48, 0.50, 0.54);
                 if is_restrictor {
                     pipe_base = vec3<f32>(0.55, 0.40, 0.25);
                     pipe_bright = vec3<f32>(0.75, 0.58, 0.35);
+                } else if btype == 49u {
+                    // Liquid pipe: blue tint
+                    pipe_base = vec3<f32>(0.30, 0.40, 0.55);
+                    pipe_bright = vec3<f32>(0.50, 0.62, 0.78);
+                } else if btype == 50u {
+                    // Pipe bridge: slightly different shade to indicate crossing
+                    pipe_base = vec3<f32>(0.42, 0.44, 0.48);
+                    pipe_bright = vec3<f32>(0.64, 0.67, 0.72);
                 }
                 color = mix(pipe_base, pipe_bright, shade);
 
@@ -1912,6 +2011,31 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                     }
                 }
 
+                // Pipe bridge: segment-specific visual overlay
+                if btype == 50u {
+                    let br_seg = (bflags >> 3u) & 3u;
+                    let br_rot = (bflags >> 5u) & 3u;
+                    let bridge_is_ns = br_rot % 2u == 0u;
+                    let along = select(cx, cy, bridge_is_ns);
+                    if br_seg == 0u || br_seg == 2u {
+                        // Entry/exit: ramp going underground — darker toward middle
+                        let toward_middle = select(along, -along, br_seg == 0u);
+                        if toward_middle > 0.1 {
+                            let ramp = smoothstep(0.1, 0.5, toward_middle);
+                            color = mix(color, vec3(0.20, 0.22, 0.25), ramp * 0.6);
+                        }
+                    } else {
+                        // Middle: surface shows "underground" indicator — dashed line
+                        let perp = select(abs(cy), abs(cx), bridge_is_ns);
+                        if perp < 0.04 {
+                            let dash = fract(select(cx, cy, bridge_is_ns) * 3.0);
+                            if dash < 0.5 {
+                                color = mix(color, vec3(0.25, 0.28, 0.30), 0.5);
+                            }
+                        }
+                    }
+                }
+
                 // Valve overlay
                 if btype == 18u {
                     let valve_open = is_open(block);
@@ -1922,6 +2046,52 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                         color = vc;
                     }
                     if cdist < 0.04 { color = vc; }
+                }
+
+                // Liquid Intake (52): blue/teal box straddling water
+                if btype == 52u {
+                    let seg52 = (bflags >> 3u) & 3u;
+                    if cdist < 0.25 {
+                        color = vec3(0.25, 0.40, 0.55);
+                        if cdist > 0.20 { color = vec3(0.18, 0.30, 0.42); } // rim
+                        if seg52 == 1u {
+                            // Water-side segment: wave pattern
+                            let wave = sin(fx * 12.0 + camera.time * 3.0) * 0.03;
+                            if abs(cy + wave) < 0.08 { color = vec3(0.20, 0.50, 0.70); }
+                        } else {
+                            // Ground-side: pipe connection indicator
+                            if cdist < 0.06 { color = vec3(0.35, 0.55, 0.70); }
+                        }
+                    }
+                }
+
+                // Liquid Pump (53): blue-green pump body
+                if btype == 53u {
+                    let pump53_r = 0.28;
+                    if cdist < pump53_r {
+                        let shade53 = 1.0 - cdist / pump53_r * 0.3;
+                        color = vec3(0.25, 0.45, 0.50) * shade53;
+                        let pulse53 = sin(camera.time * 5.0) * 0.5 + 0.5;
+                        color += vec3(0.0, pulse53 * 0.06, pulse53 * 0.08);
+                        if cdist > pump53_r - 0.03 { color = vec3(0.20, 0.32, 0.38); }
+                    }
+                }
+
+                // Liquid Output (54): nozzle spraying water
+                if btype == 54u {
+                    if cdist < 0.20 {
+                        color = vec3(0.30, 0.45, 0.55);
+                        if cdist > 0.16 { color = vec3(0.22, 0.35, 0.45); }
+                        // Animated spray dots
+                        let spray_t = camera.time * 4.0;
+                        let spray_r = fract(spray_t) * 0.3 + 0.05;
+                        let spray_a = fract(spray_t * 0.7) * 6.28;
+                        let sx = cos(spray_a) * spray_r;
+                        let sy = sin(spray_a) * spray_r;
+                        if length(vec2(cx - sx, cy - sy)) < 0.04 {
+                            color = vec3(0.40, 0.65, 0.85);
+                        }
+                    }
                 }
             }
             // Inlet/Outlet: rendered AFTER and ON TOP of everything (overlays wall sprite)
@@ -2098,8 +2268,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = ground;
         }
-    } else if btype == 36u {
-        // Wire: copper conductor with directional segments
+    } else if btype == 36u || btype == 51u {
+        // Wire / Wire Bridge: copper conductor with directional segments
         let ground = vec3<f32>(0.42, 0.35, 0.22);
         // Connection mask stored in height byte bits 4-7: bit4=N, bit5=E, bit6=S, bit7=W
         let conn_mask = bheight >> 4u;
@@ -2118,7 +2288,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let wf_e2 = (get_block(bx + 1, by) >> 16u) & 0x80u;
             let wf_n2 = (get_block(bx, by - 1) >> 16u) & 0x80u;
             let wf_s2 = (get_block(bx, by + 1) >> 16u) & 0x80u;
-            let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 42u || n_w == 43u || n_w == 45u || n_w == 7u || n_w == 12u || n_w == 10u;
+            let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 42u || n_w == 43u || n_w == 45u || n_w == 51u || n_w == 48u || n_w == 7u || n_w == 12u || n_w == 10u;
             let pwr_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 39u || n_e == 40u || n_e == 41u || n_e == 42u || n_e == 43u || n_e == 45u || n_e == 7u || n_e == 12u || n_e == 10u;
             let pwr_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 39u || n_n == 40u || n_n == 41u || n_n == 42u || n_n == 43u || n_n == 45u || n_n == 7u || n_n == 12u || n_n == 10u;
             let pwr_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 39u || n_s == 40u || n_s == 41u || n_s == 42u || n_s == 43u || n_s == 45u || n_s == 7u || n_s == 12u || n_s == 10u;
@@ -2164,6 +2334,30 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Animated pulse showing current flow
             let pulse = sin(world_x * 4.0 + world_y * 4.0 - camera.time * 8.0) * 0.5 + 0.5;
             wire_col += vec3<f32>(0.08, 0.06, 0.01) * pulse * glow_intensity;
+            // Wire bridge: segment-specific visual
+            if btype == 51u {
+                let wb_seg = (bflags >> 3u) & 3u;
+                let wb_rot = (bflags >> 5u) & 3u;
+                let bridge_is_ns = wb_rot % 2u == 0u;
+                let along = select(fx - 0.5, fy - 0.5, bridge_is_ns);
+                if wb_seg == 0u || wb_seg == 2u {
+                    // Entry/exit: ramp going underground
+                    let toward_mid = select(along, -along, wb_seg == 0u);
+                    if toward_mid > 0.1 {
+                        let ramp = smoothstep(0.1, 0.5, toward_mid);
+                        wire_col = mix(wire_col, vec3(0.15, 0.12, 0.08), ramp * 0.6);
+                    }
+                } else {
+                    // Middle: dashed underground indicator
+                    let perp = select(abs(fy - 0.5), abs(fx - 0.5), bridge_is_ns);
+                    if perp < 0.03 {
+                        let dash = fract(select(fx, fy, bridge_is_ns) * 4.0);
+                        if dash < 0.5 {
+                            wire_col = mix(wire_col, vec3(0.3, 0.25, 0.15), 0.4);
+                        }
+                    }
+                }
+            }
             color = wire_col;
         } else {
             color = ground;
@@ -2593,11 +2787,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let door_is_open = is_door(block) && is_open(block);
     // Trees: transparent sprite pixels are ground-level; canopy keeps height for shadows
     let is_tree_ground = (btype == 8u || btype == 31u) && !is_tree_pixel;
-    let is_pipe = (btype >= 15u && btype <= 20u) || btype == 46u;
+    let is_pipe = (btype >= 15u && btype <= 20u) || btype == 46u || btype == 49u || btype == 50u || btype == 52u || btype == 53u || btype == 54u;
     let is_dug = btype == 32u; // dug ground: height = depth, not visual height
     let is_rock = btype == 34u;
     let is_crate = btype == 33u; // crate height = item count, not visual height
-    let is_wire = btype == 36u; // wire height = connection mask, not visual
+    let is_wire = btype == 36u || btype == 51u; // wire height = connection mask, not visual
     let is_dimmer = btype == 43u; // dimmer/varistor height = level, not visual
     let is_breaker = btype == 45u; // breaker height = threshold, not visual
     let is_plant = btype == 47u; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
@@ -2969,18 +3163,27 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Per-pixel proximity glow for floor tiles near light sources.
-    // Applies to indoor floors AND outdoor ground (for outdoor campfires etc).
-    // Wall tops are excluded to prevent light bleed onto the roof surface.
-    // Apply proximity glow to floors, outdoor ground, and furniture (benches)
+    // Per-pixel proximity glow from nearby light sources.
+    // Applies to all visible surfaces EXCEPT structural wall tops (which would bleed onto roof).
+    // Equipment, furniture, batteries, pipes etc. inside buildings all receive light.
     let is_furniture = get_material(btype).is_furniture > 0.5 && !(btype == 11u && is_table_lamp_bulb);
-    if camera.enable_prox_glow > 0.5 && (is_indoor || is_furniture || (!is_roofed_wall && effective_height == 0u)) {
+    let is_structural_wall = is_roofed && camera.show_roofs < 0.5
+        && matches_wall_type(btype) && bheight > 0u;
+    let receives_glow = is_indoor || is_furniture
+        || (is_roofed && camera.show_roofs < 0.5 && !is_structural_wall) // indoor equipment/pipes
+        || (!is_roofed && effective_height == 0u); // outdoor ground
+    if camera.enable_prox_glow > 0.5 && receives_glow {
         // Conditional glow: skip expensive 13x13 scan if lightmap shows no nearby light
         let lm_gate = sample_lightmap(world_x, world_y);
         if lm_gate.w > 0.02 {
             let prox_glow = compute_proximity_glow(world_x, world_y, camera.time);
             let night_boost = 1.0 - camera.sun_intensity * 0.7;
-            color += prox_glow * camera.indoor_glow_mul * (0.5 + night_boost);
+            let glow_mul = camera.indoor_glow_mul * (0.5 + night_boost);
+            // Multiplicative illumination: surfaces get brighter proportionally,
+            // preserving texture detail. Small additive term ensures even very
+            // dark surfaces show some light (simulates subsurface/bounce).
+            color = color * (vec3(1.0) + prox_glow * glow_mul * 3.0)
+                  + prox_glow * glow_mul * 0.08;
         }
     }
 
@@ -3145,7 +3348,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let bh_for_temp = bheight;
         let is_solid_block = bh_for_temp > 0u && (bt_for_temp == 1u || bt_for_temp == 4u || bt_for_temp == 5u
             || bt_for_temp == 14u || (bt_for_temp >= 21u && bt_for_temp <= 25u) || bt_for_temp == 35u);
-        let is_pipe_block_t = (bt_for_temp >= 15u && bt_for_temp <= 20u) || bt_for_temp == 46u;
+        let is_pipe_block_t = (bt_for_temp >= 15u && bt_for_temp <= 20u) || bt_for_temp == 46u || bt_for_temp == 49u || bt_for_temp == 50u || bt_for_temp == 52u || bt_for_temp == 53u || bt_for_temp == 54u;
         let temp = select(smoke.a, block_temps[grid_idx], is_solid_block || is_pipe_block_t);
         // Remap: -30→0, 0→0.15, 15→0.30, 25→0.40, 40→0.55, 60→0.70, 100→0.85, 500→1.0
         var temp_norm: f32;
@@ -3213,7 +3416,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let norm_v = clamp(v / 12.0, 0.0, 1.0);
         // Is this block part of the power grid?
         let is_pwr_infra = btype == 36u || btype == 37u || btype == 38u || btype == 39u
-            || btype == 40u || btype == 41u || btype == 42u || btype == 43u || btype == 45u
+            || btype == 40u || btype == 41u || btype == 42u || btype == 43u || btype == 45u || btype == 48u || btype == 51u
             || btype == 7u || btype == 10u || btype == 11u || btype == 12u || btype == 16u
             || (bflags & 0x80u) != 0u; // wire overlay on wall
         if is_pwr_infra {
@@ -3254,7 +3457,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         let norm_a = clamp(total_current * 0.5, 0.0, 1.0);
         let is_amp_infra = btype == 36u || btype == 37u || btype == 38u || btype == 39u
-            || btype == 40u || btype == 41u || btype == 42u || btype == 43u
+            || btype == 40u || btype == 41u || btype == 42u || btype == 43u || btype == 48u || btype == 51u
             || btype == 7u || btype == 10u || btype == 11u || btype == 12u || btype == 16u
             || (bflags & 0x80u) != 0u;
         if norm_a > 0.005 {

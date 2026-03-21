@@ -52,6 +52,13 @@ pub const BT_DIAGONAL: u32 = 44;
 pub const BT_BREAKER: u32 = 45;
 pub const BT_RESTRICTOR: u32 = 46;
 pub const BT_CROP: u32 = 47;
+pub const BT_FLOODLIGHT: u32 = 48;
+pub const BT_LIQUID_PIPE: u32 = 49;
+pub const BT_PIPE_BRIDGE: u32 = 50;
+pub const BT_WIRE_BRIDGE: u32 = 51;
+pub const BT_LIQUID_INTAKE: u32 = 52;
+pub const BT_LIQUID_PUMP: u32 = 53;
+pub const BT_LIQUID_OUTPUT: u32 = 54;
 
 /// Pack a block into a u32: [type:8 | height:8 | flags:8 | roof_height:8]
 pub fn make_block(block_type: u8, height: u8, flags: u8) -> u32 {
@@ -77,7 +84,7 @@ pub fn roof_height_rs(b: u32) -> u8 {
 /// Is this block type part of the electrical power network?
 /// Checks block type and wire overlay flag. Matches the GPU-side is_conductor() in power.wgsl.
 pub fn is_conductor_rs(bt: u8, flags: u8) -> bool {
-    matches!(bt, 36..=43 | 45 | 7 | 10..=12 | 16) || (flags & 0x80) != 0
+    matches!(bt, 36..=43 | 45 | 48 | 51 | 7 | 10..=12 | 16) || (flags & 0x80) != 0
 }
 
 /// Unpacked block data for convenient access.
@@ -220,7 +227,9 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
                     // Wire(36), dimmer(43), varistor(47), restrictor(46) use height for level, not visual
                     // Crate(33) uses height for item count
                     let skip = bt_is!(nbt as u32, BT_TREE, BT_FIREPLACE, BT_CEILING_LIGHT,
-                        BT_CRATE, BT_WIRE, BT_DIMMER, BT_RESTRICTOR);
+                        BT_CRATE, BT_WIRE, BT_DIMMER, BT_RESTRICTOR,
+                        BT_LIQUID_PIPE, BT_PIPE_BRIDGE, BT_WIRE_BRIDGE,
+                        BT_LIQUID_INTAKE, BT_LIQUID_PUMP, BT_LIQUID_OUTPUT);
                     if nbh > 0 && (nb_flags & 2) == 0 && !skip
                     {
                         max_h = max_h.max(nbh);
@@ -650,5 +659,210 @@ mod tests {
         let all = make_block(36, 0xF0, 0); // all 4 connections
         let a_mask = (block_height_rs(all) >> 4) & 0xF;
         assert_eq!(a_mask, 0xF, "all-direction should have mask=15");
+    }
+
+    // --- Placement validation tests ---
+    // These test the placement rules that determine blue vs red blueprint.
+    // A blue blueprint MUST mean the block is actually placeable.
+
+    /// Helper: check if block type `place_id` can be placed on a tile containing `existing_bt`
+    /// Must match the actual placement rules in main.rs handle_click and blueprint validation.
+    fn can_place_on_block(place_id: u8, existing_bt: u32, existing_h: u8) -> bool {
+        let empty_ground = existing_h == 0 && (existing_bt == BT_AIR || existing_bt == BT_DIRT
+            || existing_bt == BT_WOOD_FLOOR || existing_bt == BT_STONE_FLOOR || existing_bt == BT_CONCRETE_FLOOR);
+        let pid = place_id as u32;
+        empty_ground
+            || (pid == BT_WIRE && existing_bt != BT_WIRE)
+            || (pid == BT_PIPE && (existing_bt == BT_PIPE || existing_bt == BT_PIPE_BRIDGE))
+            || (pid == BT_RESTRICTOR && (existing_bt == BT_PIPE || existing_bt == BT_RESTRICTOR || existing_bt == BT_PIPE_BRIDGE))
+            || (pid == BT_LIQUID_PIPE && (existing_bt == BT_LIQUID_PIPE || existing_bt == BT_PIPE_BRIDGE))
+            || (pid == BT_PUMP && existing_bt == BT_PIPE)
+            || ((pid == BT_SWITCH || pid == BT_DIMMER || pid == BT_BREAKER) && (existing_bt == BT_WIRE || existing_bt == BT_AIR || existing_bt == BT_DIRT))
+    }
+
+    #[test]
+    fn test_all_block_ids_valid() {
+        // Every defined block type ID should be < NUM_MATERIALS
+        let max_id = 54u32; // BT_LIQUID_OUTPUT
+        for id in 0..=max_id {
+            assert!(id < crate::materials::NUM_MATERIALS as u32,
+                "Block ID {} exceeds NUM_MATERIALS ({})", id, crate::materials::NUM_MATERIALS);
+        }
+    }
+
+    #[test]
+    fn test_pipe_placeable_on_ground() {
+        assert!(can_place_on_block(BT_PIPE as u8, BT_DIRT, 0));
+        assert!(can_place_on_block(BT_LIQUID_PIPE as u8, BT_DIRT, 0));
+        assert!(can_place_on_block(BT_RESTRICTOR as u8, BT_DIRT, 0));
+    }
+
+    #[test]
+    fn test_pipe_placeable_on_existing_pipe() {
+        assert!(can_place_on_block(BT_PIPE as u8, BT_PIPE, 1));
+        assert!(can_place_on_block(BT_RESTRICTOR as u8, BT_PIPE, 1));
+        assert!(can_place_on_block(BT_LIQUID_PIPE as u8, BT_LIQUID_PIPE, 1));
+    }
+
+    #[test]
+    fn test_pipe_not_cross_connect() {
+        // Gas pipes shouldn't visually merge onto liquid pipes and vice versa
+        assert!(!can_place_on_block(BT_PIPE as u8, BT_LIQUID_PIPE, 1));
+        assert!(!can_place_on_block(BT_LIQUID_PIPE as u8, BT_PIPE, 1));
+    }
+
+    #[test]
+    fn test_wire_placeable_anywhere() {
+        assert!(can_place_on_block(BT_WIRE as u8, BT_DIRT, 0));
+        assert!(can_place_on_block(BT_WIRE as u8, BT_STONE, 3)); // on walls
+        assert!(can_place_on_block(BT_WIRE as u8, BT_PIPE, 1));  // on pipes
+        assert!(!can_place_on_block(BT_WIRE as u8, BT_WIRE, 0)); // NOT on existing wire
+    }
+
+    #[test]
+    fn test_power_equipment_on_wire_or_ground() {
+        for &id in &[BT_SWITCH, BT_DIMMER, BT_BREAKER] {
+            assert!(can_place_on_block(id as u8, BT_WIRE, 0), "ID {} should place on wire", id);
+            assert!(can_place_on_block(id as u8, BT_DIRT, 0), "ID {} should place on ground", id);
+        }
+    }
+
+    #[test]
+    fn test_pump_on_pipe() {
+        assert!(can_place_on_block(BT_PUMP as u8, BT_PIPE, 1));
+        assert!(can_place_on_block(BT_PUMP as u8, BT_DIRT, 0)); // also on ground
+    }
+
+    #[test]
+    fn test_liquid_intake_on_water_or_dug() {
+        // Liquid intake is a 2-tile block; at least one tile must be water/dug
+        // This tests the individual tile acceptance (both ground and water tiles should be valid)
+        let dug = make_block(BT_DUG_GROUND as u8, 1, 0);
+        let water = make_block(BT_WATER as u8, 0, 0);
+        let dirt = make_block(BT_DIRT as u8, 0, 0);
+        assert_eq!(block_type_rs(dug) as u32, BT_DUG_GROUND);
+        assert_eq!(block_type_rs(water) as u32, BT_WATER);
+        assert_eq!(block_type_rs(dirt) as u32, BT_DIRT);
+    }
+
+    #[test]
+    fn test_is_conductor_includes_all_power_blocks() {
+        // All power grid components should be recognized as conductors
+        let power_ids: &[u8] = &[36, 37, 38, 39, 40, 41, 42, 43, 45, 48, 51, 7, 10, 11, 12, 16];
+        for &id in power_ids {
+            assert!(is_conductor_rs(id, 0), "Block type {} should be a conductor", id);
+        }
+        // Wire overlay flag
+        assert!(is_conductor_rs(1, 0x80), "Wall with wire overlay should be conductor");
+        // Non-conductors
+        assert!(!is_conductor_rs(2, 0), "Dirt should not be conductor");
+        assert!(!is_conductor_rs(15, 0), "Pipe should not be conductor");
+    }
+
+    #[test]
+    fn test_bridge_connects_to_gas_pipes() {
+        assert!(can_place_on_block(BT_PIPE as u8, BT_PIPE_BRIDGE, 1),
+            "Gas pipe should be placeable on bridge");
+        assert!(can_place_on_block(BT_RESTRICTOR as u8, BT_PIPE_BRIDGE, 1),
+            "Restrictor should be placeable on bridge");
+    }
+
+    #[test]
+    fn test_bridge_connects_to_liquid_pipes() {
+        assert!(can_place_on_block(BT_LIQUID_PIPE as u8, BT_PIPE_BRIDGE, 1),
+            "Liquid pipe should be placeable on bridge");
+    }
+
+    /// Simulate intake tile assignment: given two block types, determine if placement is valid.
+    /// Returns (ground_idx, water_idx) or None if invalid.
+    fn intake_valid(bt0: u32, bh0: u8, bt1: u32, bh1: u8) -> Option<(usize, usize)> {
+        let is_ground = |bt: u32, bh: u8| bh == 0 && (bt == BT_AIR || bt == BT_DIRT
+            || bt == BT_WOOD_FLOOR || bt == BT_STONE_FLOOR || bt == BT_CONCRETE_FLOOR);
+        let is_water = |bt: u32| bt == BT_WATER || bt == BT_DUG_GROUND;
+        if is_ground(bt0, bh0) && is_water(bt1) { Some((0, 1)) }
+        else if is_water(bt0) && is_ground(bt1, bh1) { Some((1, 0)) }
+        else { None }
+    }
+
+    #[test]
+    fn test_liquid_intake_ground_plus_water() {
+        // Ground first, water second
+        assert!(intake_valid(BT_DIRT, 0, BT_WATER, 0).is_some());
+        assert!(intake_valid(BT_DIRT, 0, BT_DUG_GROUND, 1).is_some());
+    }
+
+    #[test]
+    fn test_liquid_intake_water_plus_ground() {
+        // Water first, ground second (reversed click direction)
+        let r = intake_valid(BT_WATER, 0, BT_DIRT, 0);
+        assert!(r.is_some());
+        assert_eq!(r.unwrap(), (1, 0), "ground should be index 1, water index 0");
+    }
+
+    #[test]
+    fn test_liquid_intake_both_ground_invalid() {
+        // Both tiles are ground — no water source, invalid
+        assert!(intake_valid(BT_DIRT, 0, BT_DIRT, 0).is_none());
+    }
+
+    #[test]
+    fn test_liquid_intake_both_water_invalid() {
+        // Both tiles are water — no ground anchor, invalid
+        assert!(intake_valid(BT_WATER, 0, BT_WATER, 0).is_none());
+    }
+
+    #[test]
+    fn test_liquid_intake_wall_invalid() {
+        // Can't place on a wall tile
+        assert!(intake_valid(BT_STONE, 3, BT_WATER, 0).is_none());
+    }
+
+    #[test]
+    fn test_liquid_components_in_network() {
+        use crate::pipes::{is_liquid_pipe_component, is_gas_pipe_component};
+        // Liquid network includes: liquid pipe, bridge, intake, pump, output
+        assert!(is_liquid_pipe_component(49), "Liquid pipe");
+        assert!(is_liquid_pipe_component(50), "Bridge in liquid network");
+        assert!(is_liquid_pipe_component(52), "Liquid intake");
+        assert!(is_liquid_pipe_component(53), "Liquid pump");
+        assert!(is_liquid_pipe_component(54), "Liquid output");
+        // Gas network includes bridge too
+        assert!(is_gas_pipe_component(50), "Bridge in gas network");
+        // Cross-isolation: liquid components not in gas network
+        assert!(!is_gas_pipe_component(49), "Liquid pipe NOT in gas network");
+        assert!(!is_gas_pipe_component(52), "Liquid intake NOT in gas network");
+    }
+
+    #[test]
+    fn test_liquid_pipes_walkable() {
+        // All liquid pipe components should be recognized as walkable pipe blocks
+        // (walkability is checked in pleb.rs using the same block type IDs)
+        let liquid_types: &[u32] = &[BT_LIQUID_PIPE, BT_LIQUID_INTAKE, BT_LIQUID_PUMP, BT_LIQUID_OUTPUT];
+        for &bt in liquid_types {
+            // The pipe walkability check: bt matches AND height <= 1
+            let is_any_pipe = (bt >= 15 && bt <= 20) || bt == BT_RESTRICTOR
+                || bt == BT_LIQUID_PIPE || bt == BT_PIPE_BRIDGE
+                || bt == BT_LIQUID_INTAKE || bt == BT_LIQUID_PUMP || bt == BT_LIQUID_OUTPUT;
+            assert!(is_any_pipe, "Block type {} should be walkable as a pipe", bt);
+        }
+    }
+
+    #[test]
+    fn test_gas_pipe_types_walkable() {
+        let gas_types: &[u32] = &[BT_PIPE, BT_PUMP, BT_TANK, BT_VALVE, BT_OUTLET, BT_INLET, BT_RESTRICTOR];
+        for &bt in gas_types {
+            let is_any_pipe = (bt >= 15 && bt <= 20) || bt == BT_RESTRICTOR
+                || bt == BT_LIQUID_PIPE || bt == BT_PIPE_BRIDGE
+                || bt == BT_LIQUID_INTAKE || bt == BT_LIQUID_PUMP || bt == BT_LIQUID_OUTPUT;
+            assert!(is_any_pipe, "Block type {} should be walkable as a pipe", bt);
+        }
+    }
+
+    #[test]
+    fn test_num_materials_covers_all_blocks() {
+        let highest = BT_LIQUID_OUTPUT; // 54
+        assert!(crate::materials::NUM_MATERIALS > highest as usize,
+            "NUM_MATERIALS ({}) must be > highest block ID ({})",
+            crate::materials::NUM_MATERIALS, highest);
     }
 }

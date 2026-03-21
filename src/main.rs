@@ -267,7 +267,8 @@ struct App {
     prev_cam_zoom: f32,
     prev_cam_time: f32,
     fluid_overlay: FluidOverlay,
-    pipe_network: PipeNetwork,
+    pipe_network: PipeNetwork,         // gas pipe simulation
+    liquid_network: PipeNetwork,       // liquid pipe simulation
     fluid_speed: f32,             // fluid simulation speed multiplier
     enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
     enable_dir_bleed: bool,       // directional light bleed (expensive)
@@ -275,7 +276,8 @@ struct App {
     enable_ricochets: bool,       // bullets bounce off walls
     sandbox_mode: bool,           // enables sandbox build category + debug tools
     sandbox_tool: SandboxTool,    // current sandbox action
-    show_pipe_overlay: bool,       // draw pipe gas contents as egui overlay
+    show_pipe_overlay: bool,       // draw gas pipe contents as egui overlay (ventilation)
+    show_liquid_overlay: bool,     // draw liquid pipe contents as egui overlay
     show_flow_overlay: bool,       // draw flow arrows on pipes (pressure) and wires (current)
     show_velocity_arrows: bool,    // draw fluid velocity vector field on overlays
     pipe_width: f32,               // pipe conductance multiplier (1=narrow, 10=wide)
@@ -528,6 +530,7 @@ impl App {
             },
             fluid_overlay: FluidOverlay::None,
             pipe_network: PipeNetwork::new(),
+            liquid_network: PipeNetwork::new(),
             fluid_speed: 1.0,
             enable_prox_glow: true,
             enable_dir_bleed: true,
@@ -537,6 +540,7 @@ impl App {
             sandbox_tool: SandboxTool::None,
             drag_start: None,
             show_pipe_overlay: false,
+            show_liquid_overlay: false,
             show_flow_overlay: false,
             show_velocity_arrows: false,
             pipe_width: 5.0,
@@ -668,6 +672,38 @@ impl App {
         } else {
             // Vertical: extends south
             [(bx, by), (bx, by + 1), (bx, by + 2)]
+        }
+    }
+
+    /// Bridge tiles: 3-tile line in the rotation direction.
+    fn bridge_tiles(&self, bx: i32, by: i32, rotation: u32) -> [(i32, i32); 3] {
+        match rotation {
+            0 => [(bx, by), (bx, by + 1), (bx, by + 2)],     // N: goes south
+            1 => [(bx, by), (bx + 1, by), (bx + 2, by)],     // E: goes east
+            2 => [(bx, by), (bx, by - 1), (bx, by - 2)],     // S: goes north
+            _ => [(bx, by), (bx - 1, by), (bx - 2, by)],     // W: goes west
+        }
+    }
+
+    /// For liquid intake: determine which of the 2 tiles is ground (seg 0) and which is water (seg 1).
+    /// Returns (Some(ground_index), Some(water_index)) or (None, None) if invalid.
+    fn intake_tile_assignment(&self, tiles: &[(i32, i32); 2]) -> (Option<usize>, Option<usize>) {
+        let in_bounds = |x: i32, y: i32| x >= 0 && y >= 0 && x < GRID_W as i32 && y < GRID_H as i32;
+        if !in_bounds(tiles[0].0, tiles[0].1) || !in_bounds(tiles[1].0, tiles[1].1) {
+            return (None, None);
+        }
+        let bt = |i: usize| -> u32 {
+            (self.grid_data[(tiles[i].1 as u32 * GRID_W + tiles[i].0 as u32) as usize] & 0xFF) as u32
+        };
+        let is_water = |b: u32| b == BT_WATER || b == BT_DUG_GROUND;
+        let is_ground = |i: usize| self.can_place_at(tiles[i].0, tiles[i].1);
+        // Try both orientations: tile 0=ground + tile 1=water, or tile 0=water + tile 1=ground
+        if is_ground(0) && is_water(bt(1)) {
+            (Some(0), Some(1))
+        } else if is_water(bt(0)) && is_ground(1) {
+            (Some(1), Some(0))
+        } else {
+            (None, None)
         }
     }
 
@@ -1028,7 +1064,7 @@ impl App {
         const CONN_E: u8 = 0x20;
         const CONN_S: u8 = 0x40;
         const CONN_W: u8 = 0x80;
-        let is_line_type = block_type_id == 15 || block_type_id == 36 || block_type_id == 46; // pipe, wire, or restrictor
+        let is_line_type = block_type_id == 15 || block_type_id == 36 || block_type_id == 46 || block_type_id == 49; // pipe, wire, restrictor, liquid pipe
 
         for (ti, &(tx, ty)) in tiles.iter().enumerate() {
             if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
@@ -1040,7 +1076,9 @@ impl App {
                 let bt = block_type_rs(block);
                 let bh = (block >> 8) & 0xFF;
                 let wire_anywhere = block_type_id == 36;
-                let pipe_compat = (block_type_id == 15 || block_type_id == 46) && (bt == 15 || bt == 46);
+                let gas_pipe_compat = (block_type_id == 15 || block_type_id == 46) && (bt == 15 || bt == 46 || bt == 50);
+                let liquid_pipe_compat = block_type_id == 49 && (bt == 49 || bt == 50);
+                let pipe_compat = gas_pipe_compat || liquid_pipe_compat;
                 let same_type = bt == block_type_id || pipe_compat; // allow pipe↔restrictor
                 if ((bt == 0 || bt == 2) && bh == 0) || (wire_anywhere && bt != 36) || (is_line_type && same_type) {
                     // Compute connection mask from neighbors in the line
@@ -1068,8 +1106,9 @@ impl App {
                             if anx < 0 || any < 0 || anx >= GRID_W as i32 || any >= GRID_H as i32 { continue; }
                             let aidx = (any as u32 * GRID_W + anx as u32) as usize;
                             let abt = block_type_rs(self.grid_data[aidx]);
-                            let adj_pipe_match = (block_type_id == 15 || block_type_id == 46) && (abt == 15 || abt == 46);
-                            if abt == block_type_id || adj_pipe_match {
+                            let adj_gas_match = (block_type_id == 15 || block_type_id == 46) && (abt == 15 || abt == 46 || abt == 50);
+                            let adj_liq_match = block_type_id == 49 && (abt == 49 || abt == 50);
+                            if abt == block_type_id || adj_gas_match || adj_liq_match {
                                 conn |= mask;
                             }
                         }
@@ -1122,9 +1161,10 @@ impl App {
                             let nidx = (nny as u32 * GRID_W + nnx as u32) as usize;
                             let nb = self.grid_data[nidx];
                             let nbt = block_type_rs(nb);
-                            // Update same-type (or pipe↔restrictor) neighbors with connection mask
+                            // Update same-type (or pipe↔restrictor↔bridge) neighbors with connection mask
                             let recip_match = nbt == block_type_id
-                                || ((block_type_id == 15 || block_type_id == 46) && (nbt == 15 || nbt == 46));
+                                || ((block_type_id == 15 || block_type_id == 46) && (nbt == 15 || nbt == 46 || nbt == 50))
+                                || (block_type_id == 49 && (nbt == 49 || nbt == 50));
                             if recip_match {
                                 let nh = ((nb >> 8) & 0xFF) as u8;
                                 if (nh & 0xF0) != 0 && (nh & their_bit) == 0 {
@@ -1575,6 +1615,59 @@ impl App {
                         self.build_tool = BuildTool::None;
                     }
                 }
+                BuildTool::Place(50) | BuildTool::Place(51) => {
+                    // Pipe bridge (50) or Wire bridge (51): 3-tile placement
+                    // Can be placed on existing pipes/wires (replaces them with bridge tiles)
+                    let bridge_id = match self.build_tool { BuildTool::Place(id) => id, _ => 50 };
+                    let tiles = self.bridge_tiles(bx, by, self.build_rotation);
+                    let all_valid = tiles.iter().all(|&(tx, ty)| {
+                        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { return false; }
+                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        let tbt = (self.grid_data[tidx] & 0xFF) as u8;
+                        self.can_place_at(tx, ty)
+                            || (bridge_id == 50 && pipes::is_gas_pipe_component(tbt))
+                            || (bridge_id == 50 && pipes::is_liquid_pipe_component(tbt))
+                            || (bridge_id == 51 && (tbt == 36 || is_conductor_rs(tbt, block_flags_rs(self.grid_data[tidx]))))
+                    });
+                    if all_valid {
+                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tblock = self.grid_data[tidx];
+                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
+                            let roof_h = tblock & 0xFF000000;
+                            // flags: bits 3-4 = segment (0=entry, 1=middle, 2=exit), bits 5-6 = rotation
+                            let seg_flags = roof_flag | ((i as u8) << 3) | ((self.build_rotation as u8) << 5);
+                            self.grid_data[tidx] = make_block(bridge_id, 1, seg_flags) | roof_h;
+                        }
+                        self.grid_dirty = true;
+                        self.build_tool = BuildTool::None;
+                    }
+                }
+                BuildTool::Place(52) => {
+                    // Liquid Intake: 2-tile — one on ground, one on water/dug
+                    let tiles = self.bed_tiles(bx, by, self.build_rotation);
+                    // Determine which tile is ground and which is water
+                    let (ground_idx, water_idx) = self.intake_tile_assignment(&tiles);
+                    if let (Some(gi), Some(wi)) = (ground_idx, water_idx) {
+                        let gt = tiles[gi]; let wt = tiles[wi];
+                        // Place ground segment (seg 0)
+                        let tidx_g = (gt.1 as u32 * GRID_W + gt.0 as u32) as usize;
+                        let tb_g = self.grid_data[tidx_g];
+                        let rf_g = ((tb_g >> 16) & 0xFF) as u8 & 2;
+                        let rh_g = tb_g & 0xFF000000;
+                        let flags_g = rf_g | (0u8 << 3) | ((self.build_rotation as u8) << 5);
+                        self.grid_data[tidx_g] = make_block(52, 1, flags_g) | rh_g;
+                        // Place water segment (seg 1)
+                        let tidx_w = (wt.1 as u32 * GRID_W + wt.0 as u32) as usize;
+                        let tb_w = self.grid_data[tidx_w];
+                        let rf_w = ((tb_w >> 16) & 0xFF) as u8 & 2;
+                        let rh_w = tb_w & 0xFF000000;
+                        let flags_w = rf_w | (1u8 << 3) | ((self.build_rotation as u8) << 5);
+                        self.grid_data[tidx_w] = make_block(52, 1, flags_w) | rh_w;
+                        self.grid_dirty = true;
+                        self.build_tool = BuildTool::None;
+                    }
+                }
                 BuildTool::Place(9) => {
                     // Bench: multi-tile placement
                     let tiles = self.bench_tiles(bx, by, self.build_rotation);
@@ -1674,10 +1767,13 @@ impl App {
                     let click_mode = placement.map(|p| p.click.clone()).unwrap_or(block_defs::ClickMode::Simple);
 
                     let can_place = self.can_place_at(bx, by)
-                        || (id == 16 && bt == 15) // pump on pipe
+                        || (id == 16 && bt == 15) // gas pump on gas pipe
+                        || (id == 53 && bt == 49) // liquid pump on liquid pipe
+                        || (id == 54 && bt == 49) // liquid output on liquid pipe
                         || (id == 36 && bt != 36) // wire can go anywhere except on existing wire
                         || (id == 15 && bt == 15) // pipe on pipe = merge connections
                         || (id == 46 && (bt == 15 || bt == 46)) // restrictor on pipe or restrictor
+                        || (id == 49 && (bt == 49 || bt == 50)) // liquid pipe on liquid pipe or bridge
                         || ((id == 42 || id == 43 || id == 45) && (bt == 36 || bt == 0 || bt == 2)); // switch/dimmer/breaker on wire or ground
                     if can_place && click_mode != block_defs::ClickMode::None {
                         if id == 36 && bt != 0 && bt != 2 {
@@ -1697,7 +1793,7 @@ impl App {
                             // Restrictor starts at 50% opening (height lower nibble = 5)
                             if id == 46 { final_height = 5; }
                             // Single-click pipe/wire: auto-detect connections from adjacent matching blocks
-                            if id == 15 || id == 36 || id == 46 {
+                            if id == 15 || id == 36 || id == 46 || id == 49 {
                                 let mut conn: u8 = 0;
                                 for &(ndx, ndy, mask) in &[(0i32,-1i32,0x10u8),(0,1,0x40),(1,0,0x20),(-1,0,0x80)] {
                                     let nx = bx + ndx;
@@ -1706,7 +1802,8 @@ impl App {
                                         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                                         let nbt = block_type_rs(self.grid_data[nidx]);
                                         // Connect to same type, or pipes↔restrictors
-                                        let is_pipe_match = (id == 15 || id == 46) && (nbt == 15 || nbt == 46);
+                                        let is_pipe_match = ((id == 15 || id == 46) && (nbt == 15 || nbt == 46 || nbt == 50))
+                                            || (id == 49 && (nbt == 49 || nbt == 50));
                                         if nbt == id || is_pipe_match {
                                             conn |= mask;
                                             // Also update neighbor's connection toward us
@@ -2198,6 +2295,7 @@ impl App {
             );
             self.grid_dirty = false;
             self.pipe_network.rebuild(&self.grid_data);
+            self.liquid_network.rebuild_with(&self.grid_data, pipes::is_liquid_pipe_component);
         }
 
         // Lightning voltage surge: also handle natural lightning (heavy rain) via deferred injection
@@ -2236,9 +2334,49 @@ impl App {
 
         // Tick pipe network simulation — store outlet injections for post-shader application
         let pipe_injections = self.pipe_network.tick(dt, &self.grid_data, self.pipe_width);
+        let liquid_injections = self.liquid_network.tick(dt, &self.grid_data, self.pipe_width);
 
-        // Write pipe flow directions to GPU buffer for shader animation
-        for (&idx, cell) in &self.pipe_network.cells {
+        // Process liquid output: dump water onto ground surface + water table + wetness
+        for &(lx, ly, _gas, pressure) in &liquid_injections {
+            let cx = lx.floor() as i32;
+            let cy = ly.floor() as i32;
+            let spread = if pressure > 1.0 { 3 } else { 2 };
+            for dy in -spread..=spread {
+                for dx in -spread..=spread {
+                    let nx = cx + dx;
+                    let ny = cy + dy;
+                    if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                    let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                    let dist = ((dx * dx + dy * dy) as f32).sqrt();
+                    let falloff = (1.0 - dist / (spread as f32 + 1.0)).max(0.0);
+                    let amount = pressure.min(3.0) * falloff;
+                    // Wetness (visual ground darkening)
+                    self.wetness_data[nidx] = (self.wetness_data[nidx] + amount * dt).min(1.0);
+                    // Water table (crop irrigation)
+                    if nidx < self.water_table.len() {
+                        self.water_table[nidx] = (self.water_table[nidx] + amount * 0.3 * dt).min(0.5);
+                    }
+                    // GPU water texture (surface water visible in overlay and rendering)
+                    let water_level = amount * 0.5 * dt;
+                    let pixel: [f32; 1] = [water_level.min(0.5)];
+                    gfx.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &gfx.water_textures[self.water_phase],
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: nx as u32, y: ny as u32, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        bytemuck::cast_slice(&pixel),
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+                        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    );
+                }
+            }
+        }
+
+        // Write pipe flow directions to GPU buffer for shader animation (gas + liquid)
+        for (&idx, cell) in self.pipe_network.cells.iter().chain(self.liquid_network.cells.iter()) {
+            if idx >= GRID_W * GRID_H { continue; } // skip bridge secondary channels
             let flow_data: [f32; 2] = [cell.flow_x, cell.flow_y];
             gfx.queue.write_buffer(
                 &gfx.pipe_flow_buffer,
@@ -2342,11 +2480,12 @@ impl App {
                 // No drag: single-tile or multi-tile preview
                 match self.build_tool {
                     BuildTool::Place(9) => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
-                    BuildTool::Place(30) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
+                    BuildTool::Place(30) | BuildTool::Place(52) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
                     BuildTool::Place(37) => self.solar_tiles(hbx, hby).to_vec(),
                     BuildTool::Place(39) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
                     BuildTool::Place(40) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
                     BuildTool::Place(41) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
+                    BuildTool::Place(50) | BuildTool::Place(51) => self.bridge_tiles(hbx, hby, self.build_rotation).to_vec(),
                     _ => vec![(hbx, hby)],
                 }
             };
@@ -2384,12 +2523,43 @@ impl App {
                 } else if self.build_tool == BuildTool::Place(36) {
                     // Wire can go anywhere
                     ((tx, ty), tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32)
+                } else if self.build_tool == BuildTool::Place(52) {
+                    // Liquid Intake: whole-unit validation — one ground + one water/dug
+                    let intake_tiles = self.bed_tiles(hbx, hby, self.build_rotation);
+                    let (gi, wi) = self.intake_tile_assignment(&intake_tiles);
+                    ((tx, ty), gi.is_some() && wi.is_some())
                 } else if matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(46)) {
-                    // Pipe/Restrictor: can go on empty ground OR existing pipe/restrictor
+                    // Gas Pipe/Restrictor: on empty ground OR existing gas pipe/restrictor
                     let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                         let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || tbt == 15 || tbt == 46
+                        self.can_place_on(tx, ty, false) || tbt == 15 || tbt == 46 || tbt == 50
+                    } else { false };
+                    ((tx, ty), ok)
+                } else if self.build_tool == BuildTool::Place(49) {
+                    // Liquid Pipe: on empty ground, existing liquid pipe, or bridge
+                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        let tbt = self.grid_data[tidx] & 0xFF;
+                        self.can_place_on(tx, ty, false) || tbt == 49 || tbt == 50
+                    } else { false };
+                    ((tx, ty), ok)
+                } else if matches!(self.build_tool, BuildTool::Place(50) | BuildTool::Place(51)) {
+                    // Bridges: on empty ground or existing pipes/wires
+                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        let tbt = (self.grid_data[tidx] & 0xFF) as u8;
+                        self.can_place_on(tx, ty, false)
+                            || (self.build_tool == BuildTool::Place(50) && (pipes::is_gas_pipe_component(tbt) || pipes::is_liquid_pipe_component(tbt)))
+                            || (self.build_tool == BuildTool::Place(51) && tbt == 36)
+                    } else { false };
+                    ((tx, ty), ok)
+                } else if matches!(self.build_tool, BuildTool::Place(53) | BuildTool::Place(54)) {
+                    // Liquid pump/output: on empty ground or on liquid pipe
+                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        let tbt = self.grid_data[tidx] & 0xFF;
+                        self.can_place_on(tx, ty, false) || tbt == 49
                     } else { false };
                     ((tx, ty), ok)
                 } else if matches!(self.build_tool, BuildTool::Place(42) | BuildTool::Place(43) | BuildTool::Place(45)) {
@@ -3219,7 +3389,7 @@ impl ApplicationHandler for App {
                 } else if scroll < 0.0 {
                     self.camera.zoom /= 1.1;
                 }
-                self.camera.zoom = self.camera.zoom.clamp(base_zoom * 0.05, base_zoom * 8.0);
+                self.camera.zoom = self.camera.zoom.clamp(base_zoom * 0.01, base_zoom * 8.0);
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
