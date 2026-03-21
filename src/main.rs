@@ -195,6 +195,8 @@ struct App {
     context_menu: Option<(f32, f32)>,
     // World selection (Rimworld-style: click anything to inspect)
     world_sel: WorldSelection,
+    // Multi-select drag rectangle (screen coords)
+    select_drag_start: Option<(f32, f32)>, // world coords where selection drag started
     // Storage crate inventories: grid_idx → stored items
     crate_contents: std::collections::HashMap<u32, CrateInventory>,
     // Rock context menu
@@ -453,6 +455,7 @@ impl App {
             pleb_air_readback_pending: false,
             context_menu: None,
             world_sel: WorldSelection::None,
+            select_drag_start: None,
             crate_contents: std::collections::HashMap::new(),
             rock_context_menu: None,
             grenade_charging: false,
@@ -2297,9 +2300,9 @@ impl App {
         }
 
         // Debug: copy one dye texel at cursor position for readback
-        let shift_for_debug = self.pressed_keys.contains(&KeyCode::ShiftLeft)
-            || self.pressed_keys.contains(&KeyCode::ShiftRight);
-        if self.debug.mode || shift_for_debug {
+        let ctrl_for_debug = self.pressed_keys.contains(&KeyCode::ControlLeft)
+            || self.pressed_keys.contains(&KeyCode::ControlRight);
+        if self.debug.mode || ctrl_for_debug {
             let (wx, wy) = self.hover_world;
             let dye_x = ((wx / GRID_W as f32) * FLUID_DYE_W as f32).clamp(0.0, (FLUID_DYE_W - 1) as f32) as u32;
             let dye_y = ((wy / GRID_H as f32) * FLUID_DYE_H as f32).clamp(0.0, (FLUID_DYE_H - 1) as f32) as u32;
@@ -2877,7 +2880,7 @@ impl ApplicationHandler for App {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        // Always track cursor position and handle panning before egui
+        // Always track cursor position and handle panning/selection before egui
         if let WindowEvent::CursorMoved { position, .. } = &event {
             if self.mouse_pressed {
                 let dx = position.x - self.last_mouse_x;
@@ -2885,13 +2888,22 @@ impl ApplicationHandler for App {
                 if dx.abs() > 3.0 || dy.abs() > 3.0 {
                     self.mouse_dragged = true;
                 }
+                let shift_held = self.pressed_keys.contains(&KeyCode::ShiftLeft)
+                    || self.pressed_keys.contains(&KeyCode::ShiftRight);
                 // Shape-building tools: don't pan, just track drag
                 if self.mouse_dragged && self.drag_start.is_some() {
                     // Preview is drawn in the egui section — just don't pan
-                } else if self.mouse_dragged {
+                } else if self.mouse_dragged && shift_held {
+                    // Shift+drag = pan
                     self.camera.center_x -= dx as f32 * self.render_scale / self.camera.zoom;
                     self.camera.center_y -= dy as f32 * self.render_scale / self.camera.zoom;
                     self.window.as_ref().unwrap().request_redraw();
+                } else if self.mouse_dragged && self.build_tool == BuildTool::None {
+                    // Plain drag without build tool = selection rectangle
+                    if self.select_drag_start.is_none() {
+                        let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                        self.select_drag_start = Some((wx, wy));
+                    }
                 }
             }
             // Move dragged light source
@@ -2956,6 +2968,18 @@ impl ApplicationHandler for App {
                             let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             let (ex, ey) = (wx.floor() as i32, wy.floor() as i32);
                             self.apply_drag_shape(sx, sy, ex, ey);
+                        } else if self.select_drag_start.is_some() {
+                            // Complete selection rectangle
+                            let (sx, sy) = self.select_drag_start.unwrap();
+                            let (ex, ey) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                            let min_x = sx.min(ex).floor() as i32;
+                            let min_y = sy.min(ey).floor() as i32;
+                            let max_x = sx.max(ex).ceil() as i32;
+                            let max_y = sy.max(ey).ceil() as i32;
+                            let w = (max_x - min_x).max(1);
+                            let h = (max_y - min_y).max(1);
+                            self.world_sel = WorldSelection::Block { x: min_x, y: min_y, w, h };
+                            self.selected_pleb = None;
                         } else if !self.mouse_dragged {
                             let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             self.handle_click(wx, wy);
@@ -2963,6 +2987,7 @@ impl ApplicationHandler for App {
                         self.mouse_pressed = false;
                         self.mouse_dragged = false;
                         self.drag_start = None;
+                        self.select_drag_start = None;
                     }
                 }
                 // Right-click: context menu for selected pleb, rock menu, or pick up lights

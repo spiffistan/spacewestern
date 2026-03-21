@@ -1410,9 +1410,9 @@ impl App {
         let bp_ppp = self.ppp();
 
         // Info tool: hold Shift to inspect any block
-        let shift_held = self.pressed_keys.contains(&KeyCode::ShiftLeft)
-            || self.pressed_keys.contains(&KeyCode::ShiftRight);
-        if shift_held {
+        let ctrl_held = self.pressed_keys.contains(&KeyCode::ControlLeft)
+            || self.pressed_keys.contains(&KeyCode::ControlRight);
+        if ctrl_held {
             let (wx, wy) = self.hover_world;
             let bx = wx.floor() as i32;
             let by = wy.floor() as i32;
@@ -1662,6 +1662,33 @@ impl App {
 
     fn draw_world_overlays(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: &[((i32,i32), bool)]) {
         let bp_ppp = self.ppp();
+
+        // Selection drag rectangle (while dragging to multi-select)
+        if let Some((sx, sy)) = self.select_drag_start {
+            let (ex, ey) = self.hover_world;
+            let p0 = self.world_to_screen_ui(sx.min(ex), sy.min(ey), bp_cam);
+            let p1 = self.world_to_screen_ui(sx.max(ex), sy.max(ey), bp_cam);
+            let sel_drag_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground, egui::Id::new("select_drag"),
+            ));
+            sel_drag_painter.rect_filled(
+                egui::Rect::from_min_max(p0, p1), 0.0,
+                egui::Color32::from_rgba_unmultiplied(100, 180, 255, 30),
+            );
+            sel_drag_painter.rect_filled(
+                egui::Rect::from_min_max(p0, p1), 0.0,
+                egui::Color32::TRANSPARENT,
+            );
+            // Border
+            let r = egui::Rect::from_min_max(p0, p1);
+            let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            for i in 0..4 {
+                sel_drag_painter.line_segment(
+                    [pts[i], pts[i+1]],
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 180, 255)),
+                );
+            }
+        }
 
         // World selection brackets (Rimworld-style corner markers)
         if let WorldSelection::Block { x, y, w, h } = &self.world_sel {
