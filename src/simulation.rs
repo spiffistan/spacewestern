@@ -746,13 +746,8 @@ fn tick_pleb_activity(
                 pleb.path.clear();
                 pleb.path_idx = 0;
             } else {
-                let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                let path = astar_path(grid, start, (bx, by));
-                if !path.is_empty() {
-                    pleb.path = path;
-                    pleb.path_idx = 0;
-                    pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Starving!");
-                }
+                send_pleb_to(pleb, grid, (bx, by),
+                    PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Starving!"));
             }
         }
     } else if pleb.needs.rest < 0.08 && is_idle_or_walk && !pleb.activity.is_crisis() {
@@ -762,13 +757,8 @@ fn tick_pleb_activity(
             pleb.path.clear();
             pleb.path_idx = 0;
         } else if let Some((bx, by)) = env.nearest_bed {
-            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-            let path = astar_path(grid, start, (bx, by));
-            if !path.is_empty() {
-                pleb.path = path;
-                pleb.path_idx = 0;
-                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Exhausted!");
-            }
+            send_pleb_to(pleb, grid, (bx, by),
+                PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Exhausted!"));
         } else {
             pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Sleeping), "Collapsed!");
             pleb.path.clear();
@@ -785,13 +775,8 @@ fn tick_pleb_activity(
         let by = pleb.y.floor() as i32;
         // Search from radius 3+ to avoid pathing to an adjacent tile that's equally hot
         if let Some(target) = find_cool_tile(grid, bx, by, 20) {
-            let start = (bx, by);
-            let path = astar_path(grid, start, target);
-            if !path.is_empty() {
-                pleb.path = path;
-                pleb.path_idx = 0;
-                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Overheating!");
-            }
+            send_pleb_to(pleb, grid, target,
+                PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Overheating!"));
         }
     } else if !pleb.activity.is_crisis() {
         // Non-crisis auto-behaviors
@@ -806,13 +791,7 @@ fn tick_pleb_activity(
                     pleb.path.clear();
                     pleb.path_idx = 0;
                 } else if let Some((bx, by)) = env.nearest_bed {
-                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                    let path = astar_path(grid, start, (bx, by));
-                    if !path.is_empty() {
-                        pleb.path = path;
-                        pleb.path_idx = 0;
-                        pleb.activity = PlebActivity::Walking;
-                    }
+                    send_pleb_to(pleb, grid, (bx, by), PlebActivity::Walking);
                 }
             } else if pleb.needs.hunger < 0.4 && pleb.inventory.berries == 0 {
                 if env.near_berry_bush && pleb.harvest_target.is_none() {
@@ -824,16 +803,24 @@ fn tick_pleb_activity(
                     }
                 } else if pleb.harvest_target.is_none() {
                     if let Some((bx, by)) = env.nearest_berry_bush {
-                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path(grid, start, (bx, by));
-                        if !path.is_empty() {
-                            pleb.path = path;
-                            pleb.path_idx = 0;
-                            pleb.activity = PlebActivity::Walking;
-                        }
+                        send_pleb_to(pleb, grid, (bx, by), PlebActivity::Walking);
                     }
                 }
             }
         }
+    }
+}
+
+/// Helper: pathfind pleb to a target and set their activity. Returns true if path found.
+fn send_pleb_to(pleb: &mut Pleb, grid: &[u32], target: (i32, i32), activity: PlebActivity) -> bool {
+    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+    let path = astar_path(grid, start, target);
+    if !path.is_empty() {
+        pleb.path = path;
+        pleb.path_idx = 0;
+        pleb.activity = activity;
+        true
+    } else {
+        false
     }
 }
