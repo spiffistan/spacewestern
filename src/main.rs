@@ -2042,7 +2042,7 @@ impl App {
                             _ => vec![(hbx, hby)],
                         }
                     }
-                    BuildTool::Destroy => Self::filled_rect_tiles(sx, sy, hbx, hby),
+                    BuildTool::Destroy | BuildTool::GrowingZone => Self::filled_rect_tiles(sx, sy, hbx, hby),
                     BuildTool::Roof | BuildTool::RemoveRoof => Self::filled_rect_tiles(sx, sy, hbx, hby),
                     BuildTool::RemoveFloor => Self::filled_rect_tiles(sx, sy, hbx, hby),
                     _ => vec![(hbx, hby)],

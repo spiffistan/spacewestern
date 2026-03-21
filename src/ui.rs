@@ -602,7 +602,8 @@ impl App {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         let categories = [
                             ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
-                            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Vent", "\u{1f4a8}"), ("Power", "\u{26a1}"), ("Physics", "\u{1f4e6}"),
+                            ("Opening", "\u{1f6aa}"), ("Piping", "\u{1f529}"), ("Vent", "\u{1f4a8}"),
+                            ("Power", "\u{26a1}"), ("Zones", "\u{1f33e}"), ("Physics", "\u{1f4e6}"),
                         ];
                         for &(name, icon) in &categories {
                             let selected = self.build_category == Some(name);
@@ -707,18 +708,6 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(31), "\u{1fad0}", "Berries");
                                     icon_btn(ui, BuildTool::Place(29), "\u{1f4a5}", "Cannon");
                                     icon_btn(ui, BuildTool::Dig, "\u{26cf}", "Dig");
-                                    icon_btn(ui, BuildTool::GrowingZone, "\u{1f33f}", "Farm Zone");
-                                    ui.separator();
-                                    let prio_label = match self.work_priority {
-                                        zones::WorkPriority::PlantFirst => "Plant 1st",
-                                        zones::WorkPriority::HarvestFirst => "Harvest 1st",
-                                    };
-                                    if ui.small_button(prio_label).clicked() {
-                                        self.work_priority = match self.work_priority {
-                                            zones::WorkPriority::PlantFirst => zones::WorkPriority::HarvestFirst,
-                                            zones::WorkPriority::HarvestFirst => zones::WorkPriority::PlantFirst,
-                                        };
-                                    }
                                 }
                                 "Opening" => {
                                     icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Window");
@@ -749,6 +738,20 @@ impl App {
                                 }
                                 "Vent" => {
                                     icon_btn(ui, BuildTool::Place(12), "\u{1f4a8}", "Fan");
+                                }
+                                "Zones" => {
+                                    icon_btn(ui, BuildTool::GrowingZone, "\u{1f33f}", "Farm");
+                                    ui.separator();
+                                    let prio_label = match self.work_priority {
+                                        zones::WorkPriority::PlantFirst => "Plant 1st",
+                                        zones::WorkPriority::HarvestFirst => "Harvest 1st",
+                                    };
+                                    if ui.small_button(prio_label).clicked() {
+                                        self.work_priority = match self.work_priority {
+                                            zones::WorkPriority::PlantFirst => zones::WorkPriority::HarvestFirst,
+                                            zones::WorkPriority::HarvestFirst => zones::WorkPriority::PlantFirst,
+                                        };
+                                    }
                                 }
                                 "Physics" => {
                                     icon_btn(ui, BuildTool::WoodBox, "\u{1f4e6}", "Box");
