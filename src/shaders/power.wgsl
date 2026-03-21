@@ -29,12 +29,14 @@ fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 
 // Is this block part of the power network?
 fn is_conductor(bt: u32, flags: u32) -> bool {
-    // Wire=36, Solar=37, Battery=38/39/40, Wind=41, Switch=42, Dimmer=43
+    // Wire=36, Solar=37, Battery=38/39/40, Wind=41, Switch=42, Dimmer=43, Breaker=45
     // Electric light=7, Fan=12, Standing lamp=10, Table lamp=11, Pump=16
     // Also: any block with wire overlay flag (bit 7 of flags)
     let has_wire = (flags & 0x80u) != 0u;
     // Switch (42): only conducts when ON (flag bit 2)
     if bt == 42u { return (flags & 4u) != 0u; }
+    // Circuit breaker (45): only conducts when ON (flag bit 2)
+    if bt == 45u { return (flags & 4u) != 0u; }
     // Dimmer (43): always conducts (voltage scaling handled separately)
     return bt == 36u || bt == 37u || bt == 38u || bt == 39u || bt == 40u || bt == 41u || bt == 43u
         || bt == 7u || bt == 12u || bt == 10u || bt == 11u || bt == 16u || has_wire;
@@ -171,6 +173,27 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         voltage[idx] = clamp(bat_v, 0.0, 12.0);
         return;
+    }
+
+    // --- Circuit breaker: auto-trip on overvoltage ---
+    if bt == 45u {
+        let breaker_on = (flags & 4u) != 0u;
+        if breaker_on {
+            // Threshold stored in height byte (default 15V)
+            let threshold = f32((block >> 8u) & 0xFFu);
+            let cur_v = voltage[idx];
+            if cur_v > threshold {
+                // TRIP: zero voltage to block current flow
+                // (acts as open circuit until manually reset on CPU)
+                voltage[idx] = 0.0;
+                return;
+            }
+            // When ON and under threshold: pass through like a wire (handled by relaxation below)
+        } else {
+            // Tripped/OFF: block all current
+            voltage[idx] = 0.0;
+            return;
+        }
     }
 
     // --- Consumers: draw current (reduce voltage) ---

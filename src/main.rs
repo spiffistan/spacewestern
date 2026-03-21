@@ -1209,7 +1209,7 @@ impl App {
                         || (id == 16 && bt == 15) // pump on pipe
                         || (id == 36 && bt != 36) // wire can go anywhere except on existing wire
                         || (id == 15 && bt == 15) // pipe on pipe = merge connections
-                        || ((id == 42 || id == 43) && (bt == 36 || bt == 0 || bt == 2)); // switch/dimmer on wire or ground
+                        || ((id == 42 || id == 43 || id == 45) && (bt == 36 || bt == 0 || bt == 2)); // switch/dimmer/breaker on wire or ground
                     if can_place && click_mode != block_defs::ClickMode::None {
                         if id == 36 && bt != 0 && bt != 2 {
                             // Wire on non-ground: add wire flag to existing block (bit 7)
@@ -1223,6 +1223,8 @@ impl App {
                             if id == 42 { combined_flags |= 4; }
                             // Dimmer starts at 100% (height = 10)
                             if id == 43 { final_height = 10; }
+                            // Circuit breaker starts ON (flag bit 2), threshold in height = 15V
+                            if id == 45 { combined_flags |= 4; final_height = 15; }
                             // Single-click pipe/wire: auto-detect connections from adjacent matching blocks
                             if id == 15 || id == 36 {
                                 let mut conn: u8 = 0;
@@ -1412,6 +1414,19 @@ impl App {
             let didx = by as u32 * GRID_W + bx as u32;
             self.block_sel.dimmer = if self.block_sel.dimmer == Some(didx) { None } else { Some(didx) };
             self.block_sel.dimmer_world = (bx as f32 + 0.5, by as f32 + 0.5);
+            return;
+        }
+
+        // Click circuit breaker: reset (turn back ON) if tripped
+        if bt == 45 && self.build_tool != BuildTool::Destroy {
+            let is_on = (flags & 4) != 0;
+            if !is_on {
+                // Reset breaker (turn ON)
+                let new_block = (block & 0xFF00FFFF) | (((flags | 4) as u32) << 16);
+                self.grid_data[idx] = new_block;
+                self.grid_dirty = true;
+                log::info!("Circuit breaker at ({}, {}) RESET", bx, by);
+            }
             return;
         }
 

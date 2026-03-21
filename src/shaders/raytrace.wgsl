@@ -422,6 +422,7 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
         if sbt == 32u { continue; } // dug ground doesn't block light
         if sbt == 36u { continue; } // wire (height = connection mask, not visual)
         if sbt == 43u { continue; } // dimmer (height = level, not visual)
+        if sbt == 45u { continue; } // breaker (height = threshold, not visual)
 
         // Doors: open = pass through, closed = block (regardless of height)
         if is_door(sb) {
@@ -1144,6 +1145,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_rock_block = bt == 34u;
         let is_wire_block = bt == 36u; // height = connection mask, not visual
         let is_dimmer_block = bt == 43u; // height = dimmer level, not visual
+        let is_breaker_block = bt == 45u; // height = trip threshold, not visual
 
         // Diagonal wall: only occlude if ray is on the wall half
         let is_diag_block = bt == 44u;
@@ -1155,7 +1157,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
             diag_open = !diag_is_wall(sfx, sfy, svar);
         }
 
-        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_wire_block || is_dimmer_block || diag_open);
+        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_wire_block || is_dimmer_block || is_breaker_block || diag_open);
         if is_roofed_floor {
             // The roof is a thin plane at height rh. Rather than a hard threshold
             // that flickers, always set effective_h to rh but apply a smooth
@@ -2080,10 +2082,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let wf_e2 = (get_block(bx + 1, by) >> 16u) & 0x80u;
             let wf_n2 = (get_block(bx, by - 1) >> 16u) & 0x80u;
             let wf_s2 = (get_block(bx, by + 1) >> 16u) & 0x80u;
-            let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 42u || n_w == 43u || n_w == 7u || n_w == 12u || n_w == 10u;
-            let pwr_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 39u || n_e == 40u || n_e == 41u || n_e == 42u || n_e == 43u || n_e == 7u || n_e == 12u || n_e == 10u;
-            let pwr_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 39u || n_n == 40u || n_n == 41u || n_n == 42u || n_n == 43u || n_n == 7u || n_n == 12u || n_n == 10u;
-            let pwr_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 39u || n_s == 40u || n_s == 41u || n_s == 42u || n_s == 43u || n_s == 7u || n_s == 12u || n_s == 10u;
+            let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 42u || n_w == 43u || n_w == 45u || n_w == 7u || n_w == 12u || n_w == 10u;
+            let pwr_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 39u || n_e == 40u || n_e == 41u || n_e == 42u || n_e == 43u || n_e == 45u || n_e == 7u || n_e == 12u || n_e == 10u;
+            let pwr_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 39u || n_n == 40u || n_n == 41u || n_n == 42u || n_n == 43u || n_n == 45u || n_n == 7u || n_n == 12u || n_n == 10u;
+            let pwr_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 39u || n_s == 40u || n_s == 41u || n_s == 42u || n_s == 43u || n_s == 45u || n_s == 7u || n_s == 12u || n_s == 10u;
             conn_w = pwr_w || wf_w2 != 0u;
             conn_e = pwr_e || wf_e2 != 0u;
             conn_n = pwr_n || wf_n2 != 0u;
@@ -2372,6 +2374,47 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = ground;
         }
+    } else if btype == 45u {
+        // Circuit breaker: box with trip indicator on wire
+        let ground = vec3<f32>(0.42, 0.35, 0.22);
+        let breaker_on = (bflags & 4u) != 0u;
+        let cb_cdist = length(vec2<f32>(fx - 0.5, fy - 0.5));
+        let on_cb_wire = abs(fy - 0.5) < 0.06 || abs(fx - 0.5) < 0.06 || cb_cdist < 0.10;
+        // Breaker box
+        let box_w = 0.22;
+        let box_h = 0.18;
+        let in_box = abs(fx - 0.5) < box_w && abs(fy - 0.5) < box_h;
+        if in_box {
+            // Housing
+            color = vec3<f32>(0.35, 0.33, 0.30);
+            // Toggle lever
+            let lever_x = select(0.5 - 0.08, 0.5 + 0.08, breaker_on);
+            let lever_dist = length(vec2<f32>(fx - lever_x, fy - 0.5));
+            if lever_dist < 0.07 {
+                color = select(vec3<f32>(0.8, 0.15, 0.1), vec3<f32>(0.15, 0.6, 0.15), breaker_on);
+            }
+            // Warning stripe (yellow/black) at top
+            if fy < 0.5 - box_h + 0.05 {
+                let stripe = fract(fx * 6.0);
+                color = select(vec3<f32>(0.15, 0.15, 0.12), vec3<f32>(0.85, 0.75, 0.1), stripe > 0.5);
+            }
+            // Box outline
+            if abs(fx - 0.5) > box_w - 0.02 || abs(fy - 0.5) > box_h - 0.02 {
+                color = vec3<f32>(0.25, 0.23, 0.20);
+            }
+            // Tripped flash: red pulse when recently tripped
+            if !breaker_on {
+                let pulse = sin(camera.time * 6.0) * 0.3 + 0.7;
+                color = mix(color, vec3<f32>(0.8, 0.1, 0.05), pulse * 0.3);
+            }
+        } else if on_cb_wire {
+            var wc = vec3<f32>(0.55, 0.38, 0.20);
+            let cv = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+            wc = mix(wc, vec3<f32>(1.0, 0.85, 0.3), clamp(cv / 12.0, 0.0, 1.0) * 0.5);
+            color = wc;
+        } else {
+            color = ground;
+        }
     } else if btype == 14u {
         // Insulated wall: outer shell with fiberglass insulation core
         let edge = 0.15; // outer shell thickness
@@ -2475,8 +2518,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_crate = btype == 33u; // crate height = item count, not visual height
     let is_wire = btype == 36u; // wire height = connection mask, not visual
     let is_dimmer = btype == 43u; // dimmer height = level, not visual height
+    let is_breaker = btype == 45u; // breaker height = threshold, not visual
     let is_diag_open = btype == 44u && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
-    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_diag_open);
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_diag_open);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)
@@ -3060,7 +3104,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let norm_v = clamp(v / 12.0, 0.0, 1.0);
         // Is this block part of the power grid?
         let is_pwr_infra = btype == 36u || btype == 37u || btype == 38u || btype == 39u
-            || btype == 40u || btype == 41u || btype == 42u || btype == 43u
+            || btype == 40u || btype == 41u || btype == 42u || btype == 43u || btype == 45u
             || btype == 7u || btype == 10u || btype == 11u || btype == 12u || btype == 16u
             || (bflags & 0x80u) != 0u; // wire overlay on wall
         if is_pwr_infra {

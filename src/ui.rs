@@ -688,6 +688,7 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(41), "\u{1f300}", "Wind");
                                     icon_btn(ui, BuildTool::Place(42), "\u{1f518}", "Switch");
                                     icon_btn(ui, BuildTool::Place(43), "\u{1f39a}", "Dimmer");
+                                    icon_btn(ui, BuildTool::Place(45), "\u{1f6d1}", "Breaker");
                                     icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
                                     icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
                                     icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table");

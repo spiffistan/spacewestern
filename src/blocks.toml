@@ -679,6 +679,21 @@ click = "simple"
 place_height = 0
 
 [[block]]
+id = 45
+name = "Circuit Breaker"
+color = [0.45, 0.40, 0.35]
+render_style = 30.0
+walkable = true
+is_removable = true
+light_transmission = 1.0
+[block.placement]
+category = "Power"
+icon = "🛑"
+label = "Breaker"
+click = "simple"
+place_height = 0
+
+[[block]]
 id = 44
 name = "Diagonal Wall"
 color = [0.52, 0.50, 0.48]
