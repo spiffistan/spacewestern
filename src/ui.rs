@@ -842,7 +842,7 @@ impl App {
                 is_crisis: bool,
                 crisis_reason: Option<&'static str>,
             }
-            let pleb_display: Vec<PlebDisplay> = self.plebs.iter().enumerate().map(|(i, p)| {
+            let pleb_display: Vec<PlebDisplay> = self.plebs.iter().enumerate().filter(|(_, p)| !p.is_enemy).map(|(i, p)| {
                 let a = &p.appearance;
                 PlebDisplay {
                     idx: i,

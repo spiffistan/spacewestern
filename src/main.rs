@@ -2973,17 +2973,17 @@ impl ApplicationHandler for App {
                 // Shape-building tools: don't pan, just track drag
                 if self.mouse_dragged && self.drag_start.is_some() {
                     // Preview is drawn in the egui section — just don't pan
-                } else if self.mouse_dragged && shift_held {
-                    // Shift+drag = pan
-                    self.camera.center_x -= dx as f32 * self.render_scale / self.camera.zoom;
-                    self.camera.center_y -= dy as f32 * self.render_scale / self.camera.zoom;
-                    self.window.as_ref().unwrap().request_redraw();
-                } else if self.mouse_dragged && self.build_tool == BuildTool::None {
-                    // Plain drag without build tool = selection rectangle
+                } else if self.mouse_dragged && shift_held && self.build_tool == BuildTool::None {
+                    // Shift+drag = selection rectangle
                     if self.select_drag_start.is_none() {
                         let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                         self.select_drag_start = Some((wx, wy));
                     }
+                } else if self.mouse_dragged {
+                    // Plain drag = pan
+                    self.camera.center_x -= dx as f32 * self.render_scale / self.camera.zoom;
+                    self.camera.center_y -= dy as f32 * self.render_scale / self.camera.zoom;
+                    self.window.as_ref().unwrap().request_redraw();
                 }
             }
             // Move dragged light source
