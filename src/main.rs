@@ -226,6 +226,37 @@ impl EventCategory {
 
 const MAX_LOG_ENTRIES: usize = 100;
 
+/// A context menu action that can be performed.
+#[derive(Clone)]
+enum ContextAction {
+    /// Send selected pleb to harvest a block at (grid_x, grid_y)
+    Harvest(i32, i32),
+    /// Haul a block/item at (grid_x, grid_y) to nearest crate
+    Haul(i32, i32),
+    /// Eat a ground item at index
+    Eat(usize),
+    /// Move selected pleb to world position
+    MoveTo(f32, f32),
+}
+
+/// Unified context menu with a title, position, and list of labeled actions.
+struct ContextMenu {
+    screen_x: f32,
+    screen_y: f32,
+    title: String,
+    actions: Vec<(String, ContextAction)>,
+}
+
+impl ContextMenu {
+    fn new(sx: f32, sy: f32, title: impl Into<String>) -> Self {
+        ContextMenu { screen_x: sx, screen_y: sy, title: title.into(), actions: Vec::new() }
+    }
+    fn action(mut self, label: impl Into<String>, action: ContextAction) -> Self {
+        self.actions.push((label.into(), action));
+        self
+    }
+}
+
 // --- Application state ---
 struct App {
     window: Option<Arc<Window>>,
@@ -298,11 +329,12 @@ struct App {
     pressed_keys: std::collections::HashSet<KeyCode>,
     auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
     physics_bodies: Vec<PhysicsBody>,
+    ground_items: Vec<resources::GroundItem>,
     // Per-pleb air readback from fluid sim (updated one frame behind)
     pleb_air_data: Vec<AirReadback>,
     pleb_air_readback_pending: bool,
     // Context menu for pleb actions
-    context_menu: Option<(f32, f32)>,
+    context_menu: Option<ContextMenu>,
     // World selection (Rimworld-style: click anything to inspect)
     world_sel: WorldSelection,
     // In-game event log
@@ -317,7 +349,6 @@ struct App {
     // Storage crate inventories: grid_idx → stored items
     crate_contents: std::collections::HashMap<u32, CrateInventory>,
     // Rock context menu
-    rock_context_menu: Option<(f32, f32, i32, i32)>,
     // Combat
     grenade_charging: bool,
     grenade_charge: f32,
@@ -581,9 +612,10 @@ impl App {
             pressed_keys: std::collections::HashSet::new(),
             auto_doors: Vec::new(),
             physics_bodies: Vec::new(),
+            ground_items: Vec::new(),
             pleb_air_data: Vec::new(),
             pleb_air_readback_pending: false,
-            context_menu: None,
+            context_menu: None, // unified context menu
             world_sel: WorldSelection::none(),
             game_log: std::collections::VecDeque::new(),
             notifications: Vec::new(),
@@ -592,7 +624,6 @@ impl App {
             drought_check_timer: 30.0,
             select_drag_start: None,
             crate_contents: std::collections::HashMap::new(),
-            rock_context_menu: None,
             grenade_charging: false,
             grenade_charge: 0.0,
             grenade_impacts: Vec::new(),
@@ -969,6 +1000,25 @@ impl App {
             return;
         }
 
+        if self.build_tool == BuildTool::StorageZone {
+            let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
+            for (tx, ty) in tiles {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                let bh = (self.grid_data[idx] >> 8) & 0xFF;
+                if bh == 0 { // only floor-level tiles
+                    if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Storage) {
+                        zone.tiles.insert((tx, ty));
+                    } else {
+                        let mut zone = Zone::new(ZoneKind::Storage);
+                        zone.tiles.insert((tx, ty));
+                        self.zones.push(zone);
+                    }
+                }
+            }
+            return;
+        }
+
         // Roof tool: special handling — sets flag, doesn't change block type
         if self.build_tool == BuildTool::Roof {
             let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
@@ -1203,6 +1253,78 @@ impl App {
         compute_roof_heights(&mut self.grid_data);
     }
 
+    /// Build and open a context menu for the given screen and world position.
+    fn open_context_menu(&mut self, screen_x: f32, screen_y: f32, wx: f32, wy: f32) {
+        let bx = wx.floor() as i32;
+        let by = wy.floor() as i32;
+        let bt = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+            (self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] & 0xFF) as u32
+        } else { 0 };
+        let sel_pleb = self.selected_pleb;
+        let pleb_name = sel_pleb.and_then(|i| self.plebs.get(i)).map(|p| p.name.clone()).unwrap_or_default();
+
+        let mut menu = ContextMenu::new(screen_x, screen_y, "");
+        let mut has_actions = false;
+
+        // Harvestable: berry bush or mature crop
+        if sel_pleb.is_some() && (bt == BT_BERRY_BUSH || bt == BT_CROP) {
+            let can_harvest = if bt == BT_CROP {
+                let crop_h = (self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF;
+                crop_h >= 3
+            } else { true };
+            if can_harvest {
+                menu.title = if bt == BT_BERRY_BUSH { "Berry Bush".into() } else { "Crop".into() };
+                menu.actions.push((format!("Harvest ({})", pleb_name), ContextAction::Harvest(bx, by)));
+                has_actions = true;
+            }
+        }
+
+        // Rock: haul to storage
+        if bt == BT_ROCK {
+            menu.title = "Rock".into();
+            // Find nearest available pleb
+            let mut best_pleb: Option<(usize, f32)> = None;
+            for (i, p) in self.plebs.iter().enumerate() {
+                if p.activity.is_crisis() || p.inventory.carrying.is_some() || p.is_enemy { continue; }
+                let dist = ((p.x - bx as f32 - 0.5).powi(2) + (p.y - by as f32 - 0.5).powi(2)).sqrt();
+                if best_pleb.is_none() || dist < best_pleb.unwrap().1 {
+                    best_pleb = Some((i, dist));
+                }
+            }
+            if let Some((pi, _)) = best_pleb {
+                let pn = self.plebs[pi].name.clone();
+                menu.actions.push((format!("Haul to storage ({})", pn), ContextAction::Haul(bx, by)));
+                has_actions = true;
+            }
+        }
+
+        // Ground items at this position: eat + haul actions
+        if sel_pleb.is_some() {
+            for (i, item) in self.ground_items.iter().enumerate() {
+                let ix = item.x.floor() as i32;
+                let iy = item.y.floor() as i32;
+                if ix == bx && iy == by {
+                    if menu.title.is_empty() { menu.title = format!("{}", item.kind.label()); }
+                    if let resources::ItemKind::Berries(_n) = item.kind {
+                        menu.actions.push((format!("Eat 1 berry ({})", pleb_name), ContextAction::Eat(i)));
+                        has_actions = true;
+                    }
+                }
+            }
+        }
+
+        // Move to (fallback when pleb selected but no specific action)
+        if sel_pleb.is_some() && !has_actions {
+            menu.title = "Move".into();
+            menu.actions.push((format!("Move here ({})", pleb_name), ContextAction::MoveTo(wx, wy)));
+            has_actions = true;
+        }
+
+        if has_actions {
+            self.context_menu = Some(menu);
+        }
+    }
+
     /// Handle left-click: build tool placement, door toggle, or light toggle
     fn handle_click(&mut self, wx: f32, wy: f32) {
         let bx = wx.floor() as i32;
@@ -1386,9 +1508,9 @@ impl App {
             return;
         }
 
-        // Click on rock (no build tool): open rock context menu
+        // Click on rock (no build tool): open context menu
         if bt == 34 && self.build_tool == BuildTool::None {
-            self.rock_context_menu = Some((self.last_mouse_x as f32, self.last_mouse_y as f32, bx, by));
+            self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
             return;
         }
 
@@ -1447,7 +1569,6 @@ impl App {
                 self.selected_pleb = None;
                 self.block_sel = BlockSelection::default();
                 self.context_menu = None;
-                self.rock_context_menu = None;
             }
         }
 
@@ -1909,9 +2030,7 @@ impl App {
                     }
                 }
                 BuildTool::GrowingZone => {
-                    // Paint growing zone on dirt tiles
                     if bt == BT_DIRT as u8 {
-                        // Find or create a growing zone and add this tile
                         if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing) {
                             zone.tiles.insert((bx, by));
                         } else {
@@ -1920,7 +2039,19 @@ impl App {
                             self.zones.push(zone);
                         }
                     }
-                    // Don't deselect tool — drag to paint
+                    return;
+                }
+                BuildTool::StorageZone => {
+                    let bh = (block >> 8) & 0xFF;
+                    if bh == 0 { // floor-level tiles only
+                        if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Storage) {
+                            zone.tiles.insert((bx, by));
+                        } else {
+                            let mut zone = Zone::new(ZoneKind::Storage);
+                            zone.tiles.insert((bx, by));
+                            self.zones.push(zone);
+                        }
+                    }
                     return;
                 }
                 BuildTool::None | BuildTool::Destroy
@@ -2471,7 +2602,7 @@ impl App {
                             _ => vec![(hbx, hby)],
                         }
                     }
-                    BuildTool::Destroy | BuildTool::GrowingZone => Self::filled_rect_tiles(sx, sy, hbx, hby),
+                    BuildTool::Destroy | BuildTool::GrowingZone | BuildTool::StorageZone => Self::filled_rect_tiles(sx, sy, hbx, hby),
                     BuildTool::Roof | BuildTool::RemoveRoof => Self::filled_rect_tiles(sx, sy, hbx, hby),
                     BuildTool::RemoveFloor => Self::filled_rect_tiles(sx, sy, hbx, hby),
                     _ => vec![(hbx, hby)],
@@ -3399,7 +3530,7 @@ impl ApplicationHandler for App {
                         self.mouse_dragged = false;
                         // Start drag for shape-building tools
                         let is_shape_tool = match self.build_tool {
-                            BuildTool::Destroy | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof | BuildTool::GrowingZone => true,
+                            BuildTool::Destroy | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof | BuildTool::GrowingZone | BuildTool::StorageZone => true,
                             BuildTool::Place(id) => {
                                 let reg = block_defs::BlockRegistry::cached();
                                 reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref())
@@ -3467,7 +3598,14 @@ impl ApplicationHandler for App {
                             };
                         } else if !self.mouse_dragged {
                             let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
-                            self.handle_click(wx, wy);
+                            // Ctrl+left-click on Mac = right-click equivalent
+                            let ctrl_held = self.pressed_keys.contains(&KeyCode::ControlLeft)
+                                || self.pressed_keys.contains(&KeyCode::ControlRight);
+                            if ctrl_held && self.selected_pleb.is_some() {
+                                self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
+                            } else {
+                                self.handle_click(wx, wy);
+                            }
                         }
                         self.mouse_pressed = false;
                         self.mouse_dragged = false;
@@ -3479,62 +3617,8 @@ impl ApplicationHandler for App {
                 if button == winit::event::MouseButton::Right {
                     if state.is_pressed() {
                         let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
-                        // Check if right-clicking a rock
-                        let rbx = wx.floor() as i32;
-                        let rby = wy.floor() as i32;
-                        let rblock_type = if rbx >= 0 && rby >= 0 && rbx < GRID_W as i32 && rby < GRID_H as i32 {
-                            self.grid_data[(rby as u32 * GRID_W + rbx as u32) as usize] & 0xFF
-                        } else { 0 };
-                        if rblock_type == 34 {
-                            // Right-click rock: open rock context menu
-                            self.rock_context_menu = Some((self.last_mouse_x as f32, self.last_mouse_y as f32, rbx, rby));
-                        } else if rblock_type == 33 {
-                            // Right-click storage crate: deposit if carrying, else inspect
-                            let cidx = rby as u32 * GRID_W + rbx as u32;
-                            let mut deposited = false;
-                            if let Some(sel_idx) = self.selected_pleb {
-                                if let Some(pleb) = self.plebs.get_mut(sel_idx) {
-                                    if pleb.inventory.carrying.is_some() {
-                                        let dist = ((pleb.x - rbx as f32 - 0.5).powi(2) + (pleb.y - rby as f32 - 0.5).powi(2)).sqrt();
-                                        if dist < 2.5 {
-                                            // Close enough — deposit now
-                                            let inv = self.crate_contents.entry(cidx).or_default();
-                                            if pleb.inventory.carrying == Some("Rock") {
-                                                let can_store = inv.space().min(pleb.inventory.rocks);
-                                                inv.rocks += can_store;
-                                                pleb.inventory.rocks -= can_store;
-                                                if pleb.inventory.rocks == 0 { pleb.inventory.carrying = None; }
-                                            }
-                                            if pleb.inventory.carrying.is_none() {
-                                                pleb.haul_target = None;
-                                                pleb.activity = PlebActivity::Idle;
-                                            }
-                                            self.sync_crate_visual(cidx);
-                                            deposited = true;
-                                        } else {
-                                            // Walk to crate and deposit
-                                            let adj = adjacent_walkable(&self.grid_data, rbx, rby).unwrap_or((rbx, rby));
-                                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                            let path = astar_path(&self.grid_data, start, adj);
-                                            if !path.is_empty() {
-                                                pleb.path = path;
-                                                pleb.path_idx = 0;
-                                                pleb.activity = PlebActivity::Hauling;
-                                                pleb.haul_target = Some((rbx, rby));
-                                                pleb.harvest_target = None;
-                                            }
-                                            deposited = true;
-                                        }
-                                    }
-                                }
-                            }
-                            if !deposited {
-                                // Just inspect the crate
-                                self.block_sel.crate_idx = if self.block_sel.crate_idx == Some(cidx) { None } else { Some(cidx) };
-                                self.block_sel.crate_world = (rbx as f32 + 0.5, rby as f32 + 0.5);
-                            }
-                        } else if self.selected_pleb.is_some() {
-                            self.context_menu = Some((self.last_mouse_x as f32, self.last_mouse_y as f32));
+                        if self.selected_pleb.is_some() {
+                            self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
                         } else {
                             self.try_pick_light(wx, wy);
                         }

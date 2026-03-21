@@ -13,6 +13,7 @@ pub enum BuildTool {
     Window,       // special: placed on existing walls, replaces with glass
     WoodBox,      // special: spawns physics body, not grid block
     GrowingZone,  // paint growing zone overlay on dirt tiles
+    StorageZone,  // paint storage zone overlay — each tile stores one item stack
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

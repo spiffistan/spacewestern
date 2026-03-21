@@ -22,3 +22,30 @@ pub struct PlebInventory {
     pub rocks: u32,
     pub carrying: Option<&'static str>,
 }
+
+/// Item type for ground items.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ItemKind {
+    Berries(u32), // count
+    Rocks(u32),
+}
+
+impl ItemKind {
+    pub fn label(&self) -> String {
+        match self {
+            ItemKind::Berries(n) => format!("{} berries", n),
+            ItemKind::Rocks(n) => format!("{} rocks", n),
+        }
+    }
+    pub fn count(&self) -> u32 {
+        match self { ItemKind::Berries(n) | ItemKind::Rocks(n) => *n }
+    }
+}
+
+/// An item sitting on the ground, waiting to be hauled.
+#[derive(Clone, Debug)]
+pub struct GroundItem {
+    pub x: f32,
+    pub y: f32,
+    pub kind: ItemKind,
+}

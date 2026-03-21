@@ -448,7 +448,7 @@ impl App {
                 tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving, is_sleeping, air);
 
                 let was_crisis = pleb.activity.is_crisis();
-                tick_pleb_activity(pleb, &env, &self.grid_data, dt, self.time_speed);
+                tick_pleb_activity(pleb, &env, &self.grid_data, dt, self.time_speed, &mut self.ground_items);
                 // Log new crisis
                 if pleb.activity.is_crisis() && !was_crisis {
                     if let Some(reason) = pleb.activity.crisis_reason() {
@@ -899,11 +899,18 @@ impl App {
                                     self.grid_data[tidx] = make_block(BT_DIRT as u8, 0, fflags as u8) | roof_h;
                                     self.crop_timers.remove(&(tidx as u32));
                                     self.grid_dirty = true;
-                                    pleb.inventory.berries += 2;
-                                    events.push((EventCategory::Farm, format!("{} harvested a crop (+2 food)", pleb.name)));
+                                    // Drop harvest on ground near pleb
+                                    self.ground_items.push(resources::GroundItem {
+                                        x: pleb.x, y: pleb.y,
+                                        kind: resources::ItemKind::Berries(2),
+                                    });
+                                    events.push((EventCategory::Farm, format!("{} harvested a crop (2 berries dropped)", pleb.name)));
                                 } else if tbt == BT_BERRY_BUSH {
-                                    pleb.inventory.berries += 3;
-                                    events.push((EventCategory::Farm, format!("{} harvested berries (+3 food)", pleb.name)));
+                                    self.ground_items.push(resources::GroundItem {
+                                        x: pleb.x, y: pleb.y,
+                                        kind: resources::ItemKind::Berries(3),
+                                    });
+                                    events.push((EventCategory::Farm, format!("{} harvested berries (3 berries dropped)", pleb.name)));
                                 }
                             }
                             self.active_work.remove(&(tx, ty));
@@ -961,6 +968,7 @@ fn tick_pleb_activity(
     grid: &[u32],
     dt: f32,
     time_speed: f32,
+    ground_items: &mut Vec<resources::GroundItem>,
 ) {
     // --- Activity state machine (works on inner activity for crisis) ---
     let inner_act = pleb.activity.inner().clone();
@@ -978,9 +986,13 @@ fn tick_pleb_activity(
         PlebActivity::Harvesting(progress) => {
             let new_progress = progress + dt * time_speed * 0.5;
             if new_progress >= 1.0 {
-                pleb.inventory.berries += 3;
+                // Drop berries on ground near pleb
+                ground_items.push(resources::GroundItem {
+                    x: pleb.x, y: pleb.y,
+                    kind: resources::ItemKind::Berries(3),
+                });
                 pleb.harvest_target = None;
-                log::info!("{} harvested 3 berries (total: {})", pleb.name, pleb.inventory.berries);
+                log::info!("{} harvested 3 berries (dropped on ground)", pleb.name);
                 if was_crisis {
                     pleb.activity = PlebActivity::Crisis(
                         Box::new(PlebActivity::Eating),

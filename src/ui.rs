@@ -32,6 +32,7 @@ impl App {
         self.draw_build_bar(ctx);
         self.draw_colonist_bar(ctx);
         self.draw_context_menus(ctx, bp_ppp, bp_cam);
+        self.draw_overlays_and_popups(ctx, bp_cam, bp_ppp, dt);
         self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
         self.draw_world_labels(ctx, bp_cam);
         self.draw_selection_actions(ctx);
@@ -771,6 +772,7 @@ impl App {
                                 }
                                 "Zones" => {
                                     icon_btn(ui, BuildTool::GrowingZone, "\u{1f33f}", "Farm");
+                                    icon_btn(ui, BuildTool::StorageZone, "\u{1f4e6}", "Storage");
                                     ui.separator();
                                     let prio_label = match self.work_priority {
                                         zones::WorkPriority::PlantFirst => "Plant 1st",
@@ -942,12 +944,37 @@ impl App {
                         let inner = p.activity.inner();
                         let act_str = match inner {
                             PlebActivity::Idle => "Idle".to_string(),
-                            PlebActivity::Walking => "Walking".to_string(),
+                            PlebActivity::Walking => {
+                                if p.work_target.is_some() {
+                                    "Walking to task".to_string()
+                                } else if !p.path.is_empty() {
+                                    "Walking".to_string()
+                                } else {
+                                    "Walking".to_string()
+                                }
+                            }
                             PlebActivity::Sleeping => "Sleeping".to_string(),
                             PlebActivity::Harvesting(pr) => format!("Harvesting {:.0}%", pr * 100.0),
                             PlebActivity::Eating => "Eating".to_string(),
-                            PlebActivity::Hauling => "Hauling".to_string(),
-                            PlebActivity::Farming(pr) => format!("Farming {:.0}%", pr * 100.0),
+                            PlebActivity::Hauling => {
+                                if p.haul_target.is_some() {
+                                    "Hauling to crate".to_string()
+                                } else {
+                                    "Hauling".to_string()
+                                }
+                            }
+                            PlebActivity::Farming(pr) => {
+                                // Determine if planting or harvesting from work target block type
+                                let action = if let Some((tx, ty)) = p.work_target {
+                                    let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                                    if tidx < self.grid_data.len() {
+                                        let tbt = self.grid_data[tidx] & 0xFF;
+                                        if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" }
+                                        else { "Planting" }
+                                    } else { "Farming" }
+                                } else { "Farming" };
+                                format!("{} {:.0}%", action, pr * 100.0)
+                            }
                             PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                         };
                         if let Some(reason) = p.activity.crisis_reason() {
@@ -1165,261 +1192,132 @@ impl App {
 
     }
 
-    fn draw_context_menus(&mut self, ctx: &egui::Context, bp_ppp: f32, bp_cam: (f32,f32,f32,f32,f32)) {
-        // --- Context menu (right-click on selected pleb) ---
-        if let Some((mx, my)) = self.context_menu {
-            if let Some(sel_idx) = self.selected_pleb {
-                if let Some(pleb) = self.plebs.get(sel_idx) {
-                    let has_berries = pleb.inventory.berries > 0;
-                    let is_carrying = pleb.inventory.carrying.is_some();
-                    let carrying_label = pleb.inventory.carrying.unwrap_or("").to_string();
-                    let is_sleeping = *pleb.activity.inner() == PlebActivity::Sleeping;
-                    let in_crisis = pleb.activity.is_crisis();
-                    let hunger = pleb.needs.hunger;
-                    let rest = pleb.needs.rest;
-                    let pleb_name = pleb.name.clone();
-
-                    let mut close_menu = false;
-                    egui::Area::new(egui::Id::new("pleb_context_menu"))
-                        .fixed_pos(egui::Pos2::new(mx / bp_ppp, my / bp_ppp))
-                        .show(ctx, |ui| {
-                            egui::Frame::menu(ui.style()).show(ui, |ui| {
-                                ui.label(egui::RichText::new(&pleb_name).strong().size(11.0));
-                                if in_crisis {
-                                    ui.label(egui::RichText::new("(Crisis - cannot give orders)")
-                                        .size(9.0).color(egui::Color32::from_rgb(255, 80, 80)));
-                                }
-                                ui.separator();
-
-                                if in_crisis {
-                                    ui.label(egui::RichText::new("Actions unavailable").size(10.0).color(egui::Color32::GRAY));
-                                } else if has_berries {
-                                    let label = format!("Eat Berry ({:.0}% hunger)", hunger * 100.0);
-                                    if ui.button(egui::RichText::new(label).size(10.0)).clicked() {
-                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
-                                            p.activity = PlebActivity::Eating;
-                                        }
-                                        close_menu = true;
-                                    }
-                                } else {
-                                    ui.label(egui::RichText::new("No food").size(10.0).color(egui::Color32::GRAY));
-                                }
-
-                                ui.separator();
-
-                                if is_sleeping {
-                                    if ui.button(egui::RichText::new("Wake up").size(10.0)).clicked() {
-                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
-                                            p.activity = PlebActivity::Idle;
-                                        }
-                                        close_menu = true;
-                                    }
-                                } else {
-                                    let sleep_label = format!("Sleep ({:.0}% rest)", rest * 100.0);
-                                    if ui.button(egui::RichText::new(sleep_label).size(10.0)).clicked() {
-                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
-                                            // Check if near bed
-                                            let day_frac = self.time_of_day / DAY_DURATION;
-                                            let env = sample_environment(&self.grid_data, p.x, p.y, day_frac);
-                                            if env.near_bed {
-                                                p.activity = PlebActivity::Sleeping;
-                                                p.path.clear();
-                                                p.path_idx = 0;
-                                            } else if let Some((bx, by)) = env.nearest_bed {
-                                                let start = (p.x.floor() as i32, p.y.floor() as i32);
-                                                let path = astar_path(&self.grid_data, start, (bx, by));
-                                                if !path.is_empty() {
-                                                    p.path = path;
-                                                    p.path_idx = 0;
-                                                    p.activity = PlebActivity::Walking;
-                                                }
-                                            }
-                                        }
-                                        close_menu = true;
-                                    }
-                                }
-
-                                if ui.button(egui::RichText::new("Harvest berries").size(10.0)).clicked() {
-                                    if let Some(p) = self.plebs.get_mut(sel_idx) {
-                                        let day_frac = self.time_of_day / DAY_DURATION;
-                                        let env = sample_environment(&self.grid_data, p.x, p.y, day_frac);
-                                        if env.near_berry_bush {
-                                            if let Some((bx, by)) = env.nearest_berry_bush {
-                                                p.harvest_target = Some((bx, by));
-                                                p.activity = PlebActivity::Harvesting(0.0);
-                                                p.path.clear();
-                                                p.path_idx = 0;
-                                            }
-                                        } else if let Some((bx, by)) = env.nearest_berry_bush {
-                                            let start = (p.x.floor() as i32, p.y.floor() as i32);
-                                            let path = astar_path(&self.grid_data, start, (bx, by));
-                                            if !path.is_empty() {
-                                                p.path = path;
-                                                p.path_idx = 0;
-                                                p.activity = PlebActivity::Walking;
-                                            }
-                                        }
-                                    }
-                                    close_menu = true;
-                                }
-
-                                // Carrying actions
-                                if is_carrying && !in_crisis {
-                                    ui.separator();
-                                    ui.label(egui::RichText::new(format!("Carrying: {}", carrying_label)).size(10.0));
-                                    // Drop item here
-                                    if ui.button(egui::RichText::new("Drop here").size(10.0)).clicked() {
-                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
-                                            if p.inventory.carrying == Some("Rock") {
-                                                // Place rock at pleb's feet
-                                                let rx = p.x.floor() as i32;
-                                                let ry = p.y.floor() as i32;
-                                                if rx >= 0 && ry >= 0 && rx < GRID_W as i32 && ry < GRID_H as i32 {
-                                                    let ridx = (ry as u32 * GRID_W + rx as u32) as usize;
-                                                    let rb = self.grid_data[ridx];
-                                                    let rbt = rb & 0xFF;
-                                                    if rbt == 2 || rbt == 0 { // dirt or air = empty ground
-                                                        let roof_bits = rb & 0xFF000000;
-                                                        let flag_bits = (rb >> 16) & 2;
-                                                        self.grid_data[ridx] = make_block(34, 0, flag_bits as u8) | roof_bits;
-                                                        self.grid_dirty = true;
-                                                        p.inventory.rocks = p.inventory.rocks.saturating_sub(1);
-                                                    }
-                                                }
-                                                p.inventory.carrying = None;
-                                            }
-                                            p.activity = PlebActivity::Idle;
-                                            p.haul_target = None;
-                                            p.path.clear();
-                                            p.path_idx = 0;
-                                        }
-                                        close_menu = true;
-                                    }
-                                    // Haul to nearest storage
-                                    if ui.button(egui::RichText::new("Haul to storage").size(10.0)).clicked() {
-                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
-                                            let px = p.x.floor() as i32;
-                                            let py = p.y.floor() as i32;
-                                            if let Some((cx, cy)) = find_nearest_crate(&self.grid_data, px, py) {
-                                                let adj = adjacent_walkable(&self.grid_data, cx, cy).unwrap_or((cx, cy));
-                                                let start = (px, py);
-                                                let path = astar_path(&self.grid_data, start, adj);
-                                                if !path.is_empty() {
-                                                    p.path = path;
-                                                    p.path_idx = 0;
-                                                    p.activity = PlebActivity::Hauling;
-                                                    p.haul_target = Some((cx, cy));
-                                                    p.harvest_target = None; // already carrying
-                                                }
-                                            }
-                                        }
-                                        close_menu = true;
-                                    }
-                                }
-
-                                ui.separator();
-                                if ui.button(egui::RichText::new("Cancel").size(10.0)).clicked() {
-                                    close_menu = true;
-                                }
-                            });
-                        });
-                    if close_menu {
-                        self.context_menu = None;
-                    }
-                } else {
-                    self.context_menu = None;
-                }
-            } else {
-                self.context_menu = None;
-            }
-        }
-
-        // Close context menu when clicking anywhere (pointer not over menu)
-        if self.context_menu.is_some() {
-            let pointer_over_ui = ctx.is_pointer_over_area();
-            let any_click = ctx.input(|i| i.pointer.any_pressed());
-            if any_click && !pointer_over_ui {
-                self.context_menu = None;
-            }
-        }
-
-        self.draw_rock_context_menu(ctx, bp_ppp);
-        self.draw_popups(ctx, bp_cam);
+    fn draw_context_menus(&mut self, ctx: &egui::Context, bp_ppp: f32, _bp_cam: (f32,f32,f32,f32,f32)) {
+        self.draw_context_menu_popup(ctx, bp_ppp);
     }
 
-    fn draw_rock_context_menu(&mut self, ctx: &egui::Context, bp_ppp: f32) {
-        // --- Rock context menu (right-click or ctrl-click on a rock) ---
-        if let Some((mx, my, rx, ry)) = self.rock_context_menu {
-            let mut close_rock_menu = false;
-            // Verify rock still exists
-            let rock_valid = if rx >= 0 && ry >= 0 && rx < GRID_W as i32 && ry < GRID_H as i32 {
-                (self.grid_data[(ry as u32 * GRID_W + rx as u32) as usize] & 0xFF) == 34
-            } else { false };
-            if rock_valid {
-                egui::Area::new(egui::Id::new("rock_context_menu"))
-                    .fixed_pos(egui::Pos2::new(mx / bp_ppp, my / bp_ppp))
-                    .show(ctx, |ui| {
-                        egui::Frame::menu(ui.style()).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Rock").strong().size(12.0));
-                            ui.separator();
-                            // Find nearest pleb that can haul
-                            let mut best_pleb: Option<(usize, f32)> = None;
-                            for (i, p) in self.plebs.iter().enumerate() {
-                                if p.activity.is_crisis() || p.inventory.carrying.is_some() { continue; }
-                                let dist = ((p.x - rx as f32 - 0.5).powi(2) + (p.y - ry as f32 - 0.5).powi(2)).sqrt();
-                                if best_pleb.is_none() || dist < best_pleb.unwrap().1 {
-                                    best_pleb = Some((i, dist));
-                                }
+    fn draw_context_menu_popup(&mut self, ctx: &egui::Context, bp_ppp: f32) {
+        let menu = match &self.context_menu {
+            Some(m) => m,
+            None => return,
+        };
+        let mut close = false;
+        let mut chosen_action: Option<ContextAction> = None;
+
+        egui::Area::new(egui::Id::new("context_menu"))
+            .fixed_pos(egui::Pos2::new(menu.screen_x / bp_ppp, menu.screen_y / bp_ppp))
+            .show(ctx, |ui| {
+                egui::Frame::menu(ui.style()).show(ui, |ui| {
+                    if !menu.title.is_empty() {
+                        ui.label(egui::RichText::new(&menu.title).strong().size(12.0));
+                        ui.separator();
+                    }
+                    for (label, action) in &menu.actions {
+                        if ui.button(egui::RichText::new(label).size(11.0)).clicked() {
+                            chosen_action = Some(action.clone());
+                            close = true;
+                        }
+                    }
+                    ui.separator();
+                    if ui.button(egui::RichText::new("Cancel").size(10.0)).clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        // Execute chosen action
+        if let Some(action) = chosen_action {
+            match action {
+                ContextAction::Harvest(hx, hy) => {
+                    if let Some(sel_idx) = self.selected_pleb {
+                        let pleb = &mut self.plebs[sel_idx];
+                        if !pleb.is_enemy && !pleb.activity.is_crisis() {
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let adj = adjacent_walkable(&self.grid_data, hx, hy).unwrap_or((hx, hy));
+                            let path = astar_path(&self.grid_data, start, adj);
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.work_target = Some((hx, hy));
+                                pleb.harvest_target = None;
+                                pleb.haul_target = None;
                             }
-                            // Find nearest crate (wide search)
-                            let nearest_crate = find_nearest_crate(&self.grid_data, rx, ry);
-                            if let Some((pleb_idx, _)) = best_pleb {
-                                let pleb_name = self.plebs[pleb_idx].name.clone();
-                                if let Some((cx, cy)) = nearest_crate {
-                                    let label = format!("Haul to storage ({})", pleb_name);
-                                    if ui.button(egui::RichText::new(label).size(11.0)).clicked() {
-                                        let pleb = &mut self.plebs[pleb_idx];
-                                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                        let path = astar_path(&self.grid_data, start, (rx, ry));
-                                        if !path.is_empty() {
-                                            pleb.path = path;
-                                            pleb.path_idx = 0;
-                                            pleb.activity = PlebActivity::Hauling;
-                                            pleb.haul_target = Some((cx, cy));
-                                            pleb.harvest_target = Some((rx, ry));
-                                            self.selected_pleb = Some(pleb_idx);
-                                        }
-                                        close_rock_menu = true;
-                                    }
+                        }
+                    }
+                }
+                ContextAction::Haul(hx, hy) => {
+                    // Find nearest available pleb and nearest crate
+                    let mut best_pleb: Option<(usize, f32)> = None;
+                    for (i, p) in self.plebs.iter().enumerate() {
+                        if p.activity.is_crisis() || p.inventory.carrying.is_some() || p.is_enemy { continue; }
+                        let dist = ((p.x - hx as f32 - 0.5).powi(2) + (p.y - hy as f32 - 0.5).powi(2)).sqrt();
+                        if best_pleb.is_none() || dist < best_pleb.unwrap().1 {
+                            best_pleb = Some((i, dist));
+                        }
+                    }
+                    if let Some((pi, _)) = best_pleb {
+                        let nearest_crate = find_nearest_crate(&self.grid_data, hx, hy);
+                        if let Some((cx, cy)) = nearest_crate {
+                            let pleb = &mut self.plebs[pi];
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let path = astar_path(&self.grid_data, start, (hx, hy));
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Hauling;
+                                pleb.haul_target = Some((cx, cy));
+                                pleb.harvest_target = Some((hx, hy));
+                                self.selected_pleb = Some(pi);
+                            }
+                        }
+                    }
+                }
+                ContextAction::Eat(item_idx) => {
+                    if let Some(sel_idx) = self.selected_pleb {
+                        if item_idx < self.ground_items.len() {
+                            let item = &self.ground_items[item_idx];
+                            if let resources::ItemKind::Berries(n) = item.kind {
+                                // Eat 1 berry, reduce stack or remove
+                                self.plebs[sel_idx].needs.hunger = (self.plebs[sel_idx].needs.hunger + 0.15).min(1.0);
+                                if n <= 1 {
+                                    self.ground_items.remove(item_idx);
                                 } else {
-                                    ui.label(egui::RichText::new("No storage crate on map").weak().size(10.0));
+                                    self.ground_items[item_idx].kind = resources::ItemKind::Berries(n - 1);
                                 }
-                            } else {
-                                ui.label(egui::RichText::new("No colonist available").weak().size(10.0));
                             }
-                            ui.separator();
-                            if ui.button(egui::RichText::new("Cancel").size(10.0)).clicked() {
-                                close_rock_menu = true;
-                            }
-                        });
-                    });
-            } else {
-                close_rock_menu = true;
-            }
-            if close_rock_menu {
-                self.rock_context_menu = None;
+                        }
+                    }
+                }
+                ContextAction::MoveTo(wx, wy) => {
+                    if let Some(sel_idx) = self.selected_pleb {
+                        let pleb = &mut self.plebs[sel_idx];
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let goal = (wx.floor() as i32, wy.floor() as i32);
+                        let path = astar_path(&self.grid_data, start, goal);
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 1;
+                            pleb.activity = PlebActivity::Walking;
+                            pleb.work_target = None;
+                            pleb.harvest_target = None;
+                            pleb.haul_target = None;
+                        }
+                    }
+                }
             }
         }
-        // Close rock menu when clicking anywhere (pointer not over menu)
-        if self.rock_context_menu.is_some() {
+
+        // Close on click outside
+        if !close && self.context_menu.is_some() {
             let pointer_over_ui = ctx.is_pointer_over_area();
             let any_click = ctx.input(|i| i.pointer.any_pressed());
-            if any_click && !pointer_over_ui {
-                self.rock_context_menu = None;
-            }
+            if any_click && !pointer_over_ui { close = true; }
         }
+        if close { self.context_menu = None; }
+    }
 
-
+    fn draw_overlays_and_popups(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), bp_ppp: f32, dt: f32) {
         // Wind compass (upper-left, below top menu bar)
         {
             let wx = self.fluid_params.wind_x;
@@ -1481,6 +1379,7 @@ impl App {
                 });
         }
 
+        self.draw_popups(ctx, bp_cam);
     }
 
     fn draw_popups(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32)) {
@@ -1845,6 +1744,7 @@ impl App {
             for zone in &self.zones {
                 let color = match zone.kind {
                     zones::ZoneKind::Growing => egui::Color32::from_rgba_unmultiplied(40, 160, 40, 35),
+                    zones::ZoneKind::Storage => egui::Color32::from_rgba_unmultiplied(200, 80, 140, 35),
                 };
                 for &(tx, ty) in &zone.tiles {
                     let sx0 = ((tx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
@@ -2490,6 +2390,64 @@ impl App {
             }
         }
 
+        // Render ground items (harvest drops)
+        if !self.ground_items.is_empty() {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            let item_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground, egui::Id::new("ground_items"),
+            ));
+            let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                egui::pos2(sx, sy)
+            };
+            for item in &self.ground_items {
+                let center = to_screen(item.x, item.y);
+                let r = (tile_px * 0.18).max(3.0);
+                match item.kind {
+                    resources::ItemKind::Berries(n) => {
+                        // Berry basket: brown basket circle with purple berries on top
+                        let basket_col = egui::Color32::from_rgb(140, 100, 50);
+                        let berry_col = egui::Color32::from_rgb(120, 40, 140);
+                        item_painter.circle_filled(center, r, basket_col);
+                        // Small berry dots
+                        let br = r * 0.4;
+                        for i in 0..n.min(4) {
+                            let angle = i as f32 * 1.6 + 0.3;
+                            let bx = center.x + angle.cos() * r * 0.45;
+                            let by = center.y + angle.sin() * r * 0.45;
+                            item_painter.circle_filled(egui::pos2(bx, by), br, berry_col);
+                        }
+                        // Count label
+                        if tile_px > 6.0 {
+                            item_painter.text(
+                                egui::pos2(center.x, center.y + r + 2.0),
+                                egui::Align2::CENTER_TOP,
+                                format!("{}x", n),
+                                egui::FontId::proportional(7.0),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    }
+                    resources::ItemKind::Rocks(n) => {
+                        // Rock pile: gray circles
+                        let rock_col = egui::Color32::from_rgb(120, 120, 115);
+                        item_painter.circle_filled(center, r, rock_col);
+                        if tile_px > 6.0 {
+                            item_painter.text(
+                                egui::pos2(center.x, center.y + r + 2.0),
+                                egui::Align2::CENTER_TOP,
+                                format!("{}x", n),
+                                egui::FontId::proportional(7.0),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // Render physics bodies
         if !self.physics_bodies.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
@@ -2829,18 +2787,26 @@ impl App {
                     // Activity label + intent (when not idle)
                     if tile_px > 10.0 {
                         let inner = pleb.activity.inner();
+                        // Determine planting vs harvesting from work target
+                        let farm_action = if let Some((tx, ty)) = pleb.work_target {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            if tidx < self.grid_data.len() {
+                                let tbt = self.grid_data[tidx] & 0xFF;
+                                if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" } else { "Planting" }
+                            } else { "Farming" }
+                        } else { "Farming" };
                         let (act_text, act_color) = match inner {
                             PlebActivity::Idle => {
-                                // Show intent when idle with work target
                                 if pleb.work_target.is_some() {
-                                    (Some("Going to farm"), egui::Color32::from_rgb(120, 200, 80))
+                                    (Some(farm_action), egui::Color32::from_rgb(120, 200, 80))
                                 } else {
                                     (None, egui::Color32::GRAY)
                                 }
                             }
                             PlebActivity::Walking => {
                                 if pleb.work_target.is_some() {
-                                    (Some("Walking to farm"), egui::Color32::from_rgb(120, 200, 80))
+                                    let label = if farm_action == "Harvesting" { "Walking to harvest" } else { "Walking to plant" };
+                                    (Some(label), egui::Color32::from_rgb(120, 200, 80))
                                 } else if pleb.harvest_target.is_some() {
                                     (Some("Walking to harvest"), egui::Color32::from_rgb(200, 180, 60))
                                 } else if pleb.haul_target.is_some() {
@@ -2853,7 +2819,7 @@ impl App {
                             PlebActivity::Harvesting(_) => (Some("Harvesting"), egui::Color32::from_rgb(200, 180, 60)),
                             PlebActivity::Eating => (Some("Eating"), egui::Color32::from_rgb(200, 160, 80)),
                             PlebActivity::Hauling => (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80)),
-                            PlebActivity::Farming(_) => (Some("Farming"), egui::Color32::from_rgb(80, 200, 80)),
+                            PlebActivity::Farming(_) => (Some(farm_action), egui::Color32::from_rgb(80, 200, 80)),
                             PlebActivity::Crisis(_, _) => (None, egui::Color32::GRAY),
                         };
                         if let Some(text) = act_text {

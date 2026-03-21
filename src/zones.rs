@@ -6,6 +6,7 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, PartialEq)]
 pub enum ZoneKind {
     Growing,
+    Storage,
 }
 
 #[derive(Clone, Debug)]
@@ -176,6 +177,10 @@ pub fn generate_work_tasks(
                         tasks.push(WorkTask::Harvest(x, y));
                     }
                 }
+            }
+            ZoneKind::Storage => {
+                // Storage zones don't generate work tasks directly.
+                // Items are hauled there via context menu or auto-haul.
             }
         }
     }
