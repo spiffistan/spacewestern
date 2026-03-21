@@ -1876,31 +1876,69 @@ impl App {
                 egui::Color32::from_rgba_unmultiplied(220, 225, 255, flash_alpha),
             );
 
-            // Draw lightning bolt at strike location (use last known strike)
+            // Draw lightning bolt at strike location
             if let Some((lx, ly)) = self.lightning_strike {
                 let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
                 let strike_sx = ((lx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
                 let strike_sy = ((ly - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                let bolt_col = egui::Color32::from_rgba_unmultiplied(200, 210, 255, flash_alpha);
-                // Jagged bolt from top of screen to strike point
-                let top_x = strike_sx + (self.lightning_flash * 20.0).sin() * 30.0;
-                let mut prev = egui::pos2(top_x, 0.0);
-                let segments = 8;
+                let bolt_alpha = (self.lightning_flash * 255.0).min(255.0) as u8;
+                let bolt_col = egui::Color32::from_rgba_unmultiplied(220, 230, 255, bolt_alpha);
+                let glow_col = egui::Color32::from_rgba_unmultiplied(150, 170, 255, bolt_alpha / 3);
+                // Main bolt: thick jagged line from top of screen to strike
+                let segments = 12;
+                let mut prev = egui::pos2(strike_sx + 20.0, 0.0);
                 for i in 1..=segments {
                     let t = i as f32 / segments as f32;
-                    let jitter_x = (t * 17.3 + self.lightning_flash * 7.0).sin() * 15.0 * (1.0 - t);
-                    let next = egui::pos2(
-                        strike_sx + jitter_x,
-                        strike_sy * t,
-                    );
-                    flash_painter.line_segment([prev, next], egui::Stroke::new(3.0 - t * 2.0, bolt_col));
+                    let jitter = (t * 23.7 + lx * 3.1).sin() * 25.0 * (1.0 - t * 0.5);
+                    let next = egui::pos2(strike_sx + jitter, strike_sy * t);
+                    let width = 4.0 * (1.0 - t * 0.5) * self.lightning_flash;
+                    // Glow (wider, dimmer)
+                    flash_painter.line_segment([prev, next], egui::Stroke::new(width * 3.0, glow_col));
+                    // Core (bright)
+                    flash_painter.line_segment([prev, next], egui::Stroke::new(width, bolt_col));
                     prev = next;
                 }
-                // Bright circle at impact
+                // Branch bolt (smaller, offset)
+                let mut prev2 = egui::pos2(strike_sx - 15.0, strike_sy * 0.3);
+                for i in 1..=5 {
+                    let t = i as f32 / 5.0;
+                    let jitter = (t * 31.3 + ly * 2.7).sin() * 12.0;
+                    let next2 = egui::pos2(
+                        strike_sx + jitter * (1.0 - t),
+                        strike_sy * (0.3 + t * 0.7),
+                    );
+                    flash_painter.line_segment([prev2, next2], egui::Stroke::new(2.0 * self.lightning_flash, bolt_col));
+                    prev2 = next2;
+                }
+                // Impact circle
+                let impact_r = 15.0 * self.lightning_flash;
                 flash_painter.circle_filled(
-                    egui::pos2(strike_sx, strike_sy),
-                    8.0 * self.lightning_flash,
-                    egui::Color32::from_rgba_unmultiplied(255, 255, 240, flash_alpha),
+                    egui::pos2(strike_sx, strike_sy), impact_r,
+                    egui::Color32::from_rgba_unmultiplied(255, 255, 240, bolt_alpha),
+                );
+                flash_painter.circle_stroke(
+                    egui::pos2(strike_sx, strike_sy), impact_r * 2.0,
+                    egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(180, 190, 255, bolt_alpha / 2)),
+                );
+            }
+        }
+
+        // Voltage label at cursor when power overlay is active
+        if matches!(self.fluid_overlay, FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts) {
+            if self.debug.voltage > 0.01 {
+                let (hwx, hwy) = self.hover_world;
+                let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+                let hsx = ((hwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let hsy = ((hwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let label_painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground, egui::Id::new("voltage_label"),
+                ));
+                label_painter.text(
+                    egui::pos2(hsx, hsy - 10.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    format!("{:.1}V", self.debug.voltage),
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::from_rgb(220, 255, 220),
                 );
             }
         }

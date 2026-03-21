@@ -2145,32 +2145,55 @@ impl App {
                 );
             }
 
-            // Lightning voltage surge: inject massive voltage at strike point (once per strike)
+            // Lightning voltage surge: inject into ALL conductors within radius (natural propagation)
             if let Some((lx, ly)) = self.lightning_strike {
-                if self.lightning_surge_done { } else {
-                self.lightning_surge_done = true;
-                let lix = lx.floor() as i32;
-                let liy = ly.floor() as i32;
-                if lix >= 0 && liy >= 0 && lix < GRID_W as i32 && liy < GRID_H as i32 {
-                    let lidx = (liy as u32 * GRID_W + lix as u32) as usize;
-                    let bt = block_type_rs(self.grid_data[lidx]);
-                    let flags = block_flags_rs(self.grid_data[lidx]);
-                    let is_conductor = bt == 36 || bt == 37 || bt == 38 || bt == 39
-                        || bt == 40 || bt == 41 || bt == 42 || bt == 43
-                        || (flags & 0x80) != 0;
-                    if is_conductor {
-                        // Inject 50V surge (way over the 12V max — will overload the network)
-                        let surge: f32 = 50.0;
-                        gfx.queue.write_buffer(
-                            &gfx.voltage_buffer,
-                            (lidx as u64) * 4,
-                            bytemuck::bytes_of(&surge),
-                        );
+                if !self.lightning_surge_done {
+                    self.lightning_surge_done = true;
+                    let cx = lx.floor() as i32;
+                    let cy = ly.floor() as i32;
+                    let radius = 8i32;
+                    for dy in -radius..=radius {
+                        for dx in -radius..=radius {
+                            let nx = cx + dx;
+                            let ny = cy + dy;
+                            if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                            let dist_sq = (dx * dx + dy * dy) as f32;
+                            if dist_sq > (radius * radius) as f32 { continue; }
+                            let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                            let bt = block_type_rs(self.grid_data[nidx]);
+                            let flags = block_flags_rs(self.grid_data[nidx]);
+                            let is_conductor = bt == 36 || bt == 37 || bt == 38 || bt == 39
+                                || bt == 40 || bt == 41 || bt == 42 || bt == 43 || bt == 45
+                                || bt == 7 || bt == 10 || bt == 11 || bt == 12 || bt == 16
+                                || (flags & 0x80) != 0;
+                            if is_conductor {
+                                // Voltage decreases with distance from strike
+                                let dist = dist_sq.sqrt();
+                                let surge = 50.0 * (1.0 - dist / radius as f32).max(0.0);
+                                gfx.queue.write_buffer(
+                                    &gfx.voltage_buffer,
+                                    (nidx as u64) * 4,
+                                    bytemuck::bytes_of(&surge),
+                                );
+                            }
+                        }
+                    }
+                    // Also trip any breakers within the surge radius
+                    for dy in -20..=20i32 {
+                        for dx in -20..=20i32 {
+                            let bnx = cx + dx;
+                            let bny = cy + dy;
+                            if bnx < 0 || bny < 0 || bnx >= GRID_W as i32 || bny >= GRID_H as i32 { continue; }
+                            let bnidx = (bny as u32 * GRID_W + bnx as u32) as usize;
+                            let cb = self.grid_data[bnidx];
+                            if (cb & 0xFF) == 45 && ((cb >> 16) & 4) != 0 {
+                                self.grid_data[bnidx] = cb & !(4u32 << 16);
+                                self.grid_dirty = true;
+                            }
+                        }
                     }
                 }
-                // Strike position stays alive until flash fades (for bolt rendering)
-                // Voltage only injected once (this frame)
-            }}  // close surge_done guard + lightning_strike
+            }
 
             // Apply pipe outlet injections to dye texture (AFTER shader runs)
             // Write into cells ADJACENT to the outlet (in the outlet's facing direction)

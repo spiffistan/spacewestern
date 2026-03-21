@@ -74,7 +74,7 @@ impl App {
                 self.weather = new_weather;
             }
             // --- Lightning during heavy rain ---
-            self.lightning_flash = (self.lightning_flash - dt * 4.0).max(0.0);
+            self.lightning_flash = (self.lightning_flash - dt * 2.0).max(0.0); // slower decay for visible bolt
             if self.lightning_flash < 0.01 { self.lightning_strike = None; }
             if self.weather == WeatherState::HeavyRain {
                 self.lightning_timer -= dt * self.time_speed;
@@ -112,9 +112,9 @@ impl App {
                             || (flags & 0x80) != 0; // wire overlay
                         if is_conductor {
                             log::info!("Lightning hit power grid at ({}, {})! Voltage surge!", sx, sy);
-                            // The voltage surge will be injected via GPU write after submit
-                            // Store the strike position for the render pass
                         }
+                        // Voltage surge injection + breaker tripping happens in render pass
+                        // via GPU voltage buffer writes + GPU-side breaker threshold check
 
                         log::info!("Lightning strike at ({}, {})", sx, sy);
                     }
@@ -125,42 +125,6 @@ impl App {
             } else {
                 self.lightning_timer = 5.0; // reset when not heavy rain
                 self.lightning_strike = None;
-            }
-
-            // --- Circuit breaker trip detection ---
-            // Scan grid for ON breakers next to high-voltage conductors
-            // (The GPU shader zeros their voltage, but we need to flip the flag to keep them tripped)
-            // Only scan every 30 frames for performance
-            if self.lightmap_frame % 30 == 0 {
-                for y in 0..GRID_H {
-                    for x in 0..GRID_W {
-                        let idx = (y * GRID_W + x) as usize;
-                        let block = self.grid_data[idx];
-                        let bt = block_type_rs(block);
-                        if bt != 45 { continue; } // not a breaker
-                        let flags = block_flags_rs(block);
-                        if (flags & 4) == 0 { continue; } // already tripped
-                        let threshold = ((block >> 8) & 0xFF) as f32;
-                        // Check if any neighbor has voltage over threshold
-                        for &(dx, dy) in &[(0i32,-1i32),(0,1),(1,0),(-1,0)] {
-                            let nx = x as i32 + dx;
-                            let ny = y as i32 + dy;
-                            if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
-                            // We can't read GPU voltage from CPU, so check if lightning just hit nearby
-                            if let Some((lx, ly)) = self.lightning_strike {
-                                let dist = ((lx - x as f32 - 0.5).powi(2) + (ly - y as f32 - 0.5).powi(2)).sqrt();
-                                if dist < 15.0 && self.lightning_flash > 0.5 {
-                                    // Trip the breaker
-                                    let new_flags = flags & !4; // clear ON bit
-                                    self.grid_data[idx] = (block & 0xFF00FFFF) | ((new_flags as u32) << 16);
-                                    self.grid_dirty = true;
-                                    log::info!("Circuit breaker at ({}, {}) TRIPPED by lightning!", x, y);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             // --- Wind variation: slowly drift direction and magnitude ---
