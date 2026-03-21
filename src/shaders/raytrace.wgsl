@@ -2616,22 +2616,23 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Combine water sim level with rain for immediate visual feedback
         let wet = clamp(water_level + camera.rain_intensity * 0.3, 0.0, 1.0);
         if wet > 0.01 {
-            // Darken soil with moisture
-            color *= 1.0 - wet * 0.3;
-            // Blue tint from water
-            color = mix(color, vec3(color.r * 0.6, color.g * 0.65, color.b * 0.85), wet * 0.2);
+            // Wet soil: mix toward absolute dark brown (not relative scaling)
+            let wet_earth = vec3<f32>(0.18, 0.13, 0.07); // dark wet mud
+            color = mix(color, wet_earth, wet * 0.6);
 
             // Puddle effect: when water level is significant, show reflective surface
             if water_level > 0.15 {
                 let puddle_strength = clamp((water_level - 0.15) * 3.0, 0.0, 1.0);
-                // Animated ripples
+                // Muddy water: dark brown-tinted, not gray
+                let muddy_water = vec3<f32>(0.12, 0.09, 0.05);
+                color = mix(color, muddy_water, puddle_strength * 0.3);
+                // Subtle sky reflection (only a hint, mostly opaque muddy water)
                 let rip1 = sin(world_x * 8.0 + world_y * 5.0 + camera.time * 2.0) * 0.015;
                 let rip2 = sin(world_x * 4.0 - world_y * 9.0 + camera.time * 1.3) * 0.01;
-                // Sky reflection
-                let sky_ref = vec3(0.4, 0.5, 0.7) * (camera.sun_intensity * 0.4 + 0.15);
-                color = mix(color, sky_ref, puddle_strength * 0.4);
-                // Specular
-                let spec = pow(max(rip1 + rip2 + 0.5, 0.0), 8.0) * camera.sun_intensity * 0.15;
+                let sky_ref = vec3(0.3, 0.35, 0.45) * (camera.sun_intensity * 0.3 + 0.05);
+                color = mix(color, sky_ref, puddle_strength * 0.12);
+                // Small specular highlight
+                let spec = pow(max(rip1 + rip2 + 0.5, 0.0), 12.0) * camera.sun_intensity * 0.08;
                 color += vec3(spec) * puddle_strength;
             }
         }

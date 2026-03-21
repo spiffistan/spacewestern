@@ -1519,9 +1519,25 @@ impl App {
                 } else { String::new() }
             } else { String::new() };
 
+            // Zone info
+            let zone_info = if bx >= 0 && by >= 0 {
+                let in_growing = self.zones.iter().any(|z| z.kind == zones::ZoneKind::Growing && z.tiles.contains(&(bx, by)));
+                if in_growing { "\n\u{1f33e} Growing Zone".to_string() } else { String::new() }
+            } else { String::new() };
+
+            // Ground elevation + water hint
+            let ground_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                let gb = self.grid_data[(by as u32 * GRID_W + bx as u32) as usize];
+                let gbt = gb & 0xFF;
+                let gbh = (gb >> 8) & 0xFF;
+                if gbt == BT_DUG_GROUND {
+                    format!("\n\u{1f4a7} Dug depth: {} | Water table: {}", gbh, if gbh >= 2 { "seeping" } else { "dry" })
+                } else { String::new() }
+            } else { String::new() };
+
             let tip = format!(
-                "\u{1f4cd} ({:.1}, {:.1})\n{}\n{}{}{}",
-                wx, wy, block_info, gas_info, mat_info, pipe_info
+                "\u{1f4cd} ({:.1}, {:.1})\n{}{}{}{}{}{}",
+                wx, wy, block_info, gas_info, mat_info, pipe_info, zone_info, ground_info
             );
 
             // Position tooltip near cursor

@@ -442,7 +442,7 @@ impl App {
             start_time: Instant::now(),
             time_of_day: DAY_DURATION * (8.0 / 24.0), // start at 08:00
             time_paused: false,
-            time_speed: 1.0,
+            time_speed: 0.5,
             last_frame_time: Instant::now(),
             frame_count: 0,
             fps_accum: 0.0,
