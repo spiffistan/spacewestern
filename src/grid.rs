@@ -79,6 +79,40 @@ pub fn is_conductor_rs(bt: u8, flags: u8) -> bool {
     matches!(bt, 36..=43 | 45 | 7 | 10..=12 | 16) || (flags & 0x80) != 0
 }
 
+/// Unpacked block data for convenient access.
+pub struct BlockInfo {
+    pub raw: u32,
+    pub block_type: u32,
+    pub height: u32,
+    pub flags: u8,
+    pub roof_height: u32,
+}
+
+impl BlockInfo {
+    pub fn from_raw(b: u32) -> Self {
+        BlockInfo {
+            raw: b,
+            block_type: b & 0xFF,
+            height: (b >> 8) & 0xFF,
+            flags: ((b >> 16) & 0xFF) as u8,
+            roof_height: (b >> 24) & 0xFF,
+        }
+    }
+
+    pub fn is_door(&self) -> bool { self.flags & 1 != 0 }
+    pub fn is_roofed(&self) -> bool { self.flags & 2 != 0 }
+    pub fn is_open(&self) -> bool { self.flags & 4 != 0 }
+}
+
+/// Get unpacked block info at (x, y). Returns air for out-of-bounds.
+pub fn block_at(grid: &[u32], x: i32, y: i32) -> BlockInfo {
+    if x >= 0 && y >= 0 && x < GRID_W as i32 && y < GRID_H as i32 {
+        BlockInfo::from_raw(grid[(y as u32 * GRID_W + x as u32) as usize])
+    } else {
+        BlockInfo::from_raw(0)
+    }
+}
+
 // --- Grid index helpers ---
 
 /// Convert grid (x, y) to flat index. Returns None if out of bounds.
