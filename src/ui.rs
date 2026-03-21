@@ -2561,6 +2561,14 @@ impl App {
 
     }
 
+    /// Draw text with a dark shadow for readability on bright backgrounds.
+    fn shadow_text(painter: &egui::Painter, pos: egui::Pos2, anchor: egui::Align2, text: &str, font: egui::FontId, color: egui::Color32) {
+        let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180);
+        let off = 1.0;
+        painter.text(pos + egui::Vec2::new(off, off), anchor, text, font.clone(), shadow);
+        painter.text(pos, anchor, text, font, color);
+    }
+
     fn draw_world_labels(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32)) {
         // --- World labels: pleb names, activity, key items ---
         {
@@ -2592,13 +2600,8 @@ impl App {
                     } else {
                         egui::Color32::from_rgb(220, 220, 220)
                     };
-                    label_painter.text(
-                        pos,
-                        egui::Align2::CENTER_TOP,
-                        &pleb.name,
-                        egui::FontId::proportional(9.0),
-                        name_color,
-                    );
+                    Self::shadow_text(&label_painter, pos, egui::Align2::CENTER_TOP,
+                        &pleb.name, egui::FontId::proportional(9.0), name_color);
 
                     // Activity label + intent (when not idle)
                     if tile_px > 10.0 {
@@ -2632,13 +2635,8 @@ impl App {
                         };
                         if let Some(text) = act_text {
                             let act_pos = to_screen(pleb.x, pleb.y + 0.95);
-                            label_painter.text(
-                                act_pos,
-                                egui::Align2::CENTER_TOP,
-                                text,
-                                egui::FontId::proportional(7.0),
-                                act_color,
-                            );
+                            Self::shadow_text(&label_painter, act_pos, egui::Align2::CENTER_TOP,
+                                text, egui::FontId::proportional(7.0), act_color);
                         }
 
                         // Progress bar for farming/harvesting
@@ -2673,13 +2671,8 @@ impl App {
                         // Crisis reason
                         if let Some(reason) = pleb.activity.crisis_reason() {
                             let crisis_pos = to_screen(pleb.x, pleb.y + 0.95);
-                            label_painter.text(
-                                crisis_pos,
-                                egui::Align2::CENTER_TOP,
-                                reason,
-                                egui::FontId::proportional(8.0),
-                                egui::Color32::from_rgb(255, 60, 60),
-                            );
+                            Self::shadow_text(&label_painter, crisis_pos, egui::Align2::CENTER_TOP,
+                                reason, egui::FontId::proportional(8.0), egui::Color32::from_rgb(255, 60, 60));
                         }
                     }
                 }
