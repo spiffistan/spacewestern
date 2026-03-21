@@ -375,6 +375,14 @@ impl App {
                     if ui.selectable_label(self.enable_ricochets, "Bullet Ricochets").clicked() {
                         self.enable_ricochets = !self.enable_ricochets;
                     }
+                    ui.separator();
+                    if ui.selectable_label(self.sandbox_mode, "Sandbox Mode").clicked() {
+                        self.sandbox_mode = !self.sandbox_mode;
+                        if !self.sandbox_mode {
+                            self.sandbox_tool = SandboxTool::None;
+                            self.build_category = None;
+                        }
+                    }
                 });
 
                 ui.separator();
@@ -586,8 +594,24 @@ impl App {
                                 if selected {
                                     self.build_category = None;
                                     self.build_tool = BuildTool::None;
+                                    self.sandbox_tool = SandboxTool::None;
                                 } else {
                                     self.build_category = Some(name);
+                                    self.sandbox_tool = SandboxTool::None;
+                                }
+                            }
+                        }
+                        // Sandbox category (only visible in sandbox mode)
+                        if self.sandbox_mode {
+                            let selected = self.build_category == Some("Sandbox");
+                            let label = format!("\u{1f9ea} Sandbox");
+                            if ui.selectable_label(selected, egui::RichText::new(label).size(cat_s)).clicked() {
+                                if selected {
+                                    self.build_category = None;
+                                    self.sandbox_tool = SandboxTool::None;
+                                } else {
+                                    self.build_category = Some("Sandbox");
+                                    self.build_tool = BuildTool::None;
                                 }
                             }
                         }
@@ -699,9 +723,37 @@ impl App {
                                 "Physics" => {
                                     icon_btn(ui, BuildTool::WoodBox, "\u{1f4e6}", "Box");
                                 }
+                                "Sandbox" if self.sandbox_mode => {
+                                    // handled below (outside icon_btn scope)
+                                }
                                 _ => {}
                             }
                         });
+                        // Sandbox tools (outside icon_btn scope)
+                        if self.build_category == Some("Sandbox") && self.sandbox_mode {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = egui::Vec2::new(4.0, 4.0);
+                                let sel = self.sandbox_tool == SandboxTool::Lightning;
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(60.0), egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if sel { egui::Color32::from_rgb(60, 80, 110) }
+                                    else if response.hovered() { egui::Color32::from_rgb(55, 58, 65) }
+                                    else { egui::Color32::from_rgb(40, 42, 48) };
+                                painter.rect_filled(rect, 4.0, bg);
+                                painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
+                                painter.text(rect.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
+                                    "\u{26a1}", egui::FontId::proportional(24.0), egui::Color32::YELLOW);
+                                painter.text(rect.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
+                                    "Lightning", egui::FontId::proportional(11.0), egui::Color32::from_gray(190));
+                                if response.clicked() {
+                                    self.sandbox_tool = if sel { SandboxTool::None } else { SandboxTool::Lightning };
+                                    if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
+                                }
+                            });
+                        }
+
                         // Hint bar below icons
                         let tool = &self.build_tool;
                         if *tool != BuildTool::None {

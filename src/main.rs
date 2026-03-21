@@ -53,6 +53,12 @@ use winit::{
     window::Window,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SandboxTool {
+    None,
+    Lightning,
+}
+
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
 
@@ -136,6 +142,8 @@ struct App {
     enable_dir_bleed: bool,       // directional light bleed (expensive)
     enable_temporal: bool,        // temporal reprojection (reuse previous frame)
     enable_ricochets: bool,       // bullets bounce off walls
+    sandbox_mode: bool,           // enables sandbox build category + debug tools
+    sandbox_tool: SandboxTool,    // current sandbox action
     show_pipe_overlay: bool,       // draw pipe gas contents as egui overlay
     pipe_width: f32,               // pipe conductance multiplier (1=narrow, 10=wide)
     drag_start: Option<(i32, i32)>, // grid coords where drag started (for shape building)
@@ -361,6 +369,8 @@ impl App {
             enable_dir_bleed: true,
             enable_temporal: true,
             enable_ricochets: true,
+            sandbox_mode: false,
+            sandbox_tool: SandboxTool::None,
             drag_start: None,
             show_pipe_overlay: false,
             pipe_width: 5.0,
@@ -908,6 +918,23 @@ impl App {
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
         let flags = block_flags_rs(block);
+
+        // Sandbox tools
+        if self.sandbox_tool == SandboxTool::Lightning {
+            // Trigger lightning at clicked location
+            self.lightning_flash = 1.0;
+            self.lightning_strike = Some((wx, wy));
+            self.lightning_surge_done = false;
+            // Heat/smoke at impact
+            self.fluid_params.splat_x = wx;
+            self.fluid_params.splat_y = wy;
+            self.fluid_params.splat_vx = 0.0;
+            self.fluid_params.splat_vy = 0.0;
+            self.fluid_params.splat_radius = 1.5;
+            self.fluid_params.splat_active = 1.0;
+            log::info!("Sandbox: Lightning strike at ({:.0}, {:.0})", wx, wy);
+            return;
+        }
 
         // Destroy tool: single click destroys one block
         if self.build_tool == BuildTool::Destroy {
