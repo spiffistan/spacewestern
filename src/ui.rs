@@ -1697,8 +1697,16 @@ impl App {
             ));
             let stroke = egui::Stroke::new(2.0, egui::Color32::WHITE);
             for item in &self.world_sel.items {
-                let p0 = self.world_to_screen_ui(item.x as f32, item.y as f32, bp_cam);
-                let p1 = self.world_to_screen_ui((item.x + item.w) as f32, (item.y + item.h) as f32, bp_cam);
+                // Plebs: use live position, not grid position
+                let (wx0, wy0, wx1, wy1) = if let Some(pi) = item.pleb_idx {
+                    if let Some(pleb) = self.plebs.get(pi) {
+                        (pleb.x - 0.4, pleb.y - 0.4, pleb.x + 0.4, pleb.y + 0.4)
+                    } else { continue; }
+                } else {
+                    (item.x as f32, item.y as f32, (item.x + item.w) as f32, (item.y + item.h) as f32)
+                };
+                let p0 = self.world_to_screen_ui(wx0, wy0, bp_cam);
+                let p1 = self.world_to_screen_ui(wx1, wy1, bp_cam);
                 let rect = egui::Rect::from_min_max(p0, p1);
                 let bl = (rect.width().min(rect.height()) * 0.3).max(3.0);
                 sel_painter.line_segment([rect.left_top(), rect.left_top() + egui::Vec2::new(bl, 0.0)], stroke);
@@ -2794,13 +2802,22 @@ impl App {
         });
         let all_same_type = items.iter().all(|item| item.block_type == items[0].block_type);
 
+        let pleb_count = items.iter().filter(|i| i.pleb_idx.is_some()).count();
+        let block_count = count - pleb_count;
+
         // Label
-        let label = if count == 1 {
+        let label = if count == 1 && items[0].pleb_idx.is_some() {
+            let pi = items[0].pleb_idx.unwrap();
+            self.plebs.get(pi).map_or("Pleb".to_string(), |p| p.name.clone())
+        } else if count == 1 {
             reg.name(items[0].block_type as u8).to_string()
-        } else if all_same_type {
+        } else if all_same_type && items[0].pleb_idx.is_none() {
             format!("{}x {}", count, reg.name(items[0].block_type as u8))
         } else {
-            format!("{} items selected", count)
+            let mut parts = Vec::new();
+            if pleb_count > 0 { parts.push(format!("{} pleb{}", pleb_count, if pleb_count > 1 { "s" } else { "" })); }
+            if block_count > 0 { parts.push(format!("{} block{}", block_count, if block_count > 1 { "s" } else { "" })); }
+            parts.join(", ")
         };
 
         egui::Area::new(egui::Id::new("selection_actions"))

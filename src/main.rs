@@ -110,9 +110,12 @@ struct BlockSelection {
 /// A single selected item in the world.
 #[derive(Clone, Debug)]
 struct SelectedItem {
-    x: i32, y: i32, w: i32, h: i32, // bounding box
-    block_type: u32,
+    x: i32, y: i32, w: i32, h: i32, // bounding box (grid coords)
+    block_type: u32,                  // 0 = pleb (not a block)
+    pleb_idx: Option<usize>,          // Some(idx) if this is a pleb
 }
+
+const SEL_PLEB: u32 = u32::MAX; // sentinel block_type for pleb selections
 
 /// What's currently selected in the world (Rimworld-style).
 #[derive(Clone, Debug, Default)]
@@ -123,7 +126,10 @@ struct WorldSelection {
 impl WorldSelection {
     fn none() -> Self { WorldSelection { items: Vec::new() } }
     fn single(x: i32, y: i32, w: i32, h: i32, block_type: u32) -> Self {
-        WorldSelection { items: vec![SelectedItem { x, y, w, h, block_type }] }
+        WorldSelection { items: vec![SelectedItem { x, y, w, h, block_type, pleb_idx: None }] }
+    }
+    fn single_pleb(pleb_idx: usize, x: i32, y: i32) -> Self {
+        WorldSelection { items: vec![SelectedItem { x, y, w: 1, h: 1, block_type: SEL_PLEB, pleb_idx: Some(pleb_idx) }] }
     }
     fn is_empty(&self) -> bool { self.items.is_empty() }
 }
@@ -1206,6 +1212,8 @@ impl App {
 
             if let Some(idx) = clicked_pleb {
                 self.selected_pleb = Some(idx);
+                let p = &self.plebs[idx];
+                self.world_sel = WorldSelection::single_pleb(idx, p.x.floor() as i32, p.y.floor() as i32);
                 return;
             }
 
@@ -3000,12 +3008,30 @@ impl ApplicationHandler for App {
                                     if is_gnd { continue; }
                                     let (ox, oy, ow, oh) = self.get_block_bounds(gx, gy, bbt, bflags);
                                     if seen.insert((ox, oy)) {
-                                        items.push(SelectedItem { x: ox, y: oy, w: ow, h: oh, block_type: bbt as u32 });
+                                        items.push(SelectedItem { x: ox, y: oy, w: ow, h: oh, block_type: bbt as u32, pleb_idx: None });
                                     }
                                 }
                             }
+                            // Also check plebs in the selection area
+                            let mut first_pleb = None;
+                            for (pi, pleb) in self.plebs.iter().enumerate() {
+                                let px = pleb.x.floor() as i32;
+                                let py = pleb.y.floor() as i32;
+                                if px >= min_x && px < max_x && py >= min_y && py < max_y {
+                                    items.push(SelectedItem {
+                                        x: px, y: py, w: 1, h: 1,
+                                        block_type: SEL_PLEB, pleb_idx: Some(pi),
+                                    });
+                                    if first_pleb.is_none() { first_pleb = Some(pi); }
+                                }
+                            }
                             self.world_sel = WorldSelection { items };
-                            self.selected_pleb = None;
+                            // If exactly one pleb selected, make it the active pleb
+                            self.selected_pleb = if self.world_sel.items.iter().filter(|i| i.pleb_idx.is_some()).count() == 1 {
+                                first_pleb
+                            } else {
+                                None
+                            };
                         } else if !self.mouse_dragged {
                             let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             self.handle_click(wx, wy);
