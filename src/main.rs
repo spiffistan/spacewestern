@@ -1166,8 +1166,20 @@ impl App {
             }
         }
 
-        // Build tool placement
+        // Build tool placement (delegated to keep handle_click manageable)
         if self.build_tool != BuildTool::None {
+            self.handle_build_placement(wx, wy, bx, by, idx, block, bt, flags);
+            return;
+        }
+
+        // Block-specific click interactions (popups, toggles)
+        self.handle_block_click(bx, by, idx, block, bt, flags);
+    }
+
+    /// Handle build tool placement at grid position.
+    fn handle_build_placement(&mut self, wx: f32, wy: f32, bx: i32, by: i32, idx: usize, block: u32, bt: u8, flags: u8) {
+        if self.build_tool == BuildTool::None { return; }
+        {
             match self.build_tool {
                 BuildTool::Place(37) => {
                     // Solar panel: 3×3 multi-tile placement
@@ -1490,7 +1502,10 @@ impl App {
             }
             return;
         }
+    }
 
+    /// Handle click interactions with specific block types (toggles, popups).
+    fn handle_block_click(&mut self, bx: i32, by: i32, idx: usize, block: u32, bt: u8, flags: u8) {
         // Toggle door
         if is_door_rs(block) {
             let new_flags = flags ^ 4; // toggle bit2 (is_open)
