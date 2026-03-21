@@ -134,6 +134,52 @@ impl WorldSelection {
     fn is_empty(&self) -> bool { self.items.is_empty() }
 }
 
+/// In-game event log entry.
+#[derive(Clone, Debug)]
+struct GameEvent {
+    time: f32,           // game time when event occurred
+    message: String,
+    category: EventCategory,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EventCategory {
+    Farm,    // 🌾 green
+    Combat,  // ⚔️ red
+    Need,    // 💤 yellow
+    Build,   // 🔨 blue
+    Weather, // ⛈️ gray
+    Haul,    // 📦 brown
+    General, // white
+}
+
+impl EventCategory {
+    fn icon(&self) -> &'static str {
+        match self {
+            EventCategory::Farm => "\u{1f33e}",
+            EventCategory::Combat => "\u{2694}",
+            EventCategory::Need => "\u{1f4a4}",
+            EventCategory::Build => "\u{1f528}",
+            EventCategory::Weather => "\u{26c8}",
+            EventCategory::Haul => "\u{1f4e6}",
+            EventCategory::General => "\u{2139}",
+        }
+    }
+    fn color(&self) -> [u8; 3] {
+        match self {
+            EventCategory::Farm => [80, 200, 80],
+            EventCategory::Combat => [255, 80, 80],
+            EventCategory::Need => [220, 200, 60],
+            EventCategory::Build => [80, 150, 255],
+            EventCategory::Weather => [160, 160, 170],
+            EventCategory::Haul => [180, 140, 80],
+            EventCategory::General => [200, 200, 200],
+        }
+    }
+}
+
+const MAX_LOG_ENTRIES: usize = 100;
+
 // --- Application state ---
 struct App {
     window: Option<Arc<Window>>,
@@ -210,6 +256,8 @@ struct App {
     context_menu: Option<(f32, f32)>,
     // World selection (Rimworld-style: click anything to inspect)
     world_sel: WorldSelection,
+    // In-game event log
+    game_log: std::collections::VecDeque<GameEvent>,
     // Multi-select drag rectangle (screen coords)
     select_drag_start: Option<(f32, f32)>, // world coords where selection drag started
     // Storage crate inventories: grid_idx → stored items
@@ -471,6 +519,7 @@ impl App {
             pleb_air_readback_pending: false,
             context_menu: None,
             world_sel: WorldSelection::none(),
+            game_log: std::collections::VecDeque::new(),
             select_drag_start: None,
             crate_contents: std::collections::HashMap::new(),
             rock_context_menu: None,
@@ -1261,6 +1310,17 @@ impl App {
 
     /// Handle build tool placement at grid position.
     /// Get the bounding box (origin + size) for a block, accounting for multi-tile items.
+    fn log_event(&mut self, category: EventCategory, message: impl Into<String>) {
+        self.game_log.push_back(GameEvent {
+            time: self.time_of_day,
+            message: message.into(),
+            category,
+        });
+        while self.game_log.len() > MAX_LOG_ENTRIES {
+            self.game_log.pop_front();
+        }
+    }
+
     fn get_block_bounds(&self, bx: i32, by: i32, bt: u8, flags: u8) -> (i32, i32, i32, i32) {
         let seg = (flags >> 3) & 3;
         let rot = (flags >> 5) & 3;

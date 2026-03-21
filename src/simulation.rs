@@ -8,6 +8,8 @@ use crate::zones::*;
 impl App {
     /// Update all simulation state. Returns frame delta time.
     pub(crate) fn update_simulation(&mut self) -> f32 {
+        let mut events: Vec<(EventCategory, String)> = Vec::new();
+
         // Advance time + FPS tracking
         let now = Instant::now();
         let dt = now.elapsed_secs_since(&self.last_frame_time);
@@ -73,6 +75,13 @@ impl App {
         // --- Weather tick ---
         if !self.time_paused {
             if let Some(new_weather) = tick_weather(&self.weather, &mut self.weather_timer, dt, self.time_speed) {
+                let label = match &new_weather {
+                    WeatherState::Clear => "Weather: Clear skies",
+                    WeatherState::Cloudy => "Weather: Cloudy",
+                    WeatherState::LightRain => "Weather: Light rain",
+                    WeatherState::HeavyRain => "Weather: Heavy rain",
+                };
+                events.push((EventCategory::Weather, label.to_string()));
                 self.weather = new_weather;
             }
             // --- Lightning during heavy rain ---
@@ -115,7 +124,7 @@ impl App {
                         // Voltage surge injection + breaker tripping happens in render pass
                         // via GPU voltage buffer writes + GPU-side breaker threshold check
 
-                        log::info!("Lightning strike at ({}, {})", sx, sy);
+                        events.push((EventCategory::Weather, format!("Lightning strike at ({}, {})", sx, sy)));
                     }
 
                     // Next strike in 5-15 game seconds
@@ -376,7 +385,14 @@ impl App {
                 let is_sleeping = pleb.activity == PlebActivity::Sleeping;
                 tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving, is_sleeping, air);
 
+                let was_crisis = pleb.activity.is_crisis();
                 tick_pleb_activity(pleb, &env, &self.grid_data, dt, self.time_speed);
+                // Log new crisis
+                if pleb.activity.is_crisis() && !was_crisis {
+                    if let Some(reason) = pleb.activity.crisis_reason() {
+                        events.push((EventCategory::Need, format!("{}: {}", pleb.name, reason)));
+                    }
+                }
 
                 // Update walking state (handles both crisis and non-crisis walking)
                 let inner = pleb.activity.inner().clone();
@@ -437,7 +453,7 @@ impl App {
                                     pleb.inventory.rocks += 1;
                                     pleb.inventory.carrying = Some("Rock");
                                     pleb.harvest_target = None;
-                                    log::info!("{} picked up a rock at ({}, {})", pleb.name, rx, ry);
+                                    events.push((EventCategory::Haul, format!("{} picked up a rock", pleb.name)));
                                     // Now walk to crate (pathfind to adjacent walkable tile)
                                     if let Some((cx, cy)) = pleb.haul_target {
                                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
@@ -487,7 +503,7 @@ impl App {
                                     self.grid_dirty = true;
                                 }
                             }
-                            log::info!("{} deposited items in crate at ({}, {})", pleb.name, cx, cy);
+                            events.push((EventCategory::Haul, format!("{} deposited items in crate", pleb.name)));
                         }
                     } else {
                         pleb.activity = PlebActivity::Idle;
@@ -630,7 +646,8 @@ impl App {
             // Apply bullet hits to plebs
             for hit in &bullet_hits {
                 if let Some(pleb) = self.plebs.get_mut(hit.pleb_idx) {
-                    pleb.needs.health -= 0.2; // ~5 shots to kill
+                    events.push((EventCategory::Combat, format!("{} hit! ({:.0}% hp)", pleb.name, (pleb.needs.health - 0.2).max(0.0) * 100.0)));
+                    pleb.needs.health -= 0.2;
                     self.fluid_params.splat_x = hit.x;
                     self.fluid_params.splat_y = hit.y;
                     self.fluid_params.splat_radius = 0.3;
@@ -744,6 +761,11 @@ impl App {
 
                 if let Some((task, _)) = best_task {
                     let (tx, ty) = task.position();
+                    let task_name = match &task {
+                        WorkTask::Plant(_, _) => "plant",
+                        WorkTask::Harvest(_, _) => "harvest",
+                    };
+                    events.push((EventCategory::Farm, format!("{} going to {} at ({},{})", pleb.name, task_name, tx, ty)));
                     self.active_work.insert((tx, ty));
                     pleb.work_target = Some((tx, ty));
                     // Path to the task
@@ -772,23 +794,23 @@ impl App {
                                 let tblock = self.grid_data[tidx];
                                 let tbt = tblock & 0xFF;
                                 if tbt == BT_DIRT {
-                                    // Plant: convert dirt to crop stage 0
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = (tblock >> 16) & 0xFF;
                                     self.grid_data[tidx] = make_block(BT_CROP as u8, CROP_PLANTED as u8, fflags as u8) | roof_h;
                                     self.crop_timers.insert(tidx as u32, 0.0);
                                     self.grid_dirty = true;
+                                    events.push((EventCategory::Farm, format!("{} planted a crop", pleb.name)));
                                 } else if tbt == BT_CROP {
-                                    // Harvest crop: revert to dirt, give food
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = (tblock >> 16) & 0xFF;
                                     self.grid_data[tidx] = make_block(BT_DIRT as u8, 0, fflags as u8) | roof_h;
                                     self.crop_timers.remove(&(tidx as u32));
                                     self.grid_dirty = true;
                                     pleb.inventory.berries += 2;
+                                    events.push((EventCategory::Farm, format!("{} harvested a crop (+2 food)", pleb.name)));
                                 } else if tbt == BT_BERRY_BUSH {
-                                    // Harvest berry bush: collect berries (bush stays)
                                     pleb.inventory.berries += 3;
+                                    events.push((EventCategory::Farm, format!("{} harvested berries (+3 food)", pleb.name)));
                                 }
                             }
                             self.active_work.remove(&(tx, ty));
@@ -821,7 +843,17 @@ impl App {
         }
 
         // --- Remove dead plebs ---
+        for pleb in &self.plebs {
+            if pleb.needs.health <= 0.0 {
+                events.push((EventCategory::Combat, format!("{} has died!", pleb.name)));
+            }
+        }
         self.plebs.retain(|p| p.needs.health > 0.0);
+
+        // Push all collected events to the game log
+        for (cat, msg) in events {
+            self.log_event(cat, msg);
+        }
 
         dt
     }

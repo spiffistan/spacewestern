@@ -35,6 +35,7 @@ impl App {
         self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
         self.draw_world_labels(ctx, bp_cam);
         self.draw_selection_actions(ctx);
+        self.draw_game_log(ctx);
     }
 
     fn draw_layers_bar(&mut self, ctx: &egui::Context) {
@@ -2867,6 +2868,39 @@ impl App {
                         }
                     });
                 });
+            });
+    }
+
+    /// Draw the in-game event log (bottom-right, scrolling).
+    fn draw_game_log(&self, ctx: &egui::Context) {
+        if self.game_log.is_empty() { return; }
+
+        egui::Area::new(egui::Id::new("game_log"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -10.0])
+            .show(ctx, |ui| {
+                egui::Frame::window(ui.style())
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 25, 200))
+                    .show(ui, |ui| {
+                        ui.set_max_width(320.0);
+                        ui.set_max_height(150.0);
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .stick_to_bottom(true)
+                            .max_height(140.0)
+                            .show(ui, |ui| {
+                                for event in self.game_log.iter() {
+                                    let [r, g, b] = event.category.color();
+                                    let time_frac = event.time / DAY_DURATION;
+                                    let hours = (time_frac * 24.0) as u32;
+                                    let minutes = ((time_frac * 24.0 - hours as f32) * 60.0) as u32;
+                                    let text = format!("{:02}:{:02} {} {}", hours, minutes,
+                                        event.category.icon(), event.message);
+                                    ui.label(egui::RichText::new(text)
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(r, g, b)));
+                                }
+                            });
+                    });
             });
     }
 }
