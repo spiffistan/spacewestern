@@ -174,6 +174,11 @@ struct App {
     // Weather system
     weather: WeatherState,
     weather_timer: f32,
+    // Lightning
+    lightning_timer: f32,           // seconds until next potential strike
+    lightning_flash: f32,           // flash brightness (decays rapidly, 0-1)
+    lightning_strike: Option<(f32, f32)>, // (x, y) of current strike for rendering
+    lightning_surge_done: bool,         // prevents re-injecting voltage surge
     // Wind variation: slowly drifting target angle + magnitude
     wind_target_angle: f32,    // target angle in radians
     wind_target_mag: f32,      // target magnitude
@@ -409,6 +414,10 @@ impl App {
             burst_delay: 0.0,
             weather: WeatherState::Clear,
             weather_timer: 45.0,
+            lightning_timer: 10.0,
+            lightning_flash: 0.0,
+            lightning_strike: None,
+            lightning_surge_done: false,
             wind_target_angle: std::f32::consts::FRAC_PI_4, // ~NE
             wind_target_mag: 10.0,
             wind_change_timer: 15.0,
@@ -2093,6 +2102,33 @@ impl App {
                     bytemuck::bytes_of(&pipe_temp),
                 );
             }
+
+            // Lightning voltage surge: inject massive voltage at strike point (once per strike)
+            if let Some((lx, ly)) = self.lightning_strike {
+                if self.lightning_surge_done { } else {
+                self.lightning_surge_done = true;
+                let lix = lx.floor() as i32;
+                let liy = ly.floor() as i32;
+                if lix >= 0 && liy >= 0 && lix < GRID_W as i32 && liy < GRID_H as i32 {
+                    let lidx = (liy as u32 * GRID_W + lix as u32) as usize;
+                    let bt = block_type_rs(self.grid_data[lidx]);
+                    let flags = block_flags_rs(self.grid_data[lidx]);
+                    let is_conductor = bt == 36 || bt == 37 || bt == 38 || bt == 39
+                        || bt == 40 || bt == 41 || bt == 42 || bt == 43
+                        || (flags & 0x80) != 0;
+                    if is_conductor {
+                        // Inject 50V surge (way over the 12V max — will overload the network)
+                        let surge: f32 = 50.0;
+                        gfx.queue.write_buffer(
+                            &gfx.voltage_buffer,
+                            (lidx as u64) * 4,
+                            bytemuck::bytes_of(&surge),
+                        );
+                    }
+                }
+                // Strike position stays alive until flash fades (for bolt rendering)
+                // Voltage only injected once (this frame)
+            }}  // close surge_done guard + lightning_strike
 
             // Apply pipe outlet injections to dye texture (AFTER shader runs)
             // Write into cells ADJACENT to the outlet (in the outlet's facing direction)

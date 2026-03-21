@@ -73,6 +73,60 @@ impl App {
             if let Some(new_weather) = tick_weather(&self.weather, &mut self.weather_timer, dt, self.time_speed) {
                 self.weather = new_weather;
             }
+            // --- Lightning during heavy rain ---
+            self.lightning_flash = (self.lightning_flash - dt * 4.0).max(0.0);
+            if self.lightning_flash < 0.01 { self.lightning_strike = None; }
+            if self.weather == WeatherState::HeavyRain {
+                self.lightning_timer -= dt * self.time_speed;
+                if self.lightning_timer <= 0.0 {
+                    // Random strike location (outdoor, no roof)
+                    let seed = (self.time_of_day * 10000.0) as u32;
+                    let hash = |i: u32| -> u32 {
+                        seed.wrapping_mul(2654435761).wrapping_add(i.wrapping_mul(1013904223))
+                    };
+                    let sx = (hash(0) % GRID_W) as i32;
+                    let sy = (hash(1) % GRID_H) as i32;
+                    let idx = (sy as u32 * GRID_W + sx as u32) as usize;
+                    let block = self.grid_data[idx];
+                    let has_roof = ((block >> 16) & 2) != 0;
+
+                    if !has_roof {
+                        // Lightning strike!
+                        self.lightning_flash = 1.0;
+                        self.lightning_strike = Some((sx as f32 + 0.5, sy as f32 + 0.5));
+                        self.lightning_surge_done = false;
+
+                        // Inject heat at strike point
+                        self.fluid_params.splat_x = sx as f32 + 0.5;
+                        self.fluid_params.splat_y = sy as f32 + 0.5;
+                        self.fluid_params.splat_vx = 0.0;
+                        self.fluid_params.splat_vy = 0.0;
+                        self.fluid_params.splat_radius = 1.5;
+                        self.fluid_params.splat_active = 1.0;
+
+                        // Voltage surge: if strike hits a wire/conductor, inject massive voltage
+                        let bt = block_type_rs(block);
+                        let flags = block_flags_rs(block);
+                        let is_conductor = bt == 36 || bt == 37 || bt == 38 || bt == 39
+                            || bt == 40 || bt == 41 || bt == 42 || bt == 43
+                            || (flags & 0x80) != 0; // wire overlay
+                        if is_conductor {
+                            log::info!("Lightning hit power grid at ({}, {})! Voltage surge!", sx, sy);
+                            // The voltage surge will be injected via GPU write after submit
+                            // Store the strike position for the render pass
+                        }
+
+                        log::info!("Lightning strike at ({}, {})", sx, sy);
+                    }
+
+                    // Next strike in 5-15 game seconds
+                    self.lightning_timer = 5.0 + (hash(2) & 0xFF) as f32 / 255.0 * 10.0;
+                }
+            } else {
+                self.lightning_timer = 5.0; // reset when not heavy rain
+                self.lightning_strike = None;
+            }
+
             // --- Wind variation: slowly drift direction and magnitude ---
             self.wind_change_timer -= dt * self.time_speed;
             if self.wind_change_timer <= 0.0 {

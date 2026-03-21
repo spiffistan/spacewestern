@@ -1808,6 +1808,50 @@ impl App {
             }
         }
 
+        // Lightning flash overlay + bolt rendering
+        if self.lightning_flash > 0.01 {
+            let flash_alpha = (self.lightning_flash * 180.0).min(255.0) as u8;
+            let flash_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground, egui::Id::new("lightning_flash"),
+            ));
+            let screen_rect = egui::Rect::from_min_max(
+                egui::pos2(0.0, 0.0),
+                egui::pos2(ctx.screen_rect().width(), ctx.screen_rect().height()),
+            );
+            flash_painter.rect_filled(
+                screen_rect, 0.0,
+                egui::Color32::from_rgba_unmultiplied(220, 225, 255, flash_alpha),
+            );
+
+            // Draw lightning bolt at strike location (use last known strike)
+            if let Some((lx, ly)) = self.lightning_strike {
+                let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+                let strike_sx = ((lx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let strike_sy = ((ly - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let bolt_col = egui::Color32::from_rgba_unmultiplied(200, 210, 255, flash_alpha);
+                // Jagged bolt from top of screen to strike point
+                let top_x = strike_sx + (self.lightning_flash * 20.0).sin() * 30.0;
+                let mut prev = egui::pos2(top_x, 0.0);
+                let segments = 8;
+                for i in 1..=segments {
+                    let t = i as f32 / segments as f32;
+                    let jitter_x = (t * 17.3 + self.lightning_flash * 7.0).sin() * 15.0 * (1.0 - t);
+                    let next = egui::pos2(
+                        strike_sx + jitter_x,
+                        strike_sy * t,
+                    );
+                    flash_painter.line_segment([prev, next], egui::Stroke::new(3.0 - t * 2.0, bolt_col));
+                    prev = next;
+                }
+                // Bright circle at impact
+                flash_painter.circle_filled(
+                    egui::pos2(strike_sx, strike_sy),
+                    8.0 * self.lightning_flash,
+                    egui::Color32::from_rgba_unmultiplied(255, 255, 240, flash_alpha),
+                );
+            }
+        }
+
         // Render power cables: squiggly lines from lights/fans to nearest wire
         {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
