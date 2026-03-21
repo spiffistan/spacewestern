@@ -219,63 +219,6 @@ impl App {
             }
         }
 
-        // --- Bullet-pleb collision (line segment vs circle) ---
-        {
-            let mut hits: Vec<(usize, usize)> = Vec::new();
-            let hit_radius = 0.4f32;
-            for (bi, body) in self.physics_bodies.iter().enumerate() {
-                if body.body_type != physics::BodyType::Bullet { continue; }
-                // Bullet path this frame: from prev position to current
-                let bx0 = body.x - body.vx * dt;
-                let by0 = body.y - body.vy * dt;
-                let bx1 = body.x;
-                let by1 = body.y;
-                for (pi, pleb) in self.plebs.iter().enumerate() {
-                    if Some(pi) == self.selected_pleb { continue; }
-                    // Closest point on line segment (bx0,by0)→(bx1,by1) to pleb
-                    let seg_dx = bx1 - bx0;
-                    let seg_dy = by1 - by0;
-                    let seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
-                    let t = if seg_len_sq > 0.0001 {
-                        ((pleb.x - bx0) * seg_dx + (pleb.y - by0) * seg_dy) / seg_len_sq
-                    } else { 0.0 }.clamp(0.0, 1.0);
-                    let closest_x = bx0 + t * seg_dx;
-                    let closest_y = by0 + t * seg_dy;
-                    let dx = closest_x - pleb.x;
-                    let dy = closest_y - pleb.y;
-                    let dist = (dx * dx + dy * dy).sqrt();
-                    if dist < hit_radius {
-                        hits.push((bi, pi));
-                        break;
-                    }
-                }
-            }
-            // Apply damage and remove bullets
-            let mut bullets_to_remove = std::collections::HashSet::new();
-            for &(bi, pi) in &hits {
-                bullets_to_remove.insert(bi);
-                if let Some(pleb) = self.plebs.get_mut(pi) {
-                    pleb.needs.health -= 0.2; // ~5 shots to kill
-                    // Small smoke puff at impact
-                    self.fluid_params.splat_x = pleb.x;
-                    self.fluid_params.splat_y = pleb.y;
-                    self.fluid_params.splat_radius = 0.3;
-                    self.fluid_params.splat_active = 1.0;
-                }
-            }
-            if !bullets_to_remove.is_empty() {
-                let mut idx = 0;
-                self.physics_bodies.retain(|_| {
-                    let keep = !bullets_to_remove.contains(&idx);
-                    idx += 1;
-                    keep
-                });
-            }
-        }
-
-        // --- Remove dead plebs ---
-        self.plebs.retain(|p| p.needs.health > 0.0);
-
         // --- Pleb update ---
         // --- Cannon rotation (Q/E when cannon is selected) ---
         if let Some(cannon_idx) = self.block_sel.cannon {
@@ -326,6 +269,16 @@ impl App {
                 if self.pressed_keys.contains(&KeyCode::KeyE) { pleb.angle += 2.0 * dt; }
             }
 
+            // Unstick: if pleb is on a non-walkable tile, nudge to nearest walkable
+            if !is_walkable_pos(&self.grid_data, pleb.x, pleb.y) {
+                let bx = pleb.x.floor() as i32;
+                let by = pleb.y.floor() as i32;
+                if let Some((wx, wy)) = adjacent_walkable(&self.grid_data, bx, by) {
+                    pleb.x = wx as f32 + 0.5;
+                    pleb.y = wy as f32 + 0.5;
+                }
+            }
+
             // A* path following (all plebs)
             if pleb.path_idx < pleb.path.len() {
                 let (tx, ty) = pleb.path[pleb.path_idx];
@@ -340,10 +293,18 @@ impl App {
                     let ndx = ddx / dist;
                     let ndy = ddy / dist;
                     pleb.angle = ndy.atan2(ndx);
-                    let nx = pleb.x + ndx * move_speed * dt;
-                    let ny = pleb.y + ndy * move_speed * dt;
+                    let step_x = ndx * move_speed * dt;
+                    let step_y = ndy * move_speed * dt;
+                    let nx = pleb.x + step_x;
+                    let ny = pleb.y + step_y;
                     if is_walkable_pos(&self.grid_data, nx, ny) {
                         pleb.x = nx;
+                        pleb.y = ny;
+                    } else if is_walkable_pos(&self.grid_data, nx, pleb.y) {
+                        // Wall slide: try X only
+                        pleb.x = nx;
+                    } else if is_walkable_pos(&self.grid_data, pleb.x, ny) {
+                        // Wall slide: try Y only
                         pleb.y = ny;
                     }
                 }
@@ -395,6 +356,9 @@ impl App {
                             } else {
                                 pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Sleeping), "Collapsed!");
                             }
+                        } else if reason == "Overheating!" {
+                            // Arrived at cool tile — stay idle, overheating check will re-trigger if still hot
+                            pleb.activity = PlebActivity::Idle;
                         } else {
                             pleb.activity = PlebActivity::Idle;
                         }
@@ -595,14 +559,31 @@ impl App {
                     else { 0.0 };
                 (p.x, p.y, pvx, pvy, p.angle)
             });
-            let impacts = tick_bodies(
+            // Collect pleb positions for bullet collision
+            let pleb_positions: Vec<(f32, f32, usize)> = self.plebs.iter().enumerate()
+                .map(|(i, p)| (p.x, p.y, i)).collect();
+            let (impacts, bullet_hits) = tick_bodies(
                 &mut self.physics_bodies,
                 dt,
                 &self.grid_data,
                 self.fluid_params.wind_x,
                 self.fluid_params.wind_y,
                 pleb_data,
+                &pleb_positions,
+                self.selected_pleb,
+                self.enable_ricochets,
             );
+
+            // Apply bullet hits to plebs
+            for hit in &bullet_hits {
+                if let Some(pleb) = self.plebs.get_mut(hit.pleb_idx) {
+                    pleb.needs.health -= 0.2; // ~5 shots to kill
+                    self.fluid_params.splat_x = hit.x;
+                    self.fluid_params.splat_y = hit.y;
+                    self.fluid_params.splat_radius = 0.3;
+                    self.fluid_params.splat_active = 1.0;
+                }
+            }
 
             // Handle projectile impacts — destroy blocks, inject smoke/toxic gas
             for impact in &impacts {
@@ -626,6 +607,10 @@ impl App {
                 }
             }
         }
+
+        // --- Remove dead plebs ---
+        self.plebs.retain(|p| p.needs.health > 0.0);
+
         dt
     }
 }
@@ -738,10 +723,16 @@ fn tick_pleb_activity(
             pleb.path.clear();
             pleb.path_idx = 0;
         }
-    } else if pleb.needs.air_temp > HEAT_CRISIS_TEMP && is_idle_or_walk && !pleb.activity.is_crisis() {
-        // CRISIS: Overheating
+    }
+
+    // CRISIS: Overheating — overrides ALL activities (even sleeping/harvesting)
+    // Any pleb in dangerous heat drops everything and runs
+    // Only triggers on idle/walking to prevent re-trigger loop when pleb arrives at cool tile
+    let can_heat_flee = matches!(pleb.activity.inner(), PlebActivity::Idle | PlebActivity::Walking);
+    if pleb.needs.air_temp > HEAT_CRISIS_TEMP && can_heat_flee && pleb.activity.crisis_reason() != Some("Overheating!") {
         let bx = pleb.x.floor() as i32;
         let by = pleb.y.floor() as i32;
+        // Search from radius 3+ to avoid pathing to an adjacent tile that's equally hot
         if let Some(target) = find_cool_tile(grid, bx, by, 20) {
             let start = (bx, by);
             let path = astar_path(grid, start, target);

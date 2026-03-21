@@ -420,6 +420,8 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
         if sbh == 0u { continue; } // open floor
         if sbt >= 15u && sbt <= 20u { continue; } // pipe components don't block light
         if sbt == 32u { continue; } // dug ground doesn't block light
+        if sbt == 36u { continue; } // wire (height = connection mask, not visual)
+        if sbt == 43u { continue; } // dimmer (height = level, not visual)
 
         // Doors: open = pass through, closed = block (regardless of height)
         if is_door(sb) {
@@ -1140,6 +1142,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_dug_block = bt == 32u;
         let is_crate_block = bt == 33u; // height = item count, not visual
         let is_rock_block = bt == 34u;
+        let is_wire_block = bt == 36u; // height = connection mask, not visual
         let is_dimmer_block = bt == 43u; // height = dimmer level, not visual
 
         // Diagonal wall: only occlude if ray is on the wall half
@@ -1152,7 +1155,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
             diag_open = !diag_is_wall(sfx, sfy, svar);
         }
 
-        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_dimmer_block || diag_open);
+        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_wire_block || is_dimmer_block || diag_open);
         if is_roofed_floor {
             // The roof is a thin plane at height rh. Rather than a hard threshold
             // that flickers, always set effective_h to rh but apply a smooth
@@ -1610,6 +1613,40 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    // Pre-pass: draw wire connections underneath power equipment
+    // For battery, solar, wind, switch, dimmer — show wire entering from adjacent wire blocks
+    let is_power_equip = btype == 37u || btype == 38u || btype == 39u || btype == 40u
+        || btype == 41u || btype == 42u || btype == 43u;
+    if is_power_equip {
+        let ground_col = vec3<f32>(0.42, 0.35, 0.22);
+        color = ground_col;
+        // Check adjacent tiles for wires and draw connecting wire segments
+        let pw = 0.06;
+        for (var wd = 0; wd < 4; wd++) {
+            var wdx = 0; var wdy = 0;
+            if wd == 0 { wdx = 1; } else if wd == 1 { wdx = -1; }
+            else if wd == 2 { wdy = 1; } else { wdy = -1; }
+            let wnx = bx + wdx;
+            let wny = by + wdy;
+            if wnx < 0 || wny < 0 || wnx >= i32(camera.grid_w) || wny >= i32(camera.grid_h) { continue; }
+            let wnbt = block_type(get_block(wnx, wny));
+            let wnf = (get_block(wnx, wny) >> 16u) & 0x80u;
+            if wnbt == 36u || wnf != 0u { // wire or wire overlay
+                var on_seg = false;
+                if wdx == 1 { on_seg = fx > 0.5 && abs(fy - 0.5) < pw; }
+                if wdx == -1 { on_seg = fx < 0.5 && abs(fy - 0.5) < pw; }
+                if wdy == 1 { on_seg = fy > 0.5 && abs(fx - 0.5) < pw; }
+                if wdy == -1 { on_seg = fy < 0.5 && abs(fx - 0.5) < pw; }
+                if on_seg {
+                    var wc = vec3<f32>(0.55, 0.38, 0.20);
+                    let wv = voltage[u32(by) * u32(camera.grid_w) + u32(bx)];
+                    wc = mix(wc, vec3<f32>(1.0, 0.85, 0.3), clamp(wv / 12.0, 0.0, 1.0) * 0.5);
+                    color = wc;
+                }
+            }
+        }
+    }
+
     if btype == 5u {
         // Glass block: render with thin inset
         let glass_result = render_glass_block(world_x, world_y, fx, fy, bx, by);
@@ -1691,14 +1728,23 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             color = block_base_color(2u, 0u); // dirt floor for ground pipes
         }
 
+        // Connection mask for pipes: height byte bits 4-7 (same encoding as wires)
+        let pipe_conn_mask = bheight >> 4u;
         let n_n = block_type(get_block(bx, by - 1));
         let n_s = block_type(get_block(bx, by + 1));
         let n_e = block_type(get_block(bx + 1, by));
         let n_w = block_type(get_block(bx - 1, by));
-        let cn = n_n >= 15u && n_n <= 20u;
-        let cs = n_s >= 15u && n_s <= 20u;
-        let ce = n_e >= 15u && n_e <= 20u;
-        let cw = n_w >= 15u && n_w <= 20u;
+        // If mask is set, use it; otherwise auto-detect (backward compatible)
+        var cn = n_n >= 15u && n_n <= 20u;
+        var cs = n_s >= 15u && n_s <= 20u;
+        var ce = n_e >= 15u && n_e <= 20u;
+        var cw = n_w >= 15u && n_w <= 20u;
+        if pipe_conn_mask != 0u && btype == 15u {
+            cn = cn && (pipe_conn_mask & 1u) != 0u; // N
+            ce = ce && (pipe_conn_mask & 2u) != 0u; // E
+            cs = cs && (pipe_conn_mask & 4u) != 0u; // S
+            cw = cw && (pipe_conn_mask & 8u) != 0u; // W
+        }
 
         let cx = fx - 0.5;
         let cy = fy - 0.5;
@@ -2015,26 +2061,34 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             color = ground;
         }
     } else if btype == 36u {
-        // Wire: copper conductor with directional segments and corner sprites
+        // Wire: copper conductor with directional segments
         let ground = vec3<f32>(0.42, 0.35, 0.22);
-        // Check 4 neighbors for power-network connections
-        let n_w = block_type(get_block(bx - 1, by));
-        let n_e = block_type(get_block(bx + 1, by));
-        let n_n = block_type(get_block(bx, by - 1));
-        let n_s = block_type(get_block(bx, by + 1));
-        // Also detect wire overlay flag (bit 7) on neighboring blocks
-        let wf_w2 = (get_block(bx - 1, by) >> 16u) & 0x80u;
-        let wf_e2 = (get_block(bx + 1, by) >> 16u) & 0x80u;
-        let wf_n2 = (get_block(bx, by - 1) >> 16u) & 0x80u;
-        let wf_s2 = (get_block(bx, by + 1) >> 16u) & 0x80u;
-        let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 42u || n_w == 43u || n_w == 7u || n_w == 12u || n_w == 10u;
-        let pwr_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 39u || n_e == 40u || n_e == 41u || n_e == 42u || n_e == 43u || n_e == 7u || n_e == 12u || n_e == 10u;
-        let pwr_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 39u || n_n == 40u || n_n == 41u || n_n == 42u || n_n == 43u || n_n == 7u || n_n == 12u || n_n == 10u;
-        let pwr_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 39u || n_s == 40u || n_s == 41u || n_s == 42u || n_s == 43u || n_s == 7u || n_s == 12u || n_s == 10u;
-        let conn_w = pwr_w || wf_w2 != 0u;
-        let conn_e = pwr_e || wf_e2 != 0u;
-        let conn_n = pwr_n || wf_n2 != 0u;
-        let conn_s = pwr_s || wf_s2 != 0u;
+        // Connection mask stored in height byte bits 4-7: bit4=N, bit5=E, bit6=S, bit7=W
+        let conn_mask = bheight >> 4u;
+        // If mask is 0 (old wires or single-click), auto-detect from neighbors
+        var conn_n = (conn_mask & 1u) != 0u;
+        var conn_e = (conn_mask & 2u) != 0u;
+        var conn_s = (conn_mask & 4u) != 0u;
+        var conn_w = (conn_mask & 8u) != 0u;
+        if conn_mask == 0u {
+            // Fallback: auto-detect from power neighbors
+            let n_w = block_type(get_block(bx - 1, by));
+            let n_e = block_type(get_block(bx + 1, by));
+            let n_n = block_type(get_block(bx, by - 1));
+            let n_s = block_type(get_block(bx, by + 1));
+            let wf_w2 = (get_block(bx - 1, by) >> 16u) & 0x80u;
+            let wf_e2 = (get_block(bx + 1, by) >> 16u) & 0x80u;
+            let wf_n2 = (get_block(bx, by - 1) >> 16u) & 0x80u;
+            let wf_s2 = (get_block(bx, by + 1) >> 16u) & 0x80u;
+            let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 42u || n_w == 43u || n_w == 7u || n_w == 12u || n_w == 10u;
+            let pwr_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 39u || n_e == 40u || n_e == 41u || n_e == 42u || n_e == 43u || n_e == 7u || n_e == 12u || n_e == 10u;
+            let pwr_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 39u || n_n == 40u || n_n == 41u || n_n == 42u || n_n == 43u || n_n == 7u || n_n == 12u || n_n == 10u;
+            let pwr_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 39u || n_s == 40u || n_s == 41u || n_s == 42u || n_s == 43u || n_s == 7u || n_s == 12u || n_s == 10u;
+            conn_w = pwr_w || wf_w2 != 0u;
+            conn_e = pwr_e || wf_e2 != 0u;
+            conn_n = pwr_n || wf_n2 != 0u;
+            conn_s = pwr_s || wf_s2 != 0u;
+        }
         let wire_w = 0.07;
         var on_wire = false;
         // Draw segments toward each connected neighbor
@@ -2419,9 +2473,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_dug = btype == 32u; // dug ground: height = depth, not visual height
     let is_rock = btype == 34u;
     let is_crate = btype == 33u; // crate height = item count, not visual height
+    let is_wire = btype == 36u; // wire height = connection mask, not visual
     let is_dimmer = btype == 43u; // dimmer height = level, not visual height
     let is_diag_open = btype == 44u && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
-    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_dimmer || is_diag_open);
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_diag_open);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)
@@ -2999,25 +3054,33 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         color = mix(color * 0.3, temp_color, 0.7);
     } else if camera.fluid_overlay < 9.5 {
-        // Power overlay: show voltage in the grid
+        // Power overlay: show voltage, highlight infrastructure, dim terrain
         let grid_idx_p = u32(by) * u32(camera.grid_w) + u32(bx);
         let v = voltage[grid_idx_p];
         let norm_v = clamp(v / 12.0, 0.0, 1.0);
-        if norm_v > 0.01 {
-            var pwr_color: vec3<f32>;
-            if norm_v < 0.5 {
-                let t = norm_v / 0.5;
-                pwr_color = mix(vec3<f32>(0.1, 0.3, 0.1), vec3<f32>(0.2, 0.8, 0.2), t);
-            } else if norm_v < 0.8 {
-                let t = (norm_v - 0.5) / 0.3;
-                pwr_color = mix(vec3<f32>(0.2, 0.8, 0.2), vec3<f32>(0.9, 0.8, 0.1), t);
+        // Is this block part of the power grid?
+        let is_pwr_infra = btype == 36u || btype == 37u || btype == 38u || btype == 39u
+            || btype == 40u || btype == 41u || btype == 42u || btype == 43u
+            || btype == 7u || btype == 10u || btype == 11u || btype == 12u || btype == 16u
+            || (bflags & 0x80u) != 0u; // wire overlay on wall
+        if is_pwr_infra {
+            if norm_v > 0.01 {
+                var pwr_color: vec3<f32>;
+                if norm_v < 0.5 {
+                    pwr_color = mix(vec3<f32>(0.1, 0.3, 0.1), vec3<f32>(0.2, 0.8, 0.2), norm_v / 0.5);
+                } else if norm_v < 0.8 {
+                    pwr_color = mix(vec3<f32>(0.2, 0.8, 0.2), vec3<f32>(0.9, 0.8, 0.1), (norm_v - 0.5) / 0.3);
+                } else {
+                    pwr_color = mix(vec3<f32>(0.9, 0.8, 0.1), vec3<f32>(1.0, 0.2, 0.1), (norm_v - 0.8) / 0.2);
+                }
+                color = mix(color * 0.4, pwr_color, 0.7);
             } else {
-                let t = (norm_v - 0.8) / 0.2;
-                pwr_color = mix(vec3<f32>(0.9, 0.8, 0.1), vec3<f32>(1.0, 0.2, 0.1), t);
+                // Unpowered infrastructure: show as dim outline
+                color = mix(color * 0.3, vec3<f32>(0.3, 0.3, 0.35), 0.5);
             }
-            color = mix(color * 0.3, pwr_color, 0.7);
         } else {
-            color *= 0.5;
+            // Non-power terrain: dim heavily
+            color *= 0.25;
         }
     } else if camera.fluid_overlay < 10.5 {
         // Amps overlay: show current flow (voltage differences with neighbors)
@@ -3037,14 +3100,20 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
         let norm_a = clamp(total_current * 0.5, 0.0, 1.0);
+        let is_amp_infra = btype == 36u || btype == 37u || btype == 38u || btype == 39u
+            || btype == 40u || btype == 41u || btype == 42u || btype == 43u
+            || btype == 7u || btype == 10u || btype == 11u || btype == 12u || btype == 16u
+            || (bflags & 0x80u) != 0u;
         if norm_a > 0.005 {
             var amp_color = mix(vec3<f32>(0.05, 0.05, 0.15), vec3<f32>(0.4, 0.8, 1.0), clamp(norm_a * 2.0, 0.0, 1.0));
             if norm_a > 0.5 {
                 amp_color = mix(amp_color, vec3<f32>(1.0, 1.0, 0.9), (norm_a - 0.5) * 2.0);
             }
             color = mix(color * 0.3, amp_color, 0.7);
+        } else if is_amp_infra {
+            color = mix(color * 0.3, vec3<f32>(0.3, 0.3, 0.35), 0.5);
         } else {
-            color *= 0.5;
+            color *= 0.25;
         }
     } else if camera.fluid_overlay < 11.5 {
         // Watts overlay: generation (green) vs consumption (red)
@@ -3075,7 +3144,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             color = mix(color * 0.3, watt_color, 0.7);
         } else {
-            color *= 0.5;
+            let is_watt_infra = is_gen || is_con || is_bat || wbt == 36u || wbt == 42u || wbt == 43u
+                || (bflags & 0x80u) != 0u;
+            if is_watt_infra {
+                color = mix(color * 0.3, vec3<f32>(0.3, 0.3, 0.35), 0.5);
+            } else {
+                color *= 0.25;
+            }
         }
     } else {
         // Heat Flow: velocity magnitude colored by temperature (convection patterns)

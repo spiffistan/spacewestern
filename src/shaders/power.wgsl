@@ -192,8 +192,15 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let has_wire = (flags & 0x80u) != 0u;
     if bt == 36u || has_wire {
-        // Wire (standalone or overlay): direct 4-neighbor connections
+        // Wire: respect connection mask in height byte bits 4-7 (N=1,E=2,S=4,W=8)
+        let height_byte = (block >> 8u) & 0xFFu;
+        let conn_mask = height_byte >> 4u;
+        // Direction bits: d=0→E(ndx=1), d=1→W(ndx=-1), d=2→S(ndy=1), d=3→N(ndy=-1)
+        // Mask bits: bit0=N, bit1=E, bit2=S, bit3=W
+        let dir_mask = array<u32, 4>(2u, 8u, 4u, 1u); // E, W, S, N
         for (var d = 0; d < 4; d++) {
+            // If mask is set (>0), only connect in specified directions
+            if conn_mask != 0u && (conn_mask & dir_mask[d]) == 0u { continue; }
             var ndx = 0; var ndy = 0;
             if d == 0 { ndx = 1; } else if d == 1 { ndx = -1; }
             else if d == 2 { ndy = 1; } else { ndy = -1; }

@@ -346,9 +346,6 @@ impl App {
                     ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.05..=base_zoom * 8.0)
                         .text("Zoom").show_value(false).logarithmic(true));
                     if ui.button("Reset zoom").clicked() { zoom = base_zoom; }
-                    let mut rs = self.render_scale;
-                    ui.add(egui::Slider::new(&mut rs, 0.15..=1.0).text("Render quality").step_by(0.05));
-                    self.render_scale = rs;
                     ui.separator();
                     ui.add(egui::Slider::new(&mut oblique, 0.0..=0.3).text("Wall face tilt").step_by(0.005));
                 });
@@ -357,6 +354,10 @@ impl App {
                 ui.separator();
                 // Render menu (glow, bleed, temporal)
                 ui.menu_button("Render", |ui| {
+                    let mut rs = self.render_scale;
+                    ui.add(egui::Slider::new(&mut rs, 0.15..=1.0).text("Quality").step_by(0.05));
+                    self.render_scale = rs;
+                    ui.separator();
                     if ui.selectable_label(self.enable_prox_glow, "Proximity Glow").clicked() {
                         self.enable_prox_glow = !self.enable_prox_glow;
                     }
@@ -366,6 +367,13 @@ impl App {
                     if ui.selectable_label(self.enable_temporal, "Temporal AA").clicked() {
                         self.enable_temporal = !self.enable_temporal;
                         self.camera.force_refresh = 10.0;
+                    }
+                });
+
+                // Debug menu
+                ui.menu_button("Debug", |ui| {
+                    if ui.selectable_label(self.enable_ricochets, "Bullet Ricochets").clicked() {
+                        self.enable_ricochets = !self.enable_ricochets;
                     }
                 });
 
@@ -1482,6 +1490,7 @@ impl App {
                         } else {
                             // Validate each tile individually
                             let is_wire_tool = matches!(self.build_tool, BuildTool::Place(36));
+                            let is_pipe_tool = matches!(self.build_tool, BuildTool::Place(15));
                             let valid = if *tx < 0 || *ty < 0 || *tx >= GRID_W as i32 || *ty >= GRID_H as i32 {
                                 false
                             } else if is_wire_tool {
@@ -1491,7 +1500,9 @@ impl App {
                                 let tb = self.grid_data[tidx];
                                 let tbt = tb & 0xFF;
                                 let tbh = (tb >> 8) & 0xFF;
-                                (tbt == 0 || tbt == 2) && tbh == 0
+                                // Allow placement on empty ground OR on existing same-type block
+                                ((tbt == 0 || tbt == 2) && tbh == 0)
+                                    || (is_pipe_tool && tbt == 15) // pipe on pipe = merge connections
                             };
                             if valid {
                                 egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80)
@@ -1509,6 +1520,44 @@ impl App {
                             egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
                             0.0, color,
                         );
+                    }
+                    // Draw direction arrows on pipe/wire line tiles
+                    let is_line = matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(36));
+                    if is_line && tiles.len() > 1 {
+                        let arrow_col = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 160);
+                        for ti in 0..tiles.len() {
+                            let (tx, ty) = tiles[ti];
+                            let wx0 = tx as f32;
+                            let wy0 = ty as f32;
+                            let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                            let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                            let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                            let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                            let center = egui::pos2((sx0 + sx1) * 0.5, (sy0 + sy1) * 0.5);
+                            let tile_sz = (sx1 - sx0).max(1.0);
+                            // Arrow: toward next tile, or same direction as previous for last tile
+                            let has_next = ti + 1 < tiles.len();
+                            let has_prev = ti > 0;
+                            let (adx, ady) = if has_next {
+                                let (nx, ny) = tiles[ti + 1];
+                                ((nx - tx) as f32, (ny - ty) as f32)
+                            } else if has_prev {
+                                let (px, py) = tiles[ti - 1];
+                                ((tx - px) as f32, (ty - py) as f32)
+                            } else {
+                                (0.0, 0.0)
+                            };
+                            if adx != 0.0 || ady != 0.0 {
+                                let alen = tile_sz * 0.3;
+                                let tip = center + egui::Vec2::new(adx * alen, ady * alen);
+                                let perp = egui::Vec2::new(-ady, adx) * alen * 0.4;
+                                let base = center + egui::Vec2::new(adx * alen * 0.2, ady * alen * 0.2);
+                                painter.add(egui::Shape::convex_polygon(
+                                    vec![tip, base + perp, base - perp],
+                                    arrow_col, egui::Stroke::NONE,
+                                ));
+                            }
+                        }
                     }
                 }
             }

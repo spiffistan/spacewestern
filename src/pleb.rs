@@ -238,7 +238,7 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         let is_dug_shallow = bt == 32 && bh <= 1;
-        let is_pipe = bt >= 15 && bt <= 20;
+        let is_pipe = bt >= 15 && bt <= 20 && bh <= 1; // ground-level pipes only, not wall-mounted
         // Diagonal wall: check which side of the diagonal this corner is on
         if bt == 44 {
             let variant = ((b >> 19) & 3) as u32;
@@ -285,7 +285,7 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == 32 && bh <= 1) || (bt >= 15 && bt <= 20)
+        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == 32 && bh <= 1) || (bt >= 15 && bt <= 20 && bh <= 1)
             || bt == 44 // diagonal wall: partially walkable (continuous check handles collision)
     };
 

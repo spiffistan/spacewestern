@@ -222,11 +222,11 @@ pub const BERRY_HUNGER_RESTORE: f32 = 0.20;
 const STARVE_DAMAGE: f32 = 0.008;      // ~2 min to die from starvation
 const FREEZE_DAMAGE: f32 = 0.012;      // ~1.3 min to die from cold
 const FIRE_DAMAGE: f32 = 0.04;         // ~25s to die in fire
-const HEAT_DAMAGE: f32 = 0.015;        // ~1 min to die from extreme heat
+const HEAT_DAMAGE: f32 = 0.05;         // ~20s to die from extreme heat (was 0.015)
 /// Temperature above which colonists take heat damage
-const HEAT_DANGER_TEMP: f32 = 50.0;
+const HEAT_DANGER_TEMP: f32 = 45.0;   // lowered from 50
 /// Temperature above which colonists flee (crisis)
-pub const HEAT_CRISIS_TEMP: f32 = 45.0;
+pub const HEAT_CRISIS_TEMP: f32 = 40.0; // lowered from 45 — flee earlier
 
 /// Determine whether air is breathable at the pleb's position.
 fn air_breathable(o2: f32, co2: f32) -> bool {
@@ -516,7 +516,8 @@ pub fn find_nearest_crate(grid: &[u32], bx: i32, by: i32) -> Option<(i32, i32)> 
 /// Find the nearest tile that is cooler (outdoors / no roof = likely cooler).
 /// Used for heat crisis flee behavior.
 pub fn find_cool_tile(grid: &[u32], bx: i32, by: i32, max_radius: i32) -> Option<(i32, i32)> {
-    for r in 1..=max_radius {
+    // Start at radius 3 to avoid pathing to an equally hot adjacent tile
+    for r in 3..=max_radius {
         for dy in -r..=r {
             for dx in -r..=r {
                 if dx.abs() != r && dy.abs() != r { continue; }

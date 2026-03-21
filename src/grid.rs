@@ -126,8 +126,13 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
                     let nbh = ((nb >> 8) & 0xFF) as u8;
                     let nbt = (nb & 0xFF) as u8;
                     let nb_flags = ((nb >> 16) & 0xFF) as u8;
-                    // Wall: has height, not roofed floor, not tree/fire/light
-                    if nbh > 0 && (nb_flags & 2) == 0 && nbt != 8 && nbt != 6 && nbt != 7 {
+                    // Wall: has height, not roofed floor, not tree/fire/light/wire/dimmer/crate
+                    // Wire(36), dimmer(43) use height for connection mask/level, not visual height
+                    // Crate(33) uses height for item count
+                    if nbh > 0 && (nb_flags & 2) == 0
+                        && nbt != 8 && nbt != 6 && nbt != 7
+                        && nbt != 33 && nbt != 36 && nbt != 43
+                    {
                         max_h = max_h.max(nbh);
                         break; // found nearest wall in this direction
                     }
@@ -445,5 +450,55 @@ mod tests {
         // Out of bounds returns air (0)
         assert_eq!(get_block(&grid, -1, 0), 0);
         assert_eq!(get_block(&grid, 256, 0), 0);
+    }
+
+    #[test]
+    fn test_pipe_connection_mask_encoding() {
+        // Connection mask bits: CONN_N=0x10, CONN_E=0x20, CONN_S=0x40, CONN_W=0x80
+        // Stored in height byte, extracted as (height >> 4) & 0xF
+        // After >> 4: N=1, E=2, S=4, W=8
+
+        // Horizontal pipe: connects E+W
+        let h_pipe = make_block(15, 1 | 0x20 | 0x80, 0); // base_h=1, CONN_E + CONN_W
+        assert_eq!(block_type_rs(h_pipe), 15);
+        let h_mask = (block_height_rs(h_pipe) >> 4) & 0xF;
+        assert_eq!(h_mask & 0x2, 0x2, "should connect E"); // E=bit1
+        assert_eq!(h_mask & 0x8, 0x8, "should connect W"); // W=bit3
+        assert_eq!(h_mask & 0x1, 0x0, "should NOT connect N");
+        assert_eq!(h_mask & 0x4, 0x0, "should NOT connect S");
+
+        // Vertical pipe: connects N+S
+        let v_pipe = make_block(15, 1 | 0x10 | 0x40, 0); // base_h=1, CONN_N + CONN_S
+        let v_mask = (block_height_rs(v_pipe) >> 4) & 0xF;
+        assert_eq!(v_mask & 0x1, 0x1, "should connect N");
+        assert_eq!(v_mask & 0x4, 0x4, "should connect S");
+        assert_eq!(v_mask & 0x2, 0x0, "should NOT connect E");
+        assert_eq!(v_mask & 0x8, 0x0, "should NOT connect W");
+
+        // Corner pipe: connects N+E (L-bend)
+        let c_pipe = make_block(15, 1 | 0x10 | 0x20, 0);
+        let c_mask = (block_height_rs(c_pipe) >> 4) & 0xF;
+        assert_eq!(c_mask & 0x1, 0x1, "should connect N");
+        assert_eq!(c_mask & 0x2, 0x2, "should connect E");
+        assert_eq!(c_mask & 0x4, 0x0, "should NOT connect S");
+        assert_eq!(c_mask & 0x8, 0x0, "should NOT connect W");
+
+        // Wire: height=0, so mask is in upper nibble only
+        let h_wire = make_block(36, 0 | 0x20 | 0x80, 0); // base_h=0, CONN_E + CONN_W
+        assert_eq!(block_type_rs(h_wire), 36);
+        let w_mask = (block_height_rs(h_wire) >> 4) & 0xF;
+        assert_eq!(w_mask & 0x2, 0x2, "wire should connect E");
+        assert_eq!(w_mask & 0x8, 0x8, "wire should connect W");
+        assert_eq!(w_mask & 0x1, 0x0, "wire should NOT connect N");
+
+        // No mask (legacy/single-click): mask=0 → auto-detect
+        let legacy = make_block(15, 1, 0); // just base height, no mask
+        let l_mask = (block_height_rs(legacy) >> 4) & 0xF;
+        assert_eq!(l_mask, 0, "legacy pipe should have mask=0 (auto-detect)");
+
+        // All directions (single-tile drag):
+        let all = make_block(36, 0xF0, 0); // all 4 connections
+        let a_mask = (block_height_rs(all) >> 4) & 0xF;
+        assert_eq!(a_mask, 0xF, "all-direction should have mask=15");
     }
 }

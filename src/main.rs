@@ -135,6 +135,7 @@ struct App {
     enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
     enable_dir_bleed: bool,       // directional light bleed (expensive)
     enable_temporal: bool,        // temporal reprojection (reuse previous frame)
+    enable_ricochets: bool,       // bullets bounce off walls
     show_pipe_overlay: bool,       // draw pipe gas contents as egui overlay
     pipe_width: f32,               // pipe conductance multiplier (1=narrow, 10=wide)
     drag_start: Option<(i32, i32)>, // grid coords where drag started (for shape building)
@@ -354,6 +355,7 @@ impl App {
             enable_prox_glow: true,
             enable_dir_bleed: true,
             enable_temporal: true,
+            enable_ricochets: true,
             drag_start: None,
             show_pipe_overlay: false,
             pipe_width: 5.0,
@@ -651,15 +653,23 @@ impl App {
         let dy = (y1 - y0).abs();
         let mut tiles = Vec::new();
         if dx >= dy {
-            // Horizontal line
-            let min_x = x0.min(x1);
-            let max_x = x0.max(x1);
-            for x in min_x..=max_x { tiles.push((x, y0)); }
+            // Horizontal line (ordered in drag direction)
+            let step = if x1 >= x0 { 1 } else { -1 };
+            let mut x = x0;
+            loop {
+                tiles.push((x, y0));
+                if x == x1 { break; }
+                x += step;
+            }
         } else {
-            // Vertical line
-            let min_y = y0.min(y1);
-            let max_y = y0.max(y1);
-            for y in min_y..=max_y { tiles.push((x0, y)); }
+            // Vertical line (ordered in drag direction)
+            let step = if y1 >= y0 { 1 } else { -1 };
+            let mut y = y0;
+            loop {
+                tiles.push((x0, y));
+                if y == y1 { break; }
+                y += step;
+            }
         }
         tiles
     }
@@ -791,7 +801,14 @@ impl App {
             _ => return,
         };
 
-        for (tx, ty) in tiles {
+        // Connection mask bits: bit4=N, bit5=E, bit6=S, bit7=W (stored in height byte)
+        const CONN_N: u8 = 0x10;
+        const CONN_E: u8 = 0x20;
+        const CONN_S: u8 = 0x40;
+        const CONN_W: u8 = 0x80;
+        let is_line_type = block_type_id == 15 || block_type_id == 36; // pipe or wire
+
+        for (ti, &(tx, ty)) in tiles.iter().enumerate() {
             if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
             if self.build_tool == BuildTool::Destroy {
                 self.destroy_block_at(tx, ty);
@@ -801,15 +818,48 @@ impl App {
                 let bt = block_type_rs(block);
                 let bh = (block >> 8) & 0xFF;
                 let wire_anywhere = block_type_id == 36;
-                if ((bt == 0 || bt == 2) && bh == 0) || (wire_anywhere && bt != 36) {
-                    if wire_anywhere && bt != 0 && bt != 2 {
-                        self.grid_data[idx] |= 0x80 << 16;
+                let same_type = bt == block_type_id; // allow connecting to existing pipe/wire
+                if ((bt == 0 || bt == 2) && bh == 0) || (wire_anywhere && bt != 36) || (is_line_type && same_type) {
+                    // Compute connection mask from neighbors in the line
+                    let mut conn: u8 = 0;
+                    if is_line_type && tiles.len() > 1 {
+                        // Connect to predecessor/successor in the drag line
+                        if ti > 0 {
+                            let (px, py) = tiles[ti - 1];
+                            if px < tx { conn |= CONN_W; }
+                            if px > tx { conn |= CONN_E; }
+                            if py < ty { conn |= CONN_N; }
+                            if py > ty { conn |= CONN_S; }
+                        }
+                        if ti + 1 < tiles.len() {
+                            let (nx, ny) = tiles[ti + 1];
+                            if nx > tx { conn |= CONN_E; }
+                            if nx < tx { conn |= CONN_W; }
+                            if ny > ty { conn |= CONN_S; }
+                            if ny < ty { conn |= CONN_N; }
+                        }
+                        // To connect to existing wires, drag onto them (same_type merge handles it)
+                    } else if is_line_type {
+                        // Single tile: connect all directions (auto-detect)
+                        conn = CONN_N | CONN_E | CONN_S | CONN_W;
+                    }
+
+                    if is_line_type && same_type {
+                        // Existing pipe/wire: just merge new connections into existing mask
+                        let existing_h = ((block >> 8) & 0xFF) as u8;
+                        let merged = existing_h | conn;
+                        self.grid_data[idx] = (block & 0xFFFF00FF) | ((merged as u32) << 8);
+                    } else if wire_anywhere && bt != 0 && bt != 2 {
+                        self.grid_data[idx] |= 0x80 << 16; // wire overlay flag
                     } else {
                         let roof_flag = block_flags_rs(block) & 2;
                         let roof_h = block & 0xFF000000;
-                        let height = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(3);
+                        let base_h = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(3);
+                        // Encode connection mask in upper nibble of height byte
+                        let height = if is_line_type { base_h | conn } else { base_h };
                         self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
                     }
+
                     self.grid_dirty = true;
                 }
             }
@@ -1149,6 +1199,7 @@ impl App {
                     let can_place = self.can_place_at(bx, by)
                         || (id == 16 && bt == 15) // pump on pipe
                         || (id == 36 && bt != 36) // wire can go anywhere except on existing wire
+                        || (id == 15 && bt == 15) // pipe on pipe = merge connections
                         || ((id == 42 || id == 43) && (bt == 36 || bt == 0 || bt == 2)); // switch/dimmer on wire or ground
                     if can_place && click_mode != block_defs::ClickMode::None {
                         if id == 36 && bt != 0 && bt != 2 {
@@ -1163,6 +1214,28 @@ impl App {
                             if id == 42 { combined_flags |= 4; }
                             // Dimmer starts at 100% (height = 10)
                             if id == 43 { final_height = 10; }
+                            // Single-click pipe/wire: auto-detect connections from adjacent matching blocks
+                            if id == 15 || id == 36 {
+                                let mut conn: u8 = 0;
+                                for &(ndx, ndy, mask) in &[(0i32,-1i32,0x10u8),(0,1,0x40),(1,0,0x20),(-1,0,0x80)] {
+                                    let nx = bx + ndx;
+                                    let ny = by + ndy;
+                                    if nx >= 0 && ny >= 0 && nx < GRID_W as i32 && ny < GRID_H as i32 {
+                                        let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                                        let nbt = block_type_rs(self.grid_data[nidx]);
+                                        if nbt == id {
+                                            conn |= mask;
+                                            // Also update neighbor's connection toward us
+                                            let opp_mask: u8 = match mask { 0x10 => 0x40, 0x40 => 0x10, 0x20 => 0x80, _ => 0x20 };
+                                            let nb_h = ((self.grid_data[nidx] >> 8) & 0xFF) as u8;
+                                            self.grid_data[nidx] = (self.grid_data[nidx] & 0xFFFF00FF) | (((nb_h | opp_mask) as u32) << 8);
+                                        }
+                                    }
+                                }
+                                // If no neighbors found, connect all (standalone node)
+                                if conn == 0 { conn = 0xF0; }
+                                final_height |= conn;
+                            }
                             let roof_h = block & 0xFF000000;
                             self.grid_data[idx] = make_block(id, final_height, combined_flags) | roof_h;
                         }
@@ -1736,6 +1809,14 @@ impl App {
                 } else if self.build_tool == BuildTool::Place(36) {
                     // Wire can go anywhere
                     ((tx, ty), tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32)
+                } else if self.build_tool == BuildTool::Place(15) {
+                    // Pipe: can go on empty ground OR existing pipe (merge connections)
+                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                        let tbt = self.grid_data[tidx] & 0xFF;
+                        self.can_place_on(tx, ty, false) || tbt == 15
+                    } else { false };
+                    ((tx, ty), ok)
                 } else {
                     ((tx, ty), self.can_place_on(tx, ty, on_furniture))
                 }

@@ -24,6 +24,8 @@ pub struct PhysicsBody {
     pub render_height: f32,
     pub body_type: BodyType,
     pub fuse_timer: f32, // seconds remaining for grenade emission (0 = inactive)
+    pub prev_x: f32,     // position at start of frame (for accurate line-segment collision)
+    pub prev_y: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,6 +46,13 @@ pub struct Impact {
     pub is_grenade: bool,
 }
 
+/// Result of a bullet hitting a pleb.
+#[derive(Debug)]
+pub struct BulletHit {
+    pub pleb_idx: usize,
+    pub x: f32, pub y: f32,
+}
+
 impl PhysicsBody {
     pub fn new_wood_box(x: f32, y: f32) -> Self {
         PhysicsBody {
@@ -56,7 +65,7 @@ impl PhysicsBody {
             bounce: 0.3,
             size: 0.45,
             render_height: 1.5,
-            body_type: BodyType::WoodBox, fuse_timer: 0.0,
+            body_type: BodyType::WoodBox, fuse_timer: 0.0, prev_x: x, prev_y: y,
         }
     }
 
@@ -77,7 +86,7 @@ impl PhysicsBody {
             bounce: 0.2, // low bounce — cannonballs don't bounce much
             size: 0.12,
             render_height: 0.5,
-            body_type: BodyType::Cannonball, fuse_timer: 0.0,
+            body_type: BodyType::Cannonball, fuse_timer: 0.0, prev_x: x, prev_y: y,
         }
     }
 
@@ -97,7 +106,7 @@ impl PhysicsBody {
             bounce: 0.3,
             size: 0.08,
             render_height: 0.3,
-            body_type: BodyType::Grenade, fuse_timer: 12.0,
+            body_type: BodyType::Grenade, fuse_timer: 12.0, prev_x: x, prev_y: y,
         }
     }
 
@@ -117,7 +126,7 @@ impl PhysicsBody {
             bounce: 0.0,
             size: 0.02,
             render_height: 0.05,
-            body_type: BodyType::Bullet, fuse_timer: 0.0,
+            body_type: BodyType::Bullet, fuse_timer: 0.0, prev_x: x, prev_y: y,
         }
     }
 
@@ -200,7 +209,13 @@ pub fn nearest_body(bodies: &[PhysicsBody], x: f32, y: f32, range: f32) -> Optio
 /// DDA ray march through the grid from (x0,y0) to (x1,y1).
 /// Returns the hit point if a solid wall is encountered, None if path is clear.
 /// Steps through every grid cell the line segment crosses — no skips at any speed.
-fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<(f32, f32)> {
+/// DDA bullet trace result
+struct BulletTraceHit {
+    x: f32, y: f32,           // hit position
+    hit_x_face: bool,         // true if hit a vertical face (reflect vx), false = horizontal face (reflect vy)
+}
+
+fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<BulletTraceHit> {
     let dx = x1 - x0;
     let dy = y1 - y0;
     let dist = (dx * dx + dy * dy).sqrt();
@@ -239,7 +254,7 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
         // Out of bounds = hit
         if ix < 0 || iy < 0 || ix >= GRID_W as i32 || iy >= GRID_H as i32 {
             let t = t_max_x.min(t_max_y).min(dist);
-            return Some((x0 + dir_x * t, y0 + dir_y * t));
+            return Some(BulletTraceHit { x: x0 + dir_x * t, y: y0 + dir_y * t, hit_x_face: t_max_x < t_max_y });
         }
 
         let block = grid[(iy as u32 * GRID_W + ix as u32) as usize];
@@ -253,7 +268,9 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
             && !(is_door && is_open)
         {
             let t = t_max_x.min(t_max_y).max(0.0);
-            return Some((x0 + dir_x * t, y0 + dir_y * t));
+            // Determine which face was hit: the last axis we stepped along
+            let hit_x = t_max_x <= t_max_y;
+            return Some(BulletTraceHit { x: x0 + dir_x * t, y: y0 + dir_y * t, hit_x_face: hit_x });
         }
 
         // Step to next cell
@@ -279,11 +296,18 @@ pub fn tick_bodies(
     wind_x: f32,
     wind_y: f32,
     pleb: Option<(f32, f32, f32, f32, f32)>, // (pleb_x, pleb_y, pleb_vx, pleb_vy, pleb_angle)
-) -> Vec<Impact> {
+    all_plebs: &[(f32, f32, usize)], // (x, y, pleb_index) for bullet collision
+    selected_pleb: Option<usize>,
+    ricochets_enabled: bool,
+) -> (Vec<Impact>, Vec<BulletHit>) {
     let mut impacts = Vec::new();
     let wind_threshold = 5.0; // minimum wind speed to push a box
 
     for body in bodies.iter_mut() {
+        // Save position before physics update for accurate collision line segments
+        body.prev_x = body.x;
+        body.prev_y = body.y;
+
         // --- Bullet fast path: DDA ray march through grid (no skipped cells) ---
         if body.body_type == BodyType::Bullet {
             let x0 = body.x;
@@ -291,8 +315,28 @@ pub fn tick_bodies(
             let x1 = body.x + body.vx * dt;
             let y1 = body.y + body.vy * dt;
 
-            if let Some((_hx, _hy)) = dda_bullet_trace(grid, x0, y0, x1, y1) {
-                body.vx = 0.0; body.vy = 0.0; // mark for removal
+            if let Some(hit) = dda_bullet_trace(grid, x0, y0, x1, y1) {
+                if ricochets_enabled {
+                    // Ricochet: reflect velocity off the wall face, lose 40% speed
+                    body.x = hit.x;
+                    body.y = hit.y;
+                    if hit.hit_x_face {
+                        body.vx = -body.vx * 0.6;
+                        body.vy *= 0.6;
+                        // Nudge away from wall to prevent sticking
+                        body.x += if body.vx > 0.0 { 0.05 } else { -0.05 };
+                    } else {
+                        body.vy = -body.vy * 0.6;
+                        body.vx *= 0.6;
+                        body.y += if body.vy > 0.0 { 0.05 } else { -0.05 };
+                    }
+                    // Kill bullet if too slow after ricochet
+                    if body.vx.abs() + body.vy.abs() < 3.0 {
+                        body.vx = 0.0; body.vy = 0.0;
+                    }
+                } else {
+                    body.vx = 0.0; body.vy = 0.0; // mark for removal (no ricochet)
+                }
             } else {
                 body.x = x1;
                 body.y = y1;
@@ -518,6 +562,44 @@ pub fn tick_bodies(
         }
     }
 
+    // --- Bullet-pleb collision (before retain removes stopped bullets) ---
+    let mut bullet_hits = Vec::new();
+    let hit_radius = 0.45f32;
+    let mut bullets_hit = std::collections::HashSet::new();
+    for (bi, body) in bodies.iter().enumerate() {
+        if body.body_type != BodyType::Bullet { continue; }
+        let bx0 = body.prev_x;
+        let by0 = body.prev_y;
+        let bx1 = body.x;
+        let by1 = body.y;
+        let seg_dx = bx1 - bx0;
+        let seg_dy = by1 - by0;
+        let seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+        for &(px, py, pi) in all_plebs {
+            if Some(pi) == selected_pleb { continue; }
+            let t = if seg_len_sq > 0.0001 {
+                ((px - bx0) * seg_dx + (py - by0) * seg_dy) / seg_len_sq
+            } else { 0.0 }.clamp(0.0, 1.0);
+            let cx = bx0 + t * seg_dx;
+            let cy = by0 + t * seg_dy;
+            let dist = ((cx - px) * (cx - px) + (cy - py) * (cy - py)).sqrt();
+            if dist < hit_radius {
+                bullet_hits.push(BulletHit { pleb_idx: pi, x: cx, y: cy });
+                bullets_hit.insert(bi);
+                break;
+            }
+        }
+    }
+    // Remove bullets that hit plebs
+    if !bullets_hit.is_empty() {
+        let mut idx = 0;
+        bodies.retain(|_| {
+            let keep = !bullets_hit.contains(&idx);
+            idx += 1;
+            keep
+        });
+    }
+
     // Remove projectiles that are out of bounds, stopped, or fuse expired
     bodies.retain(|b| {
         if b.body_type == BodyType::Grenade {
@@ -536,5 +618,5 @@ pub fn tick_bodies(
         }
     });
 
-    impacts
+    (impacts, bullet_hits)
 }

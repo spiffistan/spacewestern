@@ -135,7 +135,15 @@ impl PipeNetwork {
             let cell = &self.cells[&idx];
             let conductance = if bt == 17 { pipe_width * 2.0 } else { pipe_width };
 
-            for &(dx, dy) in &[(0i32, -1i32), (0, 1), (1, 0), (-1, 0)] {
+            // Connection mask for directional pipes (height byte bits 4-7: N=0x10,E=0x20,S=0x40,W=0x80)
+            let pipe_h = (block >> 8) & 0xFF;
+            let conn_mask = pipe_h >> 4;
+            let dir_masks: [(i32, i32, u32); 4] = [(0, -1, 0x1), (0, 1, 0x4), (1, 0, 0x2), (-1, 0, 0x8)]; // N,S,E,W
+
+            for &(dx, dy, dmask) in &dir_masks {
+                // If pipe has a connection mask, only flow in connected directions
+                if bt == 15 && conn_mask != 0 && (conn_mask & dmask) == 0 { continue; }
+
                 let nx = x + dx;
                 let ny = y + dy;
                 if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
