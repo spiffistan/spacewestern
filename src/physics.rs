@@ -264,7 +264,7 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
         let is_open = (block >> 16) & 4 != 0;
 
         // Bullet stops on: solid blocks with height, except passable types and open doors
-        let passable = bt_is!(bt, BT_TREE, BT_FIREPLACE, BT_CEILING_LIGHT, BT_FLOOR_LAMP, BT_BERRY_BUSH);
+        let passable = bt_is!(bt, BT_TREE, BT_FIREPLACE, BT_CEILING_LIGHT, BT_FLOOR_LAMP, BT_BERRY_BUSH, BT_CROP);
         if bh > 0 && !passable && !(is_door && is_open)
         {
             let t = t_max_x.min(t_max_y).max(0.0);

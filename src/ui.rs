@@ -708,6 +708,17 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(29), "\u{1f4a5}", "Cannon");
                                     icon_btn(ui, BuildTool::Dig, "\u{26cf}", "Dig");
                                     icon_btn(ui, BuildTool::GrowingZone, "\u{1f33f}", "Farm Zone");
+                                    ui.separator();
+                                    let prio_label = match self.work_priority {
+                                        zones::WorkPriority::PlantFirst => "Plant 1st",
+                                        zones::WorkPriority::HarvestFirst => "Harvest 1st",
+                                    };
+                                    if ui.small_button(prio_label).clicked() {
+                                        self.work_priority = match self.work_priority {
+                                            zones::WorkPriority::PlantFirst => zones::WorkPriority::HarvestFirst,
+                                            zones::WorkPriority::HarvestFirst => zones::WorkPriority::PlantFirst,
+                                        };
+                                    }
                                 }
                                 "Opening" => {
                                     icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Window");

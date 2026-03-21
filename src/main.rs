@@ -207,7 +207,8 @@ struct App {
     wetness_data: Vec<f32>,
     // Zones & work queue
     zones: Vec<Zone>,
-    active_work: std::collections::HashSet<(i32, i32)>, // positions claimed by plebs
+    active_work: std::collections::HashSet<(i32, i32)>,
+    work_priority: zones::WorkPriority,
     crop_timers: std::collections::HashMap<u32, f32>,    // grid_idx → growth timer
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
@@ -457,6 +458,7 @@ impl App {
             wetness_data: vec![0.0; (GRID_W * GRID_H) as usize],
             zones: Vec::new(),
             active_work: std::collections::HashSet::new(),
+            work_priority: zones::WorkPriority::PlantFirst,
             crop_timers: std::collections::HashMap::new(),
             diag_preview: Vec::new(),
             voltage_data: Vec::new(),

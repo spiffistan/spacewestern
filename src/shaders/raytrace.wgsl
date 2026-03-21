@@ -1147,6 +1147,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_wire_block = bt == 36u; // height = connection mask, not visual
         let is_dimmer_block = bt == 43u; // height = dimmer/varistor level, not visual
         let is_breaker_block = bt == 45u; // height = trip threshold, not visual
+        let is_crop_block = bt == 47u; // crop height = growth stage, not visual
 
         // Diagonal wall: only occlude if ray is on the wall half
         let is_diag_block = bt == 44u;
@@ -1158,7 +1159,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
             diag_open = !diag_is_wall(sfx, sfy, svar);
         }
 
-        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_wire_block || is_dimmer_block || is_breaker_block || diag_open);
+        var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_wire_block || is_dimmer_block || is_breaker_block || is_crop_block || diag_open);
         if is_roofed_floor {
             // The roof is a thin plane at height rh. Rather than a hard threshold
             // that flickers, always set effective_h to rh but apply a smooth

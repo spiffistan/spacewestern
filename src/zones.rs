@@ -27,6 +27,13 @@ pub enum WorkTask {
     Harvest(i32, i32),  // harvest mature crop at this position
 }
 
+/// Work priority ordering.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WorkPriority {
+    PlantFirst,
+    HarvestFirst,
+}
+
 impl WorkTask {
     pub fn position(&self) -> (i32, i32) {
         match self {

@@ -709,17 +709,31 @@ impl App {
                 if pleb.activity != PlebActivity::Idle { continue; }
                 if pleb.work_target.is_some() { continue; }
 
-                // Find nearest task
+                // Find nearest task respecting priority
+                let is_preferred = |t: &WorkTask| -> bool {
+                    match self.work_priority {
+                        WorkPriority::PlantFirst => matches!(t, WorkTask::Plant(_, _)),
+                        WorkPriority::HarvestFirst => matches!(t, WorkTask::Harvest(_, _)),
+                    }
+                };
                 let mut best_task: Option<(WorkTask, f32)> = None;
+                let mut best_fallback: Option<(WorkTask, f32)> = None;
                 for task in &tasks {
                     let (tx, ty) = task.position();
                     let dx = pleb.x - tx as f32 - 0.5;
                     let dy = pleb.y - ty as f32 - 0.5;
                     let dist = dx * dx + dy * dy;
-                    if best_task.is_none() || dist < best_task.as_ref().unwrap().1 {
-                        best_task = Some((task.clone(), dist));
+                    if is_preferred(task) {
+                        if best_task.is_none() || dist < best_task.as_ref().unwrap().1 {
+                            best_task = Some((task.clone(), dist));
+                        }
+                    } else {
+                        if best_fallback.is_none() || dist < best_fallback.as_ref().unwrap().1 {
+                            best_fallback = Some((task.clone(), dist));
+                        }
                     }
                 }
+                let best_task = best_task.or(best_fallback);
 
                 if let Some((task, _)) = best_task {
                     let (tx, ty) = task.position();
