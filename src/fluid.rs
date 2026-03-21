@@ -34,8 +34,9 @@ pub fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
         let is_open = (b >> 16) & 4 != 0;
         // Inlets (20) and outlets (19) block gas like walls (they suck/push through the pipe system)
         // Other pipe components (15-18) are passable
-        if bh > 0 && bt != BT_TREE && bt != BT_FIREPLACE && bt != BT_CEILING_LIGHT && bt != BT_FLOOR_LAMP && bt != BT_TABLE_LAMP && bt != BT_FAN && bt != BT_COMPOST
-            && !(bt >= 15 && bt <= 18) && !(is_door && is_open) { 255 } else { 0 }
+        let passable = bt_is!(bt, BT_TREE, BT_FIREPLACE, BT_CEILING_LIGHT, BT_FLOOR_LAMP,
+            BT_TABLE_LAMP, BT_FAN, BT_COMPOST) || (bt >= BT_PIPE && bt <= BT_VALVE);
+        if bh > 0 && !passable && !(is_door && is_open) { 255 } else { 0 }
     }).collect()
 }
 

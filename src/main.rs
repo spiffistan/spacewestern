@@ -1,6 +1,15 @@
 use bytemuck::Zeroable;
 use std::sync::Arc;
 
+/// Check if a value matches any of the given block type constants.
+/// Usage: `bt_is!(bt, BT_TREE, BT_FIREPLACE, BT_CEILING_LIGHT)`
+/// Expands to: `bt == BT_TREE || bt == BT_FIREPLACE || bt == BT_CEILING_LIGHT`
+macro_rules! bt_is {
+    ($val:expr, $($bt:expr),+ $(,)?) => {
+        $( $val == $bt )||+
+    }
+}
+
 mod materials;
 mod grid;
 mod sprites;

@@ -263,9 +263,9 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
         let is_door = (block >> 16) & 1 != 0;
         let is_open = (block >> 16) & 4 != 0;
 
-        // Bullet stops on: solid blocks with height, except trees/fire/lights/bushes/open doors
-        if bh > 0 && bt != BT_TREE && bt != BT_FIREPLACE && bt != BT_CEILING_LIGHT && bt != BT_FLOOR_LAMP && bt != BT_BERRY_BUSH
-            && !(is_door && is_open)
+        // Bullet stops on: solid blocks with height, except passable types and open doors
+        let passable = bt_is!(bt, BT_TREE, BT_FIREPLACE, BT_CEILING_LIGHT, BT_FLOOR_LAMP, BT_BERRY_BUSH);
+        if bh > 0 && !passable && !(is_door && is_open)
         {
             let t = t_max_x.min(t_max_y).max(0.0);
             // Determine which face was hit: the last axis we stepped along
