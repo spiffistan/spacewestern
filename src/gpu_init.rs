@@ -957,6 +957,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Water table buffer (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 17,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1028,6 +1039,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
+                wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1051,6 +1063,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
+                wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1074,6 +1087,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
+                wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1097,6 +1111,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 14, resource: voltage_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 15, resource: pipe_flow_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
+                wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },

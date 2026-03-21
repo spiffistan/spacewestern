@@ -35,6 +35,8 @@ impl App {
         self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
         self.draw_world_labels(ctx, bp_cam);
         self.draw_selection_actions(ctx);
+        self.draw_notifications(ctx);
+        self.draw_conditions_bar(ctx);
         self.draw_game_log(ctx);
     }
 
@@ -116,6 +118,9 @@ impl App {
                             ui.horizontal(|ui| {
                                 if ui.selectable_label(*ov == FluidOverlay::Water, "Water").clicked() {
                                     *ov = if *ov == FluidOverlay::Water { FluidOverlay::None } else { FluidOverlay::Water };
+                                }
+                                if ui.selectable_label(*ov == FluidOverlay::WaterTable, "Table").clicked() {
+                                    *ov = if *ov == FluidOverlay::WaterTable { FluidOverlay::None } else { FluidOverlay::WaterTable };
                                 }
                                 if ui.selectable_label(self.show_velocity_arrows, "Arrows").clicked() {
                                     self.show_velocity_arrows = !self.show_velocity_arrows;
@@ -805,6 +810,32 @@ impl App {
                                 if resp_w.clicked() {
                                     self.sandbox_tool = if sel_w { SandboxTool::None } else { SandboxTool::InjectWater };
                                     if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
+                                }
+                                // Drought button (click to trigger, not a click-on-map tool)
+                                let drought_active = self.has_condition("Drought");
+                                let drought_label = if drought_active { "End Drought" } else { "Drought" };
+                                let (rect_d, resp_d) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(60.0), egui::Sense::click(),
+                                );
+                                let pd = ui.painter_at(rect_d);
+                                let bg_d = if drought_active { egui::Color32::from_rgb(120, 60, 30) }
+                                    else if resp_d.hovered() { egui::Color32::from_rgb(55, 58, 65) }
+                                    else { egui::Color32::from_rgb(40, 42, 48) };
+                                pd.rect_filled(rect_d, 4.0, bg_d);
+                                pd.rect_stroke(rect_d, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
+                                pd.text(rect_d.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
+                                    "\u{2600}", egui::FontId::proportional(24.0), egui::Color32::from_rgb(255, 200, 50));
+                                pd.text(rect_d.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
+                                    drought_label, egui::FontId::proportional(11.0), egui::Color32::from_gray(190));
+                                if resp_d.clicked() {
+                                    if drought_active {
+                                        self.conditions.retain(|c| c.name != "Drought");
+                                        self.log_event(EventCategory::Weather, "Drought ended (sandbox)".to_string());
+                                    } else {
+                                        self.add_condition("Drought", "\u{2600}", NotifCategory::Threat, 90.0);
+                                        self.notify(NotifCategory::Threat, "\u{2600}", "Drought", "Sandbox: Drought triggered!");
+                                        self.log_event(EventCategory::Weather, "Drought triggered (sandbox)".to_string());
+                                    }
                                 }
                             });
                         }
@@ -1762,45 +1793,6 @@ impl App {
                 sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(0.0, -bl)], stroke);
                 sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(-bl, 0.0)], stroke);
                 sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(0.0, -bl)], stroke);
-            }
-        }
-
-        // Water table heatmap (when Water overlay is active)
-        if self.fluid_overlay == FluidOverlay::Water && !self.water_table.is_empty() {
-            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
-            let tile_px = cam_zoom / self.render_scale / bp_ppp;
-            // Only render when tiles are large enough to see
-            if tile_px > 2.0 {
-                let wt_painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Background, egui::Id::new("water_table"),
-                ));
-                // Determine visible tile range
-                let vx0 = ((cam_cx - cam_sw * 0.5 / cam_zoom).floor() as i32).max(0);
-                let vy0 = ((cam_cy - cam_sh * 0.5 / cam_zoom).floor() as i32).max(0);
-                let vx1 = ((cam_cx + cam_sw * 0.5 / cam_zoom).ceil() as i32 + 1).min(GRID_W as i32);
-                let vy1 = ((cam_cy + cam_sh * 0.5 / cam_zoom).ceil() as i32 + 1).min(GRID_H as i32);
-                for ty in vy0..vy1 {
-                    for tx in vx0..vx1 {
-                        let idx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        if idx >= self.water_table.len() { continue; }
-                        let wt = self.water_table[idx];
-                        // Map water table to color: dry (brown) → wet (blue)
-                        let norm = ((wt + 2.5) / 3.0).clamp(0.0, 1.0); // -2.5→0, 0.5→1
-                        if norm < 0.01 { continue; }
-                        let alpha = (norm * 40.0).min(30.0) as u8;
-                        let r = ((1.0 - norm) * 80.0) as u8;
-                        let g = (norm * 40.0) as u8;
-                        let b = (norm * 160.0) as u8;
-                        let sx0 = ((tx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                        let sy0 = ((ty as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                        let sx1 = ((tx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                        let sy1 = ((ty as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                        wt_painter.rect_filled(
-                            egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
-                            0.0, egui::Color32::from_rgba_unmultiplied(r, g, b, alpha),
-                        );
-                    }
-                }
             }
         }
 
@@ -2955,6 +2947,80 @@ impl App {
     }
 
     /// Draw the in-game event log (bottom-right, scrolling).
+    /// Draw event notification cards (right side, Rimworld-style).
+    fn draw_notifications(&mut self, ctx: &egui::Context) {
+        if self.notifications.is_empty() { return; }
+        // Remove old dismissed notifications
+        self.notifications.retain(|n| !n.dismissed);
+
+        let mut dismiss_id = None;
+        egui::Area::new(egui::Id::new("notifications"))
+            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 60.0])
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    // Show most recent 5
+                    let start = self.notifications.len().saturating_sub(5);
+                    for notif in &self.notifications[start..] {
+                        let color = notif.category.color();
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 200))
+                            .corner_radius(4.0)
+                            .inner_margin(6.0)
+                            .show(ui, |ui| {
+                                ui.set_max_width(200.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(notif.icon).size(16.0));
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new(&notif.title).strong().size(11.0).color(egui::Color32::WHITE));
+                                        ui.label(egui::RichText::new(&notif.description).size(9.0).color(egui::Color32::from_gray(220)));
+                                    });
+                                });
+                            });
+                        // Right-click to dismiss
+                        let resp = ui.interact(ui.min_rect(), egui::Id::new(("notif", notif.id)), egui::Sense::click());
+                        if resp.secondary_clicked() {
+                            dismiss_id = Some(notif.id);
+                        }
+                    }
+                });
+            });
+        if let Some(id) = dismiss_id {
+            if let Some(n) = self.notifications.iter_mut().find(|n| n.id == id) {
+                n.dismissed = true;
+            }
+        }
+    }
+
+    /// Draw active conditions bar (below menu bar, persistent labels).
+    fn draw_conditions_bar(&self, ctx: &egui::Context) {
+        if self.conditions.is_empty() { return; }
+        egui::Area::new(egui::Id::new("conditions_bar"))
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 30.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for cond in &self.conditions {
+                        let color = cond.category.color();
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 220))
+                            .corner_radius(3.0)
+                            .inner_margin(6.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(cond.icon).size(12.0));
+                                    ui.label(egui::RichText::new(&cond.name).strong().size(10.0).color(egui::Color32::WHITE));
+                                    if cond.duration > 0.0 {
+                                        let pct = (cond.remaining / cond.duration * 100.0) as u32;
+                                        ui.label(egui::RichText::new(format!("{}%", pct)).size(9.0).color(egui::Color32::from_gray(200)));
+                                    }
+                                });
+                            });
+                    }
+                });
+            });
+    }
+
     fn draw_game_log(&self, ctx: &egui::Context) {
         if self.game_log.is_empty() { return; }
 

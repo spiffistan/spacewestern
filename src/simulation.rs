@@ -23,6 +23,38 @@ impl App {
             self.fps_accum = 0.0;
         }
 
+        // --- Tick active conditions + event triggers ---
+        if !self.time_paused {
+            let dt_game = dt * self.time_speed;
+            let mut ended = Vec::new();
+            for cond in self.conditions.iter_mut() {
+                if cond.remaining > 0.0 {
+                    cond.remaining -= dt_game;
+                    if cond.remaining <= 0.0 { ended.push(cond.name.clone()); }
+                }
+            }
+            for name in &ended {
+                events.push((EventCategory::Weather, format!("{} has ended", name)));
+                self.notify(NotifCategory::Positive, "\u{2705}", &format!("{} ended", name), "Conditions returning to normal.");
+            }
+            self.conditions.retain(|c| c.remaining > 0.0 || c.duration == 0.0);
+
+            self.drought_check_timer -= dt_game;
+            if self.drought_check_timer <= 0.0 {
+                self.drought_check_timer = 60.0 + (self.time_of_day * 137.0) as f32 % 60.0;
+                let seed = (self.time_of_day * 10000.0) as u32;
+                let roll = seed.wrapping_mul(2654435761) & 0xFF;
+                if roll < 25 && self.weather == WeatherState::Clear && !self.has_condition("Drought") {
+                    let duration = 60.0 + (roll as f32) * 1.5;
+                    self.add_condition("Drought", "\u{2600}", NotifCategory::Threat, duration);
+                    self.notify(NotifCategory::Threat, "\u{2600}", "Drought",
+                        format!("A drought has begun! Water drying up. ({:.0}s)", duration));
+                    events.push((EventCategory::Weather, "Drought has begun!".to_string()));
+                }
+            }
+        }
+        let is_drought = self.has_condition("Drought");
+
         if !self.time_paused {
             self.time_of_day += dt * self.time_speed;
             // Wrap around
@@ -164,8 +196,15 @@ impl App {
             self.fluid_params.wind_x = new_angle.cos() * new_mag;
             self.fluid_params.wind_y = new_angle.sin() * new_mag;
 
-            let rain = self.weather.rain_intensity();
-            let sun_dim = self.weather.sun_dimming();
+            let mut rain = self.weather.rain_intensity();
+            let mut sun_dim = self.weather.sun_dimming();
+            // Drought: override weather effects
+            if is_drought {
+                rain = 0.0; // no rain during drought
+                sun_dim = 1.0; // no cloud dimming
+                // Temperature boost: +8°C equivalent (brighter sun)
+                self.camera.sun_intensity *= 1.3;
+            }
             // Dim sun during clouds/rain
             self.camera.sun_intensity *= sun_dim;
             self.camera.sun_color_r *= sun_dim;
@@ -198,6 +237,7 @@ impl App {
             FluidOverlay::PowerAmps => 10.0,
             FluidOverlay::PowerWatts => 11.0,
             FluidOverlay::Water => 12.0,
+            FluidOverlay::WaterTable => 13.0,
         };
         // Pack velocity arrows flag as +0.25 on the overlay value
         if self.show_velocity_arrows && self.camera.fluid_overlay > 0.5 {

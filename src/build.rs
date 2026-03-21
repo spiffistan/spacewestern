@@ -28,5 +28,6 @@ pub enum FluidOverlay {
     Power,     // show voltage in power grid (dark=none, green=normal, red=overload)
     PowerAmps, // show current flow (brightness = current magnitude)
     PowerWatts, // show power consumption/generation (green=gen, red=consume)
-    Water,      // show ground water level (blue intensity)
+    Water,      // show surface water level (blue intensity)
+    WaterTable, // show underground water table depth
 }

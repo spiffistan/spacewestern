@@ -72,7 +72,8 @@ struct Camera {
 @group(0) @binding(13) var<storage, read> block_temps: array<f32>;
 @group(0) @binding(14) var<storage, read> voltage: array<f32>;
 @group(0) @binding(15) var<storage, read> pipe_flow: array<f32>;
-@group(0) @binding(16) var water_tex: texture_2d<f32>; // 2 f32 per tile: [flow_x, flow_y]
+@group(0) @binding(16) var water_tex: texture_2d<f32>;
+@group(0) @binding(17) var<storage, read> water_table_buf: array<f32>;
 
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
@@ -2609,10 +2610,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color += vec3<f32>(effective_fheight * 0.03);
     }
 
-    // Ground water rendering: read water level from simulation
+    // Ground water rendering: surface water + water table influence
     let water_level = textureLoad(water_tex, vec2<i32>(bx, by), 0).r;
+    let wt_idx = u32(by) * 256u + u32(bx);
+    let wt_depth = water_table_buf[wt_idx]; // negative = below ground, positive = spring
     let is_ground_tile = btype == 2u || btype == 26u || btype == 27u || btype == 28u || btype == 32u;
     if is_ground_tile && effective_height == 0u {
+        // Water table coloring: subtle moisture for high water table (even without surface water)
+        let wt_moisture = clamp((wt_depth + 1.5) / 2.0, 0.0, 0.5); // 0 at -1.5, 0.5 at +0.5
+        if wt_moisture > 0.02 && water_level < 0.1 {
+            let damp_earth = vec3<f32>(0.32, 0.26, 0.16);
+            color = mix(color, damp_earth, wt_moisture * 0.3);
+        }
         // Combine water sim level with rain for immediate visual feedback
         let wet = clamp(water_level + camera.rain_intensity * 0.3, 0.0, 1.0);
         if wet > 0.01 {
@@ -3297,7 +3306,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     } else if camera.fluid_overlay < 12.5 {
-        // Water overlay (12): show ground water level
+        // Water overlay (12): show surface water level
         let wl = clamp(water_level * 2.0, 0.0, 1.0);
         if wl > 0.01 {
             let water_ov_color = mix(vec3(0.08, 0.12, 0.25), vec3(0.15, 0.45, 0.9), wl);
@@ -3305,6 +3314,19 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color *= 0.3;
         }
+    } else if camera.fluid_overlay < 13.5 {
+        // Water Table overlay (13): underground water depth
+        let wt_norm = clamp((wt_depth + 3.0) / 3.5, 0.0, 1.0); // -3→0, 0.5→1
+        // Brown (dry/deep) → blue (wet/spring)
+        let dry_col = vec3(0.35, 0.22, 0.10);
+        let wet_col = vec3(0.10, 0.30, 0.70);
+        let spring_col = vec3(0.15, 0.50, 0.90);
+        var wt_color = mix(dry_col, wet_col, clamp(wt_norm * 1.5, 0.0, 1.0));
+        if wt_depth > 0.0 {
+            // Active spring: bright blue pulse
+            wt_color = mix(wt_color, spring_col, clamp(wt_depth * 2.0, 0.0, 1.0));
+        }
+        color = mix(color * 0.3, wt_color, 0.7);
     }
 
     // Velocity arrow overlay (when fractional part of fluid_overlay > 0.1)

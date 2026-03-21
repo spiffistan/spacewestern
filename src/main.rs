@@ -70,6 +70,49 @@ enum SandboxTool {
     None,
     Lightning,
     InjectWater,
+    TriggerDrought,
+}
+
+/// Event notification (Rimworld-style right panel).
+#[derive(Clone, Debug)]
+struct GameNotification {
+    id: u32,
+    title: String,
+    description: String,
+    category: NotifCategory,
+    icon: &'static str,
+    time_created: f32,
+    dismissed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum NotifCategory {
+    Threat,   // red
+    Warning,  // yellow
+    Positive, // green
+    Info,     // gray
+}
+
+impl NotifCategory {
+    fn color(&self) -> egui::Color32 {
+        match self {
+            NotifCategory::Threat => egui::Color32::from_rgb(180, 40, 40),
+            NotifCategory::Warning => egui::Color32::from_rgb(180, 160, 40),
+            NotifCategory::Positive => egui::Color32::from_rgb(40, 160, 60),
+            NotifCategory::Info => egui::Color32::from_rgb(80, 80, 90),
+        }
+    }
+}
+
+/// Active world condition with gameplay effects.
+#[derive(Clone, Debug)]
+struct ActiveCondition {
+    id: u32,
+    name: String,
+    icon: &'static str,
+    category: NotifCategory,
+    remaining: f32,   // game seconds remaining (0 = permanent until removed)
+    duration: f32,    // total duration (for progress bar)
 }
 
 const WORKGROUP_SIZE: u32 = 8;
@@ -260,6 +303,11 @@ struct App {
     world_sel: WorldSelection,
     // In-game event log
     game_log: std::collections::VecDeque<GameEvent>,
+    // Event notifications (right panel) + active conditions
+    notifications: Vec<GameNotification>,
+    conditions: Vec<ActiveCondition>,
+    next_notif_id: u32,
+    drought_check_timer: f32,
     // Multi-select drag rectangle (screen coords)
     select_drag_start: Option<(f32, f32)>, // world coords where selection drag started
     // Storage crate inventories: grid_idx → stored items
@@ -531,6 +579,10 @@ impl App {
             context_menu: None,
             world_sel: WorldSelection::none(),
             game_log: std::collections::VecDeque::new(),
+            notifications: Vec::new(),
+            conditions: Vec::new(),
+            next_notif_id: 0,
+            drought_check_timer: 30.0,
             select_drag_start: None,
             crate_contents: std::collections::HashMap::new(),
             rock_context_menu: None,
@@ -1342,9 +1394,12 @@ impl App {
                 self.selected_pleb = None;
                 return;
             } else {
-                // Clicked empty ground — deselect
+                // Clicked non-selectable tile — deselect everything
                 self.world_sel = WorldSelection::none();
                 self.selected_pleb = None;
+                self.block_sel = BlockSelection::default();
+                self.context_menu = None;
+                self.rock_context_menu = None;
             }
         }
 
@@ -1360,6 +1415,38 @@ impl App {
 
     /// Handle build tool placement at grid position.
     /// Get the bounding box (origin + size) for a block, accounting for multi-tile items.
+    fn notify(&mut self, category: NotifCategory, icon: &'static str, title: impl Into<String>, desc: impl Into<String>) {
+        self.next_notif_id += 1;
+        self.notifications.push(GameNotification {
+            id: self.next_notif_id,
+            title: title.into(),
+            description: desc.into(),
+            category,
+            icon,
+            time_created: self.time_of_day,
+            dismissed: false,
+        });
+    }
+
+    fn add_condition(&mut self, name: impl Into<String>, icon: &'static str, category: NotifCategory, duration: f32) {
+        let name = name.into();
+        // Don't duplicate
+        if self.conditions.iter().any(|c| c.name == name) { return; }
+        self.next_notif_id += 1;
+        self.conditions.push(ActiveCondition {
+            id: self.next_notif_id,
+            name,
+            icon,
+            category,
+            remaining: duration,
+            duration,
+        });
+    }
+
+    fn has_condition(&self, name: &str) -> bool {
+        self.conditions.iter().any(|c| c.name == name)
+    }
+
     fn log_event(&mut self, category: EventCategory, message: impl Into<String>) {
         self.game_log.push_back(GameEvent {
             time: self.time_of_day,
@@ -1944,6 +2031,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
+                    wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1967,6 +2055,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
+                    wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -1990,6 +2079,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
+                    wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2013,6 +2103,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
+                    wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
