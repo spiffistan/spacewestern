@@ -427,6 +427,8 @@ impl App {
                     if ui.button("Reset zoom").clicked() { zoom = base_zoom; }
                     ui.separator();
                     ui.add(egui::Slider::new(&mut oblique, 0.0..=0.3).text("Wall face tilt").step_by(0.005));
+                    ui.separator();
+                    ui.add(egui::Slider::new(&mut self.camera_pan_speed, 100.0..=1000.0).text("Pan speed").step_by(25.0));
                 });
 
                 // Admin menu (colonist placement)

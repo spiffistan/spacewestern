@@ -365,6 +365,7 @@ struct App {
     sound_damping: f32,            // damping factor per step
     sound_coupling: f32,           // sound→gas velocity coupling strength
     sound_iters_per_frame: u32,    // iterations per frame (controls propagation speed)
+    camera_pan_speed: f32,         // WASD pan speed (tiles/sec at zoom=1)
     dye_w: u32,                   // current dye texture width (tracks render resolution)
     dye_h: u32,                   // current dye texture height
     sandbox_mode: bool,           // enables sandbox build category + debug tools
@@ -657,6 +658,7 @@ impl App {
             sound_damping: 0.005,
             sound_coupling: 0.15,
             sound_iters_per_frame: 4,
+            camera_pan_speed: 400.0,
             dye_w: FLUID_DYE_W,
             dye_h: FLUID_DYE_H,
             sandbox_mode: true,
@@ -2645,6 +2647,23 @@ impl App {
 
         let dt = self.update_simulation();
 
+        // WASD camera pan when no pleb is selected
+        if self.selected_pleb.is_none() {
+            let pan_speed = self.camera_pan_speed / self.camera.zoom;
+            let mut pan_x = 0.0f32;
+            let mut pan_y = 0.0f32;
+            if self.pressed_keys.contains(&KeyCode::KeyW) || self.pressed_keys.contains(&KeyCode::ArrowUp) { pan_y -= 1.0; }
+            if self.pressed_keys.contains(&KeyCode::KeyS) || self.pressed_keys.contains(&KeyCode::ArrowDown) { pan_y += 1.0; }
+            if self.pressed_keys.contains(&KeyCode::KeyA) || self.pressed_keys.contains(&KeyCode::ArrowLeft) { pan_x -= 1.0; }
+            if self.pressed_keys.contains(&KeyCode::KeyD) || self.pressed_keys.contains(&KeyCode::ArrowRight) { pan_x += 1.0; }
+            if pan_x != 0.0 || pan_y != 0.0 {
+                let len = (pan_x * pan_x + pan_y * pan_y).sqrt();
+                self.camera.center_x += pan_x / len * pan_speed * dt;
+                self.camera.center_y += pan_y / len * pan_speed * dt;
+                self.camera.center_x = self.camera.center_x.clamp(0.0, GRID_W as f32);
+                self.camera.center_y = self.camera.center_y.clamp(0.0, GRID_H as f32);
+            }
+        }
 
         let gfx = self.gfx.as_ref().unwrap();
 
