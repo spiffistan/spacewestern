@@ -52,4 +52,8 @@ pub struct CameraUniform {
     pub cloud_cover: f32,
     pub wind_magnitude: f32,
     pub wind_angle: f32,   // wind direction in radians
+    pub use_shadow_map: f32,    // 1.0 = sample shadow map, 0.0 = per-pixel ray trace
+    pub shadow_map_scale: f32,  // shadow map texels per grid cell (for UV mapping)
+    pub _pad_sm1: f32,
+    pub _pad_sm2: f32,
 }

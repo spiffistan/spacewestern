@@ -174,6 +174,62 @@ pub struct Pleb {
     pub is_enemy: bool,
     pub wander_timer: f32,
     pub work_target: Option<(i32, i32)>, // position of current work task
+    pub schedule: PlebSchedule,
+}
+
+/// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
+#[derive(Clone, Debug)]
+pub struct PlebSchedule {
+    pub hours: [bool; 24], // true = work, false = sleep
+    pub preset: PlebShift,
+}
+
+impl Default for PlebSchedule {
+    fn default() -> Self {
+        let mut s = PlebSchedule { hours: [true; 24], preset: PlebShift::Day };
+        s.apply_preset(PlebShift::Day);
+        s
+    }
+}
+
+impl PlebSchedule {
+    pub fn apply_preset(&mut self, shift: PlebShift) {
+        self.preset = shift;
+        for h in 0..24 {
+            self.hours[h] = !shift.is_sleep_hour(h);
+        }
+    }
+
+    pub fn is_sleep_time(&self, time_of_day: f32, day_duration: f32) -> bool {
+        let hour = ((time_of_day / day_duration * 24.0) % 24.0) as usize;
+        !self.hours[hour.min(23)]
+    }
+}
+
+/// Shift presets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PlebShift {
+    Day,     // sleep 22:00-06:00
+    Night,   // sleep 10:00-18:00
+    Custom,  // manually edited
+}
+
+impl PlebShift {
+    pub fn is_sleep_hour(&self, h: usize) -> bool {
+        match self {
+            PlebShift::Day => h >= 22 || h < 6,
+            PlebShift::Night => h >= 10 && h < 18,
+            PlebShift::Custom => false, // custom uses the hours array directly
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PlebShift::Day => "Day",
+            PlebShift::Night => "Night",
+            PlebShift::Custom => "Custom",
+        }
+    }
 }
 
 impl Pleb {
@@ -196,6 +252,7 @@ impl Pleb {
             is_enemy: false,
             wander_timer: 0.0,
             work_target: None,
+            schedule: PlebSchedule::default(),
         }
     }
 

@@ -448,7 +448,7 @@ impl App {
                 tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving, is_sleeping, air);
 
                 let was_crisis = pleb.activity.is_crisis();
-                tick_pleb_activity(pleb, &env, &self.grid_data, dt, self.time_speed, &mut self.ground_items);
+                tick_pleb_activity(pleb, &env, &self.grid_data, dt, self.time_speed, &mut self.ground_items, self.time_of_day);
                 // Log new crisis
                 if pleb.activity.is_crisis() && !was_crisis {
                     if let Some(reason) = pleb.activity.crisis_reason() {
@@ -1274,6 +1274,7 @@ fn tick_pleb_activity(
     dt: f32,
     time_speed: f32,
     ground_items: &mut Vec<resources::GroundItem>,
+    time_of_day: f32,
 ) {
     // --- Activity state machine (works on inner activity for crisis) ---
     let inner_act = pleb.activity.inner().clone();
@@ -1282,9 +1283,12 @@ fn tick_pleb_activity(
 
     match &inner_act {
         PlebActivity::Sleeping => {
-            if pleb.needs.rest > 0.95
-                || pleb.needs.breathing_state != BreathingState::Normal
-            {
+            let fully_rested = pleb.needs.rest > 0.95;
+            let cant_breathe = pleb.needs.breathing_state != BreathingState::Normal;
+            // Wake up when: fully rested, can't breathe, OR shift says work time and rested enough
+            let shift_wake = !pleb.schedule.is_sleep_time(time_of_day, DAY_DURATION)
+                && pleb.needs.rest > 0.5;
+            if fully_rested || cant_breathe || shift_wake {
                 pleb.activity = PlebActivity::Idle;
             }
         }
@@ -1435,15 +1439,19 @@ fn tick_pleb_activity(
                         pleb.haul_target = None;
                     }
                 }
-            } else if (pleb.needs.rest < 0.2 || (pleb.needs.rest < 0.4 && env.is_night))
-                && !matches!(pleb.activity, PlebActivity::Sleeping)
-            {
-                if env.near_bed {
-                    pleb.activity = PlebActivity::Sleeping;
-                    pleb.path.clear();
-                    pleb.path_idx = 0;
-                } else if let Some((bx, by)) = env.nearest_bed {
-                    send_pleb_to(pleb, grid, (bx, by), PlebActivity::Walking);
+            } else if !matches!(pleb.activity, PlebActivity::Sleeping) {
+                // Sleep when: shift says it's bedtime (unless override), OR very tired
+                let is_bedtime = pleb.schedule.is_sleep_time(time_of_day, DAY_DURATION);
+                let very_tired = pleb.needs.rest < 0.2;
+                let should_sleep = is_bedtime || very_tired;
+                if should_sleep {
+                    if env.near_bed {
+                        pleb.activity = PlebActivity::Sleeping;
+                        pleb.path.clear();
+                        pleb.path_idx = 0;
+                    } else if let Some((bx, by)) = env.nearest_bed {
+                        send_pleb_to(pleb, grid, (bx, by), PlebActivity::Walking);
+                    }
                 }
             } else if pleb.needs.hunger < 0.4 && pleb.inventory.berries == 0 {
                 if env.near_berry_bush && pleb.harvest_target.is_none() {

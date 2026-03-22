@@ -114,12 +114,19 @@ pub struct PipeNetwork {
     /// Map from grid index (y * GRID_W + x) to pipe cell state.
     /// Only contains entries for pipe component blocks.
     pub cells: std::collections::HashMap<u32, PipeCell>,
+    /// Reusable scratch buffers to avoid per-frame allocations
+    scratch_indices: Vec<u32>,
+    scratch_gas_delta: std::collections::HashMap<u32, [f32; 4]>,
+    scratch_flow_accum: std::collections::HashMap<u32, (f32, f32)>,
 }
 
 impl PipeNetwork {
     pub fn new() -> Self {
         PipeNetwork {
             cells: std::collections::HashMap::new(),
+            scratch_indices: Vec::new(),
+            scratch_gas_delta: std::collections::HashMap::new(),
+            scratch_flow_accum: std::collections::HashMap::new(),
         }
     }
 
@@ -154,7 +161,9 @@ impl PipeNetwork {
     /// Returns a list of (x, y, gas[4], velocity) for outlet injections.
     pub fn tick(&mut self, dt: f32, grid: &[u32], _pipe_width: f32) -> Vec<(f32, f32, [f32; 4], f32)> {
         let mut outlet_injections = Vec::new();
-        let indices: Vec<u32> = self.cells.keys().copied().collect();
+        let mut indices = std::mem::take(&mut self.scratch_indices);
+        indices.clear();
+        indices.extend(self.cells.keys().copied());
 
         // --- Pressure relaxation: multiple iterations like the voltage system ---
         // Pumps SET pressure (voltage source), outlets DRAIN (consumer), pipes MIX (wire relaxation).
@@ -272,8 +281,11 @@ impl PipeNetwork {
         }
 
         // --- Gas composition transfer (single pass, delta-based) ---
-        let mut gas_delta: std::collections::HashMap<u32, [f32; 4]> = std::collections::HashMap::new();
-        let mut flow_accum: std::collections::HashMap<u32, (f32, f32)> = std::collections::HashMap::new();
+        // Reuse scratch buffers to avoid per-frame HashMap allocations
+        let mut gas_delta = std::mem::take(&mut self.scratch_gas_delta);
+        let mut flow_accum = std::mem::take(&mut self.scratch_flow_accum);
+        gas_delta.clear();
+        flow_accum.clear();
 
         for &idx in &indices {
             let x = (idx % GRID_W) as i32;
@@ -420,6 +432,11 @@ impl PipeNetwork {
             let temp_diff = cell.gas[3] - ambient_temp;
             cell.gas[3] -= temp_diff * 0.005 * dt;
         }
+
+        // Return scratch buffers for reuse next frame
+        self.scratch_indices = indices;
+        self.scratch_gas_delta = gas_delta;
+        self.scratch_flow_accum = flow_accum;
 
         outlet_injections
     }

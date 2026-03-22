@@ -284,7 +284,10 @@ impl App {
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .interactable(false)
             .show(ctx, |ui| {
-                ui.label(egui::RichText::new(format!("v{} | {:.0} fps", include_str!("../VERSION").trim(), self.fps_display)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(12.0));
+                let frame_ms = if self.fps_display > 0.0 { 1000.0 / self.fps_display } else { 0.0 };
+                let rw = self.camera.screen_w as u32;
+                let rh = self.camera.screen_h as u32;
+                ui.label(egui::RichText::new(format!("v{} | {:.0} fps ({:.1}ms) | {}x{}", include_str!("../VERSION").trim(), self.fps_display, frame_ms, rw, rh)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(12.0));
             });
 
     }
@@ -348,8 +351,12 @@ impl App {
 
                 ui.separator();
 
+                // Menus with sliders/toggles should stay open on click
+                let keep_open = egui::containers::menu::MenuConfig::new()
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+
                 // Lighting menu
-                ui.menu_button("Lighting", |ui| {
+                egui::containers::menu::MenuButton::new("Lighting").config(keep_open.clone()).ui(ui, |ui| {
                     ui.add(egui::Slider::new(&mut glass_light, 0.0..=0.5).text("Window glow").step_by(0.01));
                     ui.add(egui::Slider::new(&mut indoor_glow, 0.0..=1.0).text("Indoor glow").step_by(0.01));
                     ui.add(egui::Slider::new(&mut bleed, 0.0..=2.0).text("Light bleed").step_by(0.01));
@@ -360,7 +367,7 @@ impl App {
                 });
 
                 // Fluid menu
-                ui.menu_button("Fluid", |ui| {
+                egui::containers::menu::MenuButton::new("Fluid").config(keep_open.clone()).ui(ui, |ui| {
                     let mut fluid_spd = self.fluid_speed;
                     ui.add(egui::Slider::new(&mut fluid_spd, 0.0..=5.0).text("Fluid speed").step_by(0.1));
                     self.fluid_speed = fluid_spd;
@@ -383,7 +390,7 @@ impl App {
                 });
 
                 // Camera menu
-                ui.menu_button("Camera", |ui| {
+                egui::containers::menu::MenuButton::new("Camera").config(keep_open.clone()).ui(ui, |ui| {
                     let zoom_pct = zoom / base_zoom * 100.0;
                     ui.label(format!("Zoom: {:.0}%", zoom_pct));
                     ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.05..=base_zoom * 8.0)
@@ -395,12 +402,35 @@ impl App {
 
                 // Admin menu (colonist placement)
                 ui.separator();
-                // Render menu (glow, bleed, temporal)
-                ui.menu_button("Render", |ui| {
+                // Render menu — performance vs quality controls
+                egui::containers::menu::MenuButton::new("Render").config(keep_open.clone()).ui(ui, |ui| {
+                    ui.set_min_width(220.0);
+
+                    // --- Resolution ---
+                    ui.label(egui::RichText::new("Resolution").strong().size(11.0));
                     let mut rs = self.render_scale;
-                    ui.add(egui::Slider::new(&mut rs, 0.15..=1.0).text("Quality").step_by(0.05));
+                    ui.add(egui::Slider::new(&mut rs, 0.15..=1.0).text("Render scale").step_by(0.05));
                     self.render_scale = rs;
+
                     ui.separator();
+
+                    // --- Shadows ---
+                    ui.label(egui::RichText::new("Shadows").strong().size(11.0));
+                    let mut use_sm = self.shadow_map_scale > 0;
+                    ui.checkbox(&mut use_sm, "Shadow Map");
+                    if use_sm {
+                        if self.shadow_map_scale == 0 { self.shadow_map_scale = 8; }
+                        let mut sm = self.shadow_map_scale as i32;
+                        ui.add(egui::Slider::new(&mut sm, 1..=8).text("Scale"));
+                        self.shadow_map_scale = sm as u32;
+                    } else {
+                        self.shadow_map_scale = 0;
+                    }
+
+                    ui.separator();
+
+                    // --- Raytrace ---
+                    ui.label(egui::RichText::new("Raytrace").strong().size(11.0));
                     if ui.selectable_label(self.enable_prox_glow, "Proximity Glow").clicked() {
                         self.enable_prox_glow = !self.enable_prox_glow;
                     }
@@ -411,14 +441,40 @@ impl App {
                         self.enable_temporal = !self.enable_temporal;
                         self.camera.force_refresh = 10.0;
                     }
+
                     ui.separator();
-                    if ui.selectable_label(self.hires_fluid, "HiRes Fluid (512)").clicked() {
+
+                    // --- Lightmap ---
+                    ui.label(egui::RichText::new("Lightmap").strong().size(11.0));
+                    let mut lm_int = self.lightmap_interval as i32;
+                    ui.add(egui::Slider::new(&mut lm_int, 1..=10).text("Update interval"));
+                    self.lightmap_interval = lm_int as u32;
+                    let mut lm_iter = self.lightmap_iterations as i32;
+                    ui.add(egui::Slider::new(&mut lm_iter, 4..=40).text("Propagation steps"));
+                    self.lightmap_iterations = lm_iter as u32;
+                    // Keep odd to ensure correct ping-pong final output
+                    if self.lightmap_iterations % 2 == 0 { self.lightmap_iterations += 1; }
+
+                    ui.separator();
+
+                    // --- Fluid Sim ---
+                    ui.label(egui::RichText::new("Fluid Sim").strong().size(11.0));
+                    if ui.selectable_label(self.hires_fluid, "HiRes (512x512)").clicked() {
                         self.hires_fluid = !self.hires_fluid;
                     }
+                    let mut fp = self.fluid_pressure_iters as i32;
+                    ui.add(egui::Slider::new(&mut fp, 5..=50).text("Pressure iterations"));
+                    self.fluid_pressure_iters = fp as u32;
+                    // Keep odd for correct ping-pong output
+                    if self.fluid_pressure_iters % 2 == 0 { self.fluid_pressure_iters += 1; }
                 });
 
+                if ui.button("Schedule").clicked() {
+                    self.show_schedule = !self.show_schedule;
+                }
+
                 // Debug menu
-                ui.menu_button("Debug", |ui| {
+                egui::containers::menu::MenuButton::new("Debug").config(keep_open.clone()).ui(ui, |ui| {
                     if ui.selectable_label(self.enable_ricochets, "Bullet Ricochets").clicked() {
                         self.enable_ricochets = !self.enable_ricochets;
                     }
@@ -925,6 +981,7 @@ impl App {
                 carrying: Option<&'static str>,
                 is_crisis: bool,
                 crisis_reason: Option<&'static str>,
+                shift_label: &'static str,
             }
             let pleb_display: Vec<PlebDisplay> = self.plebs.iter().enumerate().filter(|(_, p)| !p.is_enemy).map(|(i, p)| {
                 let a = &p.appearance;
@@ -996,6 +1053,7 @@ impl App {
                     carrying: p.inventory.carrying,
                     is_crisis: p.activity.is_crisis(),
                     crisis_reason: p.activity.crisis_reason(),
+                    shift_label: p.schedule.preset.label(),
                 }
             }).collect();
 
@@ -1006,8 +1064,8 @@ impl App {
                         ui.horizontal(|ui| {
                             for pd in &pleb_display {
                                 let is_sel = self.selected_pleb == Some(pd.idx);
-                                let card_w = if is_sel { 110.0 } else { 48.0 };
-                                let card_h = if is_sel { 90.0 } else { 56.0 };
+                                let card_w = 48.0;
+                                let card_h = 56.0;
                                 let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(card_w, card_h), egui::Sense::click());
                                 let painter = ui.painter_at(rect);
 
@@ -1028,12 +1086,13 @@ impl App {
                                     painter.rect_filled(inset, 3.0, bg);
                                 }
 
+                                // Selection border
+                                if is_sel {
+                                    painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 200, 100)), egui::StrokeKind::Outside);
+                                }
+
                                 // Portrait area
-                                let portrait_center = if is_sel {
-                                    rect.left_center() + egui::Vec2::new(20.0, -6.0)
-                                } else {
-                                    rect.center() + egui::Vec2::new(0.0, -4.0)
-                                };
+                                let portrait_center = rect.center() + egui::Vec2::new(0.0, -4.0);
 
                                 // Body (shirt color)
                                 let shirt_c = egui::Color32::from_rgb(
@@ -1051,11 +1110,7 @@ impl App {
                                 painter.circle_filled(portrait_center + egui::Vec2::new(0.0, -6.0), 4.0, hair_c);
 
                                 // Name
-                                let name_pos = if is_sel {
-                                    rect.left_bottom() + egui::Vec2::new(20.0, -2.0)
-                                } else {
-                                    rect.center_bottom() + egui::Vec2::new(0.0, -2.0)
-                                };
+                                let name_pos = rect.center_bottom() + egui::Vec2::new(0.0, -2.0);
                                 painter.text(
                                     name_pos,
                                     egui::Align2::CENTER_BOTTOM,
@@ -1064,10 +1119,10 @@ impl App {
                                     egui::Color32::WHITE,
                                 );
 
-                                // Health bar (real value)
-                                let bar_y = if is_sel { rect.min.y + 4.0 } else { rect.max.y - 5.0 };
+                                // Health bar
+                                let bar_y = rect.max.y - 5.0;
                                 let bar_x = rect.min.x + 2.0;
-                                let bar_w = if is_sel { 36.0 } else { rect.width() - 4.0 };
+                                let bar_w = rect.width() - 4.0;
                                 let bar_rect = egui::Rect::from_min_size(
                                     egui::Pos2::new(bar_x, bar_y),
                                     egui::Vec2::new(bar_w, 2.0),
@@ -1085,101 +1140,6 @@ impl App {
                                     1.0, health_color,
                                 );
 
-                                // Expanded needs display when selected
-                                if is_sel {
-                                    let needs_x = rect.min.x + 40.0;
-                                    let needs_y = rect.min.y + 8.0;
-                                    let bar_h = 3.0;
-                                    let spacing = 8.5;
-                                    let need_w = 62.0;
-
-                                    let needs_data: [(&str, f32, egui::Color32); 5] = [
-                                        ("HUN", pd.hunger, egui::Color32::from_rgb(200, 160, 40)),
-                                        ("RST", pd.rest, egui::Color32::from_rgb(80, 120, 200)),
-                                        ("WRM", pd.warmth, egui::Color32::from_rgb(200, 100, 40)),
-                                        ("O2", pd.oxygen, egui::Color32::from_rgb(100, 200, 220)),
-                                        ("BRE", pd.breath_pct, egui::Color32::from_rgb(150, 180, 255)),
-                                    ];
-
-                                    for (i, (label, val, color)) in needs_data.iter().enumerate() {
-                                        let y = needs_y + i as f32 * spacing;
-                                        // Label — flash red for critical
-                                        let label_color = if *val < 0.2 {
-                                            egui::Color32::from_rgb(255, 80, 80)
-                                        } else {
-                                            egui::Color32::GRAY
-                                        };
-                                        painter.text(
-                                            egui::Pos2::new(needs_x, y),
-                                            egui::Align2::LEFT_TOP,
-                                            *label,
-                                            egui::FontId::proportional(7.0),
-                                            label_color,
-                                        );
-                                        // Bar background
-                                        let br = egui::Rect::from_min_size(
-                                            egui::Pos2::new(needs_x + 20.0, y + 1.0),
-                                            egui::Vec2::new(need_w - 20.0, bar_h),
-                                        );
-                                        painter.rect_filled(br, 1.0, egui::Color32::from_rgb(30, 30, 30));
-                                        // Bar fill
-                                        painter.rect_filled(
-                                            egui::Rect::from_min_size(br.min, egui::Vec2::new((need_w - 20.0) * val.clamp(0.0, 1.0), bar_h)),
-                                            1.0, *color,
-                                        );
-                                    }
-
-                                    // Breathing state label (flashing when critical)
-                                    let breath_y = needs_y + 5.0 * spacing;
-                                    let breath_color = match pd.breathing_state {
-                                        BreathingState::Normal => egui::Color32::from_rgb(120, 180, 120),
-                                        BreathingState::HoldingBreath => egui::Color32::from_rgb(220, 200, 80),
-                                        BreathingState::Gasping => egui::Color32::from_rgb(255, 60, 60),
-                                    };
-                                    painter.text(
-                                        egui::Pos2::new(needs_x, breath_y),
-                                        egui::Align2::LEFT_TOP,
-                                        pd.breathing_label,
-                                        egui::FontId::proportional(7.0),
-                                        breath_color,
-                                    );
-
-                                    // Activity + inventory line
-                                    let info_y = breath_y + 9.0;
-                                    let mut inv_parts = Vec::new();
-                                    if pd.berries > 0 { inv_parts.push(format!("{}x Berry", pd.berries)); }
-                                    if pd.rocks > 0 { inv_parts.push(format!("{}x Rock", pd.rocks)); }
-                                    if let Some(c) = pd.carrying { inv_parts.push(format!("[{}]", c)); }
-                                    let berry_str = if !inv_parts.is_empty() {
-                                        format!("{} | {}", pd.activity, inv_parts.join(" "))
-                                    } else {
-                                        pd.activity.clone()
-                                    };
-                                    painter.text(
-                                        egui::Pos2::new(needs_x, info_y),
-                                        egui::Align2::LEFT_TOP,
-                                        &berry_str,
-                                        egui::FontId::proportional(6.5),
-                                        egui::Color32::from_rgb(160, 160, 140),
-                                    );
-
-                                    // Mood label at bottom-right of card
-                                    let mood_color = if pd.mood > 20.0 {
-                                        egui::Color32::from_rgb(100, 200, 100)
-                                    } else if pd.mood > -20.0 {
-                                        egui::Color32::from_rgb(180, 180, 120)
-                                    } else {
-                                        egui::Color32::from_rgb(200, 80, 80)
-                                    };
-                                    painter.text(
-                                        egui::Pos2::new(rect.max.x - 4.0, rect.max.y - 4.0),
-                                        egui::Align2::RIGHT_BOTTOM,
-                                        pd.mood_label,
-                                        egui::FontId::proportional(7.0),
-                                        mood_color,
-                                    );
-                                }
-
                                 if response.clicked() {
                                     if is_sel {
                                         // Click again on selected pleb → toggle inventory
@@ -1196,6 +1156,98 @@ impl App {
                         });
                     });
                 });
+        }
+
+        // Schedule window (all plebs)
+        if self.show_schedule {
+            let mut open = true;
+            egui::Window::new("Schedule")
+                .open(&mut open)
+                .default_pos(egui::pos2(200.0, 200.0))
+                .resizable(false)
+                .show(ctx, |ui| {
+                    let bar_w = 240.0;
+                    let cell_w = bar_w / 24.0;
+                    let bar_h = 14.0;
+                    // Hour labels header
+                    ui.horizontal(|ui| {
+                        ui.add_space(120.0); // name + dropdown width
+                        let (header_rect, _) = ui.allocate_exact_size(egui::Vec2::new(bar_w, 12.0), egui::Sense::hover());
+                        let hp = ui.painter_at(header_rect);
+                        for h in 0..24 {
+                            let x = header_rect.min.x + (h as f32 + 0.5) * cell_w;
+                            if h % 3 == 0 {
+                                hp.text(egui::pos2(x, header_rect.center().y), egui::Align2::CENTER_CENTER,
+                                    format!("{:02}", h), egui::FontId::proportional(7.0),
+                                    egui::Color32::from_gray(160));
+                            }
+                        }
+                    });
+                    ui.separator();
+                    // Per-pleb rows
+                    let friendly: Vec<usize> = (0..self.plebs.len()).filter(|&i| !self.plebs[i].is_enemy).collect();
+                    for &pi in &friendly {
+                        ui.horizontal(|ui| {
+                            // Name
+                            let name = self.plebs[pi].name.clone();
+                            ui.label(egui::RichText::new(&name).size(10.0).strong());
+                            // Shift dropdown
+                            let preset = self.plebs[pi].schedule.preset;
+                            egui::ComboBox::from_id_salt(format!("shift_{}", pi))
+                                .selected_text(preset.label())
+                                .width(55.0)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(preset == PlebShift::Day, "Day").clicked() {
+                                        self.plebs[pi].schedule.apply_preset(PlebShift::Day);
+                                    }
+                                    if ui.selectable_label(preset == PlebShift::Night, "Night").clicked() {
+                                        self.plebs[pi].schedule.apply_preset(PlebShift::Night);
+                                    }
+                                });
+                            // 24-hour bar with clickable cells
+                            let (bar_rect, bar_response) = ui.allocate_exact_size(
+                                egui::Vec2::new(bar_w, bar_h), egui::Sense::click());
+                            let bp = ui.painter_at(bar_rect);
+                            bp.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(25, 25, 25));
+                            for h in 0..24usize {
+                                let x0 = bar_rect.min.x + h as f32 * cell_w;
+                                let x1 = x0 + cell_w;
+                                let is_work = self.plebs[pi].schedule.hours[h];
+                                let col = if is_work {
+                                    egui::Color32::from_rgb(55, 115, 55) // green = work
+                                } else {
+                                    egui::Color32::from_rgb(35, 45, 95) // blue = sleep
+                                };
+                                bp.rect_filled(egui::Rect::from_min_max(
+                                    egui::pos2(x0 + 0.5, bar_rect.min.y + 0.5),
+                                    egui::pos2(x1 - 0.5, bar_rect.max.y - 0.5)), 1.0, col);
+                            }
+                            // Click to toggle individual hours
+                            if bar_response.clicked() {
+                                if let Some(pos) = bar_response.interact_pointer_pos() {
+                                    let h = ((pos.x - bar_rect.min.x) / cell_w) as usize;
+                                    if h < 24 {
+                                        self.plebs[pi].schedule.hours[h] = !self.plebs[pi].schedule.hours[h];
+                                        self.plebs[pi].schedule.preset = PlebShift::Custom;
+                                    }
+                                }
+                            }
+                            // Current time marker
+                            let hour_frac = self.time_of_day / DAY_DURATION;
+                            let mx = bar_rect.min.x + hour_frac * bar_w;
+                            bp.line_segment(
+                                [egui::pos2(mx, bar_rect.min.y), egui::pos2(mx, bar_rect.max.y)],
+                                egui::Stroke::new(1.5, egui::Color32::WHITE));
+                        });
+                    }
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Click hours to toggle.").weak().size(9.0));
+                        ui.colored_label(egui::Color32::from_rgb(55, 115, 55), "\u{25a0} Work");
+                        ui.colored_label(egui::Color32::from_rgb(35, 45, 95), "\u{25a0} Sleep");
+                    });
+                });
+            if !open { self.show_schedule = false; }
         }
 
     }
@@ -1784,11 +1836,15 @@ impl App {
             let bp_painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground, egui::Id::new("construction_blueprints"),
             ));
+            let screen_rect = ctx.screen_rect();
             for (&(bx, by), bp) in &self.blueprints {
                 let sx0 = ((bx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
                 let sy0 = ((by as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
                 let sx1 = ((bx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
                 let sy1 = ((by as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                // Cull off-screen blueprints
+                if sx1 < screen_rect.min.x || sx0 > screen_rect.max.x
+                    || sy1 < screen_rect.min.y || sy0 > screen_rect.max.y { continue; }
                 let rect = egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1));
                 // Tint: blue if waiting for resources, green-blue if ready to build
                 let tint = if bp.resources_met() {
@@ -1820,21 +1876,15 @@ impl App {
                         };
                         Some((format!("{}/{} wood", bp.wood_delivered, bp.wood_needed), color))
                     } else { None };
-                    bp_painter.text(
+                    Self::world_label(&bp_painter,
                         egui::pos2(rect.center().x, rect.center().y - 3.0),
                         egui::Align2::CENTER_CENTER,
-                        name,
-                        egui::FontId::proportional(7.0),
-                        egui::Color32::from_rgba_unmultiplied(180, 200, 255, 180),
-                    );
+                        name, 9.0, egui::Color32::from_rgba_unmultiplied(180, 200, 255, 220));
                     if let Some((res_label, res_color)) = res_text {
-                        bp_painter.text(
-                            egui::pos2(rect.center().x, rect.center().y + 5.0),
+                        Self::world_label(&bp_painter,
+                            egui::pos2(rect.center().x, rect.center().y + 6.0),
                             egui::Align2::CENTER_CENTER,
-                            res_label,
-                            egui::FontId::proportional(6.0),
-                            res_color,
-                        );
+                            &res_label, 8.0, res_color);
                     }
                 }
             }
@@ -2008,11 +2058,15 @@ impl App {
                 let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
                 egui::pos2(sx, sy)
             };
+            let screen_rect = ctx.screen_rect();
             for (&idx, cell) in &self.pipe_network.cells {
                 let x = (idx % GRID_W) as f32;
                 let y = (idx / GRID_W) as f32;
                 let p0 = to_screen(x + 0.15, y + 0.15);
                 let p1 = to_screen(x + 0.85, y + 0.85);
+                // Cull off-screen cells
+                if p1.x < screen_rect.min.x || p0.x > screen_rect.max.x
+                    || p1.y < screen_rect.min.y || p0.y > screen_rect.max.y { continue; }
                 // Color by gas content: smoke=gray, O2=blue, CO2=yellow, temp=red
                 let smoke = cell.gas[0].min(1.0);
                 let o2 = cell.gas[1].min(1.0);
@@ -2035,13 +2089,8 @@ impl App {
                 // Pressure indicator: small text
                 if cam_zoom > 10.0 { // only show text when zoomed in enough
                     let center = egui::pos2((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
-                    painter.text(
-                        center,
-                        egui::Align2::CENTER_CENTER,
-                        format!("{:.1}", cell.pressure),
-                        egui::FontId::proportional(8.0),
-                        egui::Color32::WHITE,
-                    );
+                    Self::world_label(&painter, center, egui::Align2::CENTER_CENTER,
+                        &format!("{:.1}", cell.pressure), 10.0, egui::Color32::WHITE);
                 }
             }
         }
@@ -2058,12 +2107,15 @@ impl App {
                 let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
                 egui::pos2(sx, sy)
             };
+            let screen_rect = ctx.screen_rect();
             for (&idx, cell) in &self.liquid_network.cells {
                 if idx >= GRID_W * GRID_H { continue; }
                 let x = (idx % GRID_W) as f32;
                 let y = (idx / GRID_W) as f32;
                 let p0 = to_screen(x + 0.15, y + 0.15);
                 let p1 = to_screen(x + 0.85, y + 0.85);
+                if p1.x < screen_rect.min.x || p0.x > screen_rect.max.x
+                    || p1.y < screen_rect.min.y || p0.y > screen_rect.max.y { continue; }
                 let pres = (cell.pressure / 2.0).clamp(0.0, 1.0);
                 let r = (50.0 + pres * 50.0) as u8;
                 let g = (100.0 + pres * 80.0) as u8;
@@ -2073,13 +2125,8 @@ impl App {
                 painter.rect_filled(egui::Rect::from_min_max(p0, p1), 2.0, color);
                 if cam_zoom > 10.0 {
                     let center = egui::pos2((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
-                    painter.text(
-                        center,
-                        egui::Align2::CENTER_CENTER,
-                        format!("{:.1}", cell.pressure),
-                        egui::FontId::proportional(8.0),
-                        egui::Color32::WHITE,
-                    );
+                    Self::world_label(&painter, center, egui::Align2::CENTER_CENTER,
+                        &format!("{:.1}", cell.pressure), 10.0, egui::Color32::WHITE);
                 }
             }
         }
@@ -2152,13 +2199,9 @@ impl App {
                 painter.line_segment([tip, h1], egui::Stroke::new(stroke_w, color));
                 painter.line_segment([tip, h2], egui::Stroke::new(stroke_w, color));
                 if let Some(lbl) = label {
-                    painter.text(
-                        egui::pos2(center.x, center.y + tile_px * 0.3),
-                        egui::Align2::CENTER_TOP,
-                        lbl,
-                        egui::FontId::proportional(7.0),
-                        egui::Color32::from_rgba_unmultiplied(200, 200, 200, 180),
-                    );
+                    Self::world_label(&painter, egui::pos2(center.x, center.y + tile_px * 0.3),
+                        egui::Align2::CENTER_TOP, &lbl, 9.0,
+                        egui::Color32::from_rgba_unmultiplied(200, 200, 200, 180));
                 }
             };
 
@@ -2167,12 +2210,15 @@ impl App {
                 let max_flow = self.pipe_network.cells.values()
                     .map(|c| (c.flow_x * c.flow_x + c.flow_y * c.flow_y).sqrt())
                     .fold(0.001f32, f32::max);
+                let screen_rect = ctx.screen_rect();
                 for (&idx, cell) in &self.pipe_network.cells {
                     let mag = (cell.flow_x * cell.flow_x + cell.flow_y * cell.flow_y).sqrt();
                     if mag < 0.001 { continue; }
                     let x = (idx % GRID_W) as f32;
                     let y = (idx / GRID_W) as f32;
                     let center = to_screen(x + 0.5, y + 0.5);
+                    if center.x < screen_rect.min.x - tile_px || center.x > screen_rect.max.x + tile_px
+                        || center.y < screen_rect.min.y - tile_px || center.y > screen_rect.max.y + tile_px { continue; }
                     let norm_mag = (mag / max_flow).clamp(0.0, 1.0);
                     let label = if tile_px > 8.0 { Some(format!("{:.2}", mag)) } else { None };
                     draw_arrow(&flow_painter, center, cell.flow_x / mag, cell.flow_y / mag,
@@ -2396,13 +2442,8 @@ impl App {
                         } else {
                             egui::Color32::from_rgb(150, 150, 150) // dim for trace
                         };
-                        label_painter.text(
-                            center,
-                            egui::Align2::CENTER_CENTER,
-                            text,
-                            egui::FontId::proportional(8.0),
-                            color,
-                        );
+                        Self::world_label(&label_painter, center, egui::Align2::CENTER_CENTER,
+                            &text, 10.0, color);
                     }
                 }
             }
@@ -2483,8 +2524,12 @@ impl App {
                 let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
                 egui::pos2(sx, sy)
             };
+            let screen_rect = ctx.screen_rect();
             for item in &self.ground_items {
                 let center = to_screen(item.x, item.y);
+                // Cull off-screen items
+                if center.x < screen_rect.min.x - 20.0 || center.x > screen_rect.max.x + 20.0
+                    || center.y < screen_rect.min.y - 20.0 || center.y > screen_rect.max.y + 20.0 { continue; }
                 let r = (tile_px * 0.18).max(3.0);
                 match item.kind {
                     resources::ItemKind::Berries(n) => {
@@ -2502,26 +2547,20 @@ impl App {
                         }
                         // Count label
                         if tile_px > 6.0 {
-                            item_painter.text(
+                            Self::world_label(&item_painter,
                                 egui::pos2(center.x, center.y + r + 2.0),
                                 egui::Align2::CENTER_TOP,
-                                format!("{}x", n),
-                                egui::FontId::proportional(7.0),
-                                egui::Color32::WHITE,
-                            );
+                                &format!("{}x", n), 9.0, egui::Color32::WHITE);
                         }
                     }
                     resources::ItemKind::Rocks(n) => {
                         let rock_col = egui::Color32::from_rgb(120, 120, 115);
                         item_painter.circle_filled(center, r, rock_col);
                         if tile_px > 6.0 {
-                            item_painter.text(
+                            Self::world_label(&item_painter,
                                 egui::pos2(center.x, center.y + r + 2.0),
                                 egui::Align2::CENTER_TOP,
-                                format!("{}x", n),
-                                egui::FontId::proportional(7.0),
-                                egui::Color32::WHITE,
-                            );
+                                &format!("{}x", n), 9.0, egui::Color32::WHITE);
                         }
                     }
                     resources::ItemKind::Wood(n) => {
@@ -2537,13 +2576,10 @@ impl App {
                             );
                         }
                         if tile_px > 6.0 {
-                            item_painter.text(
+                            Self::world_label(&item_painter,
                                 egui::pos2(center.x, center.y + r + 2.0),
                                 egui::Align2::CENTER_TOP,
-                                format!("{}x", n),
-                                egui::FontId::proportional(7.0),
-                                egui::Color32::WHITE,
-                            );
+                                &format!("{}x", n), 9.0, egui::Color32::WHITE);
                         }
                     }
                 }
@@ -2850,9 +2886,16 @@ impl App {
 
     /// Draw text with a dark shadow for readability on bright backgrounds.
     fn shadow_text(painter: &egui::Painter, pos: egui::Pos2, anchor: egui::Align2, text: &str, font: egui::FontId, color: egui::Color32) {
-        let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180);
-        let off = 1.0;
-        painter.text(pos + egui::Vec2::new(off, off), anchor, text, font.clone(), shadow);
+        let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200);
+        painter.text(pos + egui::Vec2::new(1.0, 1.0), anchor, text, font.clone(), shadow);
+        painter.text(pos, anchor, text, font, color);
+    }
+
+    /// Draw a world-space label with shadow. Size is in points (scaled up from old defaults).
+    fn world_label(painter: &egui::Painter, pos: egui::Pos2, anchor: egui::Align2, text: &str, size: f32, color: egui::Color32) {
+        let font = egui::FontId::proportional(size);
+        let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200);
+        painter.text(pos + egui::Vec2::new(1.0, 1.0), anchor, text, font.clone(), shadow);
         painter.text(pos, anchor, text, font, color);
     }
 
@@ -2876,8 +2919,12 @@ impl App {
                 ));
 
                 // Pleb name + activity labels
+                let screen_rect = ctx.screen_rect();
                 for pleb in &self.plebs {
                     let pos = to_screen(pleb.x, pleb.y + 0.7);
+                    // Cull off-screen plebs
+                    if pos.x < screen_rect.min.x - 60.0 || pos.x > screen_rect.max.x + 60.0
+                        || pos.y < screen_rect.min.y - 60.0 || pos.y > screen_rect.max.y + 60.0 { continue; }
 
                     // Name label (always visible)
                     let name_color = if pleb.is_enemy {
@@ -2888,7 +2935,7 @@ impl App {
                         egui::Color32::from_rgb(220, 220, 220)
                     };
                     Self::shadow_text(&label_painter, pos, egui::Align2::CENTER_TOP,
-                        &pleb.name, egui::FontId::proportional(9.0), name_color);
+                        &pleb.name, egui::FontId::proportional(11.0), name_color);
 
                     // Activity label + intent (when not idle)
                     if tile_px > 10.0 {
@@ -2931,8 +2978,8 @@ impl App {
                         };
                         if let Some(text) = act_text {
                             let act_pos = to_screen(pleb.x, pleb.y + 0.95);
-                            Self::shadow_text(&label_painter, act_pos, egui::Align2::CENTER_TOP,
-                                text, egui::FontId::proportional(7.0), act_color);
+                            Self::world_label(&label_painter, act_pos, egui::Align2::CENTER_TOP,
+                                text, 9.0, act_color);
                         }
 
                         // Progress bar for farming/harvesting
@@ -2970,8 +3017,8 @@ impl App {
                         // Crisis reason
                         if let Some(reason) = pleb.activity.crisis_reason() {
                             let crisis_pos = to_screen(pleb.x, pleb.y + 0.95);
-                            Self::shadow_text(&label_painter, crisis_pos, egui::Align2::CENTER_TOP,
-                                reason, egui::FontId::proportional(8.0), egui::Color32::from_rgb(255, 60, 60));
+                            Self::world_label(&label_painter, crisis_pos, egui::Align2::CENTER_TOP,
+                                reason, 10.0, egui::Color32::from_rgb(255, 60, 60));
                         }
                     }
                 }
@@ -2981,11 +3028,8 @@ impl App {
                     if !pleb.is_enemy {
                         let mode_pos = to_screen(pleb.x, pleb.y - 0.8);
                         let mode_text = if self.burst_mode { "BURST" } else { "SINGLE" };
-                        label_painter.text(
-                            mode_pos, egui::Align2::CENTER_BOTTOM, mode_text,
-                            egui::FontId::proportional(7.0),
-                            egui::Color32::from_rgb(180, 180, 100),
-                        );
+                        Self::world_label(&label_painter, mode_pos, egui::Align2::CENTER_BOTTOM,
+                            mode_text, 9.0, egui::Color32::from_rgb(180, 180, 100));
                     }
                 }
 

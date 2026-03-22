@@ -54,6 +54,10 @@ struct Camera {
     cloud_cover: f32,
     wind_magnitude: f32,
     wind_angle: f32,
+    use_shadow_map: f32,
+    shadow_map_scale: f32,
+    _pad_sm1: f32,
+    _pad_sm2: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -74,6 +78,7 @@ struct Camera {
 @group(0) @binding(15) var<storage, read> pipe_flow: array<f32>;
 @group(0) @binding(16) var water_tex: texture_2d<f32>;
 @group(0) @binding(17) var<storage, read> water_table_buf: array<f32>;
+@group(0) @binding(18) var shadow_map_tex: texture_2d<f32>;
 
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
@@ -156,6 +161,20 @@ fn sample_sprite(variant: u32, fx: f32, fy: f32) -> vec4<f32> {
 fn sample_lightmap(wx: f32, wy: f32) -> vec4<f32> {
     let uv = vec2<f32>(wx / camera.grid_w, wy / camera.grid_h);
     return textureSampleLevel(lightmap_tex, lightmap_sampler, uv, 0.0);
+}
+
+// --- Shadow map sampling ---
+// Sample the pre-computed shadow map (variable resolution, bilinear interpolated).
+// The active region is (grid_w * scale) × (grid_h * scale) within the max-size texture.
+// Returns vec4(tint_rgb, light_factor) — same format as trace_shadow_ray.
+fn sample_shadow_map(wx: f32, wy: f32) -> vec4<f32> {
+    // UV maps world coords to the active portion of the shadow map texture.
+    // Texture is allocated at max_scale but only scale×grid is populated.
+    // scale/max_scale gives the fraction of the texture that's active.
+    let max_scale = 8.0; // must match SHADOW_MAP_MAX_SCALE in gpu_init.rs
+    let frac = camera.shadow_map_scale / max_scale;
+    let uv = vec2<f32>(wx / camera.grid_w * frac, wy / camera.grid_h * frac);
+    return textureSampleLevel(shadow_map_tex, lightmap_sampler, uv, 0.0);
 }
 
 // --- Block unpacking ---
@@ -253,7 +272,7 @@ fn get_ambient(time: f32) -> vec3<f32> {
 }
 
 const SHADOW_MAX_DIST: f32 = 12.0;
-const SHADOW_STEP: f32 = 0.20;
+const SHADOW_STEP: f32 = 0.35;  // coarser steps for performance (was 0.20)
 
 // Glass properties
 const GLASS_TINT: vec3<f32> = vec3<f32>(0.7, 0.85, 0.95);
@@ -281,6 +300,8 @@ const INTERIOR_WINDOW_AMBIENT: f32 = 0.12;
 // Returns: vec4(tint_rgb, light_factor)
 //   light_factor ~1.0 if ray exits through glass (sunbeam), ~0.0 if hits wall.
 fn trace_interior_sun_ray(wx: f32, wy: f32, sun_dir: vec2<f32>) -> vec4<f32> {
+    // Skip interior sun ray at night — no sunbeams when sun is down
+    if camera.sun_intensity < 0.02 { return vec4<f32>(1.0, 1.0, 1.0, 0.0); }
     let dir2d = normalize(sun_dir);
     let step_size = 0.25;
     let step_x = dir2d.x * step_size;
@@ -408,10 +429,11 @@ fn fire_flicker(time: f32) -> f32 {
 fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f32 {
     let dx = x1 - x0;
     let dy = y1 - y0;
-    let dist = sqrt(dx * dx + dy * dy);
-    if dist < 0.5 { return 1.0; }
+    let dist_sq = dx * dx + dy * dy;
+    if dist_sq < 0.25 { return 1.0; } // 0.5^2
 
-    let steps = i32(ceil(dist * 2.0)); // ~2 samples per block
+    let dist = sqrt(dist_sq);
+    let steps = i32(ceil(dist * 1.5)); // ~1.5 samples per block (was 2.0)
     var vis = 1.0;
 
     for (var i: i32 = 1; i < steps; i++) {
@@ -477,18 +499,22 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
 // lightmap propagation can't capture.
 fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
     var glow = vec3<f32>(0.0);
-    let max_search = 8; // covers floodlight range (directional, most energy within 8 tiles)
+    let max_search = 7; // covers floodlight range (directional, most energy within 7 tiles)
     let bx = i32(floor(wx));
     let by = i32(floor(wy));
 
     for (var dy: i32 = -max_search; dy <= max_search; dy++) {
         for (var dx: i32 = -max_search; dx <= max_search; dx++) {
+            // Early reject: skip corners outside circular radius (avoid sqrt)
+            let dsq = dx * dx + dy * dy;
+            if dsq > max_search * max_search { continue; }
+
             let nx = bx + dx;
             let ny = by + dy;
             let nb = get_block(nx, ny);
             let bt = block_type(nb);
 
-            // All light source types
+            // All light source types — check material only after distance cull
             if get_material(bt).light_intensity <= 0.0 {
                 continue;
             }
@@ -583,11 +609,14 @@ fn compute_directional_bleed(wx: f32, wy: f32) -> vec4<f32> {
     var total_color = vec3<f32>(0.0);
     let bx = i32(floor(wx));
     let by = i32(floor(wy));
-    let search = 6;
-    let max_range = 6.0;
+    let search = 4;
+    let max_range = 5.0;
 
     for (var dy: i32 = -search; dy <= search; dy++) {
         for (var dx: i32 = -search; dx <= search; dx++) {
+            // Circular cull
+            if dx * dx + dy * dy > search * search { continue; }
+
             let nx = bx + dx;
             let ny = by + dy;
             let nb = get_block(nx, ny);
@@ -1146,6 +1175,8 @@ fn roof_color(wx: f32, wy: f32) -> vec3<f32> {
 // Traces from a world position toward the sun, accumulating occlusion.
 // Returns: vec4(tint_rgb, light_factor)
 fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_elev: f32) -> vec4<f32> {
+    // Skip shadow tracing at night — no sun means no shadows
+    if sun_elev < 0.05 { return vec4<f32>(1.0, 1.0, 1.0, 0.0); }
     let dir2d = normalize(sun_dir);
     let step_x = dir2d.x * SHADOW_STEP;
     let step_y = dir2d.y * SHADOW_STEP;
@@ -1540,7 +1571,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let roof_col = roof_color(world_x, world_y);
 
         // Shadow on roof surface
-        let roof_shadow = trace_shadow_ray(world_x, world_y, roof_h, sun_dir, sun_elev);
+        var roof_shadow: vec4<f32>;
+        if camera.use_shadow_map > 0.5 {
+            roof_shadow = sample_shadow_map(world_x, world_y);
+        } else {
+            roof_shadow = trace_shadow_ray(world_x, world_y, roof_h, sun_dir, sun_elev);
+        }
         let roof_light = roof_shadow.w;
         let roof_tint = roof_shadow.xyz;
 
@@ -2923,20 +2959,22 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Wall under a roof: no sun, no shadow ray. Just ambient + interior indirect.
         light_factor = INTERIOR_INDIRECT;
     } else {
-        // Outdoor pixel: single shadow ray with interleaved gradient noise jitter.
-        // IGN has blue-noise-like spectral properties — distributes error evenly
-        // across the image with no clumping or visible patterns. Much smoother
-        // than white noise (fract(sin(...))), combined with temporal accumulation.
-        // Reference: Jorge Jimenez, "Next Generation Post Processing in Call of Duty"
-        let frame_offset = fract(camera.time * 5.3) * 5.0;
-        let ign_x = f32(px) + frame_offset;
-        let ign_y = f32(py) + frame_offset * 0.7;
-        let ign1 = fract(52.9829189 * fract(0.06711056 * ign_x + 0.00583715 * ign_y));
-        let ign2 = fract(52.9829189 * fract(0.00583715 * ign_x + 0.06711056 * ign_y));
-        let shadow_result = trace_shadow_ray(
-            world_x + (ign1 - 0.5) * 0.18,
-            world_y + (ign2 - 0.5) * 0.18,
-            effective_fheight, sun_dir, sun_elev);
+        // Outdoor pixel: shadow map (fast) or per-pixel ray trace (quality)
+        var shadow_result: vec4<f32>;
+        if camera.use_shadow_map > 0.5 {
+            shadow_result = sample_shadow_map(world_x, world_y);
+        } else {
+            // Per-pixel shadow with IGN dithering for temporal AA
+            let frame_offset = fract(camera.time * 5.3) * 5.0;
+            let ign_x = f32(px) + frame_offset;
+            let ign_y = f32(py) + frame_offset * 0.7;
+            let ign1 = fract(52.9829189 * fract(0.06711056 * ign_x + 0.00583715 * ign_y));
+            let ign2 = fract(52.9829189 * fract(0.00583715 * ign_x + 0.06711056 * ign_y));
+            shadow_result = trace_shadow_ray(
+                world_x + (ign1 - 0.5) * 0.18,
+                world_y + (ign2 - 0.5) * 0.18,
+                effective_fheight, sun_dir, sun_elev);
+        }
         shadow_tint = shadow_result.xyz;
         light_factor = shadow_result.w;
 
