@@ -970,11 +970,13 @@ impl App {
                                     if tidx < self.grid_data.len() {
                                         let tbt = self.grid_data[tidx] & 0xFF;
                                         if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" }
+                                        else if tbt == BT_TREE { "Chopping" }
                                         else { "Planting" }
                                     } else { "Farming" }
                                 } else { "Farming" };
                                 format!("{} {:.0}%", action, pr * 100.0)
                             }
+                            PlebActivity::Building(pr) => format!("Building {:.0}%", pr * 100.0),
                             PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                         };
                         if let Some(reason) = p.activity.crisis_reason() {
@@ -1205,22 +1207,15 @@ impl App {
         let mut chosen_action: Option<ContextAction> = None;
 
         egui::Area::new(egui::Id::new("context_menu"))
+            .order(egui::Order::Tooltip) // render on top of everything
             .fixed_pos(egui::Pos2::new(menu.screen_x / bp_ppp, menu.screen_y / bp_ppp))
             .show(ctx, |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
-                    if !menu.title.is_empty() {
-                        ui.label(egui::RichText::new(&menu.title).strong().size(12.0));
-                        ui.separator();
-                    }
                     for (label, action) in &menu.actions {
                         if ui.button(egui::RichText::new(label).size(11.0)).clicked() {
                             chosen_action = Some(action.clone());
                             close = true;
                         }
-                    }
-                    ui.separator();
-                    if ui.button(egui::RichText::new("Cancel").size(10.0)).clicked() {
-                        close = true;
                     }
                 });
             });
@@ -1277,13 +1272,30 @@ impl App {
                     if let Some(sel_idx) = self.selected_pleb {
                         if item_idx < self.ground_items.len() {
                             let item = &self.ground_items[item_idx];
-                            if let resources::ItemKind::Berries(n) = item.kind {
-                                // Eat 1 berry, reduce stack or remove
-                                self.plebs[sel_idx].needs.hunger = (self.plebs[sel_idx].needs.hunger + 0.15).min(1.0);
-                                if n <= 1 {
-                                    self.ground_items.remove(item_idx);
+                            let ix = item.x.floor() as i32;
+                            let iy = item.y.floor() as i32;
+                            let pleb = &mut self.plebs[sel_idx];
+                            if !pleb.is_enemy && !pleb.activity.is_crisis() {
+                                let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                let dist = ((pleb.x - ix as f32 - 0.5).powi(2) + (pleb.y - iy as f32 - 0.5).powi(2)).sqrt();
+                                if dist < 1.5 {
+                                    // Close enough — eat directly
+                                    pleb.harvest_target = Some((ix, iy));
+                                    pleb.activity = PlebActivity::Eating;
+                                    pleb.work_target = None;
+                                    pleb.haul_target = None;
+                                    pleb.path.clear();
                                 } else {
-                                    self.ground_items[item_idx].kind = resources::ItemKind::Berries(n - 1);
+                                    // Walk there first, eat on arrival
+                                    let path = astar_path(&self.grid_data, start, (ix, iy));
+                                    if !path.is_empty() {
+                                        pleb.path = path;
+                                        pleb.path_idx = 0;
+                                        pleb.activity = PlebActivity::Walking;
+                                        pleb.harvest_target = Some((ix, iy));
+                                        pleb.work_target = None;
+                                        pleb.haul_target = None;
+                                    }
                                 }
                             }
                         }
@@ -1755,6 +1767,69 @@ impl App {
                         egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
                         0.0, color,
                     );
+                }
+            }
+        }
+
+        // Construction blueprints — ghost blocks waiting to be built
+        if !self.blueprints.is_empty() {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            let bp_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground, egui::Id::new("construction_blueprints"),
+            ));
+            for (&(bx, by), bp) in &self.blueprints {
+                let sx0 = ((bx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy0 = ((by as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let sx1 = ((bx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy1 = ((by as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let rect = egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1));
+                // Tint: blue if waiting for resources, green-blue if ready to build
+                let tint = if bp.resources_met() {
+                    egui::Color32::from_rgba_unmultiplied(60, 160, 120, 60)
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(60, 100, 200, 50)
+                };
+                bp_painter.rect_filled(rect, 0.0, tint);
+                // Progress bar at bottom (construction progress)
+                if bp.progress > 0.01 {
+                    let bar_h = (tile_px * 0.08).max(2.0);
+                    let bar_rect = egui::Rect::from_min_size(
+                        egui::pos2(sx0, sy1 - bar_h),
+                        egui::vec2((sx1 - sx0) * bp.progress, bar_h),
+                    );
+                    bp_painter.rect_filled(bar_rect, 0.0, egui::Color32::from_rgb(80, 200, 80));
+                }
+                // Resource + name label when zoomed in
+                if tile_px > 6.0 {
+                    let bt = bp.block_data & 0xFF;
+                    let reg = block_defs::BlockRegistry::cached();
+                    let name = reg.name(bt as u8);
+                    // Resource indicator
+                    let res_text = if bp.wood_needed > 0 {
+                        let color = if bp.resources_met() {
+                            egui::Color32::from_rgb(80, 220, 80) // green = ready
+                        } else {
+                            egui::Color32::from_rgb(255, 160, 60) // orange = needs resources
+                        };
+                        Some((format!("{}/{} wood", bp.wood_delivered, bp.wood_needed), color))
+                    } else { None };
+                    bp_painter.text(
+                        egui::pos2(rect.center().x, rect.center().y - 3.0),
+                        egui::Align2::CENTER_CENTER,
+                        name,
+                        egui::FontId::proportional(7.0),
+                        egui::Color32::from_rgba_unmultiplied(180, 200, 255, 180),
+                    );
+                    if let Some((res_label, res_color)) = res_text {
+                        bp_painter.text(
+                            egui::pos2(rect.center().x, rect.center().y + 5.0),
+                            egui::Align2::CENTER_CENTER,
+                            res_label,
+                            egui::FontId::proportional(6.0),
+                            res_color,
+                        );
+                    }
                 }
             }
         }
@@ -2431,9 +2506,30 @@ impl App {
                         }
                     }
                     resources::ItemKind::Rocks(n) => {
-                        // Rock pile: gray circles
                         let rock_col = egui::Color32::from_rgb(120, 120, 115);
                         item_painter.circle_filled(center, r, rock_col);
+                        if tile_px > 6.0 {
+                            item_painter.text(
+                                egui::pos2(center.x, center.y + r + 2.0),
+                                egui::Align2::CENTER_TOP,
+                                format!("{}x", n),
+                                egui::FontId::proportional(7.0),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    }
+                    resources::ItemKind::Wood(n) => {
+                        // Wood pile: brown logs
+                        let wood_col = egui::Color32::from_rgb(120, 80, 40);
+                        let log_w = r * 1.2;
+                        let log_h = r * 0.4;
+                        for i in 0..n.min(3) {
+                            let ly = center.y - log_h * 0.8 + i as f32 * log_h * 0.8;
+                            item_painter.rect_filled(
+                                egui::Rect::from_center_size(egui::pos2(center.x, ly), egui::vec2(log_w, log_h)),
+                                log_h * 0.3, wood_col,
+                            );
+                        }
                         if tile_px > 6.0 {
                             item_painter.text(
                                 egui::pos2(center.x, center.y + r + 2.0),
@@ -2792,7 +2888,7 @@ impl App {
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                             if tidx < self.grid_data.len() {
                                 let tbt = self.grid_data[tidx] & 0xFF;
-                                if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" } else { "Planting" }
+                                if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" } else if tbt == BT_TREE { "Chopping" } else { "Planting" }
                             } else { "Farming" }
                         } else { "Farming" };
                         let (act_text, act_color) = match inner {
@@ -2820,6 +2916,7 @@ impl App {
                             PlebActivity::Eating => (Some("Eating"), egui::Color32::from_rgb(200, 160, 80)),
                             PlebActivity::Hauling => (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80)),
                             PlebActivity::Farming(_) => (Some(farm_action), egui::Color32::from_rgb(80, 200, 80)),
+                            PlebActivity::Building(_) => (Some("Building"), egui::Color32::from_rgb(100, 160, 220)),
                             PlebActivity::Crisis(_, _) => (None, egui::Color32::GRAY),
                         };
                         if let Some(text) = act_text {
@@ -2974,6 +3071,23 @@ impl App {
                             }
                         }
 
+                        // Blueprint cancel: for any selected tile with a blueprint
+                        {
+                            let bp_items: Vec<(i32, i32)> = items.iter()
+                                .filter(|i| self.blueprints.contains_key(&(i.x, i.y)))
+                                .map(|i| (i.x, i.y))
+                                .collect();
+                            if !bp_items.is_empty() {
+                                let label = if bp_items.len() == 1 { "Cancel Build" } else { "Cancel All Builds" };
+                                if ui.small_button(label).clicked() {
+                                    for (x, y) in bp_items {
+                                        self.cancel_blueprint(x, y);
+                                    }
+                                    self.world_sel = WorldSelection::none();
+                                }
+                            }
+                        }
+
                         // Single-item actions
                         if count == 1 {
                             let item = &items[0];
@@ -3038,6 +3152,18 @@ impl App {
                                         .size(9.0).color(egui::Color32::from_rgb(255, 80, 80)));
                                 }
                             }
+                        }
+
+                        // Blueprint detail
+                        if let Some(bp) = self.blueprints.get(&(item.x, item.y)) {
+                            ui.separator();
+                            let status = if bp.resources_met() {
+                                if bp.progress > 0.01 { format!("Building {:.0}%", bp.progress * 100.0) }
+                                else { "Ready to build".to_string() }
+                            } else {
+                                format!("Needs: {}/{} wood", bp.wood_delivered, bp.wood_needed)
+                            };
+                            ui.label(egui::RichText::new(format!("Blueprint: {}", status)).size(9.0));
                         }
 
                         // Pipe/liquid network pressure detail

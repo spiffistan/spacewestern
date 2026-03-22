@@ -457,6 +457,13 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
             continue;
         }
 
+        // Berry bushes + crops: soft dappled shadow
+        if sbt == 31u || sbt == 47u {
+            vis *= 0.6;
+            if vis < 0.02 { return 0.0; }
+            continue;
+        }
+
         // Solid wall: blocked
         return 0.0;
     }
@@ -1179,7 +1186,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_wire_block = bt == 36u || bt == 51u; // height = connection mask, not visual
         let is_dimmer_block = bt == 43u; // height = dimmer/varistor level, not visual
         let is_breaker_block = bt == 45u; // height = trip threshold, not visual
-        let is_plant_block = bt == 31u || bt == 47u; // berry bush + crop: no shadow
+        let is_plant_block = false; // berry bush + crop now cast soft shadows (handled below)
 
         // Diagonal wall: only occlude if ray is on the wall half
         let is_diag_block = bt == 44u;
@@ -1273,6 +1280,16 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
                 }
             }
             // Skip the normal block shadow test for trees
+        } else if bt == 31u || bt == 47u {
+            // Berry bush / crop: soft dappled shadow (lighter than trees)
+            if effective_h > current_h {
+                let plant_seed = sx * 97.3 + sy * 213.5 + camera.time * 0.3;
+                let dapple = 0.6 + 0.4 * fract(sin(plant_seed) * 43758.5453);
+                let opacity = 0.25 * dapple * SHADOW_STEP * 2.0;
+                light *= (1.0 - clamp(opacity, 0.0, 0.2));
+                tint *= mix(vec3<f32>(1.0), vec3<f32>(0.85, 1.0, 0.78), opacity * 0.3);
+                if light < 0.02 { return vec4<f32>(tint, 0.0); }
+            }
         } else
 
         // Does this block/roof intersect the ray?

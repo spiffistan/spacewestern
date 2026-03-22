@@ -247,6 +247,38 @@ struct ContextMenu {
     actions: Vec<(String, ContextAction)>,
 }
 
+/// A pending construction — placed as a ghost, built by plebs over time.
+#[derive(Clone, Debug)]
+struct Blueprint {
+    block_data: u32,      // target block (from make_block)
+    progress: f32,        // 0.0-1.0 construction progress
+    build_time: f32,      // total seconds to build
+    wood_needed: u32,     // wood required to start
+    wood_delivered: u32,  // wood deposited so far
+}
+
+impl Blueprint {
+    fn new(block_data: u32) -> Self {
+        let bt = block_data & 0xFF;
+        let (build_time, wood_needed) = match bt as u32 {
+            BT_WOOD_WALL => (3.0, 3),
+            BT_WOOD_FLOOR => (1.5, 2),
+            BT_STONE | BT_WALL | BT_GLASS | BT_INSULATED |
+            BT_STEEL_WALL | BT_SANDSTONE | BT_GRANITE |
+            BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL => (3.0, 0),
+            BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0),
+            BT_BENCH | BT_BED => (2.0, 2),
+            BT_FIREPLACE | BT_CRATE | BT_CANNON => (2.0, 0),
+            _ => (1.0, 0),
+        };
+        Blueprint { block_data, progress: 0.0, build_time, wood_needed, wood_delivered: 0 }
+    }
+
+    fn resources_met(&self) -> bool {
+        self.wood_delivered >= self.wood_needed
+    }
+}
+
 impl ContextMenu {
     fn new(sx: f32, sy: f32, title: impl Into<String>) -> Self {
         ContextMenu { screen_x: sx, screen_y: sy, title: title.into(), actions: Vec::new() }
@@ -330,6 +362,7 @@ struct App {
     auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
     physics_bodies: Vec<PhysicsBody>,
     ground_items: Vec<resources::GroundItem>,
+    blueprints: std::collections::HashMap<(i32, i32), Blueprint>,
     // Per-pleb air readback from fluid sim (updated one frame behind)
     pleb_air_data: Vec<AirReadback>,
     pleb_air_readback_pending: bool,
@@ -613,6 +646,7 @@ impl App {
             auto_doors: Vec::new(),
             physics_bodies: Vec::new(),
             ground_items: Vec::new(),
+            blueprints: std::collections::HashMap::new(),
             pleb_air_data: Vec::new(),
             pleb_air_readback_pending: false,
             context_menu: None, // unified context menu
@@ -1188,9 +1222,8 @@ impl App {
                         let roof_flag = block_flags_rs(block) & 2;
                         let roof_h = block & 0xFF000000;
                         let base_h = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(3);
-                        // Encode connection mask in upper nibble of height byte
                         let height = if is_line_type { base_h | conn } else { base_h };
-                        self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
+                        self.place_or_blueprint(tx, ty, make_block(block_type_id, height, roof_flag) | roof_h);
                     }
 
                     // Update adjacent existing pipes/wires with reciprocal connection
@@ -1236,8 +1269,29 @@ impl App {
     }
 
     /// Destroy a placed block at grid position, reverting to bare dirt.
+    /// Cancel a blueprint at the given position, releasing any assigned plebs.
+    fn cancel_blueprint(&mut self, bx: i32, by: i32) {
+        if self.blueprints.remove(&(bx, by)).is_some() {
+            self.active_work.remove(&(bx, by));
+            // Release any pleb working on this blueprint
+            for pleb in &mut self.plebs {
+                if pleb.work_target == Some((bx, by)) || pleb.haul_target == Some((bx, by)) {
+                    pleb.work_target = None;
+                    pleb.haul_target = None;
+                    pleb.harvest_target = None;
+                    if matches!(pleb.activity, PlebActivity::Building(_) | PlebActivity::Hauling) {
+                        pleb.activity = PlebActivity::Idle;
+                        pleb.path.clear();
+                    }
+                }
+            }
+        }
+    }
+
     fn destroy_block_at(&mut self, bx: i32, by: i32) {
         if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return; }
+        // Also cancel any blueprint at this position
+        self.cancel_blueprint(bx, by);
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
@@ -1254,6 +1308,26 @@ impl App {
     }
 
     /// Build and open a context menu for the given screen and world position.
+    /// Place a block or create a blueprint (if not sandbox mode and block is structural).
+    fn place_or_blueprint(&mut self, x: i32, y: i32, block_data: u32) {
+        let bt = (block_data & 0xFF) as u32;
+        // Structural blocks need construction in non-sandbox mode
+        let needs_construction = !self.sandbox_mode && matches!(bt,
+            BT_STONE | BT_WALL | BT_GLASS | BT_INSULATED |
+            BT_WOOD_WALL | BT_STEEL_WALL | BT_SANDSTONE | BT_GRANITE |
+            BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL |
+            BT_WOOD_FLOOR | BT_STONE_FLOOR | BT_CONCRETE_FLOOR |
+            BT_FIREPLACE | BT_BENCH | BT_BED | BT_CRATE | BT_CANNON
+        );
+        if needs_construction {
+            self.blueprints.insert((x, y), Blueprint::new(block_data));
+        } else {
+            let idx = (y as u32 * GRID_W + x as u32) as usize;
+            self.grid_data[idx] = block_data;
+            self.grid_dirty = true;
+        }
+    }
+
     fn open_context_menu(&mut self, screen_x: f32, screen_y: f32, wx: f32, wy: f32) {
         let bx = wx.floor() as i32;
         let by = wy.floor() as i32;
@@ -1277,6 +1351,12 @@ impl App {
                 menu.actions.push((format!("Harvest ({})", pleb_name), ContextAction::Harvest(bx, by)));
                 has_actions = true;
             }
+        }
+
+        // Tree: chop down for wood
+        if sel_pleb.is_some() && bt == BT_TREE {
+            menu.actions.push((format!("Chop down ({})", pleb_name), ContextAction::Harvest(bx, by)));
+            has_actions = true;
         }
 
         // Rock: haul to storage
@@ -1555,16 +1635,21 @@ impl App {
                 }
             }
 
-            // World selection: click non-ground blocks to select
+            // World selection: click non-ground blocks or blueprints to select
             let is_ground = bt_is!(bt as u32, BT_AIR, BT_DIRT, BT_WATER, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR, BT_DUG_GROUND);
-            if !is_ground {
-                // Determine block size (multi-tile blocks)
-                let (sel_x, sel_y, sel_w, sel_h) = self.get_block_bounds(bx, by, bt, flags);
-                self.world_sel = WorldSelection::single(sel_x, sel_y, sel_w, sel_h, bt as u32);
+            let has_bp = self.blueprints.contains_key(&(bx, by));
+            if !is_ground || has_bp {
+                let (sel_x, sel_y, sel_w, sel_h, sel_bt) = if has_bp {
+                    let bp_bt = (self.blueprints[&(bx, by)].block_data & 0xFF) as u32;
+                    (bx, by, 1, 1, bp_bt)
+                } else {
+                    let (sx, sy, sw, sh) = self.get_block_bounds(bx, by, bt, flags);
+                    (sx, sy, sw, sh, bt as u32)
+                };
+                self.world_sel = WorldSelection::single(sel_x, sel_y, sel_w, sel_h, sel_bt);
                 self.selected_pleb = None;
                 return;
             } else {
-                // Clicked non-selectable tile — deselect everything
                 self.world_sel = WorldSelection::none();
                 self.selected_pleb = None;
                 self.block_sel = BlockSelection::default();
@@ -1942,7 +2027,7 @@ impl App {
                                 final_height |= conn;
                             }
                             let roof_h = block & 0xFF000000;
-                            self.grid_data[idx] = make_block(id, final_height, combined_flags) | roof_h;
+                            self.place_or_blueprint(bx, by, make_block(id, final_height, combined_flags) | roof_h);
                         }
                         self.grid_dirty = true;
                         compute_roof_heights(&mut self.grid_data);
@@ -3569,10 +3654,19 @@ impl ApplicationHandler for App {
                                     let bflags = block_flags_rs(b);
                                     let is_gnd = bt_is!(bbt as u32, BT_AIR, BT_DIRT, BT_WATER, BT_WOOD_FLOOR,
                                         BT_STONE_FLOOR, BT_CONCRETE_FLOOR, BT_DUG_GROUND);
-                                    if is_gnd { continue; }
-                                    let (ox, oy, ow, oh) = self.get_block_bounds(gx, gy, bbt, bflags);
+                                    // Include blueprints even on ground tiles
+                                    let has_blueprint = self.blueprints.contains_key(&(gx, gy));
+                                    if is_gnd && !has_blueprint { continue; }
+                                    let bt_for_sel = if has_blueprint {
+                                        (self.blueprints[&(gx, gy)].block_data & 0xFF) as u32
+                                    } else { bbt as u32 };
+                                    let (ox, oy, ow, oh) = if has_blueprint {
+                                        (gx, gy, 1, 1)
+                                    } else {
+                                        self.get_block_bounds(gx, gy, bbt, bflags)
+                                    };
                                     if seen.insert((ox, oy)) {
-                                        items.push(SelectedItem { x: ox, y: oy, w: ow, h: oh, block_type: bbt as u32, pleb_idx: None });
+                                        items.push(SelectedItem { x: ox, y: oy, w: ow, h: oh, block_type: bt_for_sel, pleb_idx: None });
                                     }
                                 }
                             }

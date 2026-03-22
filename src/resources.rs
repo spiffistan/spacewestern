@@ -26,8 +26,9 @@ pub struct PlebInventory {
 /// Item type for ground items.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ItemKind {
-    Berries(u32), // count
+    Berries(u32),
     Rocks(u32),
+    Wood(u32),
 }
 
 impl ItemKind {
@@ -35,10 +36,11 @@ impl ItemKind {
         match self {
             ItemKind::Berries(n) => format!("{} berries", n),
             ItemKind::Rocks(n) => format!("{} rocks", n),
+            ItemKind::Wood(n) => format!("{} wood", n),
         }
     }
     pub fn count(&self) -> u32 {
-        match self { ItemKind::Berries(n) | ItemKind::Rocks(n) => *n }
+        match self { ItemKind::Berries(n) | ItemKind::Rocks(n) | ItemKind::Wood(n) => *n }
     }
 }
 

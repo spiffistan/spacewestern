@@ -38,6 +38,7 @@ pub enum PlebActivity {
     Eating,           // consuming food (quick action)
     Hauling,          // carrying item to a storage crate
     Farming(f32),     // progress 0-1, planting or harvesting a crop
+    Building(f32),    // progress 0-1, constructing a blueprint
     /// Crisis override — pleb acts autonomously, ignoring player input.
     /// Inner activity is what they're doing (Walking to food/bed, Harvesting, Eating, Sleeping).
     Crisis(Box<PlebActivity>, &'static str), // (inner_activity, reason_label)
