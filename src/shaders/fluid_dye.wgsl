@@ -169,19 +169,24 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         let block = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         let bt = block & 0xFFu;
         if bt == 6u {
-            // Fire block: O2-dependent combustion (realistic fireplace)
+            // Fire block: O2-dependent combustion with adjustable intensity
+            // Intensity stored in height byte (0-10 → 0.0-1.0)
+            let fire_intensity = f32((block >> 8u) & 0xFFu) / 10.0;
             let fire_o2 = result.g;
-            let fire_strength = clamp(fire_o2 * 3.0 - 0.5, 0.0, 1.0);
+            let fire_strength = clamp(fire_o2 * 3.0 - 0.5, 0.0, 1.0) * fire_intensity;
             let wx = f32(bx) + 0.5;
             let wy = f32(by) + 0.5;
             let phase = fire_hash(vec2(wx, wy)) * 6.28;
             let flicker = sin(params.time * 8.3 + phase) * 0.3 + 0.7;
-            // Produce smoke — much less than before (well-drafted fireplace)
+            // Smoke production scales with intensity
             result.r += params.smoke_rate * flicker * fire_strength * 0.15;
-            // Consume O2 (slower — realistic combustion)
+            // O2 consumption scales with intensity
             result.g -= 0.015 * fire_strength;
-            // Produce CO2
+            // CO2 production
             result.b += 0.01 * fire_strength;
+            // Temperature injection: 100°C at intensity 0, up to 600°C at intensity 10
+            let fire_temp = 100.0 + fire_intensity * 500.0;
+            result.a = mix(result.a, fire_temp, fire_strength * 0.3 * flicker);
         }
     }
 

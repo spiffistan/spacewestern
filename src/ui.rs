@@ -190,8 +190,10 @@ impl App {
                                         (egui::Color32::from_rgb(178, 217, 178), "15-25\u{b0}C"),
                                         (egui::Color32::from_rgb(255, 217, 76), "30-40\u{b0}C"),
                                         (egui::Color32::from_rgb(255, 115, 25), "50-60\u{b0}C"),
-                                        (egui::Color32::from_rgb(217, 25, 25), "80-100\u{b0}C"),
-                                        (egui::Color32::from_rgb(255, 255, 153), "> 200\u{b0}C"),
+                                        (egui::Color32::from_rgb(230, 30, 13), "80-100\u{b0}C"),
+                                        (egui::Color32::from_rgb(217, 25, 140), "200\u{b0}C"),
+                                        (egui::Color32::from_rgb(153, 38, 217), "400\u{b0}C"),
+                                        (egui::Color32::from_rgb(128, 76, 255), "500\u{b0}C+"),
                                     ]);
                                 }
                                 FluidOverlay::Velocity => {
@@ -2745,12 +2747,13 @@ impl App {
             let didx = dimmer_idx as usize;
             let dblock = if didx < self.grid_data.len() { self.grid_data[didx] } else { 0 };
             let dbt = dblock & 0xFF;
-            if dbt != 43 && dbt != 46 { still_valid = false; }
+            if dbt != 43 && dbt != 46 && dbt != 6 { still_valid = false; }
             if still_valid {
-                let (title, unit, max_val, mask) = match dbt {
-                    43 => ("Dimmer", "%", 10i32, 0xFFu32),
-                    46 => ("Restrictor", "%", 10i32, 0x0Fu32),       // lower nibble only
-                    _  => ("", "", 10i32, 0xFFu32),
+                let (title, max_val, mask) = match dbt {
+                    43 => ("Dimmer", 10i32, 0xFFu32),
+                    46 => ("Restrictor", 10i32, 0x0Fu32),
+                    6  => ("Fireplace", 10i32, 0xFFu32),
+                    _  => ("", 10i32, 0xFFu32),
                 };
                 let mut level = (((dblock >> 8) & mask) as i32).min(max_val);
                 egui::Area::new(egui::Id::new("dimmer_slider"))
@@ -2758,10 +2761,13 @@ impl App {
                     .show(ctx, |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                             ui.label(egui::RichText::new(title).strong().size(11.0));
-                            let display = if dbt == 46 {
-                                format!("{:.0}{} open", level as f32 * 10.0, unit)
+                            let display = if dbt == 6 {
+                                let temp = 100 + level as i32 * 50; // 100°C at 0, 600°C at 10
+                                format!("{}°C ({:.0}%)", temp, level as f32 * 10.0)
+                            } else if dbt == 46 {
+                                format!("{:.0}% open", level as f32 * 10.0)
                             } else {
-                                format!("{:.0}{}", level as f32 * 10.0, unit)
+                                format!("{:.0}%", level as f32 * 10.0)
                             };
                             ui.label(egui::RichText::new(display).size(10.0));
                             ui.add(egui::Slider::new(&mut level, 0..=max_val)

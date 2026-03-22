@@ -310,6 +310,8 @@ struct App {
     time_paused: bool,       // pause auto-advance
     time_speed: f32,         // playback speed multiplier
     last_frame_time: Instant, // for delta-time calculation
+    last_click_frame: u32,
+    last_click_pos: (i32, i32),
     // FPS tracking
     frame_count: u32,
     fps_accum: f32,
@@ -565,6 +567,8 @@ impl App {
             time_paused: false,
             time_speed: 0.5,
             last_frame_time: Instant::now(),
+            last_click_frame: 0,
+            last_click_pos: (-1, -1),
             frame_count: 0,
             fps_accum: 0.0,
             fps_display: 0.0,
@@ -1640,7 +1644,19 @@ impl App {
                 }
             }
 
-            // World selection: click non-ground blocks or blueprints to select
+            // Double-click detection: interact on double-click, select on single
+            let is_double = self.frame_count - self.last_click_frame < 30 // ~0.5s at 60fps
+                && self.last_click_pos == (bx, by);
+            self.last_click_frame = self.frame_count;
+            self.last_click_pos = (bx, by);
+
+            if is_double {
+                // Double-click: interact with the block (toggle, slider, etc.)
+                self.handle_block_click(bx, by, idx, block, bt, flags);
+                return;
+            }
+
+            // Single-click: select the block
             let is_ground = is_ground_block(bt as u32);
             let has_bp = self.blueprints.contains_key(&(bx, by));
             if !is_ground || has_bp {
@@ -1667,9 +1683,6 @@ impl App {
             self.handle_build_placement(wx, wy, bx, by, idx, block, bt, flags);
             return;
         }
-
-        // Block-specific click interactions (popups, toggles)
-        self.handle_block_click(bx, by, idx, block, bt, flags);
     }
 
     /// Handle build tool placement at grid position.
@@ -1999,6 +2012,8 @@ impl App {
                             if id == 42 { combined_flags |= 4; }
                             // Dimmer starts at 100% (height = 10)
                             if id == 43 { final_height = 10; }
+                            // Fireplace starts at 50% intensity (height = 5)
+                            if id == 6 { final_height = 5; }
                             // Circuit breaker starts ON (flag bit 2), threshold in height = 15V
                             if id == 45 { combined_flags |= 4; final_height = 15; }
                             // Restrictor starts at 50% opening (height lower nibble = 5)
@@ -2221,8 +2236,8 @@ impl App {
             return;
         }
 
-        // Click dimmer, varistor, or restrictor: show slider popup (shared UI)
-        if (bt == 43 || bt == 46) && self.build_tool != BuildTool::Destroy {
+        // Click dimmer, restrictor, or fireplace: show slider popup (shared UI)
+        if (bt == 43 || bt == 46 || bt == 6) && self.build_tool != BuildTool::Destroy {
             let didx = by as u32 * GRID_W + bx as u32;
             self.block_sel.dimmer = if self.block_sel.dimmer == Some(didx) { None } else { Some(didx) };
             self.block_sel.dimmer_world = (bx as f32 + 0.5, by as f32 + 0.5);

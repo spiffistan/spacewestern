@@ -83,11 +83,11 @@ fn main_vorticity(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Read curl magnitude from neighbors
-    let cL = abs(textureLoad(aux_tex, max(pos + vec2(-1, 0), vec2(0)), 0).r);
-    let cR = abs(textureLoad(aux_tex, min(pos + vec2(1, 0), vec2<i32>(i32(params.sim_w) - 1, i32(params.sim_h) - 1)), 0).r);
-    let cB = abs(textureLoad(aux_tex, max(pos + vec2(0, -1), vec2(0)), 0).r);
-    let cT = abs(textureLoad(aux_tex, min(pos + vec2(0, 1), vec2<i32>(i32(params.sim_w) - 1, i32(params.sim_h) - 1)), 0).r);
+    // Read curl magnitude from neighbors — zero for walls (no cross-wall vorticity)
+    let cL = select(abs(textureLoad(aux_tex, max(pos + vec2(-1, 0), vec2(0)), 0).r), 0.0, !is_fluid(pos + vec2(-1, 0)));
+    let cR = select(abs(textureLoad(aux_tex, min(pos + vec2(1, 0), vec2<i32>(i32(params.sim_w) - 1, i32(params.sim_h) - 1)), 0).r), 0.0, !is_fluid(pos + vec2(1, 0)));
+    let cB = select(abs(textureLoad(aux_tex, max(pos + vec2(0, -1), vec2(0)), 0).r), 0.0, !is_fluid(pos + vec2(0, -1)));
+    let cT = select(abs(textureLoad(aux_tex, min(pos + vec2(0, 1), vec2<i32>(i32(params.sim_w) - 1, i32(params.sim_h) - 1)), 0).r), 0.0, !is_fluid(pos + vec2(0, 1)));
     let c = textureLoad(aux_tex, pos, 0).r;
 
     // Gradient of curl magnitude → points toward vortex center
@@ -173,7 +173,7 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let v = textureLoad(vel_in, pos, 0).xy;
 
-    // Backtrace
+    // Backtrace — bilinear_vel handles walls by zeroing velocity at obstacle cells
     let back_pos = vec2<f32>(gid.xy) + 0.5 - v * params.dt;
     var new_v = bilinear_vel(back_pos);
 
@@ -188,10 +188,11 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dye_cy = pos.y * dye_scale + dye_scale / 2;
 
     let temp_c = textureLoad(dye_tex, vec2<i32>(dye_cx, dye_cy), 0).a;
-    let temp_l = textureLoad(dye_tex, vec2<i32>(max(dye_cx - dye_scale, 0), dye_cy), 0).a;
-    let temp_r = textureLoad(dye_tex, vec2<i32>(min(dye_cx + dye_scale, i32(params.dye_w) - 1), dye_cy), 0).a;
-    let temp_u = textureLoad(dye_tex, vec2<i32>(dye_cx, max(dye_cy - dye_scale, 0)), 0).a;
-    let temp_d = textureLoad(dye_tex, vec2<i32>(dye_cx, min(dye_cy + dye_scale, i32(params.dye_h) - 1)), 0).a;
+    // Temperature gradient: use center temp for wall neighbors (Neumann BC — no gradient across walls)
+    let temp_l = select(textureLoad(dye_tex, vec2<i32>(max(dye_cx - dye_scale, 0), dye_cy), 0).a, temp_c, !is_fluid(pos + vec2(-1, 0)));
+    let temp_r = select(textureLoad(dye_tex, vec2<i32>(min(dye_cx + dye_scale, i32(params.dye_w) - 1), dye_cy), 0).a, temp_c, !is_fluid(pos + vec2(1, 0)));
+    let temp_u = select(textureLoad(dye_tex, vec2<i32>(dye_cx, max(dye_cy - dye_scale, 0)), 0).a, temp_c, !is_fluid(pos + vec2(0, -1)));
+    let temp_d = select(textureLoad(dye_tex, vec2<i32>(dye_cx, min(dye_cy + dye_scale, i32(params.dye_h) - 1)), 0).a, temp_c, !is_fluid(pos + vec2(0, 1)));
 
     // Read smoke and CO2 density at this cell
     let dye_c = textureLoad(dye_tex, vec2<i32>(dye_cx, dye_cy), 0);
@@ -245,11 +246,12 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let block = grid[u32(pos.y) * u32(params.sim_w) + u32(pos.x)];
     let bt = block & 0xFFu;
     if bt == 6u {
+        let fire_intensity = f32((block >> 8u) & 0xFFu) / 10.0;
         let center = vec2<f32>(f32(pos.x) + 0.5, f32(pos.y) + 0.5);
         let phase = fract(sin(dot(center, vec2(127.1, 311.7))) * 43758.5) * 6.28;
         let wobble = vec2(
-            sin(params.time * 5.3 + phase) * 4.0,
-            cos(params.time * 4.1 + phase) * 4.0
+            sin(params.time * 5.3 + phase) * 4.0 * fire_intensity,
+            cos(params.time * 4.1 + phase) * 4.0 * fire_intensity
         );
         new_v += wobble * params.dt;
     }

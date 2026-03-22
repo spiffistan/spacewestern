@@ -1184,7 +1184,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_crate_block = bt == 33u; // height = item count, not visual
         let is_rock_block = bt == 34u;
         let is_wire_block = bt == 36u || bt == 51u; // height = connection mask, not visual
-        let is_dimmer_block = bt == 43u; // height = dimmer/varistor level, not visual
+        let is_dimmer_block = bt == 43u || bt == 6u; // height = level/intensity, not visual
         let is_breaker_block = bt == 45u; // height = trip threshold, not visual
         let is_plant_block = false; // berry bush + crop now cast soft shadows (handled below)
 
@@ -2809,7 +2809,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_rock = btype == 34u;
     let is_crate = btype == 33u; // crate height = item count, not visual height
     let is_wire = btype == 36u || btype == 51u; // wire height = connection mask, not visual
-    let is_dimmer = btype == 43u; // dimmer/varistor height = level, not visual
+    let is_dimmer = btype == 43u || btype == 6u; // height = level/intensity, not visual
     let is_breaker = btype == 45u; // breaker height = threshold, not visual
     let is_plant = btype == 47u; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
     let is_diag_open = btype == 44u && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
@@ -3416,14 +3416,22 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Hot: orange (40 to 60°C)
             let t = (temp_norm - 0.55) / 0.15;
             temp_color = mix(vec3(1.0, 0.85, 0.3), vec3(1.0, 0.45, 0.1), t);
-        } else if temp_norm < 0.85 {
-            // Very hot: deep red (60 to 100°C)
-            let t = (temp_norm - 0.70) / 0.15;
-            temp_color = mix(vec3(1.0, 0.45, 0.1), vec3(0.85, 0.1, 0.1), t);
+        } else if temp_norm < 0.82 {
+            // Very hot: deep orange-red (60 to 90°C)
+            let t = (temp_norm - 0.70) / 0.12;
+            temp_color = mix(vec3(1.0, 0.45, 0.1), vec3(0.9, 0.12, 0.05), t);
+        } else if temp_norm < 0.89 {
+            // Dangerous: cherry red to magenta (90 to 200°C)
+            let t = (temp_norm - 0.82) / 0.07;
+            temp_color = mix(vec3(0.9, 0.12, 0.05), vec3(0.85, 0.1, 0.55), t);
+        } else if temp_norm < 0.95 {
+            // Searing: magenta to violet (200 to 400°C)
+            let t = (temp_norm - 0.89) / 0.06;
+            temp_color = mix(vec3(0.85, 0.1, 0.55), vec3(0.6, 0.15, 0.85), t);
         } else {
-            // Extreme: red to bright white-yellow (100 to 500°C)
-            let t = (temp_norm - 0.85) / 0.15;
-            temp_color = mix(vec3(0.85, 0.1, 0.1), vec3(1.0, 1.0, 0.6), t);
+            // Extreme: bright violet-blue (400°C+ — plasma/lightning)
+            let t = (temp_norm - 0.95) / 0.05;
+            temp_color = mix(vec3(0.6, 0.15, 0.85), vec3(0.5, 0.3, 1.0), t);
         }
         color = mix(color * 0.3, temp_color, 0.7);
     } else if camera.fluid_overlay < 9.5 {

@@ -140,3 +140,97 @@ fn item_kind_counts() {
     assert_eq!(ItemKind::Wood(10).count(), 10);
     assert_eq!(ItemKind::Rocks(3).count(), 3);
 }
+
+// --- Fluid obstacle field ---
+
+#[test]
+fn obstacle_field_walls_are_solid() {
+    use rayworld::fluid::build_obstacle_field;
+    let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize]; // all dirt
+    // Place a 4x4 room at (10,10)-(13,13) with stone walls (height 3)
+    for x in 10..14 { grid[(10 * GRID_W + x) as usize] = make_block(1, 3, 0); } // top
+    for x in 10..14 { grid[(13 * GRID_W + x) as usize] = make_block(1, 3, 0); } // bottom
+    for y in 10..14 { grid[(y * GRID_W + 10) as usize] = make_block(1, 3, 0); } // left
+    for y in 10..14 { grid[(y * GRID_W + 13) as usize] = make_block(1, 3, 0); } // right
+
+    let obs = build_obstacle_field(&grid);
+    // Walls should be solid (255)
+    assert_eq!(obs[(10 * GRID_W + 10) as usize], 255, "top-left wall should be solid");
+    assert_eq!(obs[(10 * GRID_W + 12) as usize], 255, "top wall should be solid");
+    assert_eq!(obs[(12 * GRID_W + 10) as usize], 255, "left wall should be solid");
+    // Interior should be open (0)
+    assert_eq!(obs[(11 * GRID_W + 11) as usize], 0, "interior should be open");
+    assert_eq!(obs[(12 * GRID_W + 12) as usize], 0, "interior should be open");
+    // Exterior should be open (0)
+    assert_eq!(obs[(5 * GRID_W + 5) as usize], 0, "exterior should be open");
+}
+
+#[test]
+fn obstacle_field_doors_open_are_passable() {
+    use rayworld::fluid::build_obstacle_field;
+    let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
+    // Stone wall with door flag (bit 0) + open flag (bit 2) = flags 5
+    grid[(10 * GRID_W + 10) as usize] = make_block(1, 3, 5); // open door
+    grid[(10 * GRID_W + 11) as usize] = make_block(1, 3, 1); // closed door
+    let obs = build_obstacle_field(&grid);
+    assert_eq!(obs[(10 * GRID_W + 10) as usize], 0, "open door should be passable");
+    assert_eq!(obs[(10 * GRID_W + 11) as usize], 255, "closed door should be solid");
+}
+
+#[test]
+fn obstacle_field_plants_are_passable() {
+    use rayworld::fluid::build_obstacle_field;
+    let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
+    grid[(10 * GRID_W + 10) as usize] = make_block(BT_TREE as u8, 3, 0);
+    grid[(10 * GRID_W + 11) as usize] = make_block(BT_BERRY_BUSH as u8, 1, 0);
+    grid[(10 * GRID_W + 12) as usize] = make_block(BT_CROP as u8, 2, 0);
+    let obs = build_obstacle_field(&grid);
+    assert_eq!(obs[(10 * GRID_W + 10) as usize], 0, "tree should be passable");
+    assert_eq!(obs[(10 * GRID_W + 11) as usize], 0, "berry bush should be passable");
+    assert_eq!(obs[(10 * GRID_W + 12) as usize], 0, "crop should be passable");
+}
+
+#[test]
+fn obstacle_field_pipes_wires_passable() {
+    use rayworld::fluid::build_obstacle_field;
+    let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
+    grid[(10 * GRID_W + 10) as usize] = make_block(BT_PIPE as u8, 1, 0);
+    grid[(10 * GRID_W + 11) as usize] = make_block(BT_WIRE as u8, 0xA0, 0); // wire with conn mask
+    grid[(10 * GRID_W + 12) as usize] = make_block(BT_LIQUID_PIPE as u8, 1, 0);
+    let obs = build_obstacle_field(&grid);
+    assert_eq!(obs[(10 * GRID_W + 10) as usize], 0, "gas pipe should be passable");
+    assert_eq!(obs[(10 * GRID_W + 11) as usize], 0, "wire should be passable");
+    assert_eq!(obs[(10 * GRID_W + 12) as usize], 0, "liquid pipe should be passable");
+}
+
+#[test]
+fn obstacle_field_complete_room_sealed() {
+    // Verify a fully-sealed room has NO passable gaps in the wall ring
+    use rayworld::fluid::build_obstacle_field;
+    let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
+    // 6x6 room at (20,20)-(25,25)
+    for x in 20..26 {
+        grid[(20 * GRID_W + x) as usize] = make_block(1, 3, 0);
+        grid[(25 * GRID_W + x) as usize] = make_block(1, 3, 0);
+    }
+    for y in 20..26 {
+        grid[(y * GRID_W + 20) as usize] = make_block(1, 3, 0);
+        grid[(y * GRID_W + 25) as usize] = make_block(1, 3, 0);
+    }
+    let obs = build_obstacle_field(&grid);
+    // Check every wall tile is solid
+    for x in 20..26 {
+        assert_eq!(obs[(20 * GRID_W + x) as usize], 255, "top wall at x={} should be solid", x);
+        assert_eq!(obs[(25 * GRID_W + x) as usize], 255, "bottom wall at x={}", x);
+    }
+    for y in 20..26 {
+        assert_eq!(obs[(y * GRID_W + 20) as usize], 255, "left wall at y={}", y);
+        assert_eq!(obs[(y * GRID_W + 25) as usize], 255, "right wall at y={}", y);
+    }
+    // Interior all open
+    for y in 21..25 {
+        for x in 21..25 {
+            assert_eq!(obs[(y * GRID_W + x) as usize], 0, "interior ({},{}) should be open", x, y);
+        }
+    }
+}
