@@ -70,9 +70,22 @@ enum SandboxTool {
     Lightning,
     InjectWater,
     TriggerDrought,
-    SoundImpulse,
-    SoundBell,
+    SoundPlace(usize),  // index into SANDBOX_SOUNDS
 }
+
+/// Sandbox sound presets: (name, dB, frequency, pattern, duration)
+const SANDBOX_SOUNDS: &[(&str, f32, f32, u32, f32)] = &[
+    ("Whisper",       20.0,  0.0, 0, 0.3),    // soft impulse
+    ("Conversation",  60.0,  0.0, 0, 0.2),    // talking impulse
+    ("Alarm Bell",    80.0,  8.0, 1, 5.0),    // continuous sine
+    ("Lawnmower",     90.0,  4.0, 1, 4.0),    // low freq continuous
+    ("Gunshot",      100.0,  0.0, 0, 0.05),   // sharp impulse
+    ("Siren",        105.0, 12.0, 1, 6.0),    // high freq continuous
+    ("Cannon",       110.0,  0.0, 0, 0.08),   // heavy impulse
+    ("Thunder",      120.0,  0.0, 0, 0.2),    // rumbling impulse
+    ("Grenade",      130.0,  0.0, 0, 0.15),   // explosion
+    ("Explosion",    170.0,  0.0, 0, 0.25),   // massive blast
+];
 
 /// Event notification (Rimworld-style right panel).
 #[derive(Clone, Debug)]
@@ -258,6 +271,30 @@ struct SoundSource {
     pattern: u32,    // 0=impulse, 1=sine, 2=noise
     duration: f32,   // remaining seconds
 }
+
+/// Convert game decibels to wave equation amplitude.
+/// Reference: 80 dB = amplitude 1.0 (alarm bell at source).
+/// Uses compressed log scale: amp = 10^((dB - 80) / 40).
+fn db_to_amplitude(db: f32) -> f32 {
+    10.0f32.powf((db - 80.0) / 40.0)
+}
+
+/// Convert wave equation amplitude back to game decibels.
+fn amplitude_to_db(amp: f32) -> f32 {
+    if amp <= 0.0 { return 0.0; }
+    80.0 + 40.0 * amp.log10()
+}
+
+/// Standard sound levels (game dB):
+/// ~30 dB  Footsteps        (amp ~0.03)
+/// ~50 dB  Door open/close  (amp ~0.18)
+/// ~70 dB  Conversation     (amp ~0.56)
+/// ~80 dB  Alarm bell       (amp ~1.0)
+/// ~100 dB Gunshot          (amp ~3.16)
+/// ~110 dB Cannon fire      (amp ~5.62)
+/// ~120 dB Lightning        (amp ~10.0)
+/// ~130 dB Grenade blast    (amp ~17.8)
+/// Damage threshold: ~100 dB at pleb position
 
 /// A pending construction — placed as a ghost, built by plebs over time.
 #[derive(Clone, Debug)]
@@ -1580,18 +1617,17 @@ impl App {
             }
             return;
         }
-        if self.sandbox_tool == SandboxTool::SoundImpulse {
-            self.sound_sources.push(SoundSource {
-                x: wx, y: wy, amplitude: 2.0, frequency: 0.0,
-                phase: 0.0, pattern: 0, duration: 0.1,
-            });
-            return;
-        }
-        if self.sandbox_tool == SandboxTool::SoundBell {
-            self.sound_sources.push(SoundSource {
-                x: wx, y: wy, amplitude: 0.5, frequency: 8.0,
-                phase: 0.0, pattern: 1, duration: 3.0,
-            });
+        if let SandboxTool::SoundPlace(idx) = self.sandbox_tool {
+            if let Some(&(_name, db, freq, pattern, duration)) = SANDBOX_SOUNDS.get(idx) {
+                self.sound_sources.push(SoundSource {
+                    x: wx, y: wy,
+                    amplitude: db_to_amplitude(db),
+                    frequency: freq,
+                    phase: 0.0,
+                    pattern,
+                    duration,
+                });
+            }
             return;
         }
 
@@ -3915,7 +3951,7 @@ impl ApplicationHandler for App {
                 } else if scroll < 0.0 {
                     self.camera.zoom /= 1.1;
                 }
-                self.camera.zoom = self.camera.zoom.clamp(base_zoom * 0.01, base_zoom * 8.0);
+                self.camera.zoom = self.camera.zoom.clamp(base_zoom * 0.2, base_zoom * 8.0);
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {

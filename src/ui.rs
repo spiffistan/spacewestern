@@ -247,6 +247,28 @@ impl App {
                                         (egui::Color32::from_rgb(255, 100, 50), "Consuming"),
                                     ]);
                                 }
+                                FluidOverlay::Sound => {
+                                    ui.label(egui::RichText::new("Compression (+)").size(10.0).strong());
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(40, 40, 40), "10 dB  Leaves rustling"),
+                                        (egui::Color32::from_rgb(60, 70, 55), "40 dB  Home noise"),
+                                        (egui::Color32::from_rgb(160, 140, 20), "60 dB  Conversation"),
+                                        (egui::Color32::from_rgb(200, 100, 10), "80 dB  Alarm bell"),
+                                        (egui::Color32::from_rgb(255, 50, 10), "100 dB Gunshot \u{26a0}"),
+                                        (egui::Color32::from_rgb(220, 20, 80), "120 dB Thunder"),
+                                        (egui::Color32::from_rgb(140, 20, 200), "140 dB Blast wave"),
+                                        (egui::Color32::from_rgb(255, 255, 200), "180 dB Explosion"),
+                                    ]);
+                                    ui.add_space(2.0);
+                                    ui.label(egui::RichText::new("Rarefaction (-)").size(10.0).strong());
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(30, 40, 70), "Low vacuum"),
+                                        (egui::Color32::from_rgb(20, 50, 130), "Medium vacuum"),
+                                        (egui::Color32::from_rgb(40, 80, 180), "Strong rarefaction"),
+                                    ]);
+                                    ui.add_space(2.0);
+                                    ui.label(egui::RichText::new("\u{26a0} > 100 dB at pleb = damage").size(9.0).weak());
+                                }
                                 _ => {}
                             }
                             // Ventilation overlay legend
@@ -422,7 +444,7 @@ impl App {
                 egui::containers::menu::MenuButton::new("Camera").config(keep_open.clone()).ui(ui, |ui| {
                     let zoom_pct = zoom / base_zoom * 100.0;
                     ui.label(format!("Zoom: {:.0}%", zoom_pct));
-                    ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.05..=base_zoom * 8.0)
+                    ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.2..=base_zoom * 8.0)
                         .text("Zoom").show_value(false).logarithmic(true));
                     if ui.button("Reset zoom").clicked() { zoom = base_zoom; }
                     ui.separator();
@@ -957,15 +979,14 @@ impl App {
 
                                 // Sound placement tools (only when sound system is enabled)
                                 if self.sound_enabled {
-                                    let sel_imp = self.sandbox_tool == SandboxTool::SoundImpulse;
-                                    let sel_bell = self.sandbox_tool == SandboxTool::SoundBell;
-                                    if ui.selectable_label(sel_imp, "\u{1f4a5} Impulse").clicked() {
-                                        self.sandbox_tool = if sel_imp { SandboxTool::None } else { SandboxTool::SoundImpulse };
-                                        if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
-                                    }
-                                    if ui.selectable_label(sel_bell, "\u{1f514} Bell").clicked() {
-                                        self.sandbox_tool = if sel_bell { SandboxTool::None } else { SandboxTool::SoundBell };
-                                        if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
+                                    ui.separator();
+                                    for (i, &(name, db, _, _, _)) in SANDBOX_SOUNDS.iter().enumerate() {
+                                        let sel = self.sandbox_tool == SandboxTool::SoundPlace(i);
+                                        let label = format!("{:.0}dB {}", db, name);
+                                        if ui.selectable_label(sel, &label).clicked() {
+                                            self.sandbox_tool = if sel { SandboxTool::None } else { SandboxTool::SoundPlace(i) };
+                                            if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
+                                        }
                                     }
                                 }
                             });

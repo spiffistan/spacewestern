@@ -139,6 +139,15 @@ impl App {
                         self.lightning_strike = Some((sx as f32 + 0.5, sy as f32 + 0.5));
                         self.lightning_surge_done = false;
 
+                        // Thunder (~120 dB)
+                        if self.sound_enabled {
+                            self.sound_sources.push(SoundSource {
+                                x: sx as f32 + 0.5, y: sy as f32 + 0.5,
+                                amplitude: db_to_amplitude(120.0), frequency: 0.0,
+                                phase: 0.0, pattern: 0, duration: 0.2,
+                            });
+                        }
+
                         // Inject heat at strike point
                         self.fluid_params.splat_x = sx as f32 + 0.5;
                         self.fluid_params.splat_y = sy as f32 + 0.5;
@@ -303,6 +312,14 @@ impl App {
                     let bx = (pleb.angle + spread).cos();
                     let by = (pleb.angle + spread).sin();
                     self.physics_bodies.push(PhysicsBody::new_bullet(sx, sy, bx, by));
+                    // Gunshot sound (~100 dB)
+                    if self.sound_enabled {
+                        self.sound_sources.push(SoundSource {
+                            x: sx, y: sy,
+                            amplitude: db_to_amplitude(100.0), frequency: 0.0,
+                            phase: 0.0, pattern: 0, duration: 0.05,
+                        });
+                    }
                     // Muzzle smoke
                     self.fluid_params.splat_x = sx;
                     self.fluid_params.splat_y = sy;
@@ -679,6 +696,14 @@ impl App {
                                 self.grid_data[didx] = (db & 0xFF00FFFF) | (((block_flags_rs(db) ^ 4) as u32) << 16);
                                 self.grid_dirty = true;
                                 self.auto_doors.push((door_x, door_y, self.time_of_day));
+                                // Door open sound (~50 dB)
+                                if self.sound_enabled {
+                                    self.sound_sources.push(SoundSource {
+                                        x: door_x as f32 + 0.5, y: door_y as f32 + 0.5,
+                                        amplitude: db_to_amplitude(50.0), frequency: 0.0,
+                                        phase: 0.0, pattern: 0, duration: 0.05,
+                                    });
+                                }
                             }
                         }
                     }
@@ -737,6 +762,14 @@ impl App {
                 if is_door_rs(db) && (block_flags_rs(db) & 4) != 0 {
                     self.grid_data[didx] = (db & 0xFF00FFFF) | ((((db >> 16) & 0xFF) ^ 4) << 16);
                     self.grid_dirty = true;
+                    // Door close sound (~50 dB)
+                    if self.sound_enabled {
+                        self.sound_sources.push(SoundSource {
+                            x: dx as f32 + 0.5, y: dy as f32 + 0.5,
+                            amplitude: db_to_amplitude(50.0), frequency: 0.0,
+                            phase: 0.0, pattern: 0, duration: 0.05,
+                        });
+                    }
                 }
             }
         }
@@ -791,7 +824,23 @@ impl App {
                     // Grenade: inject toxic cloud (high smoke + CO2) via direct dye write
                     // Stored in grenade_impacts for the render pass to write to dye texture
                     self.grenade_impacts.push((impact.x, impact.y));
+                    // Grenade explosion: inject sound shockwave (~130 dB)
+                    if self.sound_enabled {
+                        self.sound_sources.push(SoundSource {
+                            x: impact.x, y: impact.y,
+                            amplitude: db_to_amplitude(130.0), frequency: 0.0,
+                            phase: 0.0, pattern: 0, duration: 0.15,
+                        });
+                    }
                 } else {
+                    // Cannonball impact: sound (~110 dB)
+                    if self.sound_enabled {
+                        self.sound_sources.push(SoundSource {
+                            x: impact.x, y: impact.y,
+                            amplitude: db_to_amplitude(110.0), frequency: 0.0,
+                            phase: 0.0, pattern: 0, duration: 0.08,
+                        });
+                    }
                     // Cannonball: inject smoke burst via splat
                     self.fluid_params.splat_x = impact.x;
                     self.fluid_params.splat_y = impact.y;
@@ -1243,6 +1292,35 @@ impl App {
                             pleb.haul_target = Some((sx, sy));    // storage zone tile
                             break; // one haul assignment per tick to avoid overwhelm
                         }
+                    }
+                }
+            }
+        }
+
+        // --- Sound shockwave damage ---
+        // Approximate sound pressure at each pleb from active sources (CPU-side, no GPU readback).
+        // Uses inverse-square falloff. Damage threshold ~100 dB at pleb position (amp ~3.16).
+        if self.sound_enabled && self.sound_coupling > 0.001 {
+            let damage_threshold = db_to_amplitude(100.0); // ~3.16 — only very loud sounds damage
+            for pleb in &mut self.plebs {
+                let mut max_pressure = 0.0f32;
+                for src in &self.sound_sources {
+                    let dx = pleb.x - src.x;
+                    let dy = pleb.y - src.y;
+                    let dist = (dx * dx + dy * dy).sqrt().max(0.5);
+                    // Pressure falls off with 1/distance (cylindrical spreading in 2D)
+                    let pressure = src.amplitude / dist;
+                    max_pressure = max_pressure.max(pressure);
+                }
+                if max_pressure > damage_threshold {
+                    // Damage proportional to how far above threshold, in dB
+                    let excess_db = amplitude_to_db(max_pressure) - 100.0;
+                    let damage = excess_db * 0.002 * dt; // gradual: ~30 dB excess = 0.06/sec
+                    pleb.needs.health -= damage;
+                    if damage > 0.005 {
+                        let db_at_pleb = amplitude_to_db(max_pressure);
+                        events.push((EventCategory::Combat,
+                            format!("{} shockwave! {:.0} dB ({:.0}% hp)", pleb.name, db_at_pleb, pleb.needs.health.max(0.0) * 100.0)));
                     }
                 }
             }

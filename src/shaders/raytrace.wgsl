@@ -3606,31 +3606,68 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         color = mix(color * 0.3, wt_color, 0.7);
     } else if camera.fluid_overlay < 14.5 {
-        // Sound overlay (14): pressure wave visualization
+        // Sound overlay (14): dB-scaled pressure visualization
+        // Colors match the decibel scale legend (green → yellow → orange → red → magenta → purple)
         let sound_cell = vec2<i32>(bx, by);
         let sp = textureLoad(sound_tex, clamp(sound_cell, vec2(0), vec2(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1)), 0);
         let pressure = sp.r;
         let velocity = sp.g;
-        let intensity = clamp(abs(pressure) * 8.0, 0.0, 1.0);
-        // Warm (positive pressure) / cool (negative pressure) coloring
-        var sound_color: vec3<f32>;
-        if pressure > 0.0 {
-            // Positive: orange → white
-            sound_color = mix(vec3(0.08, 0.06, 0.04), vec3(1.0, 0.5, 0.1), intensity);
-            if intensity > 0.7 {
-                sound_color = mix(sound_color, vec3(1.0, 0.9, 0.7), (intensity - 0.7) / 0.3);
-            }
-        } else {
-            // Negative: blue → cyan
-            sound_color = mix(vec3(0.04, 0.06, 0.08), vec3(0.1, 0.4, 1.0), intensity);
-            if intensity > 0.7 {
-                sound_color = mix(sound_color, vec3(0.5, 0.8, 1.0), (intensity - 0.7) / 0.3);
-            }
+        let amp = abs(pressure);
+
+        // Convert amplitude to approximate dB: dB = 80 + 40*log10(amp)
+        // amp 0.001 → ~-40 dB, amp 0.01 → ~0 dB, amp 0.1 → ~40 dB,
+        // amp 1.0 → 80 dB, amp 10 → 120 dB, amp 100 → 160 dB
+        var db_val = 0.0;
+        if amp > 0.0001 {
+            db_val = 80.0 + 40.0 * log(amp) / log(10.0);
         }
-        // Ring pattern: show wavefronts more clearly with velocity-based edge detection
-        let v_intensity = clamp(abs(velocity) * 12.0, 0.0, 1.0);
-        sound_color += vec3(v_intensity * 0.15);
-        color = mix(color * 0.25, sound_color, max(intensity, v_intensity * 0.5));
+        // Normalize to 0-1 range for color mapping (0 dB → 0.0, 180 dB → 1.0)
+        let t = clamp(db_val / 180.0, 0.0, 1.0);
+
+        // Color ramp matching the legend:
+        // 0.0 (silent)     = dark gray  (40, 40, 40)
+        // 0.22 (~40 dB)    = dark green (60, 70, 55)
+        // 0.33 (~60 dB)    = yellow     (160, 140, 20)
+        // 0.44 (~80 dB)    = orange     (200, 100, 10)
+        // 0.55 (~100 dB)   = red        (255, 50, 10)
+        // 0.66 (~120 dB)   = magenta    (220, 20, 80)
+        // 0.77 (~140 dB)   = purple     (140, 20, 200)
+        // 1.0  (~180 dB)   = white      (255, 255, 200)
+        var sound_color: vec3<f32>;
+        if t < 0.22 {
+            let s = t / 0.22;
+            sound_color = mix(vec3(0.15, 0.15, 0.15), vec3(0.24, 0.27, 0.22), s);
+        } else if t < 0.33 {
+            let s = (t - 0.22) / 0.11;
+            sound_color = mix(vec3(0.24, 0.27, 0.22), vec3(0.63, 0.55, 0.08), s);
+        } else if t < 0.44 {
+            let s = (t - 0.33) / 0.11;
+            sound_color = mix(vec3(0.63, 0.55, 0.08), vec3(0.78, 0.39, 0.04), s);
+        } else if t < 0.55 {
+            let s = (t - 0.44) / 0.11;
+            sound_color = mix(vec3(0.78, 0.39, 0.04), vec3(1.0, 0.20, 0.04), s);
+        } else if t < 0.66 {
+            let s = (t - 0.55) / 0.11;
+            sound_color = mix(vec3(1.0, 0.20, 0.04), vec3(0.86, 0.08, 0.31), s);
+        } else if t < 0.77 {
+            let s = (t - 0.66) / 0.11;
+            sound_color = mix(vec3(0.86, 0.08, 0.31), vec3(0.55, 0.08, 0.78), s);
+        } else {
+            let s = (t - 0.77) / 0.23;
+            sound_color = mix(vec3(0.55, 0.08, 0.78), vec3(1.0, 1.0, 0.78), s);
+        }
+
+        // Rarefaction tint: negative pressure gets a blue shift
+        if pressure < 0.0 {
+            sound_color = mix(sound_color, vec3(0.1, 0.2, 0.5), 0.3);
+        }
+
+        // Wavefront edges: velocity highlights the expanding ring
+        let v_intensity = clamp(abs(velocity) * 8.0, 0.0, 1.0);
+        sound_color += vec3(v_intensity * 0.12);
+
+        let vis = max(t, v_intensity * 0.3);
+        color = mix(color * 0.2, sound_color, clamp(vis * 1.5, 0.0, 0.95));
     }
 
     // Velocity arrow overlay (when fractional part of fluid_overlay > 0.1)
