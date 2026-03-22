@@ -214,7 +214,8 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // --- Mouse splat dye injection (smoke channel only) ---
+    // --- Splat dye injection ---
+    // splat_active: 0=none, 1=velocity+smoke (mouse), 2=velocity+temp perturbation (sound)
     if params.splat_active > 0.5 {
         let splat_dye_pos = vec2(params.splat_x, params.splat_y) * inv_scale;
         let dx = dye_pos - splat_dye_pos;
@@ -222,7 +223,16 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         let r = params.splat_radius * inv_scale.x;
         let r2 = r * r;
         let factor = exp(-d2 / r2);
-        result.r += factor * 0.5;
+        if params.splat_active < 1.5 {
+            // Mouse: inject smoke
+            result.r += factor * 0.5;
+        } else {
+            // Sound coupling: inject temperature perturbation (visible as heat shimmer)
+            // and a tiny O2 disturbance so the gas motion is visible in normal view
+            let temp_push = factor * params.splat_vy * 0.02; // use vy magnitude as intensity
+            result.a += temp_push; // temperature channel
+            result.g -= factor * abs(params.splat_vy) * 0.001; // subtle O2 dip makes it visible
+        }
     }
 
     // --- Diffusion: per-channel rates (physical mixing in still air) ---

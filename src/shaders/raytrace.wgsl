@@ -56,8 +56,12 @@ struct Camera {
     wind_angle: f32,
     use_shadow_map: f32,
     shadow_map_scale: f32,
-    _pad_sm1: f32,
-    _pad_sm2: f32,
+    sound_speed: f32,
+    sound_damping: f32,
+    sound_coupling: f32,
+    _pad4_a: f32,
+    _pad4_b: f32,
+    _pad4_c: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -79,6 +83,7 @@ struct Camera {
 @group(0) @binding(16) var water_tex: texture_2d<f32>;
 @group(0) @binding(17) var<storage, read> water_table_buf: array<f32>;
 @group(0) @binding(18) var shadow_map_tex: texture_2d<f32>;
+@group(0) @binding(19) var sound_tex: texture_2d<f32>;
 
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
@@ -3292,6 +3297,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let cold = clamp(-air_t / 20.0, 0.0, 0.4);
             color = mix(color, vec3(0.5, 0.6, 0.9), cold * 0.2);
         }
+        // Subtle sound ripple (always-on when sound is active)
+        {
+            let sc = vec2<i32>(bx, by);
+            let sp = textureLoad(sound_tex, clamp(sc, vec2(0), vec2(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1)), 0).r;
+            let ripple = clamp(sp * 0.06, -0.04, 0.04);
+            color += vec3(ripple * 0.5, ripple * 0.3, ripple * 0.8);
+        }
     } else if camera.fluid_overlay < 1.5 {
         // Gases: all gases with distinct colors, composited together
         let bg = color * 0.25;
@@ -3593,6 +3605,32 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             wt_color = mix(wt_color, spring_col, clamp(wt_depth * 2.0, 0.0, 1.0));
         }
         color = mix(color * 0.3, wt_color, 0.7);
+    } else if camera.fluid_overlay < 14.5 {
+        // Sound overlay (14): pressure wave visualization
+        let sound_cell = vec2<i32>(bx, by);
+        let sp = textureLoad(sound_tex, clamp(sound_cell, vec2(0), vec2(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1)), 0);
+        let pressure = sp.r;
+        let velocity = sp.g;
+        let intensity = clamp(abs(pressure) * 8.0, 0.0, 1.0);
+        // Warm (positive pressure) / cool (negative pressure) coloring
+        var sound_color: vec3<f32>;
+        if pressure > 0.0 {
+            // Positive: orange → white
+            sound_color = mix(vec3(0.08, 0.06, 0.04), vec3(1.0, 0.5, 0.1), intensity);
+            if intensity > 0.7 {
+                sound_color = mix(sound_color, vec3(1.0, 0.9, 0.7), (intensity - 0.7) / 0.3);
+            }
+        } else {
+            // Negative: blue → cyan
+            sound_color = mix(vec3(0.04, 0.06, 0.08), vec3(0.1, 0.4, 1.0), intensity);
+            if intensity > 0.7 {
+                sound_color = mix(sound_color, vec3(0.5, 0.8, 1.0), (intensity - 0.7) / 0.3);
+            }
+        }
+        // Ring pattern: show wavefronts more clearly with velocity-based edge detection
+        let v_intensity = clamp(abs(velocity) * 12.0, 0.0, 1.0);
+        sound_color += vec3(v_intensity * 0.15);
+        color = mix(color * 0.25, sound_color, max(intensity, v_intensity * 0.5));
     }
 
     // Velocity arrow overlay (when fractional part of fluid_overlay > 0.1)

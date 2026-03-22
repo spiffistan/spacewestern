@@ -54,6 +54,10 @@ pub struct CameraUniform {
     pub wind_angle: f32,   // wind direction in radians
     pub use_shadow_map: f32,    // 1.0 = sample shadow map, 0.0 = per-pixel ray trace
     pub shadow_map_scale: f32,  // shadow map texels per grid cell (for UV mapping)
-    pub _pad_sm1: f32,
-    pub _pad_sm2: f32,
+    pub sound_speed: f32,       // wave equation propagation speed (c)
+    pub sound_damping: f32,     // wave equation energy loss per step
+    pub sound_coupling: f32,    // strength of sound→gas velocity coupling
+    pub _pad4_a: f32,
+    pub _pad4_b: f32,
+    pub _pad4_c: f32,
 }

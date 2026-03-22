@@ -70,6 +70,8 @@ enum SandboxTool {
     Lightning,
     InjectWater,
     TriggerDrought,
+    SoundImpulse,
+    SoundBell,
 }
 
 /// Event notification (Rimworld-style right panel).
@@ -246,6 +248,17 @@ struct ContextMenu {
     actions: Vec<(String, ContextAction)>,
 }
 
+/// An active sound source in the world.
+#[derive(Clone, Debug)]
+struct SoundSource {
+    x: f32, y: f32,
+    amplitude: f32,
+    frequency: f32,  // Hz (for sine pattern)
+    phase: f32,      // accumulated phase
+    pattern: u32,    // 0=impulse, 1=sine, 2=noise
+    duration: f32,   // remaining seconds
+}
+
 /// A pending construction — placed as a ghost, built by plebs over time.
 #[derive(Clone, Debug)]
 struct Blueprint {
@@ -344,6 +357,14 @@ struct App {
     lightmap_iterations: u32,     // lightmap propagation iterations (radius)
     shadow_map_scale: u32,        // shadow map texels per grid cell (0 = per-pixel, 1-16 = shadow map)
     shadow_map_max_scale: u32,    // allocated texture supports up to this scale
+    // Sound propagation
+    sound_enabled: bool,
+    sound_phase: usize,            // 0 or 1 ping-pong
+    sound_sources: Vec<SoundSource>,
+    sound_speed: f32,              // wave propagation speed (c)
+    sound_damping: f32,            // damping factor per step
+    sound_coupling: f32,           // sound→gas velocity coupling strength
+    sound_iters_per_frame: u32,    // iterations per frame (controls propagation speed)
     dye_w: u32,                   // current dye texture width (tracks render resolution)
     dye_h: u32,                   // current dye texture height
     sandbox_mode: bool,           // enables sandbox build category + debug tools
@@ -469,6 +490,11 @@ struct GfxState {
     shadow_map_texture: wgpu::Texture,
     shadow_map_pipeline: wgpu::ComputePipeline,
     shadow_map_bind_group: wgpu::BindGroup,
+    // Sound wave propagation
+    sound_textures: [wgpu::Texture; 2],      // Rg32Float ping-pong (R=pressure, G=velocity)
+    sound_pipeline: wgpu::ComputePipeline,
+    sound_bind_groups: [wgpu::BindGroup; 2],  // ping-pong
+    sound_source_buffer: wgpu::Buffer,
     // Power grid
     voltage_buffer: wgpu::Buffer,
     power_pipeline: wgpu::ComputePipeline,
@@ -563,7 +589,8 @@ impl App {
                 pleb_x: 0.0, pleb_y: 0.0, pleb_angle: 0.0, pleb_selected: 0.0, pleb_torch: 0.0, pleb_headlight: 0.0,
                 prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
                 rain_intensity: 0.0, cloud_cover: 0.0, wind_magnitude: 0.0, wind_angle: 0.0,
-                use_shadow_map: 1.0, shadow_map_scale: 8.0, _pad_sm1: 0.0, _pad_sm2: 0.0,
+                use_shadow_map: 1.0, shadow_map_scale: 8.0, sound_speed: 0.0, sound_damping: 0.0,
+                sound_coupling: 0.0, _pad4_a: 0.0, _pad4_b: 0.0, _pad4_c: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -623,6 +650,13 @@ impl App {
             lightmap_iterations: LIGHTMAP_PROP_ITERATIONS,
             shadow_map_scale: 0,
             shadow_map_max_scale: 8,
+            sound_enabled: true,
+            sound_phase: 0,
+            sound_sources: Vec::new(),
+            sound_speed: 0.3,
+            sound_damping: 0.005,
+            sound_coupling: 0.15,
+            sound_iters_per_frame: 4,
             dye_w: FLUID_DYE_W,
             dye_h: FLUID_DYE_H,
             sandbox_mode: true,
@@ -1544,6 +1578,20 @@ impl App {
             }
             return;
         }
+        if self.sandbox_tool == SandboxTool::SoundImpulse {
+            self.sound_sources.push(SoundSource {
+                x: wx, y: wy, amplitude: 2.0, frequency: 0.0,
+                phase: 0.0, pattern: 0, duration: 0.1,
+            });
+            return;
+        }
+        if self.sandbox_tool == SandboxTool::SoundBell {
+            self.sound_sources.push(SoundSource {
+                x: wx, y: wy, amplitude: 0.5, frequency: 8.0,
+                phase: 0.0, pattern: 1, duration: 3.0,
+            });
+            return;
+        }
 
         // Destroy tool: single click destroys one block
         if self.build_tool == BuildTool::Destroy {
@@ -2383,6 +2431,7 @@ impl App {
         let fv_pres_b_view = gfx.fluid_pres[1].create_view(&wgpu::TextureViewDescriptor::default());
         let water_view = gfx.water_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
         let shadow_map_view = gfx.shadow_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sound_view = gfx.sound_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
         gfx.compute_bind_groups = [
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("compute-bg-0"), // dye_A, write output_A, read prev output_B
@@ -2402,6 +2451,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
                     wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
+                    wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2427,6 +2477,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
                     wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
+                    wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2452,6 +2503,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
                     wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
+                    wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2477,6 +2529,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
                     wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
+                    wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2731,6 +2784,49 @@ impl App {
         self.fluid_params.time = self.time_of_day;
         self.fluid_params.dt = (1.0 / 60.0) * self.fluid_speed;
         self.fluid_params.splat_active = if self.fluid_mouse_active { 1.0 } else { 0.0 };
+
+        // Sound→Gas coupling: override splat with sound source velocity if no mouse active
+        if self.sound_enabled && self.sound_coupling > 0.001
+            && !self.sound_sources.is_empty() && !self.fluid_mouse_active
+        {
+            if let Some(src) = self.sound_sources.iter()
+                .max_by(|a, b| a.amplitude.abs().partial_cmp(&b.amplitude.abs()).unwrap())
+            {
+                let coupling = self.sound_coupling;
+                let fx = src.x / GRID_W as f32 * fluid_res as f32;
+                let fy = src.y / GRID_H as f32 * fluid_res as f32;
+                let strength = src.amplitude * coupling * 60.0;
+
+                // Use divergent splat: four cardinal splats creating outward expansion
+                // The splat shader only supports one point, so we cycle through 4 offset
+                // positions around the source, each pushing outward. Over 4 frames this
+                // creates a symmetric expansion.
+                let frame_dir = (self.frame_count % 4) as usize;
+                let dirs: [(f32, f32); 4] = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
+                let (dx, dy) = dirs[frame_dir];
+                let offset = 1.5; // offset from source center
+
+                let push = match src.pattern {
+                    0 => strength * 30.0, // impulse: strong constant push
+                    1 => {
+                        // Bell: slow oscillation (use phase / frequency to get slow cycle)
+                        let slow_phase = src.phase / src.frequency.max(1.0_f32);
+                        slow_phase.sin() * strength * 15.0
+                    }
+                    _ => strength * 10.0,
+                };
+
+                if push.abs() > 0.1 {
+                    self.fluid_params.splat_x = fx + dx * offset;
+                    self.fluid_params.splat_y = fy + dy * offset;
+                    self.fluid_params.splat_vx = dx * push;
+                    self.fluid_params.splat_vy = dy * push;
+                    self.fluid_params.splat_radius = 4.0 + src.amplitude * 3.0;
+                    self.fluid_params.splat_active = 2.0; // velocity-only (no smoke)
+                }
+            }
+        }
+
         gfx.queue.write_buffer(&gfx.fluid_params_buffer, 0, bytemuck::bytes_of(&self.fluid_params));
 
         // Compute lightmap viewport bounds (grid coordinates with margin for light propagation)
@@ -3187,6 +3283,58 @@ impl App {
             let sm_wg_x = (GRID_W * sm_scale + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             let sm_wg_y = (GRID_H * sm_scale + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             cpass.dispatch_workgroups(sm_wg_x, sm_wg_y, 1);
+        }
+
+        // Sound wave propagation (multiple iterations per frame)
+        if self.sound_enabled {
+            // Pack sound parameters into camera padding fields
+            self.camera.sound_speed = self.sound_speed;
+            self.camera.sound_damping = self.sound_damping;
+            self.camera.sound_coupling = self.sound_coupling;
+            // Re-upload camera with sound params
+            gfx.queue.write_buffer(&gfx.camera_buffer, 0, bytemuck::bytes_of(&self.camera));
+
+            // Pack active sound sources into buffer
+            let max_sources = 16usize;
+            let mut source_data = vec![0.0f32; 1 + max_sources * 8];
+            let count = self.sound_sources.len().min(max_sources);
+            source_data[0] = count as f32;
+            for (i, src) in self.sound_sources.iter().enumerate().take(max_sources) {
+                let base = 1 + i * 8;
+                source_data[base] = src.x;
+                source_data[base + 1] = src.y;
+                source_data[base + 2] = src.amplitude;
+                source_data[base + 3] = src.frequency;
+                source_data[base + 4] = src.phase;
+                source_data[base + 5] = src.pattern as f32;
+                source_data[base + 6] = src.duration;
+            }
+            gfx.queue.write_buffer(&gfx.sound_source_buffer, 0, bytemuck::cast_slice(&source_data));
+
+            // Tick sources: advance phase, decrement duration, remove expired
+            let dt_sound = 1.0 / 60.0;
+            for src in &mut self.sound_sources {
+                src.phase += src.frequency * dt_sound * std::f32::consts::TAU;
+                src.duration -= dt_sound;
+            }
+            self.sound_sources.retain(|s| s.duration > 0.0);
+
+            // Dispatch wave equation iterations (ensure even count so result lands in texture A)
+            let iters = (self.sound_iters_per_frame / 2) * 2; // round down to even
+            let iters = iters.max(2);
+            let sw = (GRID_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let sh = (GRID_H + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            for _ in 0..iters {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("sound-pass"), timestamp_writes: None,
+                });
+                cpass.set_pipeline(&gfx.sound_pipeline);
+                cpass.set_bind_group(0, &gfx.sound_bind_groups[self.sound_phase], &[]);
+                cpass.dispatch_workgroups(sw, sh, 1);
+                drop(cpass);
+                self.sound_phase = 1 - self.sound_phase;
+            }
+            // After even iterations, result is back in texture A (phase 0)
         }
 
         // Compute pass 2: raytrace (per-pixel, render resolution)

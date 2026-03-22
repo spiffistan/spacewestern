@@ -979,6 +979,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Sound pressure texture (wave equation output)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 19,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1052,6 +1063,11 @@ impl App {
         });
         let shadow_map_sample_view = shadow_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Sound textures (created early for raytrace bind group)
+        let sound_tex_a_early = make_fluid_tex("sound-a", GRID_W, GRID_H, wgpu::TextureFormat::Rg32Float);
+        let sound_tex_b_early = make_fluid_tex("sound-b", GRID_W, GRID_H, wgpu::TextureFormat::Rg32Float);
+        let sound_sample_view = sound_tex_a_early.create_view(&wgpu::TextureViewDescriptor::default());
+
         // 4 compute bind groups: [dye_phase * 2 + output_phase]
         // output_phase 0: write A, read prev B; output_phase 1: write B, read prev A
         let compute_bind_group_0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1072,6 +1088,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
                 wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
+                wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1097,6 +1114,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
                 wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
+                wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1122,6 +1140,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
                 wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
+                wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1147,6 +1166,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&fv_water_a) },
                 wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
+                wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1486,6 +1506,61 @@ impl App {
             cache: None,
         });
 
+        // --- Sound wave propagation pipeline ---
+        let sound_view_a = sound_tex_a_early.create_view(&wgpu::TextureViewDescriptor::default());
+        let sound_view_b = sound_tex_b_early.create_view(&wgpu::TextureViewDescriptor::default());
+        let sound_source_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sound-sources"),
+            size: (1 + 16 * 8) * 4, // count + up to 16 sources × 8 f32
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let sound_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sound-compute"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/sound.wgsl").into()),
+        });
+        let sound_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sound-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::Rg32Float, view_dimension: wgpu::TextureViewDimension::D2 }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+        // Ping-pong: bg[0] reads A writes B, bg[1] reads B writes A
+        let sound_bg_0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sound-bg-0"), layout: &sound_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&sound_view_a) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&sound_view_b) },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: sound_source_buffer.as_entire_binding() },
+            ],
+        });
+        let sound_bg_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sound-bg-1"), layout: &sound_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&sound_view_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&sound_view_a) },
+                wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: sound_source_buffer.as_entire_binding() },
+            ],
+        });
+        let sound_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("sound-pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("sound-pl"), bind_group_layouts: &[&sound_bgl], push_constant_ranges: &[],
+            })),
+            module: &sound_shader,
+            entry_point: Some("main_sound"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         self.gfx = Some(GfxState {
             surface,
             device,
@@ -1546,6 +1621,10 @@ impl App {
             shadow_map_texture,
             shadow_map_pipeline,
             shadow_map_bind_group,
+            sound_textures: [sound_tex_a_early, sound_tex_b_early],
+            sound_pipeline,
+            sound_bind_groups: [sound_bg_0, sound_bg_1],
+            sound_source_buffer,
             voltage_buffer,
             pipe_flow_buffer,
             power_pipeline: power_pipeline_val,

@@ -31,4 +31,5 @@ pub enum FluidOverlay {
     PowerWatts, // show power consumption/generation (green=gen, red=consume)
     Water,      // show surface water level (blue intensity)
     WaterTable, // show underground water table depth
+    Sound,      // show sound pressure field (warm/cool wave visualization)
 }

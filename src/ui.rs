@@ -131,6 +131,16 @@ impl App {
                                 }
                             });
                         });
+                        ui.separator();
+                        // Sound group
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Sound").size(9.0).weak());
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(*ov == FluidOverlay::Sound, "Waves").clicked() {
+                                    *ov = if *ov == FluidOverlay::Sound { FluidOverlay::None } else { FluidOverlay::Sound };
+                                }
+                            });
+                        });
                     });
                 });
             });
@@ -387,6 +397,25 @@ impl App {
                     ui.add(egui::Slider::new(&mut fs, 0.0..=50.0).text("Fan speed").step_by(1.0));
                     self.fluid_params.fan_speed = fs;
                     ui.add(egui::Slider::new(&mut self.pipe_width, 1.0..=20.0).text("Pipe width").step_by(0.5));
+                });
+
+                // Sound menu
+                egui::containers::menu::MenuButton::new("Sound").config(keep_open.clone()).ui(ui, |ui| {
+                    ui.checkbox(&mut self.sound_enabled, "Enabled");
+                    if self.sound_enabled {
+                        ui.add(egui::Slider::new(&mut self.sound_speed, 0.1..=2.0).text("Wave speed").step_by(0.05));
+                        ui.add(egui::Slider::new(&mut self.sound_damping, 0.0..=0.05).text("Damping").step_by(0.001));
+                        ui.add(egui::Slider::new(&mut self.sound_coupling, 0.0..=1.0).text("Gas coupling").step_by(0.01));
+                        let mut iters = self.sound_iters_per_frame as i32;
+                        ui.add(egui::Slider::new(&mut iters, 2..=16).text("Iterations"));
+                        self.sound_iters_per_frame = iters as u32;
+                        if !self.sound_sources.is_empty() {
+                            ui.separator();
+                            if ui.button("Clear all sounds").clicked() {
+                                self.sound_sources.clear();
+                            }
+                        }
+                    }
                 });
 
                 // Camera menu
@@ -921,6 +950,20 @@ impl App {
                                         self.add_condition("Drought", "\u{2600}", NotifCategory::Threat, 90.0);
                                         self.notify(NotifCategory::Threat, "\u{2600}", "Drought", "Sandbox: Drought triggered!");
                                         self.log_event(EventCategory::Weather, "Drought triggered (sandbox)".to_string());
+                                    }
+                                }
+
+                                // Sound placement tools (only when sound system is enabled)
+                                if self.sound_enabled {
+                                    let sel_imp = self.sandbox_tool == SandboxTool::SoundImpulse;
+                                    let sel_bell = self.sandbox_tool == SandboxTool::SoundBell;
+                                    if ui.selectable_label(sel_imp, "\u{1f4a5} Impulse").clicked() {
+                                        self.sandbox_tool = if sel_imp { SandboxTool::None } else { SandboxTool::SoundImpulse };
+                                        if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
+                                    }
+                                    if ui.selectable_label(sel_bell, "\u{1f514} Bell").clicked() {
+                                        self.sandbox_tool = if sel_bell { SandboxTool::None } else { SandboxTool::SoundBell };
+                                        if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
                                     }
                                 }
                             });

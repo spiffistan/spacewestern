@@ -57,8 +57,12 @@ struct Camera {
     wind_angle: f32,
     use_shadow_map: f32,
     shadow_map_scale: f32,
-    _pad_sm1: f32,
-    _pad_sm2: f32,
+    sound_speed: f32,
+    sound_damping: f32,
+    sound_coupling: f32,
+    _pad4_a: f32,
+    _pad4_b: f32,
+    _pad4_c: f32,
 };
 
 @group(0) @binding(0) var shadow_out: texture_storage_2d<rgba8unorm, write>;
