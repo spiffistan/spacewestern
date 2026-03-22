@@ -28,14 +28,18 @@ fn sim_to_dye() -> vec2<f32> {
     return vec2(params.dye_w, params.dye_h) / vec2(params.sim_w, params.sim_h);
 }
 
-// Check if a sim-space cell is an obstacle
+// Check if a sim-space cell is an obstacle.
+// Obstacle texture is always 256x256 (grid resolution); scale sim coords if hires.
 fn is_obstacle(sim_pos: vec2<i32>) -> bool {
     let sw = i32(params.sim_w);
     let sh = i32(params.sim_h);
     if sim_pos.x < 0 || sim_pos.y < 0 || sim_pos.x >= sw || sim_pos.y >= sh {
-        return true; // out of bounds = wall
+        return true;
     }
-    return textureLoad(obstacle_tex, sim_pos, 0).r > 0.5;
+    // Scale sim coords to obstacle texture coords (obstacle is always 256x256)
+    let obs_x = sim_pos.x * 256 / sw;
+    let obs_y = sim_pos.y * 256 / sh;
+    return textureLoad(obstacle_tex, vec2<i32>(obs_x, obs_y), 0).r > 0.5;
 }
 
 // Manual bilinear sample of velocity at fractional sim-space position
@@ -143,7 +147,13 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     let vel = bilinear_vel(sim_pos);
 
     // Backtrace in dye-space: scale velocity from sim-space to dye-space
-    let back_pos = dye_pos - vel * inv_scale * params.dt;
+    var back_pos = dye_pos - vel * inv_scale * params.dt;
+
+    // If backtrace crossed into an obstacle, clamp to current position
+    let back_sim = vec2<i32>(back_pos * scale);
+    if is_obstacle(back_sim) {
+        back_pos = dye_pos;
+    }
 
     // Obstacle-aware bilinear sample of dye at backtraced position
     var result = bilinear_dye(back_pos);

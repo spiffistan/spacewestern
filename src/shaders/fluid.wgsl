@@ -27,7 +27,9 @@ fn in_bounds(pos: vec2<i32>) -> bool {
 
 fn is_fluid(pos: vec2<i32>) -> bool {
     if !in_bounds(pos) { return false; }
-    return textureLoad(obstacle_tex, pos, 0).r < 0.5;
+    // Obstacle texture is always 256x256; scale if sim is hires (512)
+    let obs_pos = vec2<i32>(pos.x * 256 / i32(params.sim_w), pos.y * 256 / i32(params.sim_h));
+    return textureLoad(obstacle_tex, obs_pos, 0).r < 0.5;
 }
 
 // Read velocity, returning zero for out-of-bounds or solid cells

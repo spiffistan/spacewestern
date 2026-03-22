@@ -301,9 +301,13 @@ impl PipeNetwork {
                         fa.0 += dx as f32 * dp;
                         fa.1 += dy as f32 * dp;
                     }
-                    // Gas transfer: high→low pressure
-                    if dp > 0.0 {
-                        let rate = (dp * 0.05 + dt).min(0.2);
+                    // Gas transfer: pressure-driven (advection) + diffusion
+                    // Advection: gas flows from high to low pressure
+                    let adv_rate = if dp > 0.0 { (dp * 0.05).min(0.15) } else { 0.0 };
+                    // Diffusion: gas equalizes regardless of pressure (heat conduction, mixing)
+                    let diff_rate = dt * 1.5;
+                    let rate = (adv_rate + diff_rate).min(0.25);
+                    if rate > 0.001 {
                         let gd = gas_delta.entry(nidx).or_insert([0.0; 4]);
                         for i in 0..4 { gd[i] += (cell.gas[i] - neighbor.gas[i]) * rate; }
                     }

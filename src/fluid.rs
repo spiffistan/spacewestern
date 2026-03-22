@@ -36,7 +36,7 @@ pub fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
         // Inlets (20) and outlets (19) block gas like walls (they suck/push through the pipe system)
         // Other pipe components (15-18) are passable
         let passable = bt_is!(bt, BT_TREE, BT_FIREPLACE, BT_CEILING_LIGHT, BT_FLOOR_LAMP,
-            BT_TABLE_LAMP, BT_FAN, BT_COMPOST,
+            BT_TABLE_LAMP, BT_FAN, BT_COMPOST, BT_BERRY_BUSH, BT_CROP,
             BT_LIQUID_PIPE, BT_PIPE_BRIDGE, BT_LIQUID_INTAKE, BT_LIQUID_PUMP, BT_LIQUID_OUTPUT,
             BT_WIRE, BT_DIMMER, BT_BREAKER, BT_WIRE_BRIDGE, BT_RESTRICTOR)
             || (bt >= BT_PIPE && bt <= BT_VALVE);

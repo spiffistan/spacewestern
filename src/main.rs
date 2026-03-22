@@ -2313,12 +2313,13 @@ impl App {
             .output_textures[1]
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Recreate dye textures at render resolution (screen-res smoke)
-        self.dye_w = render_w;
-        self.dye_h = render_h;
+        // Recreate dye textures at render resolution (square — world is square)
+        let dye_size = render_w.max(render_h);
+        self.dye_w = dye_size;
+        self.dye_h = dye_size;
         let dye_desc = wgpu::TextureDescriptor {
             label: Some("fluid-dye-a"),
-            size: wgpu::Extent3d { width: render_w, height: render_h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: dye_size, height: dye_size, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
