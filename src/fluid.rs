@@ -2,9 +2,10 @@
 
 use crate::grid::*;
 
-// Fluid simulation resolution. Set HIRES_FLUID to true for 512x512 velocity
-// (4x compute cost but smoother convection patterns).
-pub const FLUID_SIM_W: u32 = 256;
+// Fluid simulation resolution. Textures always allocated at max (512x512).
+// Runtime toggle switches effective dispatch resolution via FluidParams.sim_w/h.
+pub const FLUID_SIM_MAX: u32 = 512; // texture allocation size
+pub const FLUID_SIM_W: u32 = 256;   // default dispatch resolution
 pub const FLUID_SIM_H: u32 = 256;
 pub const FLUID_DYE_W: u32 = 512;
 pub const FLUID_DYE_H: u32 = 512;

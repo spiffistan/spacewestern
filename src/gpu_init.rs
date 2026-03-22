@@ -443,12 +443,12 @@ impl App {
             })
         };
 
-        let fluid_vel_a = make_fluid_tex("fluid-vel-a", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::Rg32Float);
-        let fluid_vel_b = make_fluid_tex("fluid-vel-b", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::Rg32Float);
-        let fluid_pres_a = make_fluid_tex("fluid-pres-a", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::R32Float);
-        let fluid_pres_b = make_fluid_tex("fluid-pres-b", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::R32Float);
-        let fluid_div = make_fluid_tex("fluid-div", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::R32Float);
-        let fluid_curl_tex = make_fluid_tex("fluid-curl", FLUID_SIM_W, FLUID_SIM_H, wgpu::TextureFormat::R32Float);
+        let fluid_vel_a = make_fluid_tex("fluid-vel-a", FLUID_SIM_MAX, FLUID_SIM_MAX, wgpu::TextureFormat::Rg32Float);
+        let fluid_vel_b = make_fluid_tex("fluid-vel-b", FLUID_SIM_MAX, FLUID_SIM_MAX, wgpu::TextureFormat::Rg32Float);
+        let fluid_pres_a = make_fluid_tex("fluid-pres-a", FLUID_SIM_MAX, FLUID_SIM_MAX, wgpu::TextureFormat::R32Float);
+        let fluid_pres_b = make_fluid_tex("fluid-pres-b", FLUID_SIM_MAX, FLUID_SIM_MAX, wgpu::TextureFormat::R32Float);
+        let fluid_div = make_fluid_tex("fluid-div", FLUID_SIM_MAX, FLUID_SIM_MAX, wgpu::TextureFormat::R32Float);
+        let fluid_curl_tex = make_fluid_tex("fluid-curl", FLUID_SIM_MAX, FLUID_SIM_MAX, wgpu::TextureFormat::R32Float);
         let fluid_dye_a = make_fluid_tex("fluid-dye-a", FLUID_DYE_W, FLUID_DYE_H, wgpu::TextureFormat::Rgba16Float);
         let fluid_dye_b = make_fluid_tex("fluid-dye-b", FLUID_DYE_W, FLUID_DYE_H, wgpu::TextureFormat::Rgba16Float);
 
@@ -486,7 +486,7 @@ impl App {
 
         let fluid_obstacle_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("fluid-obstacle"),
-            size: wgpu::Extent3d { width: FLUID_SIM_W, height: FLUID_SIM_H, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: GRID_W, height: GRID_H, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R8Unorm,

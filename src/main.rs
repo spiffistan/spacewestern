@@ -31,7 +31,7 @@ mod fluid;
 
 use build::{BuildTool, FluidOverlay};
 use camera::CameraUniform;
-use fluid::{FluidParams, FLUID_SIM_W, FLUID_SIM_H, FLUID_DYE_W, FLUID_DYE_H, FLUID_PRESSURE_ITERS, build_obstacle_field, smoothstep_f32, half_to_f32, f32_to_f16};
+use fluid::{FluidParams, FLUID_SIM_W, FLUID_SIM_H, FLUID_SIM_MAX, FLUID_DYE_W, FLUID_DYE_H, FLUID_PRESSURE_ITERS, build_obstacle_field, smoothstep_f32, half_to_f32, f32_to_f16};
 
 mod pipes;
 mod ui;
@@ -336,6 +336,9 @@ struct App {
     enable_dir_bleed: bool,       // directional light bleed (expensive)
     enable_temporal: bool,        // temporal reprojection (reuse previous frame)
     enable_ricochets: bool,       // bullets bounce off walls
+    hires_fluid: bool,            // 512x512 fluid sim (4x compute cost)
+    dye_w: u32,                   // current dye texture width (tracks render resolution)
+    dye_h: u32,                   // current dye texture height
     sandbox_mode: bool,           // enables sandbox build category + debug tools
     sandbox_tool: SandboxTool,    // current sandbox action
     show_pipe_overlay: bool,       // draw gas pipe contents as egui overlay (ventilation)
@@ -599,6 +602,9 @@ impl App {
             enable_dir_bleed: true,
             enable_temporal: true,
             enable_ricochets: true,
+            hires_fluid: false,
+            dye_w: FLUID_DYE_W,
+            dye_h: FLUID_DYE_H,
             sandbox_mode: true,
             sandbox_tool: SandboxTool::None,
             drag_start: None,
@@ -2307,6 +2313,24 @@ impl App {
             .output_textures[1]
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Recreate dye textures at render resolution (screen-res smoke)
+        self.dye_w = render_w;
+        self.dye_h = render_h;
+        let dye_desc = wgpu::TextureDescriptor {
+            label: Some("fluid-dye-a"),
+            size: wgpu::Extent3d { width: render_w, height: render_h, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        };
+        gfx.fluid_dye[0] = gfx.device.create_texture(&dye_desc);
+        gfx.fluid_dye[1] = gfx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("fluid-dye-b"), ..dye_desc
+        });
+
         // Rebuild bind groups with new texture view
         let lightmap_sample_view = gfx
             .lightmap_textures[0]
@@ -2472,6 +2496,55 @@ impl App {
                 ],
             }),
         ];
+
+        // Recreate fluid dye bind groups (advect_dye + splat reference dye textures)
+        let fluid_dye_bgl = gfx.fluid_p_advect_dye.get_bind_group_layout(0);
+        let fv_vel_a_fluid = gfx.fluid_vel[0].create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_obstacle_view = gfx.fluid_obstacle.create_view(&wgpu::TextureViewDescriptor::default());
+        gfx.fluid_bg_advect_dye = [
+            gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("fluid-bg-advect-dye-0"), layout: &fluid_dye_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_vel_a_fluid) },
+                    wgpu::BindGroupEntry { binding: 3, resource: gfx.fluid_params_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: gfx.grid_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&fv_obstacle_view) },
+                    wgpu::BindGroupEntry { binding: 6, resource: gfx.block_temp_buffer.as_entire_binding() },
+                ],
+            }),
+            gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("fluid-bg-advect-dye-1"), layout: &fluid_dye_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_vel_a_fluid) },
+                    wgpu::BindGroupEntry { binding: 3, resource: gfx.fluid_params_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: gfx.grid_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&fv_obstacle_view) },
+                    wgpu::BindGroupEntry { binding: 6, resource: gfx.block_temp_buffer.as_entire_binding() },
+                ],
+            }),
+        ];
+        // Splat uses dye_a at binding 7 — recreate with new dye texture
+        let fluid_sim_bgl = gfx.fluid_p_splat.get_bind_group_layout(0);
+        let fv_vel_b = gfx.fluid_vel[1].create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dummy_r = gfx.fluid_dummy_r.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dummy_r_w = gfx.fluid_dummy_r_w.create_view(&wgpu::TextureViewDescriptor::default());
+        gfx.fluid_bg_splat = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fluid-bg-splat"), layout: &fluid_sim_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_vel_b) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_vel_a_fluid) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_dummy_r) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_dummy_r_w) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle_view) },
+                wgpu::BindGroupEntry { binding: 5, resource: gfx.fluid_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: gfx.grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+            ],
+        });
     }
 
     fn render(&mut self) {
@@ -2505,8 +2578,8 @@ impl App {
             gfx.queue.write_texture(
                 wgpu::TexelCopyTextureInfo { texture: &gfx.fluid_obstacle, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 &obs_data,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(FLUID_SIM_W), rows_per_image: Some(FLUID_SIM_H) },
-                wgpu::Extent3d { width: FLUID_SIM_W, height: FLUID_SIM_H, depth_or_array_layers: 1 },
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(GRID_W), rows_per_image: Some(GRID_H) },
+                wgpu::Extent3d { width: GRID_W, height: GRID_H, depth_or_array_layers: 1 },
             );
             self.grid_dirty = false;
             self.pipe_network.rebuild(&self.grid_data);
@@ -2600,7 +2673,12 @@ impl App {
             );
         }
 
-        // Upload fluid params
+        // Upload fluid params (sim_w/h control effective resolution within max-size textures)
+        let fluid_res = if self.hires_fluid { FLUID_SIM_MAX } else { FLUID_SIM_W };
+        self.fluid_params.sim_w = fluid_res as f32;
+        self.fluid_params.sim_h = fluid_res as f32;
+        self.fluid_params.dye_w = self.dye_w as f32;
+        self.fluid_params.dye_h = self.dye_h as f32;
         self.fluid_params.time = self.time_of_day;
         self.fluid_params.dt = (1.0 / 60.0) * self.fluid_speed;
         self.fluid_params.splat_active = if self.fluid_mouse_active { 1.0 } else { 0.0 };
@@ -2864,8 +2942,11 @@ impl App {
         }
 
         // --- Fluid simulation (every frame) ---
-        let fluid_wg = (FLUID_SIM_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        let dye_wg = (FLUID_DYE_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let fluid_wg = (fluid_res + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let dye_w = self.dye_w;
+        let dye_h = self.dye_h;
+        let dye_wg_x = (dye_w + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let dye_wg_y = (dye_h + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
         // 1. Curl
         { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-curl"), timestamp_writes: None });
@@ -2897,7 +2978,7 @@ impl App {
           p.set_pipeline(&gfx.fluid_p_advect_vel); p.set_bind_group(0, &gfx.fluid_bg_advect_vel, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
         // 9. Advect dye (512x512)
         { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-advect-dye"), timestamp_writes: None });
-          p.set_pipeline(&gfx.fluid_p_advect_dye); p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]); p.dispatch_workgroups(dye_wg, dye_wg, 1); }
+          p.set_pipeline(&gfx.fluid_p_advect_dye); p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]); p.dispatch_workgroups(dye_wg_x, dye_wg_y, 1); }
         // Flip dye phase for next frame
         self.fluid_dye_phase = 1 - self.fluid_dye_phase;
 
@@ -2935,8 +3016,8 @@ impl App {
             || self.pressed_keys.contains(&KeyCode::ControlRight);
         if self.debug.mode || ctrl_for_debug {
             let (wx, wy) = self.hover_world;
-            let dye_x = ((wx / GRID_W as f32) * FLUID_DYE_W as f32).clamp(0.0, (FLUID_DYE_W - 1) as f32) as u32;
-            let dye_y = ((wy / GRID_H as f32) * FLUID_DYE_H as f32).clamp(0.0, (FLUID_DYE_H - 1) as f32) as u32;
+            let dye_x = ((wx / GRID_W as f32) * dye_w as f32).clamp(0.0, (dye_w - 1) as f32) as u32;
+            let dye_y = ((wy / GRID_H as f32) * dye_h as f32).clamp(0.0, (dye_h - 1) as f32) as u32;
             // The current readable dye is the one we just wrote to (dye phase was already flipped)
             let dye_idx = self.fluid_dye_phase; // after flip, this points to the fresh output
             encoder.copy_texture_to_buffer(
@@ -3013,10 +3094,10 @@ impl App {
         if !self.plebs.is_empty() {
             let dye_idx = self.fluid_dye_phase;
             for (i, pleb) in self.plebs.iter().enumerate() {
-                let dye_x = ((pleb.x / GRID_W as f32) * FLUID_DYE_W as f32)
-                    .clamp(0.0, (FLUID_DYE_W - 1) as f32) as u32;
-                let dye_y = ((pleb.y / GRID_H as f32) * FLUID_DYE_H as f32)
-                    .clamp(0.0, (FLUID_DYE_H - 1) as f32) as u32;
+                let dye_x = ((pleb.x / GRID_W as f32) * dye_w as f32)
+                    .clamp(0.0, (dye_w - 1) as f32) as u32;
+                let dye_y = ((pleb.y / GRID_H as f32) * dye_h as f32)
+                    .clamp(0.0, (dye_h - 1) as f32) as u32;
                 encoder.copy_texture_to_buffer(
                     wgpu::TexelCopyTextureInfo {
                         texture: &gfx.fluid_dye[dye_idx],
@@ -3123,9 +3204,9 @@ impl App {
                 let inject_y = oy as i32 + ady;
                 if inject_x < 0 || inject_y < 0 || inject_x >= GRID_W as i32 || inject_y >= GRID_H as i32 { continue; }
 
-                let dye_scale = (FLUID_DYE_W / FLUID_SIM_W) as i32;
-                let dye_x = inject_x * dye_scale;
-                let dye_y = inject_y * dye_scale;
+                // Dye texture is render-resolution; map world coords to dye pixel coords
+                let dye_x = ((inject_x as f32 / GRID_W as f32) * dye_w as f32) as i32;
+                let dye_y = ((inject_y as f32 / GRID_H as f32) * dye_h as f32) as i32;
                 let s = (pressure * 0.5).min(1.0);
                 let pixel: [u16; 4] = [
                     f32_to_f16(gas[0] * s),
@@ -3134,32 +3215,26 @@ impl App {
                     f32_to_f16(gas[3]),
                 ];
                 let bytes: &[u8] = bytemuck::cast_slice(&pixel);
-                // Write to BOTH dye textures so next frame's shader reads the injection
-                // regardless of which texture is the ping-pong input
-                for dy_off in 0..dye_scale {
-                    for dx_off in 0..dye_scale {
-                        let tx = (dye_x + dx_off).clamp(0, FLUID_DYE_W as i32 - 1) as u32;
-                        let ty = (dye_y + dy_off).clamp(0, FLUID_DYE_H as i32 - 1) as u32;
-                        for dye_idx in 0..2 {
-                        gfx.queue.write_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &gfx.fluid_dye[dye_idx],
-                                mip_level: 0,
-                                origin: wgpu::Origin3d { x: tx, y: ty, z: 0 },
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            bytes,
-                            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
-                            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                        );
-                        } // for dye_idx
-                    }
+                // Write to BOTH dye textures at the computed dye pixel
+                let tx = dye_x.clamp(0, dye_w as i32 - 1) as u32;
+                let ty = dye_y.clamp(0, dye_h as i32 - 1) as u32;
+                for dye_idx in 0..2 {
+                    gfx.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &gfx.fluid_dye[dye_idx],
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: tx, y: ty, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        bytes,
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
+                        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    );
                 }
             }
 
             // Grenade toxic gas injection: continuous emission while fuse burns
             for &(gx, gy) in &self.grenade_impacts {
-                let dye_scale = (FLUID_DYE_W / FLUID_SIM_W) as i32;
                 let radius = 1i32; // small source — fluid sim spreads it
                 for oy in -radius..=radius {
                     for ox in -radius..=radius {
@@ -3168,35 +3243,29 @@ impl App {
                         let strength = 1.0 - dist / (radius as f32 + 1.0);
                         let wx = (gx as i32 + ox).clamp(0, GRID_W as i32 - 1);
                         let wy = (gy as i32 + oy).clamp(0, GRID_H as i32 - 1);
-                        let dye_bx = wx * dye_scale;
-                        let dye_by = wy * dye_scale;
-                        // Toxic: moderate smoke (R) + high CO2 (B), depleted O2 (G)
-                        // Per-frame emission — builds up over 12 seconds
+                        let dye_bx = ((wx as f32 / GRID_W as f32) * dye_w as f32) as i32;
+                        let dye_by = ((wy as f32 / GRID_H as f32) * dye_h as f32) as i32;
                         let pixel: [u16; 4] = [
-                            f32_to_f16(0.6 * strength),   // smoke
-                            f32_to_f16(0.2),               // very low O2
-                            f32_to_f16(0.8 * strength),   // high CO2
-                            f32_to_f16(15.0),              // slightly cool (chemical reaction)
+                            f32_to_f16(0.6 * strength),
+                            f32_to_f16(0.2),
+                            f32_to_f16(0.8 * strength),
+                            f32_to_f16(15.0),
                         ];
                         let bytes: &[u8] = bytemuck::cast_slice(&pixel);
-                        for dy_off in 0..dye_scale {
-                            for dx_off in 0..dye_scale {
-                                let tx = (dye_bx + dx_off).clamp(0, FLUID_DYE_W as i32 - 1) as u32;
-                                let ty = (dye_by + dy_off).clamp(0, FLUID_DYE_H as i32 - 1) as u32;
-                                for dye_idx in 0..2 {
-                                    gfx.queue.write_texture(
-                                        wgpu::TexelCopyTextureInfo {
-                                            texture: &gfx.fluid_dye[dye_idx],
-                                            mip_level: 0,
-                                            origin: wgpu::Origin3d { x: tx, y: ty, z: 0 },
-                                            aspect: wgpu::TextureAspect::All,
-                                        },
-                                        bytes,
-                                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
-                                        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                                    );
-                                }
-                            }
+                        let tx = dye_bx.clamp(0, dye_w as i32 - 1) as u32;
+                        let ty = dye_by.clamp(0, dye_h as i32 - 1) as u32;
+                        for dye_idx in 0..2 {
+                            gfx.queue.write_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &gfx.fluid_dye[dye_idx],
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d { x: tx, y: ty, z: 0 },
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                bytes,
+                                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
+                                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                            );
                         }
                     }
                 }

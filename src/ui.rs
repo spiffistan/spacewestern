@@ -409,6 +409,10 @@ impl App {
                         self.enable_temporal = !self.enable_temporal;
                         self.camera.force_refresh = 10.0;
                     }
+                    ui.separator();
+                    if ui.selectable_label(self.hires_fluid, "HiRes Fluid (512)").clicked() {
+                        self.hires_fluid = !self.hires_fluid;
+                    }
                 });
 
                 // Debug menu
