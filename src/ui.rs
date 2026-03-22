@@ -484,6 +484,9 @@ impl App {
 
                     // --- Raytrace ---
                     ui.label(egui::RichText::new("Raytrace").strong().size(11.0));
+                    if ui.selectable_label(self.enable_terrain_detail, "Terrain Detail").clicked() {
+                        self.enable_terrain_detail = !self.enable_terrain_detail;
+                    }
                     if ui.selectable_label(self.enable_prox_glow, "Proximity Glow").clicked() {
                         self.enable_prox_glow = !self.enable_prox_glow;
                     }

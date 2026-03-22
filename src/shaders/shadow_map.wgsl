@@ -60,7 +60,7 @@ struct Camera {
     sound_speed: f32,
     sound_damping: f32,
     sound_coupling: f32,
-    _pad4_a: f32,
+    enable_terrain_detail: f32,
     _pad4_b: f32,
     _pad4_c: f32,
 };

@@ -19,7 +19,7 @@ struct Camera {
     prev_center_x: f32, prev_center_y: f32, prev_zoom: f32, prev_time: f32,
     rain_intensity: f32, cloud_cover: f32, wind_magnitude: f32, wind_angle: f32,
     use_shadow_map: f32, shadow_map_scale: f32, sound_speed: f32, sound_damping: f32,
-    sound_coupling: f32, _pad4_a: f32, _pad4_b: f32, _pad4_c: f32,
+    sound_coupling: f32, enable_terrain_detail: f32, _pad4_b: f32, _pad4_c: f32,
 };
 
 // Sound source: packed as 8 f32 per source. First f32 of buffer = source count.
@@ -40,12 +40,25 @@ fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 fn is_wall(x: i32, y: i32) -> bool {
     if x < 0 || y < 0 || x >= i32(camera.grid_w) || y >= i32(camera.grid_h) { return true; }
     let b = grid[u32(y) * u32(camera.grid_w) + u32(x)];
+    let bt = block_type(b);
     let bh = block_height(b);
     if bh == 0u { return false; }
     // Open doors transmit sound
     if is_door(b) && is_open(b) { return false; }
-    // Glass transmits some sound (partial)
-    if block_type(b) == 5u { return false; }
+    // Glass transmits some sound (partial attenuation handled elsewhere)
+    if bt == 5u { return false; }
+    // Pipes, restrictors, bridges, liquid pipes/equipment: height = connection mask, not wall
+    if (bt >= 15u && bt <= 20u) || bt == 46u || bt == 49u || bt == 50u || bt == 52u || bt == 53u || bt == 54u { return false; }
+    // Wires, wire bridges: height = connection mask
+    if bt == 36u || bt == 51u { return false; }
+    // Dimmer/varistor, breaker: height = level/threshold
+    if bt == 43u || bt == 45u { return false; }
+    // Fireplace: height = intensity
+    if bt == 6u { return false; }
+    // Crates, rocks, dug ground: not real walls
+    if bt == 32u || bt == 33u || bt == 34u { return false; }
+    // Furniture (bench, bed, lamps): sound passes over
+    if bt == 9u || bt == 10u || bt == 11u || bt == 30u { return false; }
     return true;
 }
 
@@ -130,8 +143,8 @@ fn main_sound(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Clamp to prevent explosion
-    p_new = clamp(p_new, -5.0, 5.0);
-    v_new = clamp(v_new, -5.0, 5.0);
+    p_new = clamp(p_new, -50.0, 50.0);
+    v_new = clamp(v_new, -50.0, 50.0);
 
     textureStore(sound_out, vec2(gid.xy), vec4(p_new, v_new, 0.0, 0.0));
 }

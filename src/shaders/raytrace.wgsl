@@ -59,7 +59,7 @@ struct Camera {
     sound_speed: f32,
     sound_damping: f32,
     sound_coupling: f32,
-    _pad4_a: f32,
+    enable_terrain_detail: f32,
     _pad4_b: f32,
     _pad4_c: f32,
 };
@@ -217,6 +217,209 @@ fn get_roof_height(bx: i32, by: i32) -> f32 {
     let block = get_block(bx, by);
     return f32((block >> 24u) & 0xFFu);
 }
+
+// ============================================================
+// Procedural terrain detail — decoupled noise + biome system.
+// These functions layer visual variation onto flat block colors.
+// When sprites replace per-pixel detail, the noise functions
+// remain useful for variant selection and placement decisions.
+// ============================================================
+
+// --- Noise utilities (self-contained, no game-specific logic) ---
+
+// Fast 2D hash → [0, 1]
+fn hash2(p: vec2<f32>) -> f32 {
+    let h = dot(p, vec2<f32>(127.1, 311.7));
+    return fract(sin(h) * 43758.5453);
+}
+
+// 2D hash → vec2 [0, 1]
+fn hash2v(p: vec2<f32>) -> vec2<f32> {
+    return vec2(
+        fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453),
+        fract(sin(dot(p, vec2(269.5, 183.3))) * 27183.6142),
+    );
+}
+
+// Smooth value noise (bilinear interpolation of hash values)
+fn value_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    // Smooth hermite interpolation
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash2(i);
+    let b = hash2(i + vec2(1.0, 0.0));
+    let c = hash2(i + vec2(0.0, 1.0));
+    let d = hash2(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Fractional Brownian motion — layered noise at decreasing scales
+fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
+    var sum = 0.0;
+    var amp = 0.5;
+    var pos = p;
+    for (var i: i32 = 0; i < octaves; i++) {
+        sum += value_noise(pos) * amp;
+        pos *= 2.1; // non-integer to avoid axis alignment
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+// --- Terrain detail function ---
+// Layers procedural variation onto a flat base color.
+// Inputs:
+//   base_col:    flat block color from block_base_color()
+//   wx, wy:      world-space pixel position (sub-tile precision)
+//   bx, by:      grid cell integer coords
+//   water_table: water table depth at this cell (-3..0.5)
+//   rain:        current rain intensity (0..1)
+//   wind_angle:  wind direction for grass sway
+//   time:        for subtle animation
+// Returns: modified color with terrain detail applied.
+//
+// This function is the single point to replace with sprite sampling later.
+fn terrain_detail(
+    base_col: vec3<f32>,
+    wx: f32, wy: f32,
+    bx: i32, by: i32,
+    water_table: f32,
+    rain: f32,
+    wind_angle: f32,
+    time: f32,
+) -> vec3<f32> {
+    let pos = vec2(wx, wy);
+    var color = base_col;
+
+    // --- 1. Large-scale soil variation (regional character) ---
+    let region = fbm(pos * 0.07, 3);       // 0..1, varies over ~14 tiles
+    let soil_dry = vec3(0.50, 0.40, 0.26);  // sandy, pale
+    let soil_rich = vec3(0.36, 0.28, 0.16); // dark, fertile
+    let soil_base = mix(soil_dry, soil_rich, region);
+    color = mix(color, soil_base, 0.6); // blend with original
+
+    // --- 2. Moisture influence (from water table) ---
+    // water_table: negative = deep/dry, 0 = at surface, positive = spring
+    let moisture = clamp((water_table + 1.5) / 2.5, 0.0, 1.0);
+    // Moist soil: darker, slightly green-shifted
+    color = mix(color, color * vec3(0.80, 0.88, 0.75), moisture * 0.35);
+
+    // Rain darkening
+    color *= (1.0 - rain * 0.15);
+
+    // --- 3. Grass patches (medium scale, density varies with moisture + region) ---
+    let grass_noise = fbm(pos * 0.25 + vec2(31.7, 73.1), 3);
+    let grass_threshold = 0.35 - moisture * 0.2 - region * 0.15; // more grass where wet + fertile
+    let grass_amount = smoothstep(grass_threshold, grass_threshold + 0.15, grass_noise);
+
+    if grass_amount > 0.01 {
+        // Grass base color varies
+        let grass_hue = value_noise(pos * 0.4 + vec2(97.3, 41.2));
+        let grass_green = vec3(0.22, 0.40, 0.12);
+        let grass_yellow = vec3(0.38, 0.42, 0.15);
+        let grass_dark = vec3(0.15, 0.30, 0.08);
+        var grass_col = mix(grass_green, grass_yellow, grass_hue * 0.5);
+        grass_col = mix(grass_col, grass_dark, moisture * 0.3); // darker when wet
+
+        // Per-pixel grass blade detail: directional strokes
+        let blade_seed = hash2(floor(pos * 6.0)); // ~6 blades per tile
+        let blade_angle = blade_seed * 6.28 + wind_angle * 0.3;
+        let blade_dir = vec2(cos(blade_angle), sin(blade_angle));
+        let blade_pos = fract(pos * 6.0);
+        let along_blade = dot(blade_pos - 0.5, blade_dir);
+        let across_blade = abs(dot(blade_pos - 0.5, vec2(-blade_dir.y, blade_dir.x)));
+        let on_blade = f32(across_blade < 0.08 && along_blade > -0.15 && along_blade < 0.25);
+        // Blade is brighter at tip
+        let blade_t = clamp((along_blade + 0.15) / 0.4, 0.0, 1.0);
+        let blade_col = mix(grass_col * 0.7, grass_col * 1.2, blade_t);
+
+        // Blend grass patches
+        let grass_vis = grass_amount * mix(0.5, on_blade * 0.8 + 0.2, 0.6);
+        color = mix(color, blade_col, clamp(grass_vis, 0.0, 0.85));
+
+        // --- 4. Wildflower specks (very sparse, only in grassy areas) ---
+        let flower_hash = hash2(floor(pos * 4.0) + vec2(173.1, 291.7));
+        if flower_hash > 0.93 && grass_amount > 0.4 {
+            let flower_sub = fract(pos * 4.0) - 0.5;
+            let flower_dist = length(flower_sub);
+            if flower_dist < 0.12 {
+                let flower_type = hash2(floor(pos * 4.0) + vec2(0.0, 500.0));
+                var flower_col = vec3(0.85, 0.25, 0.20); // red
+                if flower_type > 0.7 { flower_col = vec3(0.90, 0.80, 0.15); } // yellow
+                else if flower_type > 0.4 { flower_col = vec3(0.70, 0.30, 0.75); } // purple
+                else if flower_type > 0.2 { flower_col = vec3(0.90, 0.88, 0.82); } // white
+                color = mix(color, flower_col, smoothstep(0.12, 0.04, flower_dist));
+            }
+        }
+    }
+
+    // --- 5. Fine soil grain (always present, even without grass) ---
+    let grain = value_noise(pos * 8.0);
+    color += vec3((grain - 0.5) * 0.04); // subtle brightness variation
+
+    // --- 6. Pebbles / small stones (more common in dry/rocky areas) ---
+    let pebble_density = (1.0 - region) * (1.0 - moisture * 0.7); // more pebbles in dry areas
+    let pebble_hash = hash2(floor(pos * 5.0) + vec2(419.7, 137.3));
+    if pebble_hash > 1.0 - pebble_density * 0.15 {
+        let pebble_sub = fract(pos * 5.0) - 0.5;
+        let pebble_offset = hash2v(floor(pos * 5.0) + vec2(77.0, 33.0)) * 0.3 - 0.15;
+        let pebble_dist = length(pebble_sub - pebble_offset);
+        let pebble_r = 0.04 + hash2(floor(pos * 5.0) + vec2(200.0, 0.0)) * 0.04;
+        if pebble_dist < pebble_r {
+            let pebble_shade = hash2(floor(pos * 5.0) + vec2(500.0, 300.0));
+            let pebble_col = mix(vec3(0.45, 0.43, 0.40), vec3(0.58, 0.55, 0.50), pebble_shade);
+            color = mix(color, pebble_col, smoothstep(pebble_r, pebble_r * 0.3, pebble_dist));
+        }
+    }
+
+    return color;
+}
+
+// Terrain detail for stone blocks — cracks, mineral veins, color banding
+fn stone_detail(base_col: vec3<f32>, wx: f32, wy: f32) -> vec3<f32> {
+    let pos = vec2(wx, wy);
+    var color = base_col;
+
+    // Regional color variation (warm gray vs cool gray)
+    let region = value_noise(pos * 0.1);
+    let warm = vec3(0.54, 0.50, 0.44); // brownish gray
+    let cool = vec3(0.48, 0.50, 0.54); // bluish gray
+    color = mix(warm, cool, region);
+
+    // Layered strata (horizontal banding)
+    let strata = sin(wy * 3.0 + value_noise(pos * 0.5) * 2.0) * 0.03;
+    color += vec3(strata);
+
+    // Crack lines
+    let crack_noise = fbm(pos * 3.0 + vec2(57.0, 13.0), 3);
+    let crack = smoothstep(0.48, 0.50, crack_noise) * smoothstep(0.52, 0.50, crack_noise);
+    color = mix(color, color * 0.6, crack * 0.8);
+
+    // Mineral specks (rare bright/dark spots)
+    let mineral = hash2(floor(pos * 8.0));
+    if mineral > 0.95 {
+        let spec_sub = fract(pos * 8.0) - 0.5;
+        if length(spec_sub) < 0.06 {
+            color = mix(color, vec3(0.70, 0.68, 0.60), 0.5); // quartz-like
+        }
+    } else if mineral < 0.03 {
+        let spec_sub = fract(pos * 8.0) - 0.5;
+        if length(spec_sub) < 0.05 {
+            color = mix(color, vec3(0.25, 0.22, 0.20), 0.5); // dark mineral
+        }
+    }
+
+    // Fine grain texture
+    let grain = value_noise(pos * 12.0);
+    color += vec3((grain - 0.5) * 0.025);
+
+    return color;
+}
+
+// ============================================================
+// End terrain detail
+// ============================================================
 
 // --- Lighting ---
 // Sun arc: dawn (east/right) → noon (overhead) → dusk (west/left) → night → dawn
@@ -2839,6 +3042,19 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = crop_color;
     } else {
         color = block_base_color(btype, bflags);
+    }
+
+    // --- Procedural terrain detail (ground-level blocks only) ---
+    // Replace this block with sprite sampling when migrating to sprites.
+    if camera.enable_terrain_detail > 0.5 && bheight == 0u && (btype == 2u || btype == 0u) {
+        // Dirt / air (ground): full terrain detail with grass, flowers, pebbles
+        let td_wt_idx = u32(by) * u32(camera.grid_w) + u32(bx);
+        let td_wt = water_table_buf[td_wt_idx];
+        color = terrain_detail(color, world_x, world_y, bx, by,
+            td_wt, camera.rain_intensity, camera.wind_angle, camera.time);
+    } else if camera.enable_terrain_detail > 0.5 && bheight > 0u && btype == 1u {
+        // Stone block surface: cracks, veins, strata
+        color = stone_detail(color, world_x, world_y);
     }
 
     // Open door: treat as floor-level opening (overrides wall type)

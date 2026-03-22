@@ -384,6 +384,7 @@ struct App {
     pipe_network: PipeNetwork,         // gas pipe simulation
     liquid_network: PipeNetwork,       // liquid pipe simulation
     fluid_speed: f32,             // fluid simulation speed multiplier
+    enable_terrain_detail: bool,  // procedural terrain variation (grass, pebbles, etc.)
     enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
     enable_dir_bleed: bool,       // directional light bleed (expensive)
     enable_temporal: bool,        // temporal reprojection (reuse previous frame)
@@ -628,7 +629,7 @@ impl App {
                 prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
                 rain_intensity: 0.0, cloud_cover: 0.0, wind_magnitude: 0.0, wind_angle: 0.0,
                 use_shadow_map: 1.0, shadow_map_scale: 8.0, sound_speed: 0.0, sound_damping: 0.0,
-                sound_coupling: 0.0, _pad4_a: 0.0, _pad4_b: 0.0, _pad4_c: 0.0,
+                sound_coupling: 0.0, enable_terrain_detail: 1.0, _pad4_b: 0.0, _pad4_c: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -678,6 +679,7 @@ impl App {
             pipe_network: PipeNetwork::new(),
             liquid_network: PipeNetwork::new(),
             fluid_speed: 1.0,
+            enable_terrain_detail: true,
             enable_prox_glow: true,
             enable_dir_bleed: true,
             enable_temporal: true,
@@ -2896,6 +2898,7 @@ impl App {
 
         // Shadow map mode
         self.camera.use_shadow_map = if self.shadow_map_scale > 0 { 1.0 } else { 0.0 };
+        self.camera.enable_terrain_detail = if self.enable_terrain_detail { 1.0 } else { 0.0 };
         self.camera.shadow_map_scale = self.shadow_map_scale.max(1) as f32;
 
         // Update camera uniform
