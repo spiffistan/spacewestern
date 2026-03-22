@@ -4,7 +4,7 @@
 //! Simulation runs on CPU each frame. Gas composition (smoke, O2, CO2, temp)
 //! flows through the pipe network from high to low pressure.
 
-use crate::grid::{GRID_W, GRID_H, block_type_rs, block_flags_rs};
+use crate::grid::{GRID_W, GRID_H, block_type_rs, block_flags_rs, DIR_MASKS};
 
 /// For a 3-tile bridge, find the partner entry/exit tile index.
 /// Bridge segment 0 (entry) connects to segment 2 (exit) 2 tiles away in the bridge direction.
@@ -152,7 +152,7 @@ impl PipeNetwork {
     /// `dt` is the frame delta time.
     /// `grid` is the block grid for reading valve states, pump directions, etc.
     /// Returns a list of (x, y, gas[4], velocity) for outlet injections.
-    pub fn tick(&mut self, dt: f32, grid: &[u32], pipe_width: f32) -> Vec<(f32, f32, [f32; 4], f32)> {
+    pub fn tick(&mut self, dt: f32, grid: &[u32], _pipe_width: f32) -> Vec<(f32, f32, [f32; 4], f32)> {
         let mut outlet_injections = Vec::new();
         let indices: Vec<u32> = self.cells.keys().copied().collect();
 
@@ -219,7 +219,7 @@ impl PipeNetwork {
                     }
                 }
 
-                let dir_masks: [(i32, i32, u32); 4] = [(0, -1, 0x1), (0, 1, 0x4), (1, 0, 0x2), (-1, 0, 0x8)];
+                let dir_masks = DIR_MASKS;
                 for &(dx, dy, dmask) in &dir_masks {
                     // Bridge direction filtering
                     if is_bridge {

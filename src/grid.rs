@@ -87,6 +87,27 @@ pub fn is_conductor_rs(bt: u8, flags: u8) -> bool {
     matches!(bt, 36..=43 | 45 | 48 | 51 | 7 | 10..=12 | 16) || (flags & 0x80) != 0
 }
 
+/// Is this block type a ground/floor tile (walkable base, not a placed object)?
+pub fn is_ground_block(bt: u32) -> bool {
+    bt_is!(bt, BT_AIR, BT_DIRT, BT_WATER, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR, BT_DUG_GROUND)
+}
+
+/// Is this block type a structural wall?
+pub fn is_wall_block(bt: u32) -> bool {
+    bt_is!(bt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED,
+        BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE, BT_MUD_WALL, BT_DIAGONAL)
+}
+
+/// Is this block type a wire/power equipment (height byte = connection mask, not visual)?
+pub fn is_wire_block(bt: u32) -> bool {
+    bt_is!(bt, BT_WIRE, BT_DIMMER, BT_SWITCH, BT_BREAKER, BT_WIRE_BRIDGE)
+}
+
+/// Direction mask constants for pipe/wire connections.
+/// Encoded in height byte upper nibble: N=0x10, E=0x20, S=0x40, W=0x80.
+/// After >> 4: N=1, E=2, S=4, W=8.
+pub const DIR_MASKS: [(i32, i32, u32); 4] = [(0, -1, 0x1), (0, 1, 0x4), (1, 0, 0x2), (-1, 0, 0x8)];
+
 /// Unpacked block data for convenient access.
 pub struct BlockInfo {
     pub raw: u32,

@@ -1329,7 +1329,7 @@ impl App {
         if close { self.context_menu = None; }
     }
 
-    fn draw_overlays_and_popups(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), bp_ppp: f32, dt: f32) {
+    fn draw_overlays_and_popups(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), _bp_ppp: f32, _dt: f32) {
         // Wind compass (upper-left, below top menu bar)
         {
             let wx = self.fluid_params.wind_x;
@@ -1430,7 +1430,7 @@ impl App {
                     let ibt = ib & 0xFF;
                     let ibh = (ib >> 8) & 0xFF;
                     let solid = ibh > 0 && (ibt == 1 || ibt == 4 || ibt == 5 || ibt == 14 || (ibt >= 21 && ibt <= 25) || ibt == 35);
-                    let pipe = (ibt >= 15 && ibt <= 20) || ibt == 46 || ibt == 49 || ibt == 50 || ibt == 52 || ibt == 53 || ibt == 54;
+                    let pipe = pipes::is_pipe_component(ibt as u8);
                     (solid, pipe)
                 } else { (false, false) };
                 let voltage_str = if self.debug.voltage > 0.01 {

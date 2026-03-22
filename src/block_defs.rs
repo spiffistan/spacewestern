@@ -4,7 +4,6 @@
 use serde::Deserialize;
 use crate::materials::{GpuMaterial, NUM_MATERIALS};
 use bytemuck::Zeroable;
-use std::collections::HashMap;
 
 #[derive(Deserialize)]
 struct BlockFile {

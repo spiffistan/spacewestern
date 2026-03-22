@@ -16,7 +16,6 @@ mod sprites;
 mod block_defs;
 
 use materials::{GpuMaterial, build_material_table};
-use block_defs::BlockRegistry;
 use grid::*;
 use sprites::generate_tree_sprites;
 
@@ -44,7 +43,7 @@ mod physics;
 use physics::{PhysicsBody, tick_bodies, pleb_body_collision, nearest_body};
 
 mod zones;
-use zones::{Zone, ZoneKind, WorkTask, generate_work_tasks, CROP_GROW_TIME, CROP_TEMP_MIN, CROP_TEMP_MAX, CROP_OPTIMAL_LOW, CROP_OPTIMAL_HIGH, CROP_PLANTED, CROP_SPROUT, CROP_GROWING, CROP_MATURE};
+use zones::{Zone, ZoneKind};
 
 mod weather;
 use weather::{WeatherState, tick_weather, tick_wetness};
@@ -1636,7 +1635,7 @@ impl App {
             }
 
             // World selection: click non-ground blocks or blueprints to select
-            let is_ground = bt_is!(bt as u32, BT_AIR, BT_DIRT, BT_WATER, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR, BT_DUG_GROUND);
+            let is_ground = is_ground_block(bt as u32);
             let has_bp = self.blueprints.contains_key(&(bx, by));
             if !is_ground || has_bp {
                 let (sel_x, sel_y, sel_w, sel_h, sel_bt) = if has_bp {
@@ -3652,8 +3651,7 @@ impl ApplicationHandler for App {
                                     let b = self.grid_data[bidx];
                                     let bbt = block_type_rs(b);
                                     let bflags = block_flags_rs(b);
-                                    let is_gnd = bt_is!(bbt as u32, BT_AIR, BT_DIRT, BT_WATER, BT_WOOD_FLOOR,
-                                        BT_STONE_FLOOR, BT_CONCRETE_FLOOR, BT_DUG_GROUND);
+                                    let is_gnd = is_ground_block(bbt as u32);
                                     // Include blueprints even on ground tiles
                                     let has_blueprint = self.blueprints.contains_key(&(gx, gy));
                                     if is_gnd && !has_blueprint { continue; }

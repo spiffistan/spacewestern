@@ -4,7 +4,6 @@
 //! This module owns the `GpuMaterial` struct definition (must match all WGSL shaders)
 //! and re-exports the table builder for convenience.
 
-use bytemuck::Zeroable;
 
 pub const NUM_MATERIALS: usize = 55;
 
