@@ -302,9 +302,18 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
 
     if !is_walk(goal.0, goal.1) { return vec![]; }
 
+    // Chebyshev distance heuristic (optimal for 8-directional with cost 10/14)
     let heuristic = |a: (i32, i32)| -> i32 {
-        (a.0 - goal.0).abs() + (a.1 - goal.1).abs()
+        let dx = (a.0 - goal.0).abs();
+        let dy = (a.1 - goal.1).abs();
+        10 * (dx + dy) + (14 - 2 * 10) * dx.min(dy) // = 10*max + 14*min - 10*min = 10*max + 4*min
     };
+
+    // 8 directions: 4 cardinal + 4 diagonal
+    const DIRS: [(i32, i32, i32); 8] = [
+        (0, -1, 10), (0, 1, 10), (-1, 0, 10), (1, 0, 10),       // cardinal: cost 10
+        (-1, -1, 14), (1, -1, 14), (-1, 1, 14), (1, 1, 14),      // diagonal: cost 14
+    ];
 
     let mut open = BinaryHeap::new();
     let mut came_from: HashMap<(i32, i32), (i32, i32)> = HashMap::new();
@@ -327,11 +336,18 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
 
         let g = *g_score.get(&current).unwrap_or(&i32::MAX);
 
-        for &(ndx, ndy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
+        for &(ndx, ndy, cost) in &DIRS {
             let next = (current.0 + ndx, current.1 + ndy);
             if !is_walk(next.0, next.1) { continue; }
 
-            let ng = g + 1;
+            // Diagonal: require both adjacent cardinal tiles to be walkable (no corner-cutting)
+            if ndx != 0 && ndy != 0 {
+                if !is_walk(current.0 + ndx, current.1) || !is_walk(current.0, current.1 + ndy) {
+                    continue;
+                }
+            }
+
+            let ng = g + cost;
             if ng < *g_score.get(&next).unwrap_or(&i32::MAX) {
                 g_score.insert(next, ng);
                 came_from.insert(next, current);
