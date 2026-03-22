@@ -246,6 +246,9 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         let is_pipe = ((bt32 >= 15 && bt32 <= 20) || bt32 == BT_RESTRICTOR
             || bt32 == BT_LIQUID_PIPE || bt32 == BT_PIPE_BRIDGE
             || bt32 == BT_LIQUID_INTAKE || bt32 == BT_LIQUID_PUMP || bt32 == BT_LIQUID_OUTPUT) && bh <= 1;
+        // Wire/power equipment: height byte is connection mask, not visual height
+        let is_wire = bt32 == BT_WIRE || bt32 == BT_DIMMER || bt32 == BT_SWITCH
+            || bt32 == BT_BREAKER || bt32 == BT_WIRE_BRIDGE;
         // Diagonal wall: check which side of the diagonal this corner is on
         if bt == BT_DIAGONAL {
             let variant = ((b >> 19) & 3) as u32;
@@ -260,7 +263,7 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
             if on_wall { return false; }
             continue; // open half is walkable
         }
-        if !is_door && !is_dug_shallow && !is_pipe && (bh > 0 || !is_type_walkable(bt)) {
+        if !is_door && !is_dug_shallow && !is_pipe && !is_wire && (bh > 0 || !is_type_walkable(bt)) {
             return false;
         }
     }
@@ -296,8 +299,11 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
         let is_any_pipe = (bt32 >= 15 && bt32 <= 20) || bt32 == BT_RESTRICTOR
             || bt32 == BT_LIQUID_PIPE || bt32 == BT_PIPE_BRIDGE
             || bt32 == BT_LIQUID_INTAKE || bt32 == BT_LIQUID_PUMP || bt32 == BT_LIQUID_OUTPUT;
-        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == BT_DUG_GROUND && bh <= 1) || (is_any_pipe && bh <= 1)
-            || bt32 == BT_DIAGONAL // diagonal wall: partially walkable (continuous check handles collision)
+        let is_wire = bt32 == BT_WIRE || bt32 == BT_DIMMER || bt32 == BT_SWITCH
+            || bt32 == BT_BREAKER || bt32 == BT_WIRE_BRIDGE;
+        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == BT_DUG_GROUND && bh <= 1)
+            || (is_any_pipe && bh <= 1) || is_wire
+            || bt32 == BT_DIAGONAL
     };
 
     if !is_walk(goal.0, goal.1) { return vec![]; }
