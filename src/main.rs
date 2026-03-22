@@ -2649,7 +2649,8 @@ impl App {
 
         // WASD camera pan when no pleb is selected
         if self.selected_pleb.is_none() {
-            let pan_speed = self.camera_pan_speed / self.camera.zoom;
+            let shift = self.pressed_keys.contains(&KeyCode::ShiftLeft) || self.pressed_keys.contains(&KeyCode::ShiftRight);
+            let pan_speed = self.camera_pan_speed / self.camera.zoom * if shift { 2.0 } else { 1.0 };
             let mut pan_x = 0.0f32;
             let mut pan_y = 0.0f32;
             if self.pressed_keys.contains(&KeyCode::KeyW) || self.pressed_keys.contains(&KeyCode::ArrowUp) { pan_y -= 1.0; }
