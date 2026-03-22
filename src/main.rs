@@ -20,7 +20,7 @@ use grid::*;
 use sprites::generate_tree_sprites;
 
 mod pleb;
-use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity, PlebShift, PlebSchedule};
+use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, astar_path_elev, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity, PlebShift, PlebSchedule};
 
 mod needs;
 use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate, BERRY_HUNGER_RESTORE, HEAT_CRISIS_TEMP};
@@ -385,6 +385,7 @@ struct App {
     liquid_network: PipeNetwork,       // liquid pipe simulation
     fluid_speed: f32,             // fluid simulation speed multiplier
     enable_terrain_detail: bool,  // procedural terrain variation (grass, pebbles, etc.)
+    terrain_ao_strength: f32,     // terrain ambient occlusion strength (0-1)
     enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
     enable_dir_bleed: bool,       // directional light bleed (expensive)
     enable_temporal: bool,        // temporal reprojection (reuse previous frame)
@@ -481,6 +482,7 @@ struct App {
     water_phase: usize,
     water_frame: u32,
     water_table: Vec<f32>, // static water table height map (CPU copy for info overlay)
+    elevation_data: Vec<f32>, // terrain elevation (0.0–6.0 tiles of height)
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
@@ -534,6 +536,7 @@ struct GfxState {
     sound_pipeline: wgpu::ComputePipeline,
     sound_bind_groups: [wgpu::BindGroup; 2],  // ping-pong
     sound_source_buffer: wgpu::Buffer,
+    elevation_buffer: wgpu::Buffer,
     // Power grid
     voltage_buffer: wgpu::Buffer,
     power_pipeline: wgpu::ComputePipeline,
@@ -629,7 +632,7 @@ impl App {
                 prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
                 rain_intensity: 0.0, cloud_cover: 0.0, wind_magnitude: 0.0, wind_angle: 0.0,
                 use_shadow_map: 1.0, shadow_map_scale: 8.0, sound_speed: 0.0, sound_damping: 0.0,
-                sound_coupling: 0.0, enable_terrain_detail: 1.0, _pad4_b: 0.0, _pad4_c: 0.0,
+                sound_coupling: 0.0, enable_terrain_detail: 1.0, terrain_ao_strength: 2.5, _pad4_c: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -680,6 +683,7 @@ impl App {
             liquid_network: PipeNetwork::new(),
             fluid_speed: 1.0,
             enable_terrain_detail: true,
+            terrain_ao_strength: 2.5,
             enable_prox_glow: true,
             enable_dir_bleed: true,
             enable_temporal: true,
@@ -782,7 +786,8 @@ impl App {
             crop_timers: std::collections::HashMap::new(),
             water_phase: 0,
             water_frame: 0,
-            water_table: Vec::new(), // populated after grid gen in init_gfx_async
+            water_table: Vec::new(),
+            elevation_data: Vec::new(), // populated after grid gen in init_gfx_async
             diag_preview: Vec::new(),
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
@@ -889,10 +894,28 @@ impl App {
         let bt = block_type_rs(block);
         let bh = (block >> 8) & 0xFF;
         if on_furniture {
-            bt == 9 // bench
-        } else {
-            (bt == 0 || bt == 2) && bh == 0
+            return bt == 9; // bench
         }
+        if !((bt == 0 || bt == 2) && bh == 0) {
+            return false;
+        }
+        // Check terrain slope: too steep = can't build
+        if !self.elevation_data.is_empty() && idx < self.elevation_data.len() {
+            let elev = self.elevation_data[idx];
+            // Check neighbor elevation differences
+            for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+                let nx = x + dx;
+                let ny = y + dy;
+                if nx >= 0 && ny >= 0 && nx < GRID_W as i32 && ny < GRID_H as i32 {
+                    let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                    if nidx < self.elevation_data.len() {
+                        let diff = (self.elevation_data[nidx] - elev).abs();
+                        if diff > 1.0 { return false; } // too steep
+                    }
+                }
+            }
+        }
+        true
     }
 
     /// Convert screen pixel coordinates to world block coordinates
@@ -2492,6 +2515,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
                     wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
+                    wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2518,6 +2542,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
                     wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
+                    wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2544,6 +2569,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
                     wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
+                    wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2570,6 +2596,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
                     wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
+                    wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -2899,6 +2926,7 @@ impl App {
         // Shadow map mode
         self.camera.use_shadow_map = if self.shadow_map_scale > 0 { 1.0 } else { 0.0 };
         self.camera.enable_terrain_detail = if self.enable_terrain_detail { 1.0 } else { 0.0 };
+        self.camera.terrain_ao_strength = self.terrain_ao_strength;
         self.camera.shadow_map_scale = self.shadow_map_scale.max(1) as f32;
 
         // Update camera uniform

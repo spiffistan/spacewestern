@@ -524,6 +524,188 @@ pub fn generate_water_table(grid: &[u32]) -> Vec<f32> {
     table
 }
 
+/// Compute terrain ambient occlusion by tracing rays in dawn AND dusk sun directions.
+/// Uses soft occlusion (proportional to how much terrain exceeds the ray) and
+/// Gaussian blur for smooth, natural-looking structural shadows.
+/// Produces a 0.0–1.0 value per cell: 1.0 = fully exposed, lower = occluded.
+pub fn compute_terrain_ao(elevation: &[f32]) -> Vec<f32> {
+    let w = GRID_W as i32;
+    let h = GRID_H as i32;
+    let mut ao = vec![1.0f32; elevation.len()];
+
+    // Dawn (~04:20) and dusk (~19:20) sun directions
+    let dawn_angle = 0.0436 * std::f32::consts::PI;
+    let dusk_angle = 0.9364 * std::f32::consts::PI;
+    let dawn_dir = (-dawn_angle.cos(), -dawn_angle.sin() * 0.6 - 0.2);
+    let dusk_dir = (-dusk_angle.cos(), -dusk_angle.sin() * 0.6 - 0.2);
+    let norm = |d: (f32, f32)| -> (f32, f32) {
+        let len = (d.0 * d.0 + d.1 * d.1).sqrt();
+        (d.0 / len, d.1 / len)
+    };
+    let dawn_n = norm(dawn_dir);
+    let dusk_n = norm(dusk_dir);
+    let dirs: [(f32, f32); 6] = [
+        dawn_n, dusk_n,
+        (0.0, -1.0), (0.0, 1.0),
+        norm((dawn_n.0 + dusk_n.0, dawn_n.1 - 0.5)),
+        norm((dusk_n.0 + dawn_n.0, dusk_n.1 + 0.5)),
+    ];
+    let sun_angle = 0.20f32;
+    let max_dist = 18;
+
+    // Pass 1: soft occlusion — accumulate proportional blocking from ALL obstacles
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+            let e = elevation[idx];
+            let mut blocked = 0.0f32;
+
+            for &(dx, dy) in &dirs {
+                let mut ray_blocked = false;
+                for step in 1..=max_dist {
+                    let sx = x as f32 + dx * step as f32;
+                    let sy = y as f32 + dy * step as f32;
+                    let sxi = sx as i32;
+                    let syi = sy as i32;
+                    if sxi < 0 || syi < 0 || sxi >= w || syi >= h { break; }
+                    let sidx = (syi * w + sxi) as usize;
+                    let ray_h = e + sun_angle * step as f32;
+                    let excess = elevation[sidx] - ray_h;
+                    if excess > 0.0 {
+                        // Soft: proportional to how much the obstacle exceeds the ray
+                        // Capped at 2.0 to avoid extreme values from tall cliffs
+                        let block_amount = excess.min(2.0);
+                        // Inverse square falloff with distance
+                        let weight = 1.0 / (1.0 + step as f32 * step as f32 * 0.1);
+                        blocked += block_amount * weight;
+                        ray_blocked = true;
+                        break; // first obstacle along this ray
+                    }
+                }
+                // Small ambient contribution if ray escaped (exposed to sky)
+                if !ray_blocked {
+                    blocked -= 0.02; // slightly brighten fully exposed cells
+                }
+            }
+
+            ao[idx] = (1.0 - blocked * 0.10).clamp(0.4, 1.0);
+        }
+    }
+
+    // Pass 2: Gaussian blur (7×7 kernel, applied twice for extra softness)
+    let kernel: [f32; 7] = [0.03, 0.11, 0.22, 0.28, 0.22, 0.11, 0.03];
+    for _pass in 0..2 {
+        // Horizontal
+        let mut temp = ao.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = 0.0f32;
+                let mut wt = 0.0f32;
+                for k in 0..7i32 {
+                    let sx = (x + k - 3).clamp(0, w - 1);
+                    let ki = kernel[k as usize];
+                    sum += temp[(y * w + sx) as usize] * ki;
+                    wt += ki;
+                }
+                ao[(y * w + x) as usize] = sum / wt;
+            }
+        }
+        // Vertical
+        temp.copy_from_slice(&ao);
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = 0.0f32;
+                let mut wt = 0.0f32;
+                for k in 0..7i32 {
+                    let sy = (y + k - 3).clamp(0, h - 1);
+                    let ki = kernel[k as usize];
+                    sum += temp[(sy * w + x) as usize] * ki;
+                    wt += ki;
+                }
+                ao[(y * w + x) as usize] = sum / wt;
+            }
+        }
+    }
+
+    ao
+}
+
+/// Adjust water table based on elevation — hilltops are drier, valleys wetter.
+/// Call after both water_table and elevation are generated.
+pub fn adjust_water_table_for_elevation(water_table: &mut [f32], elevation: &[f32]) {
+    for i in 0..water_table.len().min(elevation.len()) {
+        // Higher elevation = lower effective water table (drier hilltops)
+        // Lower elevation = higher effective water table (wet valleys)
+        water_table[i] -= elevation[i] * 0.4; // 0.4 units drier per elevation unit
+        water_table[i] = water_table[i].clamp(-3.0, 0.5);
+    }
+}
+
+/// Generate terrain elevation map using multi-octave noise.
+/// Returns 256×256 f32 values in range 0.0–6.0 representing tiles of height.
+/// Features: gentle rolling hills, flat areas in the center, low near water.
+pub fn generate_elevation(grid: &[u32]) -> Vec<f32> {
+    let w = GRID_W;
+    let h = GRID_H;
+    let mut elev = vec![0.0f32; (w * h) as usize];
+
+    let noise = |x: f32, y: f32| -> f32 {
+        let ix = x.floor() as i32;
+        let iy = y.floor() as i32;
+        let fx = x - x.floor();
+        let fy = y - y.floor();
+        let hash = |ix: i32, iy: i32| -> f32 {
+            let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
+                .wrapping_add(1013904223);
+            (h & 0xFFFF) as f32 / 65535.0
+        };
+        let a = hash(ix, iy);
+        let b = hash(ix + 1, iy);
+        let c = hash(ix, iy + 1);
+        let d = hash(ix + 1, iy + 1);
+        let sx = fx * fx * (3.0 - 2.0 * fx);
+        let sy = fy * fy * (3.0 - 2.0 * fy);
+        a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
+    };
+
+    // Mostly flat terrain with a few gentle hills rising from the plain.
+    // Hills are sparse — only where noise exceeds a high threshold do we get elevation.
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+            let fx = x as f32;
+            let fy = y as f32;
+
+            // Multi-octave noise for hill placement
+            let n1 = noise(fx * 0.025 + 300.0, fy * 0.025 + 700.0);   // broad features
+            let n2 = noise(fx * 0.06 + 500.0, fy * 0.06 + 100.0) * 0.4; // medium detail
+            let n3 = noise(fx * 0.15 + 800.0, fy * 0.15 + 400.0) * 0.15; // fine bumps
+            let raw = n1 + n2 + n3; // ~0.0–1.55 range
+
+            // Threshold: only values above ~0.7 produce hills (keeps most of map flat)
+            let hill_threshold = 0.65;
+            let hill_raw = ((raw - hill_threshold) / (1.0 - hill_threshold)).max(0.0);
+            // Smooth ramp: square root for gentle slopes, scale to max ~4 tiles high
+            let height = hill_raw.sqrt() * 4.0;
+
+            // Subtle undulation everywhere (very low amplitude, gives life to flat areas)
+            let micro = noise(fx * 0.08 + 150.0, fy * 0.08 + 250.0) * 0.15;
+
+            // Suppress near water
+            let bt = grid[idx] & 0xFF;
+            let water_suppress = if bt == BT_WATER { 0.0 } else { 1.0 };
+
+            // Edge fade: flatten near map edges (10 tile border)
+            let edge_dist = (fx.min(w as f32 - fx)).min(fy.min(h as f32 - fy));
+            let edge_fade = (edge_dist / 10.0).min(1.0);
+
+            elev[idx] = (height + micro) * water_suppress * edge_fade;
+        }
+    }
+
+    elev
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

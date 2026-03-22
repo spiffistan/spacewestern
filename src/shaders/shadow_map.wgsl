@@ -61,13 +61,14 @@ struct Camera {
     sound_damping: f32,
     sound_coupling: f32,
     enable_terrain_detail: f32,
-    _pad4_b: f32,
+    terrain_ao_strength: f32,
     _pad4_c: f32,
 };
 
 @group(0) @binding(0) var shadow_out: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(1) var<uniform> camera: Camera;
 @group(0) @binding(2) var<storage, read> grid: array<u32>;
+@group(0) @binding(3) var<storage, read> elevation: array<f32>;
 
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
@@ -88,6 +89,11 @@ fn get_roof_height(bx: i32, by: i32) -> f32 {
     return f32((block >> 24u) & 0xFFu);
 }
 
+fn get_elev(x: i32, y: i32) -> f32 {
+    if x < 0 || y < 0 || x >= i32(camera.grid_w) || y >= i32(camera.grid_h) { return 0.0; }
+    return elevation[(u32(y) * u32(camera.grid_w) + u32(x)) * 2u]; // stride 2: [elev, ao, ...]
+}
+
 const SHADOW_MAX_DIST: f32 = 12.0;
 const SHADOW_STEP: f32 = 0.25; // finer steps than raytrace (this runs at grid scale, not per-pixel)
 
@@ -97,7 +103,7 @@ const WINDOW_SILL_FRAC: f32 = 0.25;
 const WINDOW_LINTEL_FRAC: f32 = 0.15;
 
 fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_elev: f32) -> vec4<f32> {
-    if sun_elev < 0.05 { return vec4<f32>(1.0, 1.0, 1.0, 0.0); }
+    if camera.sun_intensity < 0.001 { return vec4<f32>(1.0, 1.0, 1.0, 0.0); }
 
     let dir2d = normalize(sun_dir);
     let step_x = dir2d.x * SHADOW_STEP;
@@ -119,7 +125,7 @@ fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_e
         let bx = i32(floor(sx));
         let by = i32(floor(sy));
         let block = get_block(bx, by);
-        let bh = f32(block_height(block));
+        let bh = f32(block_height(block)) + get_elev(bx, by); // block height + terrain elevation
         let bt = block_type(block);
 
         let rh = get_roof_height(bx, by);
@@ -219,7 +225,7 @@ fn main_shadow(@builtin(global_invocation_id) gid: vec3<u32>) {
     let bx = i32(floor(wx));
     let by = i32(floor(wy));
     let block = get_block(bx, by);
-    let bh = f32(block_height(block));
+    let bh = f32(block_height(block)) + get_elev(bx, by); // include terrain elevation
 
     let sun_dir = vec2<f32>(camera.sun_dir_x, camera.sun_dir_y);
     let sun_elev = camera.sun_elevation;

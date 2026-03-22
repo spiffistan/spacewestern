@@ -60,7 +60,7 @@ struct Camera {
     sound_damping: f32,
     sound_coupling: f32,
     enable_terrain_detail: f32,
-    _pad4_b: f32,
+    terrain_ao_strength: f32,
     _pad4_c: f32,
 };
 
@@ -84,6 +84,7 @@ struct Camera {
 @group(0) @binding(17) var<storage, read> water_table_buf: array<f32>;
 @group(0) @binding(18) var shadow_map_tex: texture_2d<f32>;
 @group(0) @binding(19) var sound_tex: texture_2d<f32>;
+@group(0) @binding(20) var<storage, read> elevation_buf: array<f32>;
 
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
@@ -417,6 +418,56 @@ fn stone_detail(base_col: vec3<f32>, wx: f32, wy: f32) -> vec3<f32> {
     return color;
 }
 
+// --- Smooth elevation sampling (bilinear interpolation across tile boundaries) ---
+// elevation_buf is interleaved: [elev, ao, elev, ao, ...] — stride 2 per cell.
+fn sample_elevation(wx: f32, wy: f32) -> f32 {
+    let gx = wx - 0.5;
+    let gy = wy - 0.5;
+    let ix = i32(floor(gx));
+    let iy = i32(floor(gy));
+    let fx = fract(gx);
+    let fy = fract(gy);
+    let gw = i32(camera.grid_w);
+    let gh = i32(camera.grid_h);
+    let cx0 = u32(clamp(ix, 0, gw - 1));
+    let cx1 = u32(clamp(ix + 1, 0, gw - 1));
+    let cy0 = u32(clamp(iy, 0, gh - 1));
+    let cy1 = u32(clamp(iy + 1, 0, gh - 1));
+    let w = u32(camera.grid_w);
+    let a = elevation_buf[(cy0 * w + cx0) * 2u];
+    let b = elevation_buf[(cy0 * w + cx1) * 2u];
+    let c = elevation_buf[(cy1 * w + cx0) * 2u];
+    let d = elevation_buf[(cy1 * w + cx1) * 2u];
+    let ux = fx * fx * (3.0 - 2.0 * fx);
+    let uy = fy * fy * (3.0 - 2.0 * fy);
+    return mix(mix(a, b, ux), mix(c, d, ux), uy);
+}
+
+// Sample terrain ambient occlusion (bilinear interpolated, from interleaved buffer).
+// Returns 0.6–1.0: lower = more occluded (valley), higher = exposed (hilltop).
+fn sample_terrain_ao(wx: f32, wy: f32) -> f32 {
+    let gx = wx - 0.5;
+    let gy = wy - 0.5;
+    let ix = i32(floor(gx));
+    let iy = i32(floor(gy));
+    let fx = fract(gx);
+    let fy = fract(gy);
+    let gw = i32(camera.grid_w);
+    let gh = i32(camera.grid_h);
+    let cx0 = u32(clamp(ix, 0, gw - 1));
+    let cx1 = u32(clamp(ix + 1, 0, gw - 1));
+    let cy0 = u32(clamp(iy, 0, gh - 1));
+    let cy1 = u32(clamp(iy + 1, 0, gh - 1));
+    let w = u32(camera.grid_w);
+    let a = elevation_buf[(cy0 * w + cx0) * 2u + 1u];
+    let b = elevation_buf[(cy0 * w + cx1) * 2u + 1u];
+    let c = elevation_buf[(cy1 * w + cx0) * 2u + 1u];
+    let d = elevation_buf[(cy1 * w + cx1) * 2u + 1u];
+    let ux = fx * fx * (3.0 - 2.0 * fx);
+    let uy = fy * fy * (3.0 - 2.0 * fy);
+    return mix(mix(a, b, ux), mix(c, d, ux), uy);
+}
+
 // ============================================================
 // End terrain detail
 // ============================================================
@@ -509,7 +560,7 @@ const INTERIOR_WINDOW_AMBIENT: f32 = 0.12;
 //   light_factor ~1.0 if ray exits through glass (sunbeam), ~0.0 if hits wall.
 fn trace_interior_sun_ray(wx: f32, wy: f32, sun_dir: vec2<f32>) -> vec4<f32> {
     // Skip interior sun ray at night — no sunbeams when sun is down
-    if camera.sun_intensity < 0.02 { return vec4<f32>(1.0, 1.0, 1.0, 0.0); }
+    if camera.sun_intensity < 0.001 { return vec4<f32>(1.0, 1.0, 1.0, 0.0); }
     let dir2d = normalize(sun_dir);
     let step_size = 0.25;
     let step_x = dir2d.x * step_size;
@@ -1383,14 +1434,16 @@ fn roof_color(wx: f32, wy: f32) -> vec3<f32> {
 // Traces from a world position toward the sun, accumulating occlusion.
 // Returns: vec4(tint_rgb, light_factor)
 fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_elev: f32) -> vec4<f32> {
-    // Skip shadow tracing at night — no sun means no shadows
-    if sun_elev < 0.05 { return vec4<f32>(1.0, 1.0, 1.0, 0.0); }
+    // At night (no sun), everything is in shadow — light_factor = 0
+    if camera.sun_intensity < 0.001 { return vec4<f32>(1.0, 1.0, 1.0, 0.0); }
     let dir2d = normalize(sun_dir);
     let step_x = dir2d.x * SHADOW_STEP;
     let step_y = dir2d.y * SHADOW_STEP;
     let step_h = sun_elev * SHADOW_STEP;
 
-    var current_h = surface_height;
+    // Include terrain elevation in the starting height
+    let start_elev = sample_elevation(wx, wy);
+    var current_h = surface_height + start_elev;
     var sx = wx;
     var sy = wy;
     var light = 1.0;
@@ -1405,7 +1458,9 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let bx = i32(floor(sx));
         let by = i32(floor(sy));
         let block = get_block(bx, by);
-        let bh = f32(block_height(block));
+        // Include terrain elevation in obstacle height
+        let sample_elev = sample_elevation(sx, sy);
+        let bh = f32(block_height(block)) + sample_elev;
         let bt = block_type(block);
 
         // Shadow occlusion logic:
@@ -1763,6 +1818,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // Terrain elevation slope face — disabled for now (causes sharp lines at low oblique).
+    // TODO: re-enable with dedicated slope strength parameter independent of wall oblique.
+    let is_slope_face = false;
+    let slope_face_t = 0.0;
+
     // Sun parameters precomputed on CPU (no per-pixel trig)
     let sun_dir = vec2<f32>(camera.sun_dir_x, camera.sun_dir_y);
     let sun_elev = camera.sun_elevation;
@@ -1907,6 +1967,30 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                   + face_glow * face_glow_mul * 0.08;
         }
 
+        color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+        textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
+        return;
+    }
+
+    // --- Terrain slope face (elevation-based oblique) ---
+    if is_slope_face {
+        // Earth/soil slope face — darker at bottom, grassy variation
+        let slope_noise = value_noise(vec2(world_x * 3.0, slope_face_t * 5.0 + world_y));
+        let soil_dark = vec3<f32>(0.32, 0.24, 0.14); // deep soil
+        let soil_surface = vec3<f32>(0.42, 0.34, 0.20); // surface soil
+        var slope_color = mix(soil_surface, soil_dark, slope_face_t);
+        // Grass at the top edge of the slope
+        if slope_face_t < 0.25 {
+            let grass_t = 1.0 - slope_face_t / 0.25;
+            slope_color = mix(slope_color, vec3(0.25, 0.38, 0.15), grass_t * 0.6);
+        }
+        // Soil texture
+        slope_color += vec3((slope_noise - 0.5) * 0.04);
+        // Ambient occlusion at bottom
+        slope_color *= (0.65 + 0.35 * (1.0 - slope_face_t));
+        // Lighting: slope faces south so mostly in shade, slight indirect
+        let indirect = sun_color * camera.sun_intensity * 0.10;
+        color = slope_color * (ambient * 0.5 + indirect);
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
         textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
         return;
@@ -3048,13 +3132,47 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Replace this block with sprite sampling when migrating to sprites.
     if camera.enable_terrain_detail > 0.5 && bheight == 0u && (btype == 2u || btype == 0u) {
         // Dirt / air (ground): full terrain detail with grass, flowers, pebbles
-        let td_wt_idx = u32(by) * u32(camera.grid_w) + u32(bx);
-        let td_wt = water_table_buf[td_wt_idx];
+        let td_idx = u32(by) * u32(camera.grid_w) + u32(bx);
+        let td_wt = water_table_buf[td_idx];
+        let td_elev = sample_elevation(world_x, world_y); // smooth interpolated
+        // Hilltops are drier (reduce effective water table with elevation)
+        let effective_wt = td_wt - td_elev * 0.3;
         color = terrain_detail(color, world_x, world_y, bx, by,
-            td_wt, camera.rain_intensity, camera.wind_angle, camera.time);
+            effective_wt, camera.rain_intensity, camera.wind_angle, camera.time);
     } else if camera.enable_terrain_detail > 0.5 && bheight > 0u && btype == 1u {
         // Stone block surface: cracks, veins, strata
         color = stone_detail(color, world_x, world_y);
+    }
+
+    // --- Elevation visual cues (ground-level blocks only) ---
+    // Uses bilinear-interpolated elevation for smooth gradients (no tile-edge jaggies).
+    if camera.enable_terrain_detail > 0.5 && bheight == 0u {
+        let elev = sample_elevation(world_x, world_y);
+
+        // 1. Altitude brightness: higher = lighter, lower = darker (topographic convention)
+        let elev_bright = 1.0 + elev * 0.06;
+        color *= elev_bright;
+
+        // 2. Hillshade: terrain normal dotted with sun direction
+        // Creates directional lighting on slopes — sun-facing bright, shadow-facing dark.
+        let e_dx = sample_elevation(world_x + 0.5, world_y) - sample_elevation(world_x - 0.5, world_y);
+        let e_dy = sample_elevation(world_x, world_y + 0.5) - sample_elevation(world_x, world_y - 0.5);
+        let terrain_normal = normalize(vec3(-e_dx, -e_dy, 1.5));
+        // Use a fixed northwest illumination for consistent depth perception,
+        // blended with the actual sun direction when sun is up.
+        let fixed_light = normalize(vec3(-0.5, -0.7, 1.5)); // NW light (cartographic standard)
+        let sun3d = normalize(vec3(sun_dir.x, sun_dir.y, max(sun_elev, 0.5)));
+        let light_dir = normalize(mix(fixed_light, sun3d, camera.sun_intensity * 0.6));
+        let hillshade = dot(terrain_normal, light_dir);
+        // Apply ±15% brightness based on slope facing
+        color *= 0.92 + hillshade * 0.15;
+
+        // 3. Terrain ambient occlusion: pre-computed structural shadows from dawn+dusk rays.
+        // Valleys and terrain folds get permanent soft darkening; hilltops stay bright.
+        if camera.terrain_ao_strength > 0.01 {
+            let terrain_ao = sample_terrain_ao(world_x, world_y);
+            color *= mix(1.0, terrain_ao, camera.terrain_ao_strength);
+        }
     }
 
     // Open door: treat as floor-level opening (overrides wall type)

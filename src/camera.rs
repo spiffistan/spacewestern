@@ -58,6 +58,6 @@ pub struct CameraUniform {
     pub sound_damping: f32,     // wave equation energy loss per step
     pub sound_coupling: f32,    // strength of sound→gas velocity coupling
     pub enable_terrain_detail: f32, // 1.0 = procedural terrain, 0.0 = flat colors
-    pub _pad4_b: f32,
+    pub terrain_ao_strength: f32,   // 0.0 = no AO, 1.0 = full structural shadow
     pub _pad4_c: f32,
 }

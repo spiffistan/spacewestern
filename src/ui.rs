@@ -487,6 +487,7 @@ impl App {
                     if ui.selectable_label(self.enable_terrain_detail, "Terrain Detail").clicked() {
                         self.enable_terrain_detail = !self.enable_terrain_detail;
                     }
+                    ui.add(egui::Slider::new(&mut self.terrain_ao_strength, 0.0..=5.0).text("Terrain AO").step_by(0.1));
                     if ui.selectable_label(self.enable_prox_glow, "Proximity Glow").clicked() {
                         self.enable_prox_glow = !self.enable_prox_glow;
                     }
@@ -1618,7 +1619,7 @@ impl App {
                 if in_growing { "\n\u{1f33e} Growing Zone".to_string() } else { String::new() }
             } else { String::new() };
 
-            // Ground water info
+            // Ground water + elevation info
             let ground_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                 let gidx = (by as u32 * GRID_W + bx as u32) as usize;
                 let gb = self.grid_data[gidx];
@@ -1628,7 +1629,9 @@ impl App {
                 let wt_label = if wt > 0.0 { "spring" } else if wt > -0.5 { "wet" } else if wt > -1.5 { "moderate" } else { "dry" };
                 let sw = self.debug.water_level;
                 let sw_label = if sw > 0.5 { "flooded" } else if sw > 0.15 { "puddle" } else if sw > 0.01 { "moist" } else { "dry" };
-                let mut info = format!("\n\u{1f4a7} Surface: {:.2} ({}) | Table: {:.1} ({})", sw, sw_label, wt, wt_label);
+                let elev = if gidx < self.elevation_data.len() { self.elevation_data[gidx] } else { 0.0 };
+                let mut info = format!("\n\u{26f0} Elevation: {:.1}", elev);
+                info += &format!("\n\u{1f4a7} Surface: {:.2} ({}) | Table: {:.1} ({})", sw, sw_label, wt, wt_label);
                 if gbt == BT_DUG_GROUND {
                     info += &format!(" | Dug: {}", gbh);
                 }
@@ -2098,15 +2101,42 @@ impl App {
                     egui::pos2(sx, sy)
                 };
                 // Draw from pleb's current position through remaining path
+                // Color by elevation cost: green=flat, yellow=slight slope, red=steep uphill, blue=downhill
                 let mut prev = to_screen(pleb.x, pleb.y);
+                let mut prev_pos = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                 for i in pleb.path_idx..pleb.path.len() {
                     let (px, py) = pleb.path[i];
                     let next = to_screen(px as f32 + 0.5, py as f32 + 0.5);
+                    // Compute elevation difference for color
+                    let seg_color = if !self.elevation_data.is_empty() {
+                        let prev_idx = (prev_pos.1 as u32 * GRID_W + prev_pos.0 as u32) as usize;
+                        let next_idx = (py as u32 * GRID_W + px as u32) as usize;
+                        let elev_diff = if prev_idx < self.elevation_data.len() && next_idx < self.elevation_data.len() {
+                            self.elevation_data[next_idx] - self.elevation_data[prev_idx]
+                        } else { 0.0 };
+                        if elev_diff > 0.3 {
+                            // Uphill: yellow → red
+                            let t = ((elev_diff - 0.3) / 1.5).min(1.0);
+                            egui::Color32::from_rgba_unmultiplied(
+                                (255.0) as u8, (255.0 - t * 200.0) as u8, (100.0 - t * 100.0) as u8, 180)
+                        } else if elev_diff < -0.3 {
+                            // Downhill: cyan
+                            let t = ((-elev_diff - 0.3) / 1.5).min(1.0);
+                            egui::Color32::from_rgba_unmultiplied(
+                                (100.0 - t * 50.0) as u8, (200.0 + t * 55.0) as u8, 255, 180)
+                        } else {
+                            // Flat: green
+                            egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)
+                        }
+                    } else {
+                        egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)
+                    };
                     painter.line_segment(
                         [prev, next],
-                        egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)),
+                        egui::Stroke::new(2.0, seg_color),
                     );
                     prev = next;
+                    prev_pos = (px, py);
                 }
                 // Draw target marker at end
                 let last = pleb.path.last().unwrap();

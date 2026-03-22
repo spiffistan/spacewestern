@@ -2,7 +2,7 @@
 //! Extracted from main.rs to keep it manageable.
 
 use crate::*;
-use crate::grid::generate_water_table;
+use crate::grid::{generate_water_table, generate_elevation, compute_terrain_ao, adjust_water_table_for_elevation};
 
 impl App {
     pub(crate) async fn init_gfx_async(&mut self, window: Arc<Window>) {
@@ -48,7 +48,7 @@ impl App {
                     required_limits: {
                         let mut limits = wgpu::Limits::downlevel_defaults()
                             .using_resolution(adapter.limits());
-                        limits.max_storage_buffers_per_shader_stage = 8;
+                        limits.max_storage_buffers_per_shader_stage = 10;
                         limits
                     },
                     memory_hints: wgpu::MemoryHints::default(),
@@ -990,6 +990,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Terrain elevation buffer (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 20,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1032,6 +1043,32 @@ impl App {
             mapped_at_creation: false,
         });
         queue.write_buffer(&water_table_buffer, 0, bytemuck::cast_slice(&self.water_table));
+
+        // Elevation: terrain height map generated from noise
+        let elevation_data = generate_elevation(&self.grid_data);
+        self.elevation_data = elevation_data.clone();
+
+        // Adjust water table for elevation (hilltops drier, valleys wetter)
+        adjust_water_table_for_elevation(&mut self.water_table, &self.elevation_data);
+        queue.write_buffer(&water_table_buffer, 0, bytemuck::cast_slice(&self.water_table));
+
+        // Compute terrain ambient occlusion (structural shadows from low-angle rays)
+        let terrain_ao = compute_terrain_ao(&self.elevation_data);
+
+        // Interleave elevation + AO: [elev0, ao0, elev1, ao1, ...]
+        let grid_size = (GRID_W * GRID_H) as usize;
+        let mut elev_ao_data = vec![0.0f32; grid_size * 2];
+        for i in 0..grid_size {
+            elev_ao_data[i * 2] = self.elevation_data[i];
+            elev_ao_data[i * 2 + 1] = terrain_ao[i];
+        }
+        let elevation_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("elevation-ao"),
+            size: (GRID_W * GRID_H * 2 * 4) as u64, // 2 f32 per cell
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&elevation_buffer, 0, bytemuck::cast_slice(&elev_ao_data));
 
         let water_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("water-readback"),
@@ -1089,6 +1126,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
                 wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
+                wgpu::BindGroupEntry { binding: 20, resource: elevation_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1115,6 +1153,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
                 wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
+                wgpu::BindGroupEntry { binding: 20, resource: elevation_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1141,6 +1180,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
                 wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
+                wgpu::BindGroupEntry { binding: 20, resource: elevation_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1167,6 +1207,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 17, resource: water_table_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
                 wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
+                wgpu::BindGroupEntry { binding: 20, resource: elevation_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1399,6 +1440,7 @@ impl App {
                 wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::Rgba8Unorm, view_dimension: wgpu::TextureViewDimension::D2 }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         });
         let shadow_map_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1408,6 +1450,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&shadow_map_write_view) },
                 wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: grid_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: elevation_buffer.as_entire_binding() },
             ],
         });
         let shadow_map_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -1625,6 +1668,7 @@ impl App {
             sound_pipeline,
             sound_bind_groups: [sound_bg_0, sound_bg_1],
             sound_source_buffer,
+            elevation_buffer,
             voltage_buffer,
             pipe_flow_buffer,
             power_pipeline: power_pipeline_val,

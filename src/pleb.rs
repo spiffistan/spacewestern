@@ -340,6 +340,12 @@ pub fn adjacent_walkable(grid: &[u32], gx: i32, gy: i32) -> Option<(i32, i32)> {
 
 /// A* pathfinding on the block grid. Returns path from start to goal (inclusive), or empty if unreachable.
 pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
+    astar_path_elev(grid, &[], start, goal)
+}
+
+/// A* pathfinding with optional elevation-aware movement cost.
+/// Uphill movement costs more, downhill slightly less.
+pub fn astar_path_elev(grid: &[u32], elevation: &[f32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
     use std::collections::{BinaryHeap, HashMap};
     use std::cmp::Reverse;
 
@@ -408,7 +414,17 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
                 }
             }
 
-            let ng = g + cost;
+            // Elevation cost: uphill is harder, downhill slightly easier
+            let elev_cost = if !elevation.is_empty() {
+                let cur_idx = (current.1 as u32 * GRID_W + current.0 as u32) as usize;
+                let nxt_idx = (next.1 as u32 * GRID_W + next.0 as u32) as usize;
+                if cur_idx < elevation.len() && nxt_idx < elevation.len() {
+                    let diff = elevation[nxt_idx] - elevation[cur_idx];
+                    // Uphill: +3 cost per unit elevation. Downhill: -1 (slight benefit, clamped)
+                    (diff * 3.0).max(-1.0) as i32
+                } else { 0 }
+            } else { 0 };
+            let ng = g + cost + elev_cost;
             if ng < *g_score.get(&next).unwrap_or(&i32::MAX) {
                 g_score.insert(next, ng);
                 came_from.insert(next, current);
