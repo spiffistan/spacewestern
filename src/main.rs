@@ -1010,9 +1010,16 @@ impl App {
                 let bx = (idx % GRID_W as usize) as i32;
                 let by = (idx / GRID_W as usize) as i32;
                 let bt = block_type_rs(self.grid_data[idx]);
-                let replacement = fire::burn_replacement_pub(bt);
-                let roof_h = self.grid_data[idx] & 0xFF000000;
-                self.grid_data[idx] = make_block(replacement as u8, 0, 0) | (if replacement == BT_AIR { 0 } else { roof_h });
+                if bt == BT_DIRT {
+                    // Grass burned away — scorch the dirt (height=1), don't destroy
+                    let flags = (self.grid_data[idx] >> 16) & 0xFF;
+                    let roof_h = self.grid_data[idx] & 0xFF000000;
+                    self.grid_data[idx] = make_block(BT_DIRT as u8, 1, flags as u8) | roof_h;
+                } else {
+                    let replacement = fire::burn_replacement_pub(bt);
+                    let roof_h = self.grid_data[idx] & 0xFF000000;
+                    self.grid_data[idx] = make_block(replacement as u8, 0, 0) | (if replacement == BT_AIR { 0 } else { roof_h });
+                }
                 self.grid_dirty = true;
                 self.log_event(EventCategory::Weather, format!("Fire consumed block at ({}, {})", bx, by));
             }

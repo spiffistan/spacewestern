@@ -26,6 +26,8 @@ name = "Dirt"
 color = [0.45, 0.35, 0.20]
 light_transmission = 1.0
 walkable = true
+is_flammable = true
+ignition_temp = 180.0
 thermal = { heat_capacity = 2.0, conductivity = 0.003, solar_absorption = 0.5 }
 
 [[block]]

@@ -3315,6 +3315,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let effective_wt = td_wt - td_elev * 0.3;
         color = terrain_detail(color, world_x, world_y, bx, by,
             effective_wt, camera.rain_intensity, camera.wind_angle, camera.time);
+    } else if btype == BT_DIRT && bheight > 0u {
+        // Scorched dirt (grass burned away): dark charred earth, no vegetation
+        let char_noise = value_noise(vec2(world_x * 3.0, world_y * 3.0));
+        let ash_col = mix(vec3<f32>(0.15, 0.12, 0.08), vec3<f32>(0.25, 0.20, 0.14), char_noise);
+        // Scattered ash flecks
+        let ash_fleck = value_noise(vec2(world_x * 8.0 + 17.3, world_y * 8.0 + 41.7));
+        let fleck_col = mix(ash_col, vec3<f32>(0.35, 0.32, 0.28), smoothstep(0.7, 0.8, ash_fleck));
+        color = fleck_col;
     } else if camera.enable_terrain_detail > 0.5 && bheight > 0u && btype == BT_STONE {
         // Stone block surface: cracks, veins, strata
         color = stone_detail(color, world_x, world_y);
@@ -4237,7 +4245,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Temporal blend provides sufficient shadow smoothing.
 
     // --- Fire overlay for burning blocks (applied AFTER lighting so flames are emissive) ---
-    if mat.is_flammable > 0.5 {
+    // Skip scorched dirt (height > 0) — grass already burned away
+    let skip_fire = btype == BT_DIRT && bheight > 0u;
+    if mat.is_flammable > 0.5 && !skip_fire {
         let fire_tidx = u32(by) * u32(camera.grid_w) + u32(bx);
         let fire_temp = block_temps[fire_tidx];
         if fire_temp > mat.ignition_temp {

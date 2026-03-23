@@ -19,6 +19,7 @@ const RAIN_PROGRESS_REDUCE: f32 = 0.05; // burn progress reduction per sec in ra
 fn burn_time(bt: u32) -> Option<f32> {
     match bt {
         BT_TREE => Some(30.0),
+        BT_DIRT => Some(5.0),  // grass burns fast
         BT_BENCH => Some(15.0),
         BT_WOOD_WALL => Some(25.0),
         BT_WOOD_FLOOR => Some(20.0),
@@ -70,6 +71,10 @@ pub fn tick_fire(
         if idx >= grid_size { continue; }
         let block = grid[idx];
         let bt = block_type_rs(block);
+        let bh = (block >> 8) & 0xFF;
+
+        // Scorched dirt (height > 0) — already burned, remove
+        if bt == BT_DIRT && bh > 0 { burn_progress.remove(&idx); continue; }
 
         let bt_time = match burn_time(bt) {
             Some(t) => t,
@@ -134,6 +139,10 @@ pub fn tick_fire(
                     None => continue,
                 };
                 if !ndef.is_flammable { continue; }
+
+                // Scorched dirt (height > 0) — grass already burned, skip
+                let nbh = (nb >> 8) & 0xFF;
+                if nbt == BT_DIRT && nbh > 0 { continue; }
 
                 // Wind bonus: spreading downwind is easier
                 let wind_dot = dx as f32 * wind_dx + dy as f32 * wind_dy;
