@@ -993,11 +993,19 @@ impl App {
                     1.0 - (water_avail - 0.7) * 0.3 // waterlogged: slight penalty
                 };
 
+                // Soil richness from terrain data (0-31 → 0.3-1.3 multiplier)
+                let richness_factor = if idx < self.terrain_data.len() {
+                    let richness = terrain_richness(self.terrain_data[idx]);
+                    0.3 + (richness as f32 / 31.0) * 1.0
+                } else {
+                    1.0
+                };
+
                 // Per-tile randomness: 0.7-1.3 variation (deterministic from position)
                 let hash = (grid_idx.wrapping_mul(2654435761).wrapping_add(stage * 1013904223)) & 0xFFFF;
                 let random_factor = 0.7 + (hash as f32 / 65535.0) * 0.6;
 
-                let growth_rate = temp_factor * sun_factor * water_factor * random_factor;
+                let growth_rate = temp_factor * sun_factor * water_factor * random_factor * richness_factor;
                 *timer += grow_dt * growth_rate;
                 if *timer >= CROP_GROW_TIME {
                     *timer = 0.0;

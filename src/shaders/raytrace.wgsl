@@ -87,6 +87,7 @@ struct Camera {
 @group(0) @binding(20) var<storage, read> elevation_buf: array<f32>;
 @group(0) @binding(21) var fog_tex: texture_2d<f32>;
 @group(0) @binding(22) var fog_sampler: sampler;
+@group(0) @binding(23) var<storage, read> terrain_buf: array<u32>;
 
 // --- Fog of war helper (bilinear-sampled for smooth edges) ---
 fn sample_fog(wx: f32, wy: f32) -> f32 {
@@ -305,6 +306,19 @@ fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
 // Returns: modified color with terrain detail applied.
 //
 // This function is the single point to replace with sprite sampling later.
+// Terrain hue palette — indexed by terrain type (bits 0-3 of terrain_buf)
+// 0=grass, 1=sand, 2=rocky, 3=clay, 4=gravel, 5=snow, 6=marsh, 7=loam
+fn terrain_base_color(terrain_type: u32) -> vec3<f32> {
+    if terrain_type == 1u { return vec3(0.72, 0.62, 0.42); }  // sand: warm tan
+    if terrain_type == 2u { return vec3(0.45, 0.42, 0.38); }  // rocky: grey
+    if terrain_type == 3u { return vec3(0.50, 0.38, 0.25); }  // clay: reddish brown
+    if terrain_type == 4u { return vec3(0.48, 0.46, 0.42); }  // gravel: grey-brown
+    if terrain_type == 5u { return vec3(0.85, 0.88, 0.92); }  // snow: white
+    if terrain_type == 6u { return vec3(0.30, 0.35, 0.22); }  // marsh: dark green-brown
+    if terrain_type == 7u { return vec3(0.38, 0.30, 0.18); }  // loam: dark fertile
+    return vec3(0.42, 0.36, 0.22);                            // grass: default earth
+}
+
 fn terrain_detail(
     base_col: vec3<f32>,
     wx: f32, wy: f32,
@@ -315,86 +329,119 @@ fn terrain_detail(
     time: f32,
 ) -> vec3<f32> {
     let pos = vec2(wx, wy);
-    var color = base_col;
 
-    // --- 1. Large-scale soil variation (regional character) ---
-    let region = fbm(pos * 0.07, 3);       // 0..1, varies over ~14 tiles
-    let soil_dry = vec3(0.50, 0.40, 0.26);  // sandy, pale
-    let soil_rich = vec3(0.36, 0.28, 0.16); // dark, fertile
-    let soil_base = mix(soil_dry, soil_rich, region);
-    color = mix(color, soil_base, 0.6); // blend with original
+    // Read terrain parameters from buffer
+    let tidx = u32(by) * u32(camera.grid_w) + u32(bx);
+    let tdata = terrain_buf[tidx];
+    let t_type = tdata & 0xFu;
+    let t_veg = f32((tdata >> 4u) & 0x1Fu) / 31.0;       // 0..1 vegetation density
+    let t_grain = f32((tdata >> 9u) & 0xFu) / 15.0;       // 0..1 texture grain
+    let t_rough = f32((tdata >> 13u) & 0x3u) / 3.0;        // 0..1 roughness
+
+    // --- 1. Base soil color from terrain type ---
+    let soil_base = terrain_base_color(t_type);
+    // Add per-tile noise variation (subtle, prevents tiling artifacts)
+    let soil_noise = value_noise(pos * 0.4 + vec2(97.3, 41.2));
+    var color = mix(soil_base, soil_base * (0.85 + soil_noise * 0.3), 0.5);
 
     // --- 2. Moisture influence (from water table) ---
-    // water_table: negative = deep/dry, 0 = at surface, positive = spring
     let moisture = clamp((water_table + 1.5) / 2.5, 0.0, 1.0);
-    // Moist soil: darker, slightly green-shifted
     color = mix(color, color * vec3(0.80, 0.88, 0.75), moisture * 0.35);
-
-    // Rain darkening
     color *= (1.0 - rain * 0.15);
 
-    // --- 3. Grass patches (medium scale, density varies with moisture + region) ---
-    let grass_noise = fbm(pos * 0.25 + vec2(31.7, 73.1), 3);
-    let grass_threshold = 0.35 - moisture * 0.2 - region * 0.15; // more grass where wet + fertile
-    let grass_amount = smoothstep(grass_threshold, grass_threshold + 0.15, grass_noise);
+    // --- 3. Vegetation (density from terrain buffer, not hardcoded noise) ---
+    // Vegetation is scaled by t_veg: 0 = barren, 1 = lush
+    if t_veg > 0.05 {
+        // Per-pixel grass noise modulates local presence within the vegetation density
+        let grass_noise = fbm(pos * 0.25 + vec2(31.7, 73.1), 3);
+        let grass_threshold = 1.0 - t_veg; // higher veg = lower threshold = more grass
+        let grass_amount = smoothstep(grass_threshold - 0.1, grass_threshold + 0.1, grass_noise);
 
-    if grass_amount > 0.01 {
-        // Grass base color varies
-        let grass_hue = value_noise(pos * 0.4 + vec2(97.3, 41.2));
-        let grass_green = vec3(0.22, 0.40, 0.12);
-        let grass_yellow = vec3(0.38, 0.42, 0.15);
-        let grass_dark = vec3(0.15, 0.30, 0.08);
-        var grass_col = mix(grass_green, grass_yellow, grass_hue * 0.5);
-        grass_col = mix(grass_col, grass_dark, moisture * 0.3); // darker when wet
+        if grass_amount > 0.01 {
+            // Grass color varies by terrain type
+            let grass_hue = value_noise(pos * 0.4 + vec2(97.3, 41.2));
+            var grass_green = vec3(0.22, 0.40, 0.12);
+            var grass_yellow = vec3(0.38, 0.42, 0.15);
+            // Marsh/loam: darker, richer greens
+            if t_type == 6u || t_type == 7u {
+                grass_green = vec3(0.15, 0.32, 0.08);
+                grass_yellow = vec3(0.28, 0.35, 0.12);
+            }
+            // Sand/gravel: sparse, yellowed scrub
+            if t_type == 1u || t_type == 4u {
+                grass_green = vec3(0.35, 0.38, 0.18);
+                grass_yellow = vec3(0.45, 0.42, 0.22);
+            }
+            var grass_col = mix(grass_green, grass_yellow, grass_hue * 0.5);
+            grass_col = mix(grass_col, grass_col * 0.7, moisture * 0.3);
 
-        // Per-pixel grass blade detail: directional strokes
-        let blade_seed = hash2(floor(pos * 6.0)); // ~6 blades per tile
-        let blade_angle = blade_seed * 6.28 + wind_angle * 0.3;
-        let blade_dir = vec2(cos(blade_angle), sin(blade_angle));
-        let blade_pos = fract(pos * 6.0);
-        let along_blade = dot(blade_pos - 0.5, blade_dir);
-        let across_blade = abs(dot(blade_pos - 0.5, vec2(-blade_dir.y, blade_dir.x)));
-        let on_blade = f32(across_blade < 0.08 && along_blade > -0.15 && along_blade < 0.25);
-        // Blade is brighter at tip
-        let blade_t = clamp((along_blade + 0.15) / 0.4, 0.0, 1.0);
-        let blade_col = mix(grass_col * 0.7, grass_col * 1.2, blade_t);
+            // Grass blade detail
+            let blade_seed = hash2(floor(pos * 6.0));
+            let blade_angle = blade_seed * 6.28 + wind_angle * 0.3;
+            let blade_dir = vec2(cos(blade_angle), sin(blade_angle));
+            let blade_pos = fract(pos * 6.0);
+            let along_blade = dot(blade_pos - 0.5, blade_dir);
+            let across_blade = abs(dot(blade_pos - 0.5, vec2(-blade_dir.y, blade_dir.x)));
+            let on_blade = f32(across_blade < 0.08 && along_blade > -0.15 && along_blade < 0.25);
+            let blade_t = clamp((along_blade + 0.15) / 0.4, 0.0, 1.0);
+            let blade_col = mix(grass_col * 0.7, grass_col * 1.2, blade_t);
+            let grass_vis = grass_amount * mix(0.5, on_blade * 0.8 + 0.2, 0.6);
+            color = mix(color, blade_col, clamp(grass_vis, 0.0, 0.85));
 
-        // Blend grass patches
-        let grass_vis = grass_amount * mix(0.5, on_blade * 0.8 + 0.2, 0.6);
-        color = mix(color, blade_col, clamp(grass_vis, 0.0, 0.85));
-
-        // --- 4. Wildflower specks (very sparse, only in grassy areas) ---
-        let flower_hash = hash2(floor(pos * 4.0) + vec2(173.1, 291.7));
-        if flower_hash > 0.93 && grass_amount > 0.4 {
-            let flower_sub = fract(pos * 4.0) - 0.5;
-            let flower_dist = length(flower_sub);
-            if flower_dist < 0.12 {
-                let flower_type = hash2(floor(pos * 4.0) + vec2(0.0, 500.0));
-                var flower_col = vec3(0.85, 0.25, 0.20); // red
-                if flower_type > 0.7 { flower_col = vec3(0.90, 0.80, 0.15); } // yellow
-                else if flower_type > 0.4 { flower_col = vec3(0.70, 0.30, 0.75); } // purple
-                else if flower_type > 0.2 { flower_col = vec3(0.90, 0.88, 0.82); } // white
-                color = mix(color, flower_col, smoothstep(0.12, 0.04, flower_dist));
+            // Wildflowers (only in medium-high vegetation areas)
+            if t_veg > 0.4 {
+                let flower_hash = hash2(floor(pos * 4.0) + vec2(173.1, 291.7));
+                if flower_hash > 0.93 && grass_amount > 0.4 {
+                    let flower_sub = fract(pos * 4.0) - 0.5;
+                    let flower_dist = length(flower_sub);
+                    if flower_dist < 0.12 {
+                        let flower_type = hash2(floor(pos * 4.0) + vec2(0.0, 500.0));
+                        var flower_col = vec3(0.85, 0.25, 0.20);
+                        if flower_type > 0.7 { flower_col = vec3(0.90, 0.80, 0.15); }
+                        else if flower_type > 0.4 { flower_col = vec3(0.70, 0.30, 0.75); }
+                        else if flower_type > 0.2 { flower_col = vec3(0.90, 0.88, 0.82); }
+                        color = mix(color, flower_col, smoothstep(0.12, 0.04, flower_dist));
+                    }
+                }
             }
         }
     }
 
-    // --- 5. Fine soil grain (always present, even without grass) ---
-    let grain = value_noise(pos * 8.0);
-    color += vec3((grain - 0.5) * 0.04); // subtle brightness variation
+    // --- 4. Fine soil grain (frequency from terrain buffer) ---
+    let grain_freq = 4.0 + t_grain * 12.0; // 4..16 — fine to coarse
+    let grain_val = value_noise(pos * grain_freq);
+    let grain_strength = 0.03 + t_rough * 0.05; // rougher = more variation
+    color += vec3((grain_val - 0.5) * grain_strength);
 
-    // --- 6. Pebbles / small stones (more common in dry/rocky areas) ---
-    let pebble_density = (1.0 - region) * (1.0 - moisture * 0.7); // more pebbles in dry areas
-    let pebble_hash = hash2(floor(pos * 5.0) + vec2(419.7, 137.3));
-    if pebble_hash > 1.0 - pebble_density * 0.15 {
-        let pebble_sub = fract(pos * 5.0) - 0.5;
-        let pebble_offset = hash2v(floor(pos * 5.0) + vec2(77.0, 33.0)) * 0.3 - 0.15;
-        let pebble_dist = length(pebble_sub - pebble_offset);
-        let pebble_r = 0.04 + hash2(floor(pos * 5.0) + vec2(200.0, 0.0)) * 0.04;
-        if pebble_dist < pebble_r {
-            let pebble_shade = hash2(floor(pos * 5.0) + vec2(500.0, 300.0));
-            let pebble_col = mix(vec3(0.45, 0.43, 0.40), vec3(0.58, 0.55, 0.50), pebble_shade);
-            color = mix(color, pebble_col, smoothstep(pebble_r, pebble_r * 0.3, pebble_dist));
+    // --- 5. Surface detail per terrain type ---
+    // Pebbles/stones: more common with high roughness
+    let pebble_density = t_rough * (1.0 - t_veg * 0.7);
+    if pebble_density > 0.1 {
+        let pebble_hash = hash2(floor(pos * 5.0) + vec2(419.7, 137.3));
+        if pebble_hash > 1.0 - pebble_density * 0.2 {
+            let pebble_sub = fract(pos * 5.0) - 0.5;
+            let pebble_offset = hash2v(floor(pos * 5.0) + vec2(77.0, 33.0)) * 0.3 - 0.15;
+            let pebble_dist = length(pebble_sub - pebble_offset);
+            let pebble_r = 0.04 + hash2(floor(pos * 5.0) + vec2(200.0, 0.0)) * 0.04;
+            if pebble_dist < pebble_r {
+                let pebble_shade = hash2(floor(pos * 5.0) + vec2(500.0, 300.0));
+                let pebble_col = mix(vec3(0.45, 0.43, 0.40), vec3(0.58, 0.55, 0.50), pebble_shade);
+                color = mix(color, pebble_col, smoothstep(pebble_r, pebble_r * 0.3, pebble_dist));
+            }
+        }
+    }
+
+    // Sand ripples (only on sand terrain)
+    if t_type == 1u {
+        let ripple = sin(wx * 3.0 + wy * 1.5 + value_noise(pos * 0.3) * 4.0) * 0.5 + 0.5;
+        color = mix(color, color * 1.08, ripple * 0.3);
+    }
+
+    // Snow sparkle (only on snow terrain)
+    if t_type == 5u {
+        let sparkle = value_noise(pos * 20.0 + vec2(time * 0.5, 0.0));
+        if sparkle > 0.95 {
+            color = mix(color, vec3(1.0), (sparkle - 0.95) * 20.0 * 0.3);
         }
     }
 

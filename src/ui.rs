@@ -1685,6 +1685,19 @@ impl App {
                 if gbt == BT_DUG_GROUND {
                     info += &format!(" | Dug: {}", gbh);
                 }
+                // Terrain type and soil richness
+                if gidx < self.terrain_data.len() {
+                    let td = self.terrain_data[gidx];
+                    let tt = terrain_type(td);
+                    let tr = terrain_richness(td);
+                    let veg = (td >> 4) & 0x1F;
+                    let tt_name = match tt {
+                        0 => "Grass", 1 => "Sand", 2 => "Rocky", 3 => "Clay",
+                        4 => "Gravel", 5 => "Snow", 6 => "Marsh", 7 => "Loam",
+                        _ => "Unknown",
+                    };
+                    info += &format!("\n\u{1f30d} Terrain: {} | Soil: {}/31 | Veg: {}/31", tt_name, tr, veg);
+                }
                 info
             } else { String::new() };
 

@@ -746,6 +746,177 @@ pub fn generate_elevation(grid: &[u32]) -> Vec<f32> {
     elev
 }
 
+// Terrain type constants (stored in bits 0-3 of terrain_data)
+pub const TERRAIN_GRASS: u32 = 0;
+pub const TERRAIN_SAND: u32 = 1;
+pub const TERRAIN_ROCKY: u32 = 2;
+pub const TERRAIN_CLAY: u32 = 3;
+pub const TERRAIN_GRAVEL: u32 = 4;
+pub const TERRAIN_SNOW: u32 = 5;
+pub const TERRAIN_MARSH: u32 = 6;
+pub const TERRAIN_LOAM: u32 = 7;
+
+/// Terrain data packing:
+///   bits 0-3:   terrain type (0-15)
+///   bits 4-8:   vegetation density (0-31)
+///   bits 9-12:  grain/texture scale (0-15)
+///   bits 13-14: surface roughness (0-3)
+///   bits 15-19: soil richness (0-31)
+///   bits 20-23: moisture retention (0-15)
+pub fn pack_terrain(terrain_type: u32, vegetation: u32, grain: u32, roughness: u32, richness: u32, moisture_ret: u32) -> u32 {
+    (terrain_type & 0xF)
+    | ((vegetation & 0x1F) << 4)
+    | ((grain & 0xF) << 9)
+    | ((roughness & 0x3) << 13)
+    | ((richness & 0x1F) << 15)
+    | ((moisture_ret & 0xF) << 20)
+}
+
+pub fn terrain_type(t: u32) -> u32 { t & 0xF }
+pub fn terrain_richness(t: u32) -> u32 { (t >> 15) & 0x1F }
+
+/// Generate terrain data buffer from elevation and water table.
+/// Assigns terrain type, vegetation density, soil richness etc.
+/// based on noise layers that create coherent biome regions.
+pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
+    let w = GRID_W;
+    let h = GRID_H;
+    let grid_size = (w * h) as usize;
+    let mut terrain = vec![0u32; grid_size];
+
+    let noise = |x: f32, y: f32| -> f32 {
+        let ix = x.floor() as i32;
+        let iy = y.floor() as i32;
+        let fx = x - x.floor();
+        let fy = y - y.floor();
+        let hash = |ix: i32, iy: i32| -> f32 {
+            let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
+                .wrapping_add(1013904223);
+            (h & 0xFFFF) as f32 / 65535.0
+        };
+        let a = hash(ix, iy);
+        let b = hash(ix + 1, iy);
+        let c = hash(ix, iy + 1);
+        let d = hash(ix + 1, iy + 1);
+        let sx = fx * fx * (3.0 - 2.0 * fx);
+        let sy = fy * fy * (3.0 - 2.0 * fy);
+        a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
+    };
+
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+            let fx = x as f32;
+            let fy = y as f32;
+
+            let elev = if idx < elevation.len() { elevation[idx] } else { 0.0 };
+            let wt = if idx < water_table.len() { water_table[idx] } else { -2.0 };
+
+            // --- Biome noise layers ---
+            // Temperature gradient (N-S axis + noise)
+            let temp_noise = noise(fx * 0.02 + 1000.0, fy * 0.02 + 1000.0);
+            let temperature = temp_noise + (fy / h as f32) * 0.3; // warmer to south
+
+            // Aridity (separate noise field)
+            let arid_noise = noise(fx * 0.025 + 2000.0, fy * 0.025 + 2000.0);
+            let aridity = arid_noise - wt * 0.2; // wetter near high water table
+
+            // Rocky factor: increases with elevation
+            let rock_noise = noise(fx * 0.04 + 3000.0, fy * 0.04 + 3000.0);
+            let rockiness = (elev * 0.25 + rock_noise * 0.5).min(1.0);
+
+            // --- Terrain type assignment ---
+            let terrain_type = if elev > 3.0 && rockiness > 0.6 {
+                TERRAIN_ROCKY
+            } else if wt > -0.3 {
+                TERRAIN_MARSH  // near springs / waterlogged
+            } else if aridity > 0.75 {
+                TERRAIN_SAND
+            } else if rockiness > 0.5 {
+                TERRAIN_GRAVEL
+            } else if temperature < 0.25 {
+                TERRAIN_SNOW
+            } else if aridity < 0.35 && temperature > 0.4 {
+                TERRAIN_LOAM   // fertile lowland
+            } else if aridity < 0.5 {
+                TERRAIN_CLAY
+            } else {
+                TERRAIN_GRASS
+            };
+
+            // --- Vegetation density ---
+            // More veg with moisture, less on rock/sand/snow
+            let veg_base = match terrain_type {
+                TERRAIN_GRASS => 0.6 + (1.0 - aridity) * 0.4,
+                TERRAIN_LOAM => 0.7 + (1.0 - aridity) * 0.3,
+                TERRAIN_MARSH => 0.5 + temp_noise * 0.3,
+                TERRAIN_CLAY => 0.3 + (1.0 - aridity) * 0.3,
+                TERRAIN_SAND => 0.05,
+                TERRAIN_ROCKY => 0.02,
+                TERRAIN_GRAVEL => 0.1 + (1.0 - aridity) * 0.15,
+                TERRAIN_SNOW => 0.0,
+                _ => 0.3,
+            };
+            let veg_noise = noise(fx * 0.15 + 4000.0, fy * 0.15 + 4000.0);
+            let vegetation = ((veg_base + (veg_noise - 0.5) * 0.3) * 31.0).clamp(0.0, 31.0) as u32;
+
+            // --- Grain/texture scale ---
+            let grain = match terrain_type {
+                TERRAIN_SAND => 6,    // medium ripple
+                TERRAIN_ROCKY => 12,  // coarse
+                TERRAIN_GRAVEL => 10, // coarse-medium
+                TERRAIN_GRASS => 4,   // fine
+                TERRAIN_LOAM => 3,    // fine
+                TERRAIN_MARSH => 5,   // medium
+                TERRAIN_CLAY => 4,    // fine-medium
+                TERRAIN_SNOW => 2,    // very fine (smooth)
+                _ => 5,
+            };
+
+            // --- Surface roughness ---
+            let roughness = match terrain_type {
+                TERRAIN_ROCKY => 3,
+                TERRAIN_GRAVEL => 2,
+                TERRAIN_SAND => 1,
+                TERRAIN_SNOW => 0,
+                _ => 1,
+            };
+
+            // --- Soil richness (farming potential) ---
+            let richness_base = match terrain_type {
+                TERRAIN_LOAM => 0.85,
+                TERRAIN_GRASS => 0.6,
+                TERRAIN_CLAY => 0.5,
+                TERRAIN_MARSH => 0.7,
+                TERRAIN_SAND => 0.1,
+                TERRAIN_GRAVEL => 0.15,
+                TERRAIN_ROCKY => 0.05,
+                TERRAIN_SNOW => 0.0,
+                _ => 0.4,
+            };
+            let rich_noise = noise(fx * 0.08 + 5000.0, fy * 0.08 + 5000.0);
+            let richness = ((richness_base + (rich_noise - 0.5) * 0.3) * 31.0).clamp(0.0, 31.0) as u32;
+
+            // --- Moisture retention ---
+            let moist_ret = match terrain_type {
+                TERRAIN_CLAY => 12,
+                TERRAIN_LOAM => 10,
+                TERRAIN_MARSH => 14,
+                TERRAIN_GRASS => 8,
+                TERRAIN_SAND => 2,
+                TERRAIN_GRAVEL => 3,
+                TERRAIN_ROCKY => 1,
+                TERRAIN_SNOW => 4,
+                _ => 6,
+            };
+
+            terrain[idx] = pack_terrain(terrain_type, vegetation, grain, roughness, richness, moist_ret);
+        }
+    }
+
+    terrain
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

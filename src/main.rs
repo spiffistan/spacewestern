@@ -245,6 +245,7 @@ struct App {
     water_frame: u32,
     water_table: Vec<f32>, // static water table height map (CPU copy for info overlay)
     elevation_data: Vec<f32>, // terrain elevation (0.0–6.0 tiles of height)
+    terrain_data: Vec<u32>,   // per-tile terrain type, vegetation, richness etc.
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
@@ -311,6 +312,7 @@ struct GfxState {
     sound_bind_groups: [wgpu::BindGroup; 2],  // ping-pong
     sound_source_buffer: wgpu::Buffer,
     elevation_buffer: wgpu::Buffer,
+    terrain_buffer: wgpu::Buffer,
     // Power grid
     voltage_buffer: wgpu::Buffer,
     power_pipeline: wgpu::ComputePipeline,
@@ -564,6 +566,7 @@ impl App {
             water_frame: 0,
             water_table: Vec::new(),
             elevation_data: Vec::new(), // populated after grid gen in init_gfx_async
+            terrain_data: Vec::new(),  // populated after grid gen in init_gfx_async
             diag_preview: Vec::new(),
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
