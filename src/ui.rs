@@ -547,6 +547,16 @@ impl App {
 
                 ui.separator();
                 ui.menu_button("Admin", |ui| {
+                    if ui.selectable_label(self.fog_enabled, "Fog of War").clicked() {
+                        self.fog_enabled = !self.fog_enabled;
+                        self.fog_dirty = true;
+                        if !self.fog_enabled {
+                            // When disabling, make texture fully visible
+                            self.fog_texture_data.iter_mut().for_each(|v| *v = 255);
+                            self.fog_dirty = true;
+                        }
+                    }
+                    ui.separator();
                     let pleb_label = format!("Add Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
                     if ui.button(pleb_label).clicked() {
                         self.placing_pleb = !self.placing_pleb;

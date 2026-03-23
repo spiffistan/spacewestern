@@ -85,6 +85,22 @@ struct Camera {
 @group(0) @binding(18) var shadow_map_tex: texture_2d<f32>;
 @group(0) @binding(19) var sound_tex: texture_2d<f32>;
 @group(0) @binding(20) var<storage, read> elevation_buf: array<f32>;
+@group(0) @binding(21) var fog_tex: texture_2d<f32>;
+
+// --- Fog of war helper ---
+fn apply_fog(color: vec3<f32>, bx: i32, by: i32) -> vec3<f32> {
+    if camera.fog_enabled < 0.5 { return color; }
+    if bx < 0 || by < 0 || bx >= i32(camera.grid_w) || by >= i32(camera.grid_h) { return color; }
+    let fog = textureLoad(fog_tex, vec2<i32>(bx, by), 0).r;
+    if fog < 0.01 {
+        return vec3(0.0); // shrouded
+    } else if fog < 0.5 {
+        // explored: desaturate + dim
+        let gray = dot(color, vec3(0.299, 0.587, 0.114));
+        return mix(vec3(gray), color, 0.3) * 0.35;
+    }
+    return color; // visible
+}
 
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
@@ -1744,6 +1760,15 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let by = i32(floor(world_y));
     let fx = fract(world_x);
     let fy = fract(world_y);
+
+    // --- Fog of war early exit: skip all work for shrouded tiles ---
+    if camera.fog_enabled > 0.5 && bx >= 0 && by >= 0 && bx < i32(camera.grid_w) && by < i32(camera.grid_h) {
+        let fog_early = textureLoad(fog_tex, vec2<i32>(bx, by), 0).r;
+        if fog_early < 0.01 {
+            textureStore(output, vec2<u32>(px, py), vec4(0.0, 0.0, 0.0, 1.0));
+            return;
+        }
+    }
 
     // --- Temporal reprojection: compute blend weight for TAA-style accumulation ---
     // Instead of binary reproject-or-don't, we ALWAYS render the current frame
@@ -4059,6 +4084,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Workgroup shadow blur removed — workgroupBarrier() requires uniform control flow
     // which is incompatible with early returns above (roof, emissive, wall face).
     // Temporal blend provides sufficient shadow smoothing.
+
+    // Apply fog of war
+    color = apply_fog(color, bx, by);
 
     textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
 }

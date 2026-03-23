@@ -1008,6 +1008,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Fog of war texture (R8Unorm, 256x256)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 21,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1039,6 +1050,25 @@ impl App {
         );
         let fv_water_a = water_a.create_view(&wgpu::TextureViewDescriptor::default());
         let fv_water_b = water_b.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Fog of war texture (R8Unorm, 256x256 — grid scale)
+        let fog_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("fog-of-war"),
+            size: wgpu::Extent3d { width: GRID_W, height: GRID_H, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // Initialize fully visible (255 = 1.0)
+        let fog_init = vec![255u8; (GRID_W * GRID_H) as usize];
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &fog_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &fog_init, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(GRID_W), rows_per_image: Some(GRID_H) },
+            wgpu::Extent3d { width: GRID_W, height: GRID_H, depth_or_array_layers: 1 },
+        );
+        let fog_view = fog_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Water table: static height map generated from terrain
         let water_table_data = generate_water_table(&self.grid_data);
@@ -1134,6 +1164,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
                 wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
                 wgpu::BindGroupEntry { binding: 20, resource: elevation_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&fog_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1161,6 +1192,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
                 wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
                 wgpu::BindGroupEntry { binding: 20, resource: elevation_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&fog_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1188,6 +1220,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
                 wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
                 wgpu::BindGroupEntry { binding: 20, resource: elevation_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&fog_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1215,6 +1248,7 @@ impl App {
                 wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_sample_view) },
                 wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_sample_view) },
                 wgpu::BindGroupEntry { binding: 20, resource: elevation_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&fog_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a) },
@@ -1665,6 +1699,7 @@ impl App {
             block_temp_readback_buffer,
             voltage_readback_buffer,
             pleb_air_readback_buffer,
+            fog_texture,
             block_temp_buffer,
             thermal_pipeline: thermal_pipeline_val,
             thermal_bind_group: thermal_bind_group_val,
