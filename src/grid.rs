@@ -65,8 +65,8 @@ pub fn make_block(block_type: u8, height: u8, flags: u8) -> u32 {
     (block_type as u32) | ((height as u32) << 8) | ((flags as u32) << 16)
 }
 
-pub fn block_type_rs(b: u32) -> u8 {
-    (b & 0xFF) as u8
+pub fn block_type_rs(b: u32) -> u32 {
+    b & 0xFF
 }
 
 pub fn block_flags_rs(b: u32) -> u8 {
@@ -83,7 +83,7 @@ pub fn roof_height_rs(b: u32) -> u8 {
 
 /// Is this block type part of the electrical power network?
 /// Checks block type and wire overlay flag. Matches the GPU-side is_conductor() in power.wgsl.
-pub fn is_conductor_rs(bt: u8, flags: u8) -> bool {
+pub fn is_conductor_rs(bt: u32, flags: u8) -> bool {
     matches!(bt, 36..=43 | 45 | 48 | 51 | 7 | 10..=12 | 16) || (flags & 0x80) != 0
 }
 
@@ -717,7 +717,7 @@ mod tests {
             for h in [0u8, 1, 3, 5, 128, 255] {
                 for f in [0u8, 1, 2, 4, 7, 63] {
                     let block = make_block(bt, h, f);
-                    assert_eq!(block_type_rs(block), bt, "type mismatch for ({bt},{h},{f})");
+                    assert_eq!(block_type_rs(block), bt as u32, "type mismatch for ({bt},{h},{f})");
                     assert_eq!(block_height_rs(block), h, "height mismatch for ({bt},{h},{f})");
                     assert_eq!(block_flags_rs(block), f, "flags mismatch for ({bt},{h},{f})");
                 }
@@ -943,15 +943,15 @@ mod tests {
         let dug = make_block(BT_DUG_GROUND as u8, 1, 0);
         let water = make_block(BT_WATER as u8, 0, 0);
         let dirt = make_block(BT_DIRT as u8, 0, 0);
-        assert_eq!(block_type_rs(dug) as u32, BT_DUG_GROUND);
-        assert_eq!(block_type_rs(water) as u32, BT_WATER);
-        assert_eq!(block_type_rs(dirt) as u32, BT_DIRT);
+        assert_eq!(block_type_rs(dug), BT_DUG_GROUND);
+        assert_eq!(block_type_rs(water), BT_WATER);
+        assert_eq!(block_type_rs(dirt), BT_DIRT);
     }
 
     #[test]
     fn test_is_conductor_includes_all_power_blocks() {
         // All power grid components should be recognized as conductors
-        let power_ids: &[u8] = &[36, 37, 38, 39, 40, 41, 42, 43, 45, 48, 51, 7, 10, 11, 12, 16];
+        let power_ids: &[u32] = &[36, 37, 38, 39, 40, 41, 42, 43, 45, 48, 51, 7, 10, 11, 12, 16];
         for &id in power_ids {
             assert!(is_conductor_rs(id, 0), "Block type {} should be a conductor", id);
         }

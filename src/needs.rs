@@ -182,7 +182,7 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
             if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
 
             let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
-            let bt = block_type_rs(b) as u32;
+            let bt = block_type_rs(b);
             let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
 
             if bt == BT_FIREPLACE {
@@ -528,7 +528,7 @@ pub fn find_nearest_crate(grid: &[u32], bx: i32, by: i32) -> Option<(i32, i32)> 
             let sy = by + dy;
             if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
             let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
-            if block_type_rs(b) as u32 == BT_CRATE {
+            if block_type_rs(b) == BT_CRATE {
                 let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
                 if dist < best_dist {
                     best_dist = dist;
@@ -556,7 +556,7 @@ pub fn find_cool_tile(grid: &[u32], bx: i32, by: i32, max_radius: i32) -> Option
                 // Outdoors (no roof) = likely cooler, and walkable
                 if roof_height_rs(b) == 0 && is_walkable_pos(grid, sx as f32 + 0.5, sy as f32 + 0.5) {
                     // Also check no fire nearby
-                    let bt = block_type_rs(b) as u32;
+                    let bt = block_type_rs(b);
                     if bt != BT_FIREPLACE { // not a fireplace
                         return Some((sx, sy));
                     }

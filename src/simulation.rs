@@ -2,7 +2,6 @@
 //! Extracted from render() to keep main.rs manageable.
 
 use crate::*;
-use crate::grid::*;
 use crate::zones::*;
 
 impl App {

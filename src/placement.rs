@@ -10,7 +10,7 @@ impl App {
             let idx = cidx as usize;
             if idx < self.grid_data.len() {
                 let block = self.grid_data[idx];
-                if (block & 0xFF) as u32 == BT_CRATE {
+                if (block & 0xFF) == BT_CRATE {
                     // Store item count in height byte (bits 8-15)
                     self.grid_data[idx] = (block & 0xFFFF00FF) | ((count as u32) << 8);
                     self.grid_dirty = true;
@@ -95,7 +95,7 @@ impl App {
         let bt = block_type_rs(block);
         let bh = (block >> 8) & 0xFF;
         if on_furniture {
-            return bt as u32 == BT_BENCH;
+            return bt == BT_BENCH;
         }
         if !((bt == 0 || bt == 2) && bh == 0) {
             return false;
@@ -139,7 +139,7 @@ impl App {
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
-        if bt as u32 == BT_FIREPLACE || bt as u32 == BT_CEILING_LIGHT {
+        if bt == BT_FIREPLACE || bt == BT_CEILING_LIGHT {
             self.dragging_light = Some((bx as u32, by as u32));
             log::info!("Picked up light at ({}, {})", bx, by);
             return true;
@@ -344,7 +344,7 @@ impl App {
                 let block = self.grid_data[idx];
                 let bt = block & 0xFF;
                 // Replace floor types (26/27/28) with dirt (2)
-                if bt_is!(bt as u32, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
+                if bt_is!(bt, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
                     let roof_flag = (block >> 16) & 2;
                     let roof_h = block & 0xFF000000;
                     self.grid_data[idx] = make_block(2, 0, roof_flag as u8) | roof_h;
@@ -456,10 +456,10 @@ impl App {
                             if anx < 0 || any < 0 || anx >= GRID_W as i32 || any >= GRID_H as i32 { continue; }
                             let aidx = (any as u32 * GRID_W + anx as u32) as usize;
                             let abt = block_type_rs(self.grid_data[aidx]);
-                            let abt32 = abt as u32;
-                            let adj_gas_match = bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(abt32, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
-                            let adj_liq_match = bid == BT_LIQUID_PIPE && bt_is!(abt32, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
-                            if abt32 == bid || adj_gas_match || adj_liq_match {
+                            let abt = abt as u32;
+                            let adj_gas_match = bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(abt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
+                            let adj_liq_match = bid == BT_LIQUID_PIPE && bt_is!(abt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
+                            if abt == bid || adj_gas_match || adj_liq_match {
                                 conn |= mask;
                             }
                         }
@@ -512,10 +512,10 @@ impl App {
                             let nb = self.grid_data[nidx];
                             let nbt = block_type_rs(nb);
                             // Update same-type (or pipe↔restrictor↔bridge) neighbors with connection mask
-                            let nbt32 = nbt as u32;
-                            let recip_match = nbt32 == bid
-                                || (bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(nbt32, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
-                                || (bid == BT_LIQUID_PIPE && bt_is!(nbt32, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
+                            let nbt = nbt as u32;
+                            let recip_match = nbt == bid
+                                || (bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(nbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
+                                || (bid == BT_LIQUID_PIPE && bt_is!(nbt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
                             if recip_match {
                                 let nh = ((nb >> 8) & 0xFF) as u8;
                                 if (nh & 0xF0) != 0 && (nh & their_bit) == 0 {
@@ -673,23 +673,22 @@ impl App {
         }
     }
 
-    pub(crate) fn get_block_bounds(&self, bx: i32, by: i32, bt: u8, flags: u8) -> (i32, i32, i32, i32) {
+    pub(crate) fn get_block_bounds(&self, bx: i32, by: i32, bt: u32, flags: u8) -> (i32, i32, i32, i32) {
         let seg = (flags >> 3) & 3;
         let rot = (flags >> 5) & 3;
-        let bt32 = bt as u32;
-        if bt32 == BT_BENCH {
+        if bt == BT_BENCH {
             let ox = if rot == 0 { bx - seg as i32 } else { bx };
             let oy = if rot == 0 { by } else { by - seg as i32 };
             if rot == 0 { (ox, oy, 3, 1) } else { (ox, oy, 1, 3) }
-        } else if bt32 == BT_BED || bt32 == BT_BATTERY_M {
+        } else if bt == BT_BED || bt == BT_BATTERY_M {
             let ox = if rot == 0 { bx - seg as i32 } else { bx };
             let oy = if rot == 0 { by } else { by - seg as i32 };
             if rot == 0 { (ox, oy, 2, 1) } else { (ox, oy, 1, 2) }
-        } else if bt32 == BT_SOLAR {
+        } else if bt == BT_SOLAR {
             let row = (flags >> 5) & 3;
             let col = (flags >> 3) & 3;
             (bx - col as i32, by - row as i32, 3, 3)
-        } else if bt32 == BT_BATTERY_L || bt32 == BT_WIND_TURBINE {
+        } else if bt == BT_BATTERY_L || bt == BT_WIND_TURBINE {
             let col = seg & 1;
             let row = (flags >> 5) & 1;
             (bx - col as i32, by - row as i32, 2, 2)
@@ -698,7 +697,7 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_build_placement(&mut self, wx: f32, wy: f32, bx: i32, by: i32, idx: usize, block: u32, bt: u8, flags: u8) {
+    pub(crate) fn handle_build_placement(&mut self, wx: f32, wy: f32, bx: i32, by: i32, idx: usize, block: u32, bt: u32, flags: u8) {
         if self.build_tool == BuildTool::None { return; }
         {
             match self.build_tool {
@@ -790,11 +789,11 @@ impl App {
                     let all_valid = tiles.iter().all(|&(tx, ty)| {
                         if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { return false; }
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        let tbt = (self.grid_data[tidx] & 0xFF) as u8;
+                        let tbt = block_type_rs(self.grid_data[tidx]);
                         self.can_place_at(tx, ty)
                             || (bridge_id == 50 && pipes::is_gas_pipe_component(tbt))
                             || (bridge_id == 50 && pipes::is_liquid_pipe_component(tbt))
-                            || (bridge_id == 51 && (tbt as u32 == BT_WIRE || is_conductor_rs(tbt, block_flags_rs(self.grid_data[tidx]))))
+                            || (bridge_id == 51 && (tbt == BT_WIRE || is_conductor_rs(tbt, block_flags_rs(self.grid_data[tidx]))))
                     });
                     if all_valid {
                         for (i, &(tx, ty)) in tiles.iter().enumerate() {
@@ -874,7 +873,7 @@ impl App {
                 }
                 BuildTool::Place(11) => {
                     // Table lamp: can only be placed on benches (type 9)
-                    if bt as u32 == BT_BENCH {
+                    if bt == BT_BENCH {
                         let roof_h = block & 0xFF000000;
                         let roof_flag = flags & 2;
                         self.grid_data[idx] = make_block(11, 1, roof_flag) | roof_h;
@@ -885,7 +884,7 @@ impl App {
                 }
                 BuildTool::Place(12) => {
                     // Fan: can be placed on a wall OR on the ground
-                    let on_wall = bt_is!(bt as u32, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0;
+                    let on_wall = bt_is!(bt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0;
                     let on_ground = self.can_place_at(bx, by);
                     if on_wall {
                         let wall_h = ((block >> 8) & 0xFF) as u8;
@@ -910,7 +909,7 @@ impl App {
                     // Outlet/Inlet: can place on ground OR on walls
                     let on_ground = self.can_place_at(bx, by);
                     let bt_at = block_type_rs(block);
-                    let on_wall = bt_is!(bt_at as u32, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0;
+                    let on_wall = bt_is!(bt_at, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0;
                     if on_ground || on_wall {
                         let height = if on_wall { ((block >> 8) & 0xFF) as u8 } else { 1 };
                         let roof_flag = flags & 2;
@@ -932,18 +931,18 @@ impl App {
                     let stays_selected = placement.map(|p| p.stays_selected).unwrap_or(false);
                     let click_mode = placement.map(|p| p.click.clone()).unwrap_or(block_defs::ClickMode::Simple);
 
-                    let bt32 = bt as u32;
+                    let bt = bt as u32;
                     let can_place = self.can_place_at(bx, by)
-                        || (id == BT_PUMP && bt32 == BT_PIPE)
-                        || (id == BT_LIQUID_PUMP && bt32 == BT_LIQUID_PIPE)
-                        || (id == BT_LIQUID_OUTPUT && bt32 == BT_LIQUID_PIPE)
-                        || (id == BT_WIRE && bt32 != BT_WIRE)
-                        || (id == BT_PIPE && bt32 == BT_PIPE)
-                        || (id == BT_RESTRICTOR && bt_is!(bt32, BT_PIPE, BT_RESTRICTOR))
-                        || (id == BT_LIQUID_PIPE && bt_is!(bt32, BT_LIQUID_PIPE, BT_PIPE_BRIDGE))
-                        || (bt_is!(id, BT_SWITCH, BT_DIMMER, BT_BREAKER) && bt_is!(bt32, BT_WIRE, BT_AIR, BT_DIRT));
+                        || (id == BT_PUMP && bt == BT_PIPE)
+                        || (id == BT_LIQUID_PUMP && bt == BT_LIQUID_PIPE)
+                        || (id == BT_LIQUID_OUTPUT && bt == BT_LIQUID_PIPE)
+                        || (id == BT_WIRE && bt != BT_WIRE)
+                        || (id == BT_PIPE && bt == BT_PIPE)
+                        || (id == BT_RESTRICTOR && bt_is!(bt, BT_PIPE, BT_RESTRICTOR))
+                        || (id == BT_LIQUID_PIPE && bt_is!(bt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE))
+                        || (bt_is!(id, BT_SWITCH, BT_DIMMER, BT_BREAKER) && bt_is!(bt, BT_WIRE, BT_AIR, BT_DIRT));
                     if can_place && click_mode != block_defs::ClickMode::None {
-                        if id == BT_WIRE && bt32 != BT_AIR && bt32 != BT_DIRT {
+                        if id == BT_WIRE && bt != BT_AIR && bt != BT_DIRT {
                             // Wire on non-ground: add wire flag to existing block (bit 7)
                             self.grid_data[idx] |= 0x80 << 16; // set wire overlay flag
                         } else {
@@ -971,10 +970,10 @@ impl App {
                                         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                                         let nbt = block_type_rs(self.grid_data[nidx]);
                                         // Connect to same type, or pipes↔restrictors
-                                        let nbt32 = nbt as u32;
-                                        let is_pipe_match = (bt_is!(id, BT_PIPE, BT_RESTRICTOR) && bt_is!(nbt32, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
-                                            || (id == BT_LIQUID_PIPE && bt_is!(nbt32, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
-                                        if nbt as u32 == id || is_pipe_match {
+
+                                        let is_pipe_match = (bt_is!(id, BT_PIPE, BT_RESTRICTOR) && bt_is!(nbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
+                                            || (id == BT_LIQUID_PIPE && bt_is!(nbt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
+                                        if nbt == id || is_pipe_match {
                                             conn |= mask;
                                             // Also update neighbor's connection toward us
                                             // Skip if neighbor has mask=0 (auto-detect mode — already connects all directions)
@@ -1013,7 +1012,7 @@ impl App {
                 }
                 BuildTool::Window => {
                     // Window (glass): replaces wall blocks
-                    if bt_is!(bt as u32, BT_STONE, BT_WALL, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0 {
+                    if bt_is!(bt, BT_STONE, BT_WALL, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0 {
                         let height = ((block >> 8) & 0xFF) as u8;
                         let roof_flag = flags & 2;
                         let roof_h = block & 0xFF000000;
@@ -1025,7 +1024,7 @@ impl App {
                 }
                 BuildTool::Door => {
                     // Door: replaces wall blocks with door
-                    if bt_is!(bt as u32, BT_STONE, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0 {
+                    if bt_is!(bt, BT_STONE, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0 {
                         let roof_h = block & 0xFF000000;
                         // Door: height 1, flag bit0=is_door, starts closed (bit2=0)
                         self.grid_data[idx] = make_block(4, 1, 1) | roof_h;
@@ -1037,7 +1036,7 @@ impl App {
                 BuildTool::RemoveFloor => {
                     let block = self.grid_data[idx];
                     let bt_here = block_type_rs(block);
-                    if bt_is!(bt_here as u32, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
+                    if bt_is!(bt_here, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
                         let roof_flag = block_flags_rs(block) & 2;
                         let roof_h = block & 0xFF000000;
                         self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
@@ -1063,11 +1062,11 @@ impl App {
                     if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                         let bt_dig = block_type_rs(block);
                         let roof_h = block & 0xFF000000;
-                        if bt_dig as u32 == BT_DIRT || bt_is!(bt_dig as u32, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
+                        if bt_dig == BT_DIRT || bt_is!(bt_dig, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
                             // Dirt or floor → dug ground depth 1 (20%)
                             self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
                             self.grid_dirty = true;
-                        } else if bt_dig as u32 == BT_DUG_GROUND {
+                        } else if bt_dig == BT_DUG_GROUND {
                             let depth = (block >> 8) & 0xFF;
                             if depth < 5 {
                                 self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, (depth + 1) as u8, 0) | roof_h;
@@ -1077,7 +1076,7 @@ impl App {
                     }
                 }
                 BuildTool::GrowingZone => {
-                    if bt == BT_DIRT as u8 {
+                    if bt == BT_DIRT {
                         if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing) {
                             zone.tiles.insert((bx, by));
                         } else {
@@ -1109,7 +1108,7 @@ impl App {
     }
 
     /// Handle click interactions with specific block types (toggles, popups).
-    pub(crate) fn handle_block_click(&mut self, bx: i32, by: i32, idx: usize, block: u32, bt: u8, flags: u8) {
+    pub(crate) fn handle_block_click(&mut self, bx: i32, by: i32, idx: usize, block: u32, bt: u32, flags: u8) {
         // Toggle door
         if is_door_rs(block) {
             let new_flags = flags ^ 4; // toggle bit2 (is_open)
@@ -1157,7 +1156,7 @@ impl App {
         }
 
         // Toggle valve open/closed
-        if bt as u32 == BT_VALVE {
+        if bt == BT_VALVE {
             let new_flags = flags ^ 4; // toggle bit2 (is_open)
             let new_block = (block & 0xFF00FFFF) | ((new_flags as u32) << 16);
             self.grid_data[idx] = new_block;
@@ -1168,7 +1167,7 @@ impl App {
         }
 
         // Toggle switch on/off
-        if bt as u32 == BT_SWITCH && self.build_tool != BuildTool::Destroy {
+        if bt == BT_SWITCH && self.build_tool != BuildTool::Destroy {
             let new_flags = flags ^ 4; // toggle bit2
             let new_block = (block & 0xFF00FFFF) | ((new_flags as u32) << 16);
             self.grid_data[idx] = new_block;
@@ -1179,7 +1178,7 @@ impl App {
         }
 
         // Click dimmer, restrictor, or fireplace: show slider popup (shared UI)
-        if (bt as u32 == BT_DIMMER || bt as u32 == BT_RESTRICTOR || bt as u32 == BT_FIREPLACE) && self.build_tool != BuildTool::Destroy {
+        if (bt == BT_DIMMER || bt == BT_RESTRICTOR || bt == BT_FIREPLACE) && self.build_tool != BuildTool::Destroy {
             let didx = by as u32 * GRID_W + bx as u32;
             self.block_sel.dimmer = if self.block_sel.dimmer == Some(didx) { None } else { Some(didx) };
             self.block_sel.dimmer_world = (bx as f32 + 0.5, by as f32 + 0.5);
@@ -1187,7 +1186,7 @@ impl App {
         }
 
         // Click circuit breaker: reset (turn back ON) if tripped
-        if bt as u32 == BT_BREAKER && self.build_tool != BuildTool::Destroy {
+        if bt == BT_BREAKER && self.build_tool != BuildTool::Destroy {
             let is_on = (flags & 4) != 0;
             if !is_on {
                 // Reset breaker (turn ON)
@@ -1200,7 +1199,7 @@ impl App {
         }
 
         // Click fan: show speed popup (similar to pump)
-        if bt as u32 == BT_FAN && self.build_tool != BuildTool::Destroy {
+        if bt == BT_FAN && self.build_tool != BuildTool::Destroy {
             let fidx = by as u32 * GRID_W + bx as u32;
             self.block_sel.fan = if self.block_sel.fan == Some(fidx) { None } else { Some(fidx) };
             self.block_sel.fan_world = (bx as f32 + 0.5, by as f32 + 0.5);
@@ -1208,7 +1207,7 @@ impl App {
         }
 
         // Click pump: toggle pump speed popup
-        if bt as u32 == BT_PUMP {
+        if bt == BT_PUMP {
             let pidx = by as u32 * GRID_W + bx as u32;
             self.block_sel.pump = if self.block_sel.pump == Some(pidx) { None } else { Some(pidx) };
             self.block_sel.pump_world = (bx as f32 + 0.5, by as f32 + 0.5);

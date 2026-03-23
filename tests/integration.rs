@@ -51,7 +51,7 @@ fn wire_block_classification() {
 
 #[test]
 fn conductor_includes_all_power_blocks() {
-    let power_ids: &[u8] = &[36, 37, 38, 39, 40, 41, 42, 43, 45, 48, 51, 7, 10, 11, 12, 16];
+    let power_ids: &[u32] = &[36, 37, 38, 39, 40, 41, 42, 43, 45, 48, 51, 7, 10, 11, 12, 16];
     for &id in power_ids {
         assert!(is_conductor_rs(id, 0), "Block type {} should be a conductor", id);
     }

@@ -4,7 +4,7 @@
 //! Simulation runs on CPU each frame. Gas composition (smoke, O2, CO2, temp)
 //! flows through the pipe network from high to low pressure.
 
-use crate::grid::{GRID_W, GRID_H, block_type_rs, block_flags_rs, DIR_MASKS};
+use crate::grid::*;
 
 /// For a 3-tile bridge, find the partner entry/exit tile index.
 /// Bridge segment 0 (entry) connects to segment 2 (exit) 2 tiles away in the bridge direction.
@@ -77,17 +77,17 @@ impl PipeConnections {
 }
 
 /// Check if a block type is part of the gas pipe network.
-pub fn is_gas_pipe_component(bt: u8) -> bool {
-    (bt >= 15 && bt <= 20) || bt == 46 || bt == 50
+pub fn is_gas_pipe_component(bt: u32) -> bool {
+    bt_is!(bt, BT_PIPE, BT_PUMP, BT_TANK, BT_VALVE, BT_OUTLET, BT_INLET, BT_RESTRICTOR, BT_PIPE_BRIDGE)
 }
 
 /// Check if a block type is part of the liquid pipe network.
-pub fn is_liquid_pipe_component(bt: u8) -> bool {
-    bt == 49 || bt == 50 || bt == 52 || bt == 53 || bt == 54
+pub fn is_liquid_pipe_component(bt: u32) -> bool {
+    bt_is!(bt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE, BT_LIQUID_INTAKE, BT_LIQUID_PUMP, BT_LIQUID_OUTPUT)
 }
 
 /// Check if a block type is part of ANY pipe network (gas or liquid).
-pub fn is_pipe_component(bt: u8) -> bool {
+pub fn is_pipe_component(bt: u32) -> bool {
     is_gas_pipe_component(bt) || is_liquid_pipe_component(bt)
 }
 
@@ -132,7 +132,7 @@ impl PipeNetwork {
 
     /// Rebuild the network from the grid using a component predicate.
     /// Preserves existing cell state — only adds/removes as needed.
-    pub fn rebuild_with(&mut self, grid: &[u32], is_component: fn(u8) -> bool) {
+    pub fn rebuild_with(&mut self, grid: &[u32], is_component: fn(u32) -> bool) {
         self.cells.retain(|&idx, _| {
             let bt = block_type_rs(grid[idx as usize]);
             is_component(bt)
@@ -143,7 +143,7 @@ impl PipeNetwork {
                 let bt = block_type_rs(grid[idx as usize]);
                 if is_component(bt) && !self.cells.contains_key(&idx) {
                     let mut cell = PipeCell::default();
-                    if bt == 17 { cell.volume = 10.0; }
+                    if bt == BT_TANK { cell.volume = 10.0; }
                     self.cells.insert(idx, cell);
                 }
             }

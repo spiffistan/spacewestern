@@ -99,7 +99,7 @@ impl App {
         }
 
         // Click cannon: select for rotation, or fire if already selected
-        if bt as u32 == BT_CANNON && self.build_tool == BuildTool::None {
+        if bt == BT_CANNON && self.build_tool == BuildTool::None {
             let cannon_idx = by as u32 * GRID_W + bx as u32;
             if self.block_sel.cannon == Some(cannon_idx) {
                 // Already selected — fire!
@@ -135,7 +135,7 @@ impl App {
                 log::info!("Selected cannon at ({}, {})", bx, by);
             }
             return;
-        } else if self.block_sel.cannon.is_some() && bt as u32 != BT_CANNON {
+        } else if self.block_sel.cannon.is_some() && bt != BT_CANNON {
             // Clicked away from cannon — deselect
             self.block_sel.cannon = None;
         }
@@ -157,13 +157,13 @@ impl App {
         }
 
         // Click on rock (no build tool): open context menu
-        if bt as u32 == BT_ROCK && self.build_tool == BuildTool::None {
+        if bt == BT_ROCK && self.build_tool == BuildTool::None {
             self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
             return;
         }
 
         // Click on storage crate: toggle inspection popup
-        if bt as u32 == BT_CRATE && self.build_tool != BuildTool::Destroy {
+        if bt == BT_CRATE && self.build_tool != BuildTool::Destroy {
             let cidx = by as u32 * GRID_W + bx as u32;
             self.block_sel.crate_idx = if self.block_sel.crate_idx == Some(cidx) { None } else { Some(cidx) };
             self.block_sel.crate_world = (bx as f32 + 0.5, by as f32 + 0.5);
@@ -204,7 +204,7 @@ impl App {
             }
 
             // Single-click on non-ground: select block (deselects pleb)
-            let is_ground = is_ground_block(bt as u32);
+            let is_ground = is_ground_block(bt);
             let has_bp = self.blueprints.contains_key(&(bx, by));
             if !is_ground || has_bp {
                 let (sel_x, sel_y, sel_w, sel_h, sel_bt) = if has_bp {
@@ -212,7 +212,7 @@ impl App {
                     (bx, by, 1, 1, bp_bt)
                 } else {
                     let (sx, sy, sw, sh) = self.get_block_bounds(bx, by, bt, flags);
-                    (sx, sy, sw, sh, bt as u32)
+                    (sx, sy, sw, sh, bt)
                 };
                 self.world_sel = WorldSelection::single(sel_x, sel_y, sel_w, sel_h, sel_bt);
                 self.selected_pleb = None;

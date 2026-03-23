@@ -1558,7 +1558,7 @@ impl App {
                     let ibt = ib & 0xFF;
                     let ibh = (ib >> 8) & 0xFF;
                     let solid = ibh > 0 && (ibt == 1 || ibt == 4 || ibt == 5 || ibt == 14 || (ibt >= 21 && ibt <= 25) || ibt == 35);
-                    let pipe = pipes::is_pipe_component(ibt as u8);
+                    let pipe = pipes::is_pipe_component(ibt);
                     (solid, pipe)
                 } else { (false, false) };
                 let voltage_str = if self.debug.voltage > 0.01 {
@@ -1583,7 +1583,7 @@ impl App {
             // Show pipe state if hovering over any pipe/liquid component
             let pipe_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                 let pidx = by as u32 * GRID_W + bx as u32;
-                let pbt = (self.grid_data[pidx as usize] & 0xFF) as u8;
+                let pbt = self.grid_data[pidx as usize] & 0xFF;
                 let is_gas = pipes::is_gas_pipe_component(pbt);
                 let is_liq = pipes::is_liquid_pipe_component(pbt);
                 if is_gas {
@@ -2342,7 +2342,7 @@ impl App {
                         let b = self.grid_data[idx];
                         let bt = b & 0xFF;
                         let fl = (b >> 16) & 0xFF;
-                        let is_cond = is_conductor_rs(bt as u8, fl as u8);
+                        let is_cond = is_conductor_rs(bt, fl as u8);
                         if !is_cond { continue; }
                         let v = self.voltage_data[idx];
                         if v < 0.01 { continue; }
@@ -2372,7 +2372,7 @@ impl App {
                         let fl = (b >> 16) & 0xFF;
                         // Skip pipe tiles (already drawn above)
                         if bt >= 15 && bt <= 20 { continue; }
-                        let is_cond = is_conductor_rs(bt as u8, fl as u8);
+                        let is_cond = is_conductor_rs(bt, fl as u8);
                         if !is_cond { continue; }
                         let v = self.voltage_data[idx];
                         if v < 0.01 { continue; }
@@ -2526,7 +2526,7 @@ impl App {
                         let b = self.grid_data[idx];
                         let bt = b & 0xFF;
                         let flags = (b >> 16) & 0xFF;
-                        let is_cond = is_conductor_rs(bt as u8, flags as u8);
+                        let is_cond = is_conductor_rs(bt, flags as u8);
                         if !is_cond { continue; }
                         let center = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
                         let text = if v >= 10.0 {
@@ -3321,7 +3321,7 @@ impl App {
 
                         // Pipe/liquid network pressure detail
                         let pidx = item.y as u32 * GRID_W + item.x as u32;
-                        let pbt = (item.block_type & 0xFF) as u8;
+                        let pbt = item.block_type & 0xFF;
                         if pipes::is_gas_pipe_component(pbt) {
                             if let Some(cell) = self.pipe_network.cells.get(&pidx) {
                                 ui.separator();

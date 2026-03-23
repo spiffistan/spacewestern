@@ -20,7 +20,7 @@ use grid::*;
 use sprites::generate_tree_sprites;
 
 mod pleb;
-use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, astar_path_elev, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity, PlebShift, PlebSchedule};
+use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity, PlebShift};
 
 mod needs;
 use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate, BERRY_HUNGER_RESTORE, HEAT_CRISIS_TEMP};
@@ -68,6 +68,7 @@ mod types;
 use types::*;
 
 mod placement;
+#[cfg(test)]
 pub(crate) use placement::compute_diagonal_wall_tiles;
 
 mod input;
@@ -1263,10 +1264,10 @@ impl App {
                     // Bridges: on empty ground or existing pipes/wires
                     let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        let tbt = (self.grid_data[tidx] & 0xFF) as u8;
+                        let tbt = self.grid_data[tidx] & 0xFF;
                         self.can_place_on(tx, ty, false)
                             || (self.build_tool == BuildTool::Place(50) && (pipes::is_gas_pipe_component(tbt) || pipes::is_liquid_pipe_component(tbt)))
-                            || (self.build_tool == BuildTool::Place(51) && tbt as u32 == BT_WIRE)
+                            || (self.build_tool == BuildTool::Place(51) && tbt == BT_WIRE)
                     } else { false };
                     ((tx, ty), ok)
                 } else if matches!(self.build_tool, BuildTool::Place(53) | BuildTool::Place(54)) {
