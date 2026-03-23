@@ -551,8 +551,18 @@ impl App {
                         self.fog_enabled = !self.fog_enabled;
                         self.fog_dirty = true;
                         if !self.fog_enabled {
-                            // When disabling, make texture fully visible
                             self.fog_texture_data.iter_mut().for_each(|v| *v = 255);
+                            self.fog_dirty = true;
+                        }
+                    }
+                    if self.fog_enabled {
+                        if ui.selectable_label(self.fog_start_explored, "Pre-revealed Map").clicked() {
+                            self.fog_start_explored = !self.fog_start_explored;
+                            if self.fog_start_explored {
+                                self.fog_explored.iter_mut().for_each(|v| *v = 255);
+                            }
+                            // Force recompute
+                            self.fog_prev_tiles.clear();
                             self.fog_dirty = true;
                         }
                     }

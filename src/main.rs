@@ -257,6 +257,7 @@ struct App {
     fog_dirty: bool,
     fog_prev_tiles: Vec<(i32, i32)>, // per-pleb last known tile
     fog_vision_radius: i32,
+    fog_start_explored: bool, // true = map starts pre-revealed
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -564,11 +565,12 @@ impl App {
             voltage_readback_pending: false,
             fog_enabled: false,
             fog_visibility: vec![0u8; (GRID_W * GRID_H) as usize],
-            fog_explored: vec![255u8; (GRID_W * GRID_H) as usize], // start fully explored in sandbox
-            fog_texture_data: vec![255u8; (GRID_W * GRID_H) as usize], // start fully visible
+            fog_explored: vec![0u8; (GRID_W * GRID_H) as usize], // start unexplored (black)
+            fog_texture_data: vec![0u8; (GRID_W * GRID_H) as usize],
             fog_dirty: true,
             fog_prev_tiles: Vec::new(),
             fog_vision_radius: 25,
+            fog_start_explored: false, // true = map starts pre-revealed
         }
     }
 
