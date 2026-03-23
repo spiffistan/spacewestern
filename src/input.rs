@@ -73,6 +73,29 @@ impl App {
             }
             return;
         }
+        if self.sandbox_tool == SandboxTool::Ignite {
+            // Ignite: set flammable block on fire by raising its temperature
+            let idx = (by as u32 * GRID_W + bx as u32) as usize;
+            let block = self.grid_data[idx];
+            let bt = block_type_rs(block);
+            let reg = block_defs::BlockRegistry::cached();
+            if let Some(def) = reg.get(bt) {
+                if def.is_flammable {
+                    let ignite_temp = def.ignition_temp + 150.0;
+                    // Write high temperature to GPU block_temps buffer
+                    if let Some(gfx) = &self.gfx {
+                        gfx.queue.write_buffer(
+                            &gfx.block_temp_buffer,
+                            (idx as u64) * 4,
+                            bytemuck::bytes_of(&ignite_temp),
+                        );
+                    }
+                    self.burn_progress.insert(idx, 0.0);
+                    self.log_event(EventCategory::Weather, format!("Fire! {} ignited at ({}, {})", def.name, bx, by));
+                }
+            }
+            return;
+        }
         if let SandboxTool::SoundPlace(idx) = self.sandbox_tool {
             if let Some(&(_name, db, freq, pattern, duration)) = SANDBOX_SOUNDS.get(idx) {
                 self.sound_sources.push(SoundSource {

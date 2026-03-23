@@ -258,6 +258,8 @@ struct App {
     fog_prev_tiles: Vec<(i32, i32)>, // per-pleb last known tile
     fog_vision_radius: i32,
     fog_start_explored: bool, // true = map starts pre-revealed
+    // Fire system
+    burn_progress: std::collections::HashMap<usize, f32>, // grid_idx → 0.0..1.0
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -571,6 +573,7 @@ impl App {
             fog_prev_tiles: Vec::new(),
             fog_vision_radius: 25,
             fog_start_explored: false, // true = map starts pre-revealed
+            burn_progress: std::collections::HashMap::new(),
         }
     }
 

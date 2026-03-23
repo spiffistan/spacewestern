@@ -1001,6 +1001,26 @@ impl App {
                                     }
                                 }
 
+                                // Ignite tool (click flammable block to set on fire)
+                                let sel_ign = self.sandbox_tool == SandboxTool::Ignite;
+                                let (rect_ign, resp_ign) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(60.0), egui::Sense::click(),
+                                );
+                                let pi = ui.painter_at(rect_ign);
+                                let bg_ign = if sel_ign { egui::Color32::from_rgb(140, 60, 20) }
+                                    else if resp_ign.hovered() { egui::Color32::from_rgb(55, 58, 65) }
+                                    else { egui::Color32::from_rgb(40, 42, 48) };
+                                pi.rect_filled(rect_ign, 4.0, bg_ign);
+                                pi.rect_stroke(rect_ign, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
+                                pi.text(rect_ign.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
+                                    "\u{1f525}", egui::FontId::proportional(24.0), egui::Color32::from_rgb(255, 120, 30));
+                                pi.text(rect_ign.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
+                                    "Ignite", egui::FontId::proportional(11.0), egui::Color32::from_gray(190));
+                                if resp_ign.clicked() {
+                                    self.sandbox_tool = if sel_ign { SandboxTool::None } else { SandboxTool::Ignite };
+                                    if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
+                                }
+
                                 // Sound placement tools (only when sound system is enabled)
                                 if self.sound_enabled {
                                     ui.separator();

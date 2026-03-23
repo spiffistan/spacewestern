@@ -10,6 +10,7 @@ pub enum SandboxTool {
     Lightning,
     InjectWater,
     TriggerDrought,
+    Ignite,
     SoundPlace(usize),  // index into SANDBOX_SOUNDS
 }
 
