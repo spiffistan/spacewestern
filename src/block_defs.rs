@@ -74,6 +74,7 @@ pub enum ClickMode {
     OnWall,
     OnFurniture,
     MultiTile,
+    WallAdjacent,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]

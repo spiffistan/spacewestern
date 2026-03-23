@@ -1011,10 +1011,11 @@ impl App {
                 let by = (idx / GRID_W as usize) as i32;
                 let bt = block_type_rs(self.grid_data[idx]);
                 if bt == BT_DIRT {
-                    // Grass burned away — scorch the dirt (height=1), don't destroy
-                    let flags = (self.grid_data[idx] >> 16) & 0xFF;
+                    // Grass burned away — scorch the dirt (flags bit 0), don't destroy
+                    // Height stays 0 so placement/water/pathfinding still work
+                    let flags = ((self.grid_data[idx] >> 16) & 0xFF) as u8;
                     let roof_h = self.grid_data[idx] & 0xFF000000;
-                    self.grid_data[idx] = make_block(BT_DIRT as u8, 1, flags as u8) | roof_h;
+                    self.grid_data[idx] = make_block(BT_DIRT as u8, 0, flags | 1) | roof_h;
                 } else {
                     let replacement = fire::burn_replacement_pub(bt);
                     let roof_h = self.grid_data[idx] & 0xFF000000;
@@ -1401,7 +1402,21 @@ impl App {
                     } else { false };
                     ((tx, ty), ok)
                 } else {
-                    ((tx, ty), self.can_place_on(tx, ty, on_furniture))
+                    // Wall-adjacent items: valid only if adjacent to a wall
+                    let is_wall_adjacent = match self.build_tool {
+                        BuildTool::Place(id) => {
+                            let reg2 = block_defs::BlockRegistry::cached();
+                            reg2.get(id).and_then(|d| d.placement.as_ref())
+                                .map(|p| p.click == block_defs::ClickMode::WallAdjacent)
+                                .unwrap_or(false)
+                        }
+                        _ => false,
+                    };
+                    if is_wall_adjacent {
+                        ((tx, ty), self.wall_adjacent_direction(tx, ty).is_some())
+                    } else {
+                        ((tx, ty), self.can_place_on(tx, ty, on_furniture))
+                    }
                 }
             }).collect()
         } else {

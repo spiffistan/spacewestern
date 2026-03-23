@@ -42,7 +42,7 @@ fn is_conductor(bt: u32, flags: u32) -> bool {
     // Dimmer (43): always conducts (voltage scaling handled separately)
     // Wire bridge (51): always conducts (axis-restricted in relaxation)
     return bt == BT_WIRE || bt == BT_SOLAR || bt == BT_BATTERY_S || bt == BT_BATTERY_M || bt == BT_BATTERY_L || bt == BT_WIND_TURBINE || bt == BT_DIMMER || bt == BT_WIRE_BRIDGE
-        || bt == BT_CEILING_LIGHT || bt == BT_FAN || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_PUMP || bt == BT_FLOODLIGHT || has_wire;
+        || bt == BT_CEILING_LIGHT || bt == BT_FAN || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_PUMP || bt == BT_FLOODLIGHT || bt == BT_WALL_LAMP || has_wire;
 }
 
 fn is_battery(bt: u32) -> bool {
@@ -57,7 +57,7 @@ fn is_generator(bt: u32) -> bool {
 // Is this block a power consumer?
 fn is_consumer(bt: u32) -> bool {
     // Electric light=7, Standing lamp=10, Table lamp=11, Fan=12, Pump=16, Floodlight=48
-    return bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FAN || bt == BT_PUMP || bt == BT_FLOODLIGHT;
+    return bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FAN || bt == BT_PUMP || bt == BT_FLOODLIGHT || bt == BT_WALL_LAMP;
 }
 
 @compute @workgroup_size(8, 8)
@@ -208,6 +208,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     if bt == BT_FAN { load = 0.012; }  // Fan: ~10W
     if bt == BT_PUMP { load = 0.010; }  // Pump: ~8W
     if bt == BT_FLOODLIGHT { load = 0.030; }  // Floodlight: ~25W
+    if bt == BT_WALL_LAMP { load = 0.006; }   // Wall lamp: ~5W
 
     // --- Voltage relaxation ---
     // Wires connect to direct 4-neighbors only.

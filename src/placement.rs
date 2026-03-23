@@ -79,6 +79,46 @@ impl App {
         }
     }
 
+    /// Find wall neighbors of a floor tile. Returns directions (0=N,1=E,2=S,3=W) where walls exist.
+    pub(crate) fn find_wall_neighbors(&self, x: i32, y: i32) -> Vec<u32> {
+        let dirs: [(i32, i32, u32); 4] = [(0, -1, 0), (1, 0, 1), (0, 1, 2), (-1, 0, 3)];
+        let reg = block_defs::BlockRegistry::cached();
+        let mut result = Vec::new();
+        for &(dx, dy, dir) in &dirs {
+            let nx = x + dx;
+            let ny = y + dy;
+            if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+            let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+            let nb = self.grid_data[nidx];
+            let nbt = block_type_rs(nb);
+            let nbh = (nb >> 8) & 0xFF;
+            if nbh > 0 && reg.is_wall(nbt) {
+                result.push(dir);
+            }
+        }
+        result
+    }
+
+    /// Check if a tile is valid for wall-adjacent placement and return the facing direction.
+    /// If multiple walls, uses build_rotation to disambiguate.
+    /// Returns None if no adjacent wall or tile isn't floor-level.
+    pub(crate) fn wall_adjacent_direction(&self, x: i32, y: i32) -> Option<u32> {
+        if !self.can_place_at(x, y) { return None; }
+        let walls = self.find_wall_neighbors(x, y);
+        match walls.len() {
+            0 => None,
+            1 => Some(walls[0]),
+            _ => {
+                // Multiple walls: use build_rotation to pick
+                if walls.contains(&self.build_rotation) {
+                    Some(self.build_rotation)
+                } else {
+                    Some(walls[0])
+                }
+            }
+        }
+    }
+
     /// Check if a tile is valid for placement (ground level, in bounds)
     pub(crate) fn can_place_at(&self, x: i32, y: i32) -> bool {
         self.can_place_on(x, y, false)
@@ -930,6 +970,21 @@ impl App {
                     let extra_flags = placement.map(|p| p.extra_flags).unwrap_or(0);
                     let stays_selected = placement.map(|p| p.stays_selected).unwrap_or(false);
                     let click_mode = placement.map(|p| p.click.clone()).unwrap_or(block_defs::ClickMode::Simple);
+
+                    // Wall-adjacent placement: auto-detect wall direction
+                    if click_mode == block_defs::ClickMode::WallAdjacent {
+                        if let Some(dir) = self.wall_adjacent_direction(bx, by) {
+                            let roof_flag = flags & 2;
+                            let roof_h = block & 0xFF000000;
+                            let dir_flags = roof_flag | ((dir as u8) << 3);
+                            self.place_or_blueprint(bx, by, make_block(id as u8, place_height, dir_flags) | roof_h);
+                            self.grid_dirty = true;
+                            compute_roof_heights(&mut self.grid_data);
+                            log::info!("Placed wall attachment {} at ({}, {}) facing dir={}", id, bx, by, dir);
+                            self.build_tool = BuildTool::None;
+                        }
+                        return;
+                    }
 
                     let bt = bt as u32;
                     let can_place = self.can_place_at(bx, by)

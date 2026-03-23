@@ -59,6 +59,8 @@ pub const BT_WIRE_BRIDGE: u32 = 51;
 pub const BT_LIQUID_INTAKE: u32 = 52;
 pub const BT_LIQUID_PUMP: u32 = 53;
 pub const BT_LIQUID_OUTPUT: u32 = 54;
+pub const BT_WALL_TORCH: u32 = 55;
+pub const BT_WALL_LAMP: u32 = 56;
 
 /// Generate WGSL `const BT_*: u32 = N;` lines for all block type constants.
 /// Prepend this to shader source so WGSL can use the same names as Rust.
@@ -89,6 +91,7 @@ pub fn wgsl_block_constants() -> String {
         ("BT_LIQUID_PIPE", BT_LIQUID_PIPE), ("BT_PIPE_BRIDGE", BT_PIPE_BRIDGE),
         ("BT_WIRE_BRIDGE", BT_WIRE_BRIDGE), ("BT_LIQUID_INTAKE", BT_LIQUID_INTAKE),
         ("BT_LIQUID_PUMP", BT_LIQUID_PUMP), ("BT_LIQUID_OUTPUT", BT_LIQUID_OUTPUT),
+        ("BT_WALL_TORCH", BT_WALL_TORCH), ("BT_WALL_LAMP", BT_WALL_LAMP),
     ];
     for &(name, val) in consts {
         s.push_str(&format!("const {}: u32 = {}u;\n", name, val));
@@ -121,7 +124,7 @@ pub fn roof_height_rs(b: u32) -> u8 {
 /// Is this block type part of the electrical power network?
 /// Checks block type and wire overlay flag. Matches the GPU-side is_conductor() in power.wgsl.
 pub fn is_conductor_rs(bt: u32, flags: u8) -> bool {
-    matches!(bt, 36..=43 | 45 | 48 | 51 | 7 | 10..=12 | 16) || (flags & 0x80) != 0
+    matches!(bt, 36..=43 | 45 | 48 | 51 | 56 | 7 | 10..=12 | 16) || (flags & 0x80) != 0
 }
 
 /// Is this block type a ground/floor tile (walkable base, not a placed object)?

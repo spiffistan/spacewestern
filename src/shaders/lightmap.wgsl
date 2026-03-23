@@ -54,7 +54,7 @@ struct GpuMaterial {
     ignition_temp: f32, walkable: f32, is_removable: f32, _pad: f32,
 };
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 54u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 56u)]; }
 
 // --- Block unpacking ---
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
@@ -120,7 +120,7 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
         var color = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
 
         // Electric lights: OFF without power (voltage < 2V)
-        if bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FLOODLIGHT {
+        if bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FLOODLIGHT || bt == BT_WALL_LAMP {
             let vidx = u32(by) * u32(camera.grid_w) + u32(bx);
             let lv = voltage[vidx];
             if lv < 2.0 {
@@ -128,6 +128,16 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
             } else {
                 intensity *= clamp((lv - 2.0) / 6.0, 0.0, 1.0);
             }
+        }
+
+        // Wall torch: apply fire flicker (same as fireplace)
+        if bt == BT_WALL_TORCH {
+            let wx = f32(bx) + 0.5;
+            let wy = f32(by) + 0.5;
+            let phase = fire_hash(vec2<f32>(wx, wy)) * 6.28;
+            let flicker = fire_flicker(camera.time + phase);
+            intensity = intensity * (0.7 + 0.3 * flicker);
+            color = mix(FIRE_COLOR, FIRE_COLOR_HOT, flicker * 0.3);
         }
 
         // Fireplace: apply flicker

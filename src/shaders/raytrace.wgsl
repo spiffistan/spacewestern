@@ -147,7 +147,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 54u)];
+    return materials[min(bt, 56u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -834,8 +834,17 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
                 light_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, burn_glow_i * flicker * 0.5);
             }
 
+            // Wall torch: fire flicker (same as fireplace pattern)
+            if bt == BT_WALL_TORCH {
+                let phase = fire_hash(vec2<f32>(lcx, lcy)) * 6.28;
+                let flicker = fire_flicker(time + phase);
+                intensity *= (0.7 + 0.3 * flicker);
+                let heat = clamp(1.0 - dist / 3.0, 0.0, 1.0);
+                light_col = mix(light_col, FIRE_COLOR_HOT, heat * flicker);
+            }
+
             // Electric lights: brightness proportional to voltage, off only at 0V
-            if bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FLOODLIGHT {
+            if bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FLOODLIGHT || bt == BT_WALL_LAMP {
                 let light_idx = u32(ny) * u32(camera.grid_w) + u32(nx);
                 let lv = voltage[light_idx];
                 if lv < 0.1 {
@@ -1052,6 +1061,84 @@ fn render_fireplace(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> 
         // Bright hot core at very center
         let core_t = max(0.0, 1.0 - dist_center / (rim_inner * 0.4));
         color = mix(color, FIRE_COLOR_HOT * (0.8 + 0.2 * flicker), core_t * core_t);
+    }
+
+    return color;
+}
+
+// Wall torch: iron bracket + flame rendered at the edge nearest the wall
+fn render_wall_torch(fx: f32, fy: f32, flags: u32, time: f32, wx: f32, wy: f32) -> vec3<f32> {
+    let dir = (flags >> 3u) & 3u; // 0=N, 1=E, 2=S, 3=W
+    // Transform coordinates so the wall edge is always at local_y = 0
+    var lx = 0.0; var ly = 0.0;
+    if dir == 0u      { lx = fx; ly = fy; }           // N: wall at top, ly=0 is wall edge
+    else if dir == 1u { lx = fy; ly = 1.0 - fx; }     // E: wall at right
+    else if dir == 2u { lx = 1.0 - fx; ly = 1.0 - fy; } // S: wall at bottom
+    else              { lx = 1.0 - fy; ly = fx; }     // W: wall at left
+
+    var color = block_base_color(2u, 0u); // ground base
+
+    // Bracket: iron mount at wall edge (ly < 0.2, centered on lx)
+    let bracket_cx = abs(lx - 0.5);
+    if ly < 0.18 && bracket_cx < 0.08 {
+        color = vec3(0.30, 0.28, 0.25); // dark iron
+        // Bracket arm
+        if ly > 0.06 && bracket_cx < 0.04 {
+            color = vec3(0.35, 0.32, 0.28);
+        }
+    }
+
+    // Flame: small flickering fire at tip of bracket
+    let flame_cx = lx - 0.5;
+    let flame_cy = ly - 0.12;
+    let flame_dist = length(vec2(flame_cx, flame_cy));
+    if flame_dist < 0.10 {
+        let phase = fire_hash(vec2(wx, wy)) * 6.28;
+        let flicker = fire_flicker(time + phase);
+        let flame_t = 1.0 - flame_dist / 0.10;
+        let flame_color = mix(FIRE_COLOR, FIRE_COLOR_HOT, flame_t * flicker);
+        color = mix(color, flame_color, flame_t * (0.7 + 0.3 * flicker));
+    }
+
+    return color;
+}
+
+// Wall lamp: metallic fixture with warm-white glow at wall edge
+fn render_wall_lamp(fx: f32, fy: f32, flags: u32, bx: i32, by: i32) -> vec3<f32> {
+    let dir = (flags >> 3u) & 3u;
+    // Transform so wall edge is at local_y = 0
+    var lx = 0.0; var ly = 0.0;
+    if dir == 0u      { lx = fx; ly = fy; }
+    else if dir == 1u { lx = fy; ly = 1.0 - fx; }
+    else if dir == 2u { lx = 1.0 - fx; ly = 1.0 - fy; }
+    else              { lx = 1.0 - fy; ly = fx; }
+
+    var color = block_base_color(2u, 0u); // ground base
+
+    // Fixture body: compact metallic housing at wall edge
+    let body_cx = abs(lx - 0.5);
+    let body_cy = ly;
+    if body_cy < 0.20 && body_cx < 0.12 {
+        color = vec3(0.55, 0.53, 0.50); // brushed metal
+        // Metallic sheen
+        let sheen = 1.0 - body_cy / 0.20;
+        color += vec3(0.06) * sheen;
+        // Rim
+        if body_cx > 0.09 || body_cy > 0.17 {
+            color = vec3(0.40, 0.38, 0.36);
+        }
+    }
+
+    // Lens/glow: bright when powered
+    let lens_cx = lx - 0.5;
+    let lens_cy = ly - 0.10;
+    let lens_dist = length(vec2(lens_cx, lens_cy));
+    if lens_dist < 0.07 {
+        let vidx = u32(by) * u32(camera.grid_w) + u32(bx);
+        let lv = voltage[vidx];
+        let power = sqrt(clamp(lv / 8.0, 0.0, 1.0));
+        let lens_t = 1.0 - lens_dist / 0.07;
+        color = mix(vec3(0.45, 0.43, 0.40), vec3(0.95, 0.92, 0.85) * (0.5 + power), lens_t * lens_t);
     }
 
     return color;
@@ -2274,6 +2361,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = block_base_color(2u, 0u); // ground
         }
+    } else if btype == BT_WALL_TORCH {
+        color = render_wall_torch(fx, fy, bflags, camera.time, world_x, world_y);
+    } else if btype == BT_WALL_LAMP {
+        color = render_wall_lamp(fx, fy, bflags, bx, by);
     } else if btype == BT_FAN {
         // Fan: metallic gray housing with grille and bold direction arrow
         // Outer frame (dark steel border)
@@ -2809,10 +2900,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let wf_e2 = (get_block(bx + 1, by) >> 16u) & 0x80u;
             let wf_n2 = (get_block(bx, by - 1) >> 16u) & 0x80u;
             let wf_s2 = (get_block(bx, by + 1) >> 16u) & 0x80u;
-            let pwr_w = n_w == BT_WIRE || n_w == BT_SOLAR || n_w == BT_BATTERY_S || n_w == BT_BATTERY_M || n_w == BT_BATTERY_L || n_w == BT_WIND_TURBINE || n_w == BT_SWITCH || n_w == BT_DIMMER || n_w == BT_BREAKER || n_w == BT_WIRE_BRIDGE || n_w == BT_FLOODLIGHT || n_w == BT_CEILING_LIGHT || n_w == BT_FAN || n_w == BT_FLOOR_LAMP;
-            let pwr_e = n_e == BT_WIRE || n_e == BT_SOLAR || n_e == BT_BATTERY_S || n_e == BT_BATTERY_M || n_e == BT_BATTERY_L || n_e == BT_WIND_TURBINE || n_e == BT_SWITCH || n_e == BT_DIMMER || n_e == BT_BREAKER || n_e == BT_CEILING_LIGHT || n_e == BT_FAN || n_e == BT_FLOOR_LAMP;
-            let pwr_n = n_n == BT_WIRE || n_n == BT_SOLAR || n_n == BT_BATTERY_S || n_n == BT_BATTERY_M || n_n == BT_BATTERY_L || n_n == BT_WIND_TURBINE || n_n == BT_SWITCH || n_n == BT_DIMMER || n_n == BT_BREAKER || n_n == BT_CEILING_LIGHT || n_n == BT_FAN || n_n == BT_FLOOR_LAMP;
-            let pwr_s = n_s == BT_WIRE || n_s == BT_SOLAR || n_s == BT_BATTERY_S || n_s == BT_BATTERY_M || n_s == BT_BATTERY_L || n_s == BT_WIND_TURBINE || n_s == BT_SWITCH || n_s == BT_DIMMER || n_s == BT_BREAKER || n_s == BT_CEILING_LIGHT || n_s == BT_FAN || n_s == BT_FLOOR_LAMP;
+            let pwr_w = n_w == BT_WIRE || n_w == BT_SOLAR || n_w == BT_BATTERY_S || n_w == BT_BATTERY_M || n_w == BT_BATTERY_L || n_w == BT_WIND_TURBINE || n_w == BT_SWITCH || n_w == BT_DIMMER || n_w == BT_BREAKER || n_w == BT_WIRE_BRIDGE || n_w == BT_FLOODLIGHT || n_w == BT_CEILING_LIGHT || n_w == BT_FAN || n_w == BT_FLOOR_LAMP || n_w == BT_WALL_LAMP;
+            let pwr_e = n_e == BT_WIRE || n_e == BT_SOLAR || n_e == BT_BATTERY_S || n_e == BT_BATTERY_M || n_e == BT_BATTERY_L || n_e == BT_WIND_TURBINE || n_e == BT_SWITCH || n_e == BT_DIMMER || n_e == BT_BREAKER || n_e == BT_CEILING_LIGHT || n_e == BT_FAN || n_e == BT_FLOOR_LAMP || n_e == BT_WALL_LAMP;
+            let pwr_n = n_n == BT_WIRE || n_n == BT_SOLAR || n_n == BT_BATTERY_S || n_n == BT_BATTERY_M || n_n == BT_BATTERY_L || n_n == BT_WIND_TURBINE || n_n == BT_SWITCH || n_n == BT_DIMMER || n_n == BT_BREAKER || n_n == BT_CEILING_LIGHT || n_n == BT_FAN || n_n == BT_FLOOR_LAMP || n_n == BT_WALL_LAMP;
+            let pwr_s = n_s == BT_WIRE || n_s == BT_SOLAR || n_s == BT_BATTERY_S || n_s == BT_BATTERY_M || n_s == BT_BATTERY_L || n_s == BT_WIND_TURBINE || n_s == BT_SWITCH || n_s == BT_DIMMER || n_s == BT_BREAKER || n_s == BT_CEILING_LIGHT || n_s == BT_FAN || n_s == BT_FLOOR_LAMP || n_s == BT_WALL_LAMP;
             conn_w = pwr_w || wf_w2 != 0u;
             conn_e = pwr_e || wf_e2 != 0u;
             conn_n = pwr_n || wf_n2 != 0u;
@@ -3306,7 +3397,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Procedural terrain detail (ground-level blocks only) ---
     // Replace this block with sprite sampling when migrating to sprites.
-    if camera.enable_terrain_detail > 0.5 && bheight == 0u && (btype == BT_DIRT || btype == BT_AIR) {
+    let is_scorched_dirt = btype == BT_DIRT && (bflags & 1u) != 0u;
+    if camera.enable_terrain_detail > 0.5 && bheight == 0u && (btype == BT_DIRT || btype == BT_AIR) && !is_scorched_dirt {
         // Dirt / air (ground): full terrain detail with grass, flowers, pebbles
         let td_idx = u32(by) * u32(camera.grid_w) + u32(bx);
         let td_wt = water_table_buf[td_idx];
@@ -3315,7 +3407,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let effective_wt = td_wt - td_elev * 0.3;
         color = terrain_detail(color, world_x, world_y, bx, by,
             effective_wt, camera.rain_intensity, camera.wind_angle, camera.time);
-    } else if btype == BT_DIRT && bheight > 0u {
+    } else if is_scorched_dirt {
         // Scorched dirt (grass burned away): dark charred earth, no vegetation
         let char_noise = value_noise(vec2(world_x * 3.0, world_y * 3.0));
         let ash_col = mix(vec3<f32>(0.15, 0.12, 0.08), vec3<f32>(0.25, 0.20, 0.14), char_noise);
@@ -4010,7 +4102,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Is this block part of the power grid?
         let is_pwr_infra = btype == BT_WIRE || btype == BT_SOLAR || btype == BT_BATTERY_S || btype == BT_BATTERY_M
             || btype == BT_BATTERY_L || btype == BT_WIND_TURBINE || btype == BT_SWITCH || btype == BT_DIMMER || btype == BT_BREAKER || btype == BT_FLOODLIGHT || btype == BT_WIRE_BRIDGE
-            || btype == BT_CEILING_LIGHT || btype == BT_FLOOR_LAMP || btype == BT_TABLE_LAMP || btype == BT_FAN || btype == BT_PUMP
+            || btype == BT_CEILING_LIGHT || btype == BT_FLOOR_LAMP || btype == BT_TABLE_LAMP || btype == BT_FAN || btype == BT_PUMP || btype == BT_WALL_LAMP
             || (bflags & 0x80u) != 0u; // wire overlay on wall
         if is_pwr_infra {
             if norm_v > 0.01 {
@@ -4051,7 +4143,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let norm_a = clamp(total_current * 0.5, 0.0, 1.0);
         let is_amp_infra = btype == BT_WIRE || btype == BT_SOLAR || btype == BT_BATTERY_S || btype == BT_BATTERY_M
             || btype == BT_BATTERY_L || btype == BT_WIND_TURBINE || btype == BT_SWITCH || btype == BT_DIMMER || btype == BT_FLOODLIGHT || btype == BT_WIRE_BRIDGE
-            || btype == BT_CEILING_LIGHT || btype == BT_FLOOR_LAMP || btype == BT_TABLE_LAMP || btype == BT_FAN || btype == BT_PUMP
+            || btype == BT_CEILING_LIGHT || btype == BT_FLOOR_LAMP || btype == BT_TABLE_LAMP || btype == BT_FAN || btype == BT_PUMP || btype == BT_WALL_LAMP
             || (bflags & 0x80u) != 0u;
         if norm_a > 0.005 {
             var amp_color = mix(vec3<f32>(0.05, 0.05, 0.15), vec3<f32>(0.4, 0.8, 1.0), clamp(norm_a * 2.0, 0.0, 1.0));
@@ -4245,8 +4337,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Temporal blend provides sufficient shadow smoothing.
 
     // --- Fire overlay for burning blocks (applied AFTER lighting so flames are emissive) ---
-    // Skip scorched dirt (height > 0) — grass already burned away
-    let skip_fire = btype == BT_DIRT && bheight > 0u;
+    // Skip scorched dirt (flags bit 0) — grass already burned away
+    let skip_fire = btype == BT_DIRT && (bflags & 1u) != 0u;
     if mat.is_flammable > 0.5 && !skip_fire {
         let fire_tidx = u32(by) * u32(camera.grid_w) + u32(bx);
         let fire_temp = block_temps[fire_tidx];

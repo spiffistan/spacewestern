@@ -73,8 +73,9 @@ pub fn tick_fire(
         let bt = block_type_rs(block);
         let bh = (block >> 8) & 0xFF;
 
-        // Scorched dirt (height > 0) — already burned, remove
-        if bt == BT_DIRT && bh > 0 { burn_progress.remove(&idx); continue; }
+        // Scorched dirt (flags bit 0) — already burned, remove
+        let bf = block_flags_rs(block);
+        if bt == BT_DIRT && (bf & 1) != 0 { burn_progress.remove(&idx); continue; }
 
         let bt_time = match burn_time(bt) {
             Some(t) => t,
@@ -140,9 +141,9 @@ pub fn tick_fire(
                 };
                 if !ndef.is_flammable { continue; }
 
-                // Scorched dirt (height > 0) — grass already burned, skip
-                let nbh = (nb >> 8) & 0xFF;
-                if nbt == BT_DIRT && nbh > 0 { continue; }
+                // Scorched dirt (flags bit 0) — grass already burned, skip
+                let nbf = block_flags_rs(nb);
+                if nbt == BT_DIRT && (nbf & 1) != 0 { continue; }
 
                 // Wind bonus: spreading downwind is easier
                 let wind_dot = dx as f32 * wind_dx + dy as f32 * wind_dy;

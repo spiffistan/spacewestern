@@ -57,7 +57,7 @@ fn get_elevation(b: u32) -> f32 {
     // Walls and solid blocks: treated as very high (water can't flow onto them)
     if bh > 0u && bt != BT_TREE && bt != BT_FIREPLACE && bt != BT_CEILING_LIGHT && bt != BT_FLOOR_LAMP && bt != BT_BERRY_BUSH
         && bt != BT_CRATE && bt != BT_ROCK && bt != BT_WIRE && bt != BT_DIMMER && bt != BT_CROP
-        && bt != BT_BREAKER && bt != BT_RESTRICTOR
+        && bt != BT_BREAKER && bt != BT_RESTRICTOR && bt != BT_WALL_TORCH && bt != BT_WALL_LAMP
         && !(bt >= BT_PIPE && bt <= BT_INLET) // gas pipe components
         && bt != BT_LIQUID_PIPE && bt != BT_PIPE_BRIDGE && bt != BT_LIQUID_INTAKE && bt != BT_LIQUID_PUMP && bt != BT_LIQUID_OUTPUT {
         return 10.0; // effectively a wall — water won't flow here
