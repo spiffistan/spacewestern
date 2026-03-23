@@ -62,6 +62,8 @@ struct Camera {
     enable_terrain_detail: f32,
     terrain_ao_strength: f32,
     fog_enabled: f32,
+    hover_x: f32,
+    hover_y: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -4395,6 +4397,43 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Fire is emissive — boost brightness above 1.0, not dimmed by shadows
             let emissive_fire = fire_ov.rgb * (1.2 + 0.8 * burn_i);
             color = mix(color, emissive_fire, fire_ov.a);
+        }
+    }
+
+    // Hover tint: highlight interactable blocks under the cursor
+    if camera.hover_x >= 0.0 {
+        let hbx = i32(floor(camera.hover_x));
+        let hby = i32(floor(camera.hover_y));
+        if bx == hbx && by == hby {
+            // Determine if this block is interactable and choose tint color
+            var hover_tint = vec3(0.0);
+            var is_hover = false;
+            // Doors: warm highlight
+            if (bflags & 1u) != 0u && btype == BT_WALL {
+                hover_tint = vec3(0.8, 0.6, 0.2); is_hover = true;
+            }
+            // Toggle blocks: switches, valves, breakers
+            if btype == BT_SWITCH || btype == BT_VALVE || btype == BT_BREAKER {
+                hover_tint = vec3(0.3, 0.7, 1.0); is_hover = true;
+            }
+            // Slider blocks: dimmers, restrictors, fireplaces
+            if btype == BT_DIMMER || btype == BT_RESTRICTOR || btype == BT_FIREPLACE {
+                hover_tint = vec3(1.0, 0.6, 0.3); is_hover = true;
+            }
+            // Fan, pump: mechanical blue
+            if btype == BT_FAN || btype == BT_PUMP {
+                hover_tint = vec3(0.3, 0.8, 0.9); is_hover = true;
+            }
+            if is_hover {
+                // Subtle pulsing highlight
+                let pulse = 0.08 + 0.04 * sin(camera.time * 3.0);
+                color = mix(color, hover_tint, pulse);
+                // Edge brighten for clarity
+                let edge_x = min(fx, 1.0 - fx);
+                let edge_y = min(fy, 1.0 - fy);
+                let edge = smoothstep(0.08, 0.0, min(edge_x, edge_y));
+                color = mix(color, hover_tint, edge * 0.25);
+            }
         }
     }
 

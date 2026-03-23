@@ -379,32 +379,8 @@ impl App {
         for (i, pleb) in self.plebs.iter_mut().enumerate() {
             let is_selected = sel == Some(i);
 
-            // WASD direct movement (only for selected pleb, blocked during crisis)
+            // Q/E rotation for selected pleb
             if is_selected && !pleb.activity.is_crisis() {
-                let mut dx = 0.0f32;
-                let mut dy = 0.0f32;
-                if self.pressed_keys.contains(&KeyCode::KeyW) { dy -= 1.0; }
-                if self.pressed_keys.contains(&KeyCode::KeyS) { dy += 1.0; }
-                if self.pressed_keys.contains(&KeyCode::KeyA) { dx -= 1.0; }
-                if self.pressed_keys.contains(&KeyCode::KeyD) { dx += 1.0; }
-
-                if dx != 0.0 || dy != 0.0 {
-                    let len = (dx * dx + dy * dy).sqrt();
-                    dx /= len; dy /= len;
-                    pleb.angle = dy.atan2(dx);
-                    let nx = pleb.x + dx * move_speed * dt;
-                    let ny = pleb.y + dy * move_speed * dt;
-                    if is_walkable_pos(&self.grid_data, nx, ny) {
-                        pleb.x = nx;
-                        pleb.y = ny;
-                        let (cx, cy) = pleb_body_collision(&self.physics_bodies, pleb.x, pleb.y);
-                        pleb.x = cx;
-                        pleb.y = cy;
-                    }
-                    pleb.path.clear();
-                    pleb.path_idx = 0;
-                }
-
                 // Q/E rotation
                 if self.pressed_keys.contains(&KeyCode::KeyQ) { pleb.angle -= 2.0 * dt; }
                 if self.pressed_keys.contains(&KeyCode::KeyE) { pleb.angle += 2.0 * dt; }
@@ -798,13 +774,7 @@ impl App {
         {
             let sel_pleb = self.selected_pleb.and_then(|i| self.plebs.get(i));
             let pleb_data = sel_pleb.map(|p| {
-                let pvx = if self.pressed_keys.contains(&KeyCode::KeyD) { 3.0 }
-                    else if self.pressed_keys.contains(&KeyCode::KeyA) { -3.0 }
-                    else { 0.0 };
-                let pvy = if self.pressed_keys.contains(&KeyCode::KeyS) { 3.0 }
-                    else if self.pressed_keys.contains(&KeyCode::KeyW) { -3.0 }
-                    else { 0.0 };
-                (p.x, p.y, pvx, pvy, p.angle)
+                (p.x, p.y, 0.0f32, 0.0f32, p.angle)
             });
             // Collect pleb positions for bullet collision
             let pleb_positions: Vec<(f32, f32, usize)> = self.plebs.iter().enumerate()

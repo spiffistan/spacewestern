@@ -40,7 +40,7 @@ mod simulation;
 use pipes::PipeNetwork;
 
 mod physics;
-use physics::{PhysicsBody, tick_bodies, pleb_body_collision, nearest_body, projectile_def, PROJ_BULLET};
+use physics::{PhysicsBody, tick_bodies, nearest_body, projectile_def, PROJ_BULLET};
 
 mod zones;
 use zones::{Zone, ZoneKind};
@@ -180,7 +180,8 @@ struct App {
     block_sel: BlockSelection,      // which popup/slider is open
     build_category: Option<&'static str>, // selected build category, None = collapsed
     debug: DebugReadback,          // shift-hover readback state
-    fluid_mouse_active: bool,  // middle mouse button held
+    middle_mouse_pressed: bool, // middle mouse button held (fast pan)
+    fluid_mouse_active: bool,  // middle mouse button held (legacy, unused)
     fluid_mouse_prev: Option<(f32, f32)>, // previous world position for velocity calc
     // Pleb (character)
     plebs: Vec<Pleb>,
@@ -411,6 +412,7 @@ impl App {
                 rain_intensity: 0.0, cloud_cover: 0.0, wind_magnitude: 0.0, wind_angle: 0.0,
                 use_shadow_map: 1.0, shadow_map_scale: 8.0, sound_speed: 0.0, sound_damping: 0.0,
                 sound_coupling: 0.0, enable_terrain_detail: 1.0, terrain_ao_strength: 2.5, fog_enabled: 0.0,
+                hover_x: -1.0, hover_y: -1.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -499,6 +501,7 @@ impl App {
             prev_cam_y: 0.0,
             prev_cam_zoom: 0.0,
             prev_cam_time: 0.0,
+            middle_mouse_pressed: false,
             fluid_mouse_active: false,
             fluid_mouse_prev: None,
             plebs: {
@@ -969,8 +972,8 @@ impl App {
 
         let dt = self.update_simulation();
 
-        // WASD camera pan when no pleb is selected
-        if self.selected_pleb.is_none() {
+        // WASD camera pan (always active)
+        {
             let shift = self.pressed_keys.contains(&KeyCode::ShiftLeft) || self.pressed_keys.contains(&KeyCode::ShiftRight);
             let pan_speed = self.camera_pan_speed / self.camera.zoom * if shift { 2.0 } else { 1.0 };
             let mut pan_x = 0.0f32;
@@ -1218,6 +1221,8 @@ impl App {
         self.camera.enable_terrain_detail = if self.enable_terrain_detail { 1.0 } else { 0.0 };
         self.camera.terrain_ao_strength = self.terrain_ao_strength;
         self.camera.fog_enabled = if self.fog_enabled { 1.0 } else { 0.0 };
+        self.camera.hover_x = self.hover_world.0;
+        self.camera.hover_y = self.hover_world.1;
 
         // Fog of war: update visibility when enabled
         if self.fog_enabled {
@@ -2142,6 +2147,17 @@ impl ApplicationHandler for App {
                     self.window.as_ref().unwrap().request_redraw();
                 }
             }
+            // Middle mouse drag = fast pan (3x speed, no drag threshold)
+            if self.middle_mouse_pressed {
+                let dx = position.x - self.last_mouse_x;
+                let dy = position.y - self.last_mouse_y;
+                let pan_mul = 3.0; // faster than left-click drag
+                self.camera.center_x -= dx as f32 * self.render_scale / self.camera.zoom * pan_mul;
+                self.camera.center_y -= dy as f32 * self.render_scale / self.camera.zoom * pan_mul;
+                self.camera.center_x = self.camera.center_x.clamp(0.0, GRID_W as f32);
+                self.camera.center_y = self.camera.center_y.clamp(0.0, GRID_H as f32);
+                self.window.as_ref().unwrap().request_redraw();
+            }
             // Move dragged light source
             if self.dragging_light.is_some() {
                 let (wx, wy) = self.screen_to_world(position.x, position.y);
@@ -2275,6 +2291,11 @@ impl ApplicationHandler for App {
                         self.select_drag_start = None;
                     }
                 }
+                // Middle-click: fast pan
+                if button == winit::event::MouseButton::Middle {
+                    self.middle_mouse_pressed = state.is_pressed();
+                }
+
                 // Right-click: context menu for selected pleb, rock menu, or pick up lights
                 if button == winit::event::MouseButton::Right {
                     if state.is_pressed() {
