@@ -104,6 +104,8 @@ name = "Tree"
 color = [0.18, 0.35, 0.12]
 render_style = 4.0
 light_transmission = 0.5
+is_flammable = true
+ignition_temp = 200.0
 thermal = { heat_capacity = 2.0, conductivity = 0.001, solar_absorption = 0.3 }
 
 [[block]]
@@ -114,6 +116,8 @@ render_style = 5.0
 light_transmission = 1.0
 is_furniture = true
 walkable = true
+is_flammable = true
+ignition_temp = 260.0
 thermal = { heat_capacity = 2.0, conductivity = 0.003, solar_absorption = 0.4 }
 [block.placement]
 category = "Build"
@@ -400,6 +404,8 @@ color = [0.55, 0.42, 0.22]
 light_transmission = 1.0
 walkable = true
 is_removable = true
+is_flammable = true
+ignition_temp = 280.0
 thermal = { heat_capacity = 2.5, conductivity = 0.002, solar_absorption = 0.4 }
 [block.placement]
 category = "Floor"
@@ -468,6 +474,8 @@ light_transmission = 1.0
 is_furniture = true
 walkable = true
 is_removable = true
+is_flammable = true
+ignition_temp = 180.0
 thermal = { heat_capacity = 2.0, conductivity = 0.002, solar_absorption = 0.3 }
 [block.placement]
 category = "Build"
@@ -485,6 +493,8 @@ render_style = 18.0
 light_transmission = 0.6
 walkable = true
 is_plant = true
+is_flammable = true
+ignition_temp = 150.0
 is_harvestable = true
 thermal = { heat_capacity = 1.5, conductivity = 0.001, solar_absorption = 0.3 }
 [block.placement]
@@ -511,6 +521,8 @@ render_style = 20.0
 light_transmission = 1.0
 is_furniture = true
 is_removable = true
+is_flammable = true
+ignition_temp = 240.0
 thermal = { heat_capacity = 2.0, conductivity = 0.002, solar_absorption = 0.4 }
 [block.placement]
 category = "Build"
@@ -854,5 +866,7 @@ color = [0.30, 0.55, 0.15]
 render_style = 32.0
 walkable = true
 is_plant = true
+is_flammable = true
+ignition_temp = 130.0
 light_transmission = 0.8
 thermal = { heat_capacity = 1.0, conductivity = 0.001, solar_absorption = 0.3 }
