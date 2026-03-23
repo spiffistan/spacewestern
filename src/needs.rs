@@ -26,6 +26,56 @@ const CO2_POISON_DAMAGE: f32 = 0.015;
 /// Breath recovery rate when breathing good air (seconds of breath per second)
 const BREATH_RECOVERY_RATE: f32 = 3.0;
 
+// --- Environment scan radii ---
+const ENV_SCAN_RADIUS: i32 = 6;
+const NEAR_FIRE_RADIUS: f32 = 4.0;
+const NEAR_HEATER_RADIUS: f32 = 3.0;
+const NEAR_FURNITURE_RADIUS: f32 = 3.0;
+const NEAR_BED_RADIUS: f32 = 2.0;
+const NEAR_INTERACT_RADIUS: f32 = 2.0;  // berry bush, crate
+const CRATE_SCAN_RADIUS: i32 = 60;
+
+// --- Temperature comfort range (°C) ---
+const TEMP_COMFORTABLE_LOW: f32 = 18.0;
+const TEMP_COMFORTABLE_HIGH: f32 = 28.0;
+const TEMP_COOL_MIN: f32 = 5.0;
+const TEMP_HOT_RANGE: f32 = 50.0;        // degrees above comfortable before warmth hits 0.2
+
+// --- Warmth fallback (no fluid sim) ---
+const WARMTH_INDOORS: f32 = 0.7;
+const WARMTH_NIGHT_OUTDOORS: f32 = 0.2;
+const WARMTH_DAY_OUTDOORS: f32 = 0.5;
+
+// --- Night/day boundary ---
+const NIGHT_START_FRAC: f32 = 0.85;
+const NIGHT_END_FRAC: f32 = 0.15;
+
+// --- Safety ---
+const FIRE_DANGER_DIST: f32 = 2.0;
+const FIRE_LETHAL_DIST: f32 = 1.0;
+
+// --- Comfort ---
+const COMFORT_INDOORS_FURNITURE: f32 = 1.0;
+const COMFORT_INDOORS: f32 = 0.6;
+const COMFORT_OUTDOORS: f32 = 0.3;
+
+// --- Health ---
+const NATURAL_HEAL_RATE: f32 = 0.002;
+const NATURAL_HEAL_THRESHOLD: f32 = 0.5;
+const STARVATION_THRESHOLD: f32 = 0.05;
+const FREEZE_THRESHOLD: f32 = 0.15;
+const TOXIC_GAS_CO2: f32 = 0.5;
+const TOXIC_GAS_O2: f32 = 0.5;
+const TOXIC_CONTACT_DAMAGE: f32 = 0.06;
+
+// --- Mood weights ---
+const MOOD_HUNGER_WEIGHT: f32 = 20.0;
+const MOOD_REST_WEIGHT: f32 = 20.0;
+const MOOD_WARMTH_WEIGHT: f32 = 15.0;
+const MOOD_OXYGEN_WEIGHT: f32 = 25.0;
+const MOOD_SAFETY_WEIGHT: f32 = 10.0;
+const MOOD_COMFORT_WEIGHT: f32 = 10.0;
+
 /// Breathing state machine for a pleb.
 #[derive(Clone, Debug, PartialEq)]
 pub enum BreathingState {
@@ -108,7 +158,7 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
         false
     };
 
-    let is_night = day_frac < 0.15 || day_frac > 0.85;
+    let is_night = day_frac < NIGHT_END_FRAC || day_frac > NIGHT_START_FRAC;
 
     let mut near_fire = false;
     let mut near_heater = false;
@@ -124,8 +174,7 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
     let mut bush_dist = f32::MAX;
     let mut crate_dist = f32::MAX;
 
-    // Scan nearby blocks (radius 6 for berry bushes, 4 for most)
-    let scan_r = 6i32;
+    let scan_r = ENV_SCAN_RADIUS;
     for dy in -scan_r..=scan_r {
         for dx in -scan_r..=scan_r {
             let sx = bx + dx;
@@ -136,50 +185,32 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
             let bt = block_type_rs(b) as u32;
             let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
 
-            match bt {
-                // Fireplace (type 6)
-                6 => {
-                    if dist < 4.0 { near_fire = true; }
-                    if dist < fire_dist { fire_dist = dist; }
+            if bt == BT_FIREPLACE {
+                if dist < NEAR_FIRE_RADIUS { near_fire = true; }
+                if dist < fire_dist { fire_dist = dist; }
+            } else if bt == BT_CEILING_LIGHT {
+                if dist < NEAR_HEATER_RADIUS { near_heater = true; }
+            } else if bt_is!(bt, BT_BENCH, BT_COMPOST) {
+                if dist < NEAR_FURNITURE_RADIUS { near_furniture = true; }
+            } else if bt == BT_BED {
+                if dist < NEAR_BED_RADIUS { near_bed = true; }
+                if dist < NEAR_FURNITURE_RADIUS { near_furniture = true; }
+                if dist < bed_dist {
+                    bed_dist = dist;
+                    nearest_bed = Some((sx, sy));
                 }
-                // Electric light (type 7) — treat as heater too
-                7 => {
-                    if dist < 3.0 { near_heater = true; }
+            } else if bt == BT_BERRY_BUSH {
+                if dist < NEAR_INTERACT_RADIUS { near_berry_bush = true; }
+                if dist < bush_dist {
+                    bush_dist = dist;
+                    nearest_berry_bush = Some((sx, sy));
                 }
-                // Bench (type 9)
-                9 => {
-                    if dist < 3.0 { near_furniture = true; }
+            } else if bt == BT_CRATE {
+                if dist < NEAR_INTERACT_RADIUS { near_crate = true; }
+                if dist < crate_dist {
+                    crate_dist = dist;
+                    nearest_crate = Some((sx, sy));
                 }
-                // Bench legacy (type 13)
-                13 => {
-                    if dist < 3.0 { near_furniture = true; }
-                }
-                // Bed (type 30)
-                30 => {
-                    if dist < 2.0 { near_bed = true; }
-                    if dist < 3.0 { near_furniture = true; }
-                    if dist < bed_dist {
-                        bed_dist = dist;
-                        nearest_bed = Some((sx, sy));
-                    }
-                }
-                // Berry bush (type 31)
-                31 => {
-                    if dist < 2.0 { near_berry_bush = true; }
-                    if dist < bush_dist {
-                        bush_dist = dist;
-                        nearest_berry_bush = Some((sx, sy));
-                    }
-                }
-                // Storage crate (type 33)
-                33 => {
-                    if dist < 2.0 { near_crate = true; }
-                    if dist < crate_dist {
-                        crate_dist = dist;
-                        nearest_crate = Some((sx, sy));
-                    }
-                }
-                _ => {}
             }
         }
     }
@@ -266,26 +297,22 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
 
     // --- Warmth: driven by fluid sim temperature when available ---
     let target_warmth = if let Some(air) = air {
-        // Map real temperature to warmth need: 18-24°C is comfortable
         let temp = air.temp;
-        if temp >= 18.0 && temp <= 28.0 {
+        if temp >= TEMP_COMFORTABLE_LOW && temp <= TEMP_COMFORTABLE_HIGH {
             1.0
-        } else if temp > 28.0 {
-            // Too hot — mild discomfort
-            (1.0 - (temp - 28.0) / 50.0).max(0.2)
-        } else if temp >= 5.0 {
-            // Cool — linear drop
-            (temp - 5.0) / 13.0 // 0 at 5°C, 1 at 18°C
+        } else if temp > TEMP_COMFORTABLE_HIGH {
+            (1.0 - (temp - TEMP_COMFORTABLE_HIGH) / TEMP_HOT_RANGE).max(0.2)
+        } else if temp >= TEMP_COOL_MIN {
+            (temp - TEMP_COOL_MIN) / (TEMP_COMFORTABLE_LOW - TEMP_COOL_MIN)
         } else {
-            // Freezing
             0.0
         }
     } else {
         // Fallback: grid-based approximation
         if env.near_fire || env.near_heater { 1.0 }
-        else if env.is_indoors { 0.7 }
-        else if env.is_night { 0.2 }
-        else { 0.5 }
+        else if env.is_indoors { WARMTH_INDOORS }
+        else if env.is_night { WARMTH_NIGHT_OUTDOORS }
+        else { WARMTH_DAY_OUTDOORS }
     };
     let rate = if target_warmth > needs.warmth { 0.3 } else { 0.5 };
     needs.warmth += (target_warmth - needs.warmth) * rate * t;
@@ -372,8 +399,8 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
 
     // --- Safety: threatened by fire proximity and being outside at night ---
     let mut safety_target = 1.0f32;
-    if env.fire_dist < 2.0 {
-        safety_target -= 0.5 * (1.0 - env.fire_dist / 2.0);
+    if env.fire_dist < FIRE_DANGER_DIST {
+        safety_target -= 0.5 * (1.0 - env.fire_dist / FIRE_DANGER_DIST);
     }
     if env.is_night && !env.is_indoors {
         safety_target -= 0.3;
@@ -392,18 +419,18 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
 
     // --- Comfort: indoors + furniture = comfy ---
     let comfort_target = if env.is_indoors && env.near_furniture {
-        1.0
+        COMFORT_INDOORS_FURNITURE
     } else if env.is_indoors {
-        0.6
+        COMFORT_INDOORS
     } else {
-        0.3
+        COMFORT_OUTDOORS
     };
     needs.comfort += (comfort_target - needs.comfort) * 0.2 * t;
     needs.comfort = needs.comfort.clamp(0.0, 1.0);
 
     // --- Health damage from critical needs ---
     let mut damage = 0.0f32;
-    if needs.hunger < 0.05 {
+    if needs.hunger < STARVATION_THRESHOLD {
         damage += STARVE_DAMAGE;
     }
 
@@ -419,20 +446,20 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
 
     // Toxic gas: when low O2 AND high CO2 simultaneously (grenade cloud).
     // Damages even while holding breath (skin/eye contact).
-    if needs.air_co2 > 0.5 && needs.air_o2 < 0.5 {
-        let toxic_str = ((needs.air_co2 - 0.5) * 2.0).min(1.0);
-        damage += 0.06 * toxic_str; // ~17s to kill at full concentration
+    if needs.air_co2 > TOXIC_GAS_CO2 && needs.air_o2 < TOXIC_GAS_O2 {
+        let toxic_str = ((needs.air_co2 - TOXIC_GAS_CO2) * 2.0).min(1.0);
+        damage += TOXIC_CONTACT_DAMAGE * toxic_str;
     }
 
-    if needs.warmth < 0.15 {
-        damage += FREEZE_DAMAGE * (1.0 - needs.warmth / 0.15);
+    if needs.warmth < FREEZE_THRESHOLD {
+        damage += FREEZE_DAMAGE * (1.0 - needs.warmth / FREEZE_THRESHOLD);
     }
     // Heat damage: scales with temperature above danger threshold
     if needs.air_temp > HEAT_DANGER_TEMP {
         let heat_severity = ((needs.air_temp - HEAT_DANGER_TEMP) / 50.0).min(1.0);
         damage += HEAT_DAMAGE * heat_severity;
     }
-    if env.fire_dist < 1.0 {
+    if env.fire_dist < FIRE_LETHAL_DIST {
         damage += FIRE_DAMAGE;
     }
 
@@ -441,18 +468,18 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
         needs.health = (needs.health - damage * t).max(0.0);
     } else {
         // Slow natural healing when all needs met above 0.5
-        if needs.hunger > 0.5 && needs.rest > 0.5 && needs.warmth > 0.5 && needs.oxygen > 0.5 {
-            needs.health = (needs.health + 0.002 * t).min(1.0);
+        if needs.hunger > NATURAL_HEAL_THRESHOLD && needs.rest > NATURAL_HEAL_THRESHOLD && needs.warmth > NATURAL_HEAL_THRESHOLD && needs.oxygen > NATURAL_HEAL_THRESHOLD {
+            needs.health = (needs.health + NATURAL_HEAL_RATE * t).min(1.0);
         }
     }
 
     // --- Mood: weighted sum of all needs ---
-    let weighted = needs.hunger * 20.0
-        + needs.rest * 20.0
-        + needs.warmth * 15.0
-        + needs.oxygen * 25.0
-        + needs.safety * 10.0
-        + needs.comfort * 10.0;
+    let weighted = needs.hunger * MOOD_HUNGER_WEIGHT
+        + needs.rest * MOOD_REST_WEIGHT
+        + needs.warmth * MOOD_WARMTH_WEIGHT
+        + needs.oxygen * MOOD_OXYGEN_WEIGHT
+        + needs.safety * MOOD_SAFETY_WEIGHT
+        + needs.comfort * MOOD_COMFORT_WEIGHT;
     let target_mood = weighted * 2.0 - 100.0;
     needs.mood += (target_mood - needs.mood) * 0.1 * t;
     needs.mood = needs.mood.clamp(-100.0, 100.0);
@@ -494,14 +521,14 @@ pub fn breathing_label(state: &BreathingState) -> &'static str {
 pub fn find_nearest_crate(grid: &[u32], bx: i32, by: i32) -> Option<(i32, i32)> {
     let mut best: Option<(i32, i32)> = None;
     let mut best_dist = f32::MAX;
-    let scan_r = 60i32; // scan entire visible area
+    let scan_r = CRATE_SCAN_RADIUS;
     for dy in -scan_r..=scan_r {
         for dx in -scan_r..=scan_r {
             let sx = bx + dx;
             let sy = by + dy;
             if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
             let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
-            if block_type_rs(b) == 33 {
+            if block_type_rs(b) as u32 == BT_CRATE {
                 let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
                 if dist < best_dist {
                     best_dist = dist;
