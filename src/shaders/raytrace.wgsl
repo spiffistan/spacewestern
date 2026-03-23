@@ -797,8 +797,19 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             let nb = get_block(nx, ny);
             let bt = block_type(nb);
 
-            // All light source types — check material only after distance cull
-            if get_material(bt).light_intensity <= 0.0 {
+            // Check if this is a light source OR a burning flammable block
+            let glow_mat = get_material(bt);
+            var is_burning_glow = false;
+            var burn_glow_i = 0.0;
+            if glow_mat.is_flammable > 0.5 && glow_mat.light_intensity <= 0.0 {
+                let b_idx = u32(ny) * u32(camera.grid_w) + u32(nx);
+                let b_temp = block_temps[b_idx];
+                if b_temp > glow_mat.ignition_temp {
+                    is_burning_glow = true;
+                    burn_glow_i = clamp((b_temp - glow_mat.ignition_temp) / 300.0, 0.0, 1.0);
+                }
+            }
+            if glow_mat.light_intensity <= 0.0 && !is_burning_glow {
                 continue;
             }
 
@@ -809,11 +820,19 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             let dist = sqrt(fdx * fdx + fdy * fdy);
 
             // Get material properties for this light source
-            let mat = get_material(bt);
-            var radius = mat.light_radius;
-            var intensity = mat.light_intensity;
-            var light_col = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
-            let light_h = mat.light_height;
+            var radius = glow_mat.light_radius;
+            var intensity = glow_mat.light_intensity;
+            var light_col = vec3<f32>(glow_mat.light_color_r, glow_mat.light_color_g, glow_mat.light_color_b);
+            let light_h = glow_mat.light_height;
+
+            // Burning block glow: synthesize light properties from fire state
+            if is_burning_glow {
+                let phase = fire_hash(vec2<f32>(lcx, lcy)) * 6.28;
+                let flicker = fire_flicker(time + phase);
+                intensity = burn_glow_i * 0.7 * (0.6 + 0.4 * flicker);
+                radius = 4.0 + burn_glow_i * 3.0;
+                light_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, burn_glow_i * flicker * 0.5);
+            }
 
             // Electric lights: brightness proportional to voltage, off only at 0V
             if bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FLOODLIGHT {
@@ -3345,18 +3364,6 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_breaker = btype == BT_BREAKER; // breaker height = threshold, not visual
     let is_plant = btype == BT_CROP; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
     let is_diag_open = btype == BT_DIAGONAL && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
-    // --- Fire overlay for burning blocks ---
-    // (reuses `mat` from earlier get_material(btype) call)
-    if mat.is_flammable > 0.5 {
-        let fire_tidx = u32(by) * u32(camera.grid_w) + u32(bx);
-        let fire_temp = block_temps[fire_tidx];
-        if fire_temp > mat.ignition_temp {
-            let burn_i = clamp((fire_temp - mat.ignition_temp) / 300.0, 0.0, 1.0);
-            let fire_ov = render_fire_overlay(world_x, world_y, fx, fy, camera.time, burn_i);
-            color = mix(color, fire_ov.rgb, fire_ov.a);
-        }
-    }
-
     let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_plant || is_diag_open);
     let effective_fheight = f32(effective_height);
 
@@ -4228,6 +4235,19 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Workgroup shadow blur removed — workgroupBarrier() requires uniform control flow
     // which is incompatible with early returns above (roof, emissive, wall face).
     // Temporal blend provides sufficient shadow smoothing.
+
+    // --- Fire overlay for burning blocks (applied AFTER lighting so flames are emissive) ---
+    if mat.is_flammable > 0.5 {
+        let fire_tidx = u32(by) * u32(camera.grid_w) + u32(bx);
+        let fire_temp = block_temps[fire_tidx];
+        if fire_temp > mat.ignition_temp {
+            let burn_i = clamp((fire_temp - mat.ignition_temp) / 300.0, 0.0, 1.0);
+            let fire_ov = render_fire_overlay(world_x, world_y, fx, fy, camera.time, burn_i);
+            // Fire is emissive — boost brightness above 1.0, not dimmed by shadows
+            let emissive_fire = fire_ov.rgb * (1.2 + 0.8 * burn_i);
+            color = mix(color, emissive_fire, fire_ov.a);
+        }
+    }
 
     // Apply fog of war
     color = apply_fog(color, world_x, world_y);
