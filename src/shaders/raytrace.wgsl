@@ -1039,37 +1039,87 @@ fn render_fireplace(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> 
 }
 
 // Render fire overlay for burning blocks. Returns RGBA where A = fire opacity.
+// Multi-layer effect: ember bed → flame tongues → hot core → sparks → smoke wisps.
+// `intensity` 0-1 controls progression from smoldering to roaring.
 fn render_fire_overlay(wx: f32, wy: f32, fx: f32, fy: f32, time: f32, intensity: f32) -> vec4<f32> {
-    let phase = fract(sin(wx * 127.1 + wy * 311.7) * 43758.5) * 6.28;
+    // Per-tile phase so adjacent burning blocks don't flicker in sync
+    let phase = fire_hash(vec2<f32>(wx, wy)) * 6.28;
     let flicker = fire_flicker(time + phase);
-    let int = intensity * flicker;
 
-    // Distance from tile center
     let cx = fx - 0.5;
     let cy = fy - 0.5;
     let dist = sqrt(cx * cx + cy * cy);
-
-    // Flame tongues: radial pattern with angular variation
     let angle = atan2(cy, cx);
-    let tongue_count = 5.0 + intensity * 3.0;
-    let tongue = sin(angle * tongue_count + time * 4.0 + phase) * 0.5 + 0.5;
-    let tongue2 = sin(angle * (tongue_count + 2.0) - time * 6.0 + phase * 1.5) * 0.5 + 0.5;
 
-    // Fire coverage: flames grow from edges inward as intensity increases
-    let flame_radius = 0.3 + intensity * 0.2;
-    let edge_fire = smoothstep(flame_radius + 0.1, flame_radius - 0.15, dist);
-    let tongue_fire = tongue * tongue2 * edge_fire;
+    // === Layer 1: Ember bed (always present, even at low intensity) ===
+    let ember_t = time * 1.5 + phase;
+    let e1 = sin(wx * 17.0 + ember_t * 2.3) * sin(wy * 19.0 + ember_t * 1.7);
+    let e2 = sin(wx * 31.0 - ember_t * 3.1) * sin(wy * 23.0 + ember_t * 2.9);
+    let e3 = sin(wx * 47.0 + ember_t * 1.1) * sin(wy * 37.0 - ember_t * 2.0);
+    let ember_glow = clamp(e1 * 0.4 + e2 * 0.3 + e3 * 0.2 + 0.2, 0.0, 1.0);
+    let ember_color = mix(
+        vec3<f32>(0.25, 0.06, 0.02),  // dark charcoal
+        vec3<f32>(0.9, 0.3, 0.05),    // glowing orange
+        ember_glow * intensity
+    );
+    var fire_opacity = clamp(intensity * 0.4 + ember_glow * 0.3, 0.0, 1.0);
+    var fire_color = ember_color;
 
-    // Add scattered embers
-    let ember_hash = fract(sin(fx * 43.3 + fy * 17.7 + time * 2.0) * 91.0);
-    let ember = select(0.0, 0.3, ember_hash > 0.85 && dist < 0.4);
+    // === Layer 2: Flame tongues (multiple overlapping waves) ===
+    let flame_t = time * 3.0 + phase;
+    let f1 = sin(angle * 3.0 + flame_t * 4.7) * 0.5 + 0.5;
+    let f2 = sin(angle * 5.0 - flame_t * 6.3 + 1.5) * 0.5 + 0.5;
+    let f3 = sin(angle * 7.0 + flame_t * 3.2 + 3.0) * 0.5 + 0.5;
+    let tongue_pattern = f1 * 0.5 + f2 * 0.3 + f3 * 0.2;
 
-    let fire_amount = clamp(tongue_fire * int + ember * int, 0.0, 1.0);
+    // Flames grow from edges inward — more coverage at higher intensity
+    let flame_reach = 0.15 + intensity * 0.35; // max radius of flame coverage
+    let radial_fade = smoothstep(flame_reach, flame_reach * 0.3, dist);
+    let flame_strength = tongue_pattern * radial_fade * intensity;
 
-    // Color: orange core, yellow-white at high intensity
-    let fire_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, intensity * flicker * 0.7);
+    // Upward bias: flames lick toward -Y (north = "up" in top-down view)
+    let upward_bias = clamp(-cy * 2.0 + 0.5, 0.0, 1.0);
+    let biased_flame = flame_strength * (0.6 + 0.4 * upward_bias);
 
-    return vec4(fire_col, fire_amount);
+    let flame_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, biased_flame * flicker);
+    fire_color = mix(fire_color, flame_col, clamp(biased_flame * 1.5, 0.0, 1.0));
+    fire_opacity = max(fire_opacity, biased_flame);
+
+    // === Layer 3: Hot core (bright center at high intensity) ===
+    let core_radius = 0.15 * intensity;
+    if dist < core_radius && intensity > 0.3 {
+        let core_t = 1.0 - dist / core_radius;
+        let core_bright = core_t * core_t * intensity;
+        fire_color = mix(fire_color, FIRE_COLOR_HOT * (1.0 + 0.2 * flicker), core_bright);
+        fire_opacity = max(fire_opacity, core_bright);
+    }
+
+    // === Layer 4: Sparks (bright hot dots that appear and fade) ===
+    let spark_t = time * 5.0 + phase;
+    let spark_seed = fire_hash(vec2<f32>(wx + floor(spark_t), wy + floor(spark_t * 0.7)));
+    let spark_life = fract(spark_t * 0.3 + spark_seed);
+    let spark_x = fract(spark_seed * 3.7 + 0.2) - 0.5;
+    let spark_y = fract(spark_seed * 5.3 + 0.8) - 0.5 - spark_life * 0.3; // drift upward
+    let spark_dist = sqrt((cx - spark_x * 0.3) * (cx - spark_x * 0.3) + (cy - spark_y * 0.3) * (cy - spark_y * 0.3));
+    let spark_brightness = max(0.0, 1.0 - spark_dist * 20.0) * (1.0 - spark_life) * intensity;
+    if spark_brightness > 0.01 {
+        fire_color = mix(fire_color, vec3<f32>(1.0, 0.95, 0.7), spark_brightness);
+        fire_opacity = max(fire_opacity, spark_brightness);
+    }
+
+    // === Layer 5: Smoke wisps at edges (dark, translucent) ===
+    let smoke_t = time * 0.8 + phase;
+    let smoke_noise = sin(angle * 4.0 + smoke_t * 2.0) * sin(dist * 10.0 + smoke_t * 3.0);
+    let smoke_band = smoothstep(0.25, 0.5, dist) * smoothstep(0.6, 0.45, dist);
+    let smoke_amount = max(0.0, smoke_noise * 0.5 + 0.3) * smoke_band * intensity * 0.4;
+    if smoke_amount > 0.01 {
+        fire_color = mix(fire_color, vec3<f32>(0.15, 0.12, 0.10), smoke_amount);
+    }
+
+    // Overall flicker modulation
+    fire_opacity *= (0.7 + 0.3 * flicker);
+
+    return vec4(fire_color, clamp(fire_opacity, 0.0, 1.0));
 }
 
 // Render electric light block from top-down: ceiling-mounted fixture seen from above
