@@ -579,7 +579,7 @@ impl App {
             label: Some("fluid-sim"), source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/fluid.wgsl")).into()),
         });
         let fluid_pressure_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fluid-pressure"), source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluid_pressure.wgsl").into()),
+            label: Some("fluid-pressure"), source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/fluid_pressure.wgsl")).into()),
         });
         let fluid_dye_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("fluid-dye"), source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/fluid_dye.wgsl")).into()),
@@ -1243,7 +1243,7 @@ impl App {
         // --- Render (blit) pipeline ---
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blit-shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blit.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/blit.wgsl")).into()),
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1398,7 +1398,7 @@ impl App {
         // --- Thermal exchange pipeline ---
         let thermal_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("thermal-compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/thermal.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/thermal.wgsl")).into()),
         });
         let thermal_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("thermal-bgl"),
