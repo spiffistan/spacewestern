@@ -73,6 +73,7 @@ pub(crate) use placement::compute_diagonal_wall_tiles;
 
 mod input;
 mod fog;
+mod fire;
 
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
@@ -991,7 +992,45 @@ impl App {
             }
         }
 
+        // --- Fire system tick (before gfx borrow so we can mutate self) ---
+        let fire_temp_overrides = if !self.burn_progress.is_empty() {
+            let (temps, destroyed) = fire::tick_fire(
+                &self.grid_data,
+                &mut self.burn_progress,
+                dt, self.time_speed, self.frame_count,
+                self.camera.rain_intensity,
+                self.camera.wind_angle,
+                self.camera.wind_magnitude,
+                &self.wetness_data,
+            );
+            for &idx in &destroyed {
+                let bx = (idx % GRID_W as usize) as i32;
+                let by = (idx / GRID_W as usize) as i32;
+                let bt = block_type_rs(self.grid_data[idx]);
+                let replacement = fire::burn_replacement_pub(bt);
+                let roof_h = self.grid_data[idx] & 0xFF000000;
+                self.grid_data[idx] = make_block(replacement as u8, 0, 0) | (if replacement == BT_AIR { 0 } else { roof_h });
+                self.grid_dirty = true;
+                self.log_event(EventCategory::Weather, format!("Fire consumed block at ({}, {})", bx, by));
+            }
+            if !destroyed.is_empty() {
+                compute_roof_heights(&mut self.grid_data);
+            }
+            temps
+        } else {
+            Vec::new()
+        };
+
         let gfx = self.gfx.as_ref().unwrap();
+
+        // Write fire temperature overrides to GPU
+        for &(idx, temp) in &fire_temp_overrides {
+            gfx.queue.write_buffer(
+                &gfx.block_temp_buffer,
+                (idx as u64) * 4,
+                bytemuck::bytes_of(&temp),
+            );
+        }
 
         // Re-upload grid if dirty (door toggled etc.)
         if self.grid_dirty {

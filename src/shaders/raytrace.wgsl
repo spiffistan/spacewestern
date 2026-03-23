@@ -1038,6 +1038,40 @@ fn render_fireplace(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> 
     return color;
 }
 
+// Render fire overlay for burning blocks. Returns RGBA where A = fire opacity.
+fn render_fire_overlay(wx: f32, wy: f32, fx: f32, fy: f32, time: f32, intensity: f32) -> vec4<f32> {
+    let phase = fract(sin(wx * 127.1 + wy * 311.7) * 43758.5) * 6.28;
+    let flicker = fire_flicker(time + phase);
+    let int = intensity * flicker;
+
+    // Distance from tile center
+    let cx = fx - 0.5;
+    let cy = fy - 0.5;
+    let dist = sqrt(cx * cx + cy * cy);
+
+    // Flame tongues: radial pattern with angular variation
+    let angle = atan2(cy, cx);
+    let tongue_count = 5.0 + intensity * 3.0;
+    let tongue = sin(angle * tongue_count + time * 4.0 + phase) * 0.5 + 0.5;
+    let tongue2 = sin(angle * (tongue_count + 2.0) - time * 6.0 + phase * 1.5) * 0.5 + 0.5;
+
+    // Fire coverage: flames grow from edges inward as intensity increases
+    let flame_radius = 0.3 + intensity * 0.2;
+    let edge_fire = smoothstep(flame_radius + 0.1, flame_radius - 0.15, dist);
+    let tongue_fire = tongue * tongue2 * edge_fire;
+
+    // Add scattered embers
+    let ember_hash = fract(sin(fx * 43.3 + fy * 17.7 + time * 2.0) * 91.0);
+    let ember = select(0.0, 0.3, ember_hash > 0.85 && dist < 0.4);
+
+    let fire_amount = clamp(tongue_fire * int + ember * int, 0.0, 1.0);
+
+    // Color: orange core, yellow-white at high intensity
+    let fire_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, intensity * flicker * 0.7);
+
+    return vec4(fire_col, fire_amount);
+}
+
 // Render electric light block from top-down: ceiling-mounted fixture seen from above
 fn render_electric_light(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> {
     // Floor beneath the light
@@ -3221,6 +3255,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_breaker = btype == BT_BREAKER; // breaker height = threshold, not visual
     let is_plant = btype == BT_CROP; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
     let is_diag_open = btype == BT_DIAGONAL && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
+    // --- Fire overlay for burning blocks ---
+    let mat = get_material(btype);
+    if mat.is_flammable > 0.5 {
+        let fire_tidx = u32(by) * u32(camera.grid_w) + u32(bx);
+        let fire_temp = block_temps[fire_tidx];
+        if fire_temp > mat.ignition_temp {
+            let burn_i = clamp((fire_temp - mat.ignition_temp) / 300.0, 0.0, 1.0);
+            let fire_ov = render_fire_overlay(world_x, world_y, fx, fy, camera.time, burn_i);
+            color = mix(color, fire_ov.rgb, fire_ov.a);
+        }
+    }
+
     let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_plant || is_diag_open);
     let effective_fheight = f32(effective_height);
 

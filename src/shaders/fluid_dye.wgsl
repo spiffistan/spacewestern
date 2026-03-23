@@ -190,6 +190,30 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // --- Burning blocks: smoke, O2 consumption, CO2, heat (non-fireplace) ---
+    if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
+        let burn_block = grid[u32(by) * u32(params.sim_w) + u32(bx)];
+        let burn_bt = burn_block & 0xFFu;
+        let burn_idx = u32(by) * u32(params.sim_w) + u32(bx);
+        let btemp = block_temps[burn_idx];
+        // Check if block is flammable AND hot enough to be burning
+        let is_burning = (burn_bt == BT_TREE || burn_bt == BT_BENCH || burn_bt == BT_WOOD_WALL
+            || burn_bt == BT_WOOD_FLOOR || burn_bt == BT_BED || burn_bt == BT_BERRY_BUSH
+            || burn_bt == BT_CRATE || burn_bt == BT_CROP) && btemp > 200.0;
+        if is_burning {
+            let burn_i = clamp((btemp - 200.0) / 300.0, 0.0, 1.0);
+            let fire_o2 = result.g;
+            let fire_str = clamp(fire_o2 * 3.0 - 0.5, 0.0, 1.0) * burn_i;
+            let burn_phase = f32(burn_idx % 256u) * 0.0245; // per-tile phase
+            let burn_flicker = sin(params.time * 8.3 + burn_phase) * 0.3 + 0.7;
+            result.r += params.smoke_rate * burn_flicker * fire_str * 0.25;  // heavy smoke
+            result.g -= 0.025 * fire_str;   // O2 consumed (faster than fireplace)
+            result.b += 0.018 * fire_str;   // CO2 produced
+            let burn_temp = 200.0 + burn_i * 350.0;
+            result.a = mix(result.a, burn_temp, fire_str * 0.3 * burn_flicker);
+        }
+    }
+
     // Compost: anaerobic decomposition produces CO2 without consuming O2
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block_c = grid[u32(by) * u32(params.sim_w) + u32(bx)];
