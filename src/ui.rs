@@ -1407,7 +1407,7 @@ impl App {
                         if !pleb.is_enemy && !pleb.activity.is_crisis() {
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                             let adj = adjacent_walkable(&self.grid_data, hx, hy).unwrap_or((hx, hy));
-                            let path = astar_path(&self.grid_data, start, adj);
+                            let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
                             if !path.is_empty() {
                                 pleb.path = path;
                                 pleb.path_idx = 0;
@@ -1434,7 +1434,7 @@ impl App {
                         if let Some((cx, cy)) = nearest_crate {
                             let pleb = &mut self.plebs[pi];
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path(&self.grid_data, start, (hx, hy));
+                            let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (hx, hy));
                             if !path.is_empty() {
                                 pleb.path = path;
                                 pleb.path_idx = 0;
@@ -1465,7 +1465,7 @@ impl App {
                                     pleb.path.clear();
                                 } else {
                                     // Walk there first, eat on arrival
-                                    let path = astar_path(&self.grid_data, start, (ix, iy));
+                                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (ix, iy));
                                     if !path.is_empty() {
                                         pleb.path = path;
                                         pleb.path_idx = 0;
@@ -1484,7 +1484,7 @@ impl App {
                         let pleb = &mut self.plebs[sel_idx];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                         let goal = (wx.floor() as i32, wy.floor() as i32);
-                        let path = astar_path(&self.grid_data, start, goal);
+                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, goal);
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 1;

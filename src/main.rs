@@ -20,7 +20,7 @@ use grid::*;
 use sprites::generate_tree_sprites;
 
 mod pleb;
-use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity, PlebShift};
+use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path_terrain, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity, PlebShift};
 
 mod needs;
 use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate, BERRY_HUNGER_RESTORE, HEAT_CRISIS_TEMP};
@@ -247,6 +247,7 @@ struct App {
     water_table: Vec<f32>, // static water table height map (CPU copy for info overlay)
     elevation_data: Vec<f32>, // terrain elevation (0.0–6.0 tiles of height)
     terrain_data: Vec<u32>,   // per-tile terrain type, vegetation, richness etc.
+    terrain_dirty: bool,      // true when terrain_data needs re-upload to GPU
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
@@ -570,6 +571,7 @@ impl App {
             water_table: Vec::new(),
             elevation_data: Vec::new(), // populated after grid gen in init_gfx_async
             terrain_data: Vec::new(),  // populated after grid gen in init_gfx_async
+            terrain_dirty: false,
             diag_preview: Vec::new(),
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
@@ -1067,6 +1069,16 @@ impl App {
             self.grid_dirty = false;
             self.pipe_network.rebuild(&self.grid_data);
             self.liquid_network.rebuild_with(&self.grid_data, pipes::is_liquid_pipe_component);
+        }
+
+        // Re-upload terrain data if dirty (compaction changed)
+        if self.terrain_dirty {
+            gfx.queue.write_buffer(
+                &gfx.terrain_buffer,
+                0,
+                bytemuck::cast_slice(&self.terrain_data),
+            );
+            self.terrain_dirty = false;
         }
 
         // Upload fog texture when changed

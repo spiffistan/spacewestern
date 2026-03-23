@@ -336,7 +336,9 @@ fn terrain_detail(
     let tidx = u32(by) * u32(camera.grid_w) + u32(bx);
     let tdata = terrain_buf[tidx];
     let t_type = tdata & 0xFu;
-    let t_veg = f32((tdata >> 4u) & 0x1Fu) / 31.0;       // 0..1 vegetation density
+    let t_compact = f32((tdata >> 24u) & 0x1Fu) / 31.0;   // 0..1 compaction (foot traffic)
+    let t_veg_raw = f32((tdata >> 4u) & 0x1Fu) / 31.0;    // 0..1 base vegetation density
+    let t_veg = t_veg_raw * (1.0 - t_compact * 0.9);      // compaction kills vegetation
     let t_grain = f32((tdata >> 9u) & 0xFu) / 15.0;       // 0..1 texture grain
     let t_rough = f32((tdata >> 13u) & 0x3u) / 3.0;        // 0..1 roughness
 
@@ -345,6 +347,12 @@ fn terrain_detail(
     // Add per-tile noise variation (subtle, prevents tiling artifacts)
     let soil_noise = value_noise(pos * 0.4 + vec2(97.3, 41.2));
     var color = mix(soil_base, soil_base * (0.85 + soil_noise * 0.3), 0.5);
+
+    // Compacted soil: darker, smoother, worn path appearance
+    if t_compact > 0.05 {
+        let path_col = soil_base * 0.72; // darker packed earth
+        color = mix(color, path_col, t_compact * 0.6);
+    }
 
     // --- 2. Moisture influence (from water table) ---
     let moisture = clamp((water_table + 1.5) / 2.5, 0.0, 1.0);

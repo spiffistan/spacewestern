@@ -347,12 +347,16 @@ pub fn adjacent_walkable(grid: &[u32], gx: i32, gy: i32) -> Option<(i32, i32)> {
 
 /// A* pathfinding on the block grid. Returns path from start to goal (inclusive), or empty if unreachable.
 pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
-    astar_path_elev(grid, &[], start, goal)
+    astar_path_full(grid, &[], &[], start, goal)
 }
 
-/// A* pathfinding with optional elevation-aware movement cost.
-/// Uphill movement costs more, downhill slightly less.
-pub fn astar_path_elev(grid: &[u32], elevation: &[f32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
+pub fn astar_path_terrain(grid: &[u32], terrain: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
+    astar_path_full(grid, &[], terrain, start, goal)
+}
+
+/// A* pathfinding with optional elevation and terrain-aware movement cost.
+/// Compacted terrain reduces cost (plebs prefer worn paths).
+pub fn astar_path_full(grid: &[u32], elevation: &[f32], terrain: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
     use std::collections::{BinaryHeap, HashMap};
     use std::cmp::Reverse;
 
@@ -431,7 +435,16 @@ pub fn astar_path_elev(grid: &[u32], elevation: &[f32], start: (i32, i32), goal:
                     (diff * 3.0).max(-1.0) as i32
                 } else { 0 }
             } else { 0 };
-            let ng = g + cost + elev_cost;
+            // Compaction bonus: well-trodden tiles are cheaper to traverse
+            let compact_bonus = if !terrain.is_empty() {
+                let nxt_idx = (next.1 as u32 * GRID_W + next.0 as u32) as usize;
+                if nxt_idx < terrain.len() {
+                    let compact = terrain_compaction(terrain[nxt_idx]);
+                    // Up to -3 cost for fully compacted (31) tiles
+                    -((compact as i32) * 3 / 31)
+                } else { 0 }
+            } else { 0 };
+            let ng = g + cost + elev_cost + compact_bonus;
             if ng < *g_score.get(&next).unwrap_or(&i32::MAX) {
                 g_score.insert(next, ng);
                 came_from.insert(next, current);

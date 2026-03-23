@@ -350,7 +350,7 @@ impl App {
                 let target_x = (pleb.x + dx).clamp(1.0, GRID_W as f32 - 2.0) as i32;
                 let target_y = (pleb.y + dy).clamp(1.0, GRID_H as f32 - 2.0) as i32;
                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                let path = astar_path(&self.grid_data, start, (target_x, target_y));
+                let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (target_x, target_y));
                 if !path.is_empty() {
                     pleb.path = path;
                     pleb.path_idx = 0;
@@ -408,22 +408,49 @@ impl App {
                 if dist < 0.2 {
                     pleb.path_idx += 1;
                 } else {
+                    // Speed modifier from terrain compaction + roughness
+                    let tile_x = pleb.x.floor() as i32;
+                    let tile_y = pleb.y.floor() as i32;
+                    let speed_mul = if tile_x >= 0 && tile_y >= 0
+                        && tile_x < GRID_W as i32 && tile_y < GRID_H as i32 {
+                        let tidx = (tile_y as u32 * GRID_W + tile_x as u32) as usize;
+                        if tidx < self.terrain_data.len() {
+                            let compact = terrain_compaction(self.terrain_data[tidx]) as f32;
+                            let rough = terrain_roughness(self.terrain_data[tidx]) as f32;
+                            // Compaction: 0→1.0x, 31→1.25x speed boost
+                            // Roughness: 0→1.0x, 3→0.85x speed penalty
+                            (1.0 + compact / 31.0 * 0.25) * (1.0 - rough / 3.0 * 0.15)
+                        } else { 1.0 }
+                    } else { 1.0 };
+
                     let ndx = ddx / dist;
                     let ndy = ddy / dist;
                     pleb.angle = ndy.atan2(ndx);
-                    let step_x = ndx * move_speed * dt;
-                    let step_y = ndy * move_speed * dt;
+                    let effective_speed = move_speed * speed_mul;
+                    let step_x = ndx * effective_speed * dt;
+                    let step_y = ndy * effective_speed * dt;
                     let nx = pleb.x + step_x;
                     let ny = pleb.y + step_y;
                     if is_walkable_pos(&self.grid_data, nx, ny) {
                         pleb.x = nx;
                         pleb.y = ny;
                     } else if is_walkable_pos(&self.grid_data, nx, pleb.y) {
-                        // Wall slide: try X only
                         pleb.x = nx;
                     } else if is_walkable_pos(&self.grid_data, pleb.x, ny) {
-                        // Wall slide: try Y only
                         pleb.y = ny;
+                    }
+
+                    // Increment compaction on the tile being walked on
+                    if tile_x >= 0 && tile_y >= 0
+                        && tile_x < GRID_W as i32 && tile_y < GRID_H as i32 {
+                        let tidx = (tile_y as u32 * GRID_W + tile_x as u32) as usize;
+                        if tidx < self.terrain_data.len() {
+                            let before = terrain_compaction(self.terrain_data[tidx]);
+                            terrain_add_compaction(&mut self.terrain_data[tidx], 1);
+                            if terrain_compaction(self.terrain_data[tidx]) != before {
+                                self.terrain_dirty = true;
+                            }
+                        }
                     }
                 }
             }
@@ -442,7 +469,7 @@ impl App {
                 tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving, is_sleeping, air);
 
                 let was_crisis = pleb.activity.is_crisis();
-                tick_pleb_activity(pleb, &env, &self.grid_data, dt, self.time_speed, &mut self.ground_items, self.time_of_day);
+                tick_pleb_activity(pleb, &env, &self.grid_data, &self.terrain_data, dt, self.time_speed, &mut self.ground_items, self.time_of_day);
                 // Log new crisis
                 if pleb.activity.is_crisis() && !was_crisis {
                     if let Some(reason) = pleb.activity.crisis_reason() {
@@ -557,7 +584,7 @@ impl App {
                                 if let Some((cx, cy)) = pleb.haul_target {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                                     let adj = adjacent_walkable(&self.grid_data, cx, cy).unwrap_or((cx, cy));
-                                    let path = astar_path(&self.grid_data, start, adj);
+                                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
                                     if !path.is_empty() { pleb.path = path; pleb.path_idx = 0; }
                                     else { pleb.activity = PlebActivity::Idle; }
                                 } else { pleb.activity = PlebActivity::Idle; }
@@ -639,7 +666,7 @@ impl App {
                         pleb.needs.flee_target = Some(target);
                         pleb.activity = PlebActivity::Walking;
                         let start = (bx, by);
-                        let path = astar_path(&self.grid_data, start, target);
+                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, target);
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 0;
@@ -994,6 +1021,21 @@ impl App {
             for idx in matured { self.crop_timers.remove(&idx); }
         }
 
+        // --- Terrain compaction decay (natural path fading) ---
+        // Decay a batch of random tiles each frame so unused paths slowly fade
+        if !self.time_paused && self.frame_count % 30 == 0 {
+            let grid_size = self.terrain_data.len();
+            if grid_size > 0 {
+                // Decay 64 random tiles per tick (covers full map in ~3000 frames)
+                for k in 0..64u32 {
+                    let hash = self.frame_count.wrapping_mul(2654435761).wrapping_add(k * 1013904223);
+                    let idx = (hash as usize) % grid_size;
+                    terrain_decay_compaction(&mut self.terrain_data[idx]);
+                }
+                self.terrain_dirty = true;
+            }
+        }
+
         // --- Work queue: assign idle friendly plebs to tasks ---
         {
             let mut tasks = generate_work_tasks(&self.zones, &self.grid_data, GRID_W, &self.active_work);
@@ -1046,7 +1088,7 @@ impl App {
                     pleb.work_target = Some((tx, ty));
                     // Path to the task
                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                    let path = astar_path(&self.grid_data, start, (tx, ty));
+                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (tx, ty));
                     if !path.is_empty() {
                         pleb.path = path;
                         pleb.path_idx = 0;
@@ -1217,7 +1259,7 @@ impl App {
                         let pleb = &mut self.plebs[pi];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                         let adj = adjacent_walkable(&self.grid_data, bx, by).unwrap_or((bx, by));
-                        let path = astar_path(&self.grid_data, start, adj);
+                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 0;
@@ -1255,7 +1297,7 @@ impl App {
                             if let Some((pi, _)) = best_pleb {
                                 let pleb = &mut self.plebs[pi];
                                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                let path = astar_path(&self.grid_data, start, wood_pos);
+                                let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, wood_pos);
                                 if !path.is_empty() {
                                     pleb.path = path;
                                     pleb.path_idx = 0;
@@ -1354,7 +1396,7 @@ impl App {
                     if let Some((pi, _)) = best_pleb {
                         let pleb = &mut self.plebs[pi];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path(&self.grid_data, start, (ix, iy));
+                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (ix, iy));
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 0;
@@ -1426,6 +1468,7 @@ fn tick_pleb_activity(
     pleb: &mut Pleb,
     env: &needs::EnvSample,
     grid: &[u32],
+    terrain: &[u32],
     dt: f32,
     time_speed: f32,
     ground_items: &mut Vec<resources::GroundItem>,
@@ -1530,7 +1573,7 @@ fn tick_pleb_activity(
                 pleb.path.clear();
                 pleb.path_idx = 0;
             } else {
-                send_pleb_to(pleb, grid, (bx, by),
+                send_pleb_to(pleb, grid, terrain, (bx, by),
                     PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Starving!"));
             }
         }
@@ -1541,7 +1584,7 @@ fn tick_pleb_activity(
             pleb.path.clear();
             pleb.path_idx = 0;
         } else if let Some((bx, by)) = env.nearest_bed {
-            send_pleb_to(pleb, grid, (bx, by),
+            send_pleb_to(pleb, grid, terrain, (bx, by),
                 PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Exhausted!"));
         } else {
             pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Sleeping), "Collapsed!");
@@ -1559,7 +1602,7 @@ fn tick_pleb_activity(
         let by = pleb.y.floor() as i32;
         // Search from radius 3+ to avoid pathing to an adjacent tile that's equally hot
         if let Some(target) = find_cool_tile(grid, bx, by, 20) {
-            send_pleb_to(pleb, grid, target,
+            send_pleb_to(pleb, grid, terrain, target,
                 PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Overheating!"));
         }
     } else if !pleb.activity.is_crisis() {
@@ -1584,7 +1627,7 @@ fn tick_pleb_activity(
                 }
                 if let Some((bx, by, _)) = best_berry {
                     let start = (px, py);
-                    let path = astar_path(grid, start, (bx, by));
+                    let path = astar_path_terrain(grid, terrain, start, (bx, by));
                     if !path.is_empty() {
                         pleb.path = path;
                         pleb.path_idx = 0;
@@ -1605,7 +1648,7 @@ fn tick_pleb_activity(
                         pleb.path.clear();
                         pleb.path_idx = 0;
                     } else if let Some((bx, by)) = env.nearest_bed {
-                        send_pleb_to(pleb, grid, (bx, by), PlebActivity::Walking);
+                        send_pleb_to(pleb, grid, terrain, (bx, by), PlebActivity::Walking);
                     }
                 }
             } else if pleb.needs.hunger < 0.4 && pleb.inventory.berries == 0 {
@@ -1618,7 +1661,7 @@ fn tick_pleb_activity(
                     }
                 } else if pleb.harvest_target.is_none() {
                     if let Some((bx, by)) = env.nearest_berry_bush {
-                        send_pleb_to(pleb, grid, (bx, by), PlebActivity::Walking);
+                        send_pleb_to(pleb, grid, terrain, (bx, by), PlebActivity::Walking);
                     }
                 }
             }
@@ -1627,9 +1670,9 @@ fn tick_pleb_activity(
 }
 
 /// Helper: pathfind pleb to a target and set their activity. Returns true if path found.
-fn send_pleb_to(pleb: &mut Pleb, grid: &[u32], target: (i32, i32), activity: PlebActivity) -> bool {
+fn send_pleb_to(pleb: &mut Pleb, grid: &[u32], terrain: &[u32], target: (i32, i32), activity: PlebActivity) -> bool {
     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-    let path = astar_path(grid, start, target);
+    let path = astar_path_terrain(grid, terrain, start, target);
     if !path.is_empty() {
         pleb.path = path;
         pleb.path_idx = 0;

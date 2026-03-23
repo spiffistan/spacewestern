@@ -775,6 +775,7 @@ pub const TERRAIN_LOAM: u32 = 7;
 ///   bits 13-14: surface roughness (0-3)
 ///   bits 15-19: soil richness (0-31)
 ///   bits 20-23: moisture retention (0-15)
+///   bits 24-28: compaction (0-31, foot traffic wear)
 pub fn pack_terrain(terrain_type: u32, vegetation: u32, grain: u32, roughness: u32, richness: u32, moisture_ret: u32) -> u32 {
     (terrain_type & 0xF)
     | ((vegetation & 0x1F) << 4)
@@ -782,10 +783,28 @@ pub fn pack_terrain(terrain_type: u32, vegetation: u32, grain: u32, roughness: u
     | ((roughness & 0x3) << 13)
     | ((richness & 0x1F) << 15)
     | ((moisture_ret & 0xF) << 20)
+    // bits 24-28: compaction, starts at 0
 }
 
 pub fn terrain_type(t: u32) -> u32 { t & 0xF }
 pub fn terrain_richness(t: u32) -> u32 { (t >> 15) & 0x1F }
+pub fn terrain_compaction(t: u32) -> u32 { (t >> 24) & 0x1F }
+pub fn terrain_roughness(t: u32) -> u32 { (t >> 13) & 0x3 }
+
+/// Increment compaction on a terrain tile (clamped to 31).
+pub fn terrain_add_compaction(t: &mut u32, amount: u32) {
+    let cur = (*t >> 24) & 0x1F;
+    let new = (cur + amount).min(31);
+    *t = (*t & 0xE0FFFFFF) | (new << 24);
+}
+
+/// Decay compaction by 1 (natural decompaction over time).
+pub fn terrain_decay_compaction(t: &mut u32) {
+    let cur = (*t >> 24) & 0x1F;
+    if cur > 0 {
+        *t = (*t & 0xE0FFFFFF) | ((cur - 1) << 24);
+    }
+}
 
 /// Generate terrain data buffer from elevation and water table.
 /// Assigns terrain type, vegetation density, soil richness etc.
