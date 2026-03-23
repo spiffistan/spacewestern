@@ -3556,20 +3556,22 @@ impl App {
         let mut total_berries = 0u32;
         let mut total_rocks = 0u32;
         for item in &self.ground_items {
-            match item.kind {
-                resources::ItemKind::Wood(n) => total_wood += n,
-                resources::ItemKind::Berries(n) => total_berries += n,
-                resources::ItemKind::Rocks(n) => total_rocks += n,
+            match item.stack.item_id {
+                item_defs::ITEM_WOOD => total_wood += item.stack.count as u32,
+                item_defs::ITEM_BERRIES => total_berries += item.stack.count as u32,
+                item_defs::ITEM_ROCK => total_rocks += item.stack.count as u32,
+                _ => {}
             }
         }
         for inv in self.crate_contents.values() {
-            total_berries += inv.berries;
-            total_rocks += inv.rocks;
+            total_berries += inv.berries();
+            total_rocks += inv.rocks();
         }
         for pleb in &self.plebs {
             if !pleb.is_enemy {
-                total_berries += pleb.inventory.berries;
-                total_rocks += pleb.inventory.rocks;
+                total_berries += pleb.inventory.berries();
+                total_rocks += pleb.inventory.rocks();
+                total_wood += pleb.inventory.wood();
             }
         }
         let pleb_count = self.plebs.iter().filter(|p| !p.is_enemy).count();
@@ -3623,6 +3625,8 @@ impl App {
                                 PlebActivity::Hauling => "Hauling",
                                 PlebActivity::Farming(_) => "Farming",
                                 PlebActivity::Building(_) => "Building",
+                                PlebActivity::Crafting(_, _) => "Crafting",
+                                PlebActivity::Staggering(_) => "Staggering",
                                 PlebActivity::Crisis(_, _) => "Crisis",
                             };
                             ui.label(egui::RichText::new(act_str).size(10.0).weak());
@@ -3647,12 +3651,14 @@ impl App {
                             bar(ui, "WRM ", pleb.needs.warmth, egui::Color32::from_rgb(200, 100, 40));
                             bar(ui, "O2  ", pleb.needs.oxygen, egui::Color32::from_rgb(100, 200, 220));
 
-                            if pleb.inventory.berries > 0 || pleb.inventory.rocks > 0 || pleb.inventory.carrying.is_some() {
+                            if pleb.inventory.is_carrying() {
                                 ui.separator();
                                 let mut inv_str = Vec::new();
-                                if pleb.inventory.berries > 0 { inv_str.push(format!("{} berries", pleb.inventory.berries)); }
-                                if pleb.inventory.rocks > 0 { inv_str.push(format!("{} rocks", pleb.inventory.rocks)); }
-                                if let Some(c) = pleb.inventory.carrying { inv_str.push(format!("[{}]", c)); }
+                                for stack in &pleb.inventory.stacks {
+                                    if stack.count > 0 {
+                                        inv_str.push(stack.label());
+                                    }
+                                }
                                 ui.label(egui::RichText::new(inv_str.join(" | ")).size(10.0).weak());
                             }
                         });
@@ -3671,7 +3677,7 @@ impl App {
         let bh = (block >> 8) & 0xFF;
         let flags = (block >> 16) & 0xFF;
         let reg = block_defs::BlockRegistry::cached();
-        let type_name = reg.name(bt as u8);
+        let type_name = reg.name(bt);
 
         egui::Area::new(egui::Id::new("selection_info"))
             .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
