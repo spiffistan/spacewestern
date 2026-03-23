@@ -1020,6 +1020,15 @@ impl App {
                                     self.sandbox_tool = if sel_ign { SandboxTool::None } else { SandboxTool::Ignite };
                                     if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
                                 }
+                                if sel_ign {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("Intensity").size(10.0).color(egui::Color32::from_gray(160)));
+                                        let slider = egui::Slider::new(&mut self.fire_intensity, 0.2..=3.0)
+                                            .step_by(0.1)
+                                            .show_value(true);
+                                        ui.add(slider);
+                                    });
+                                }
 
                                 // Sound placement tools (only when sound system is enabled)
                                 if self.sound_enabled {

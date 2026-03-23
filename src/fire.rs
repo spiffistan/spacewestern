@@ -55,6 +55,7 @@ pub fn tick_fire(
     wind_angle: f32,
     _wind_magnitude: f32,
     wetness: &[f32],
+    fire_intensity: f32,
 ) -> (Vec<(usize, f32)>, Vec<usize>) {
     let mut temp_overrides = Vec::new();
     let mut destroyed = Vec::new();
@@ -96,8 +97,8 @@ pub fn tick_fire(
             continue;
         }
 
-        // Self-heating: maintain high temperature
-        let burn_temp = BURN_TEMP_BASE + BURN_TEMP_BOOST * (*progress).min(1.0);
+        // Self-heating: maintain high temperature (scaled by fire_intensity)
+        let burn_temp = (BURN_TEMP_BASE + BURN_TEMP_BOOST * (*progress).min(1.0)) * fire_intensity;
         temp_overrides.push((idx, burn_temp));
     }
 

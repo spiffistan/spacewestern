@@ -81,7 +81,7 @@ impl App {
             let reg = block_defs::BlockRegistry::cached();
             if let Some(def) = reg.get(bt) {
                 if def.is_flammable {
-                    let ignite_temp = def.ignition_temp + 150.0;
+                    let ignite_temp = def.ignition_temp + 150.0 * self.fire_intensity;
                     // Write high temperature to GPU block_temps buffer
                     if let Some(gfx) = &self.gfx {
                         gfx.queue.write_buffer(

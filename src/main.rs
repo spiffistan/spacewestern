@@ -261,6 +261,7 @@ struct App {
     fog_start_explored: bool, // true = map starts pre-revealed
     // Fire system
     burn_progress: std::collections::HashMap<usize, f32>, // grid_idx → 0.0..1.0
+    fire_intensity: f32, // sandbox ignite temperature multiplier (0.5 = smolder, 2.0 = inferno)
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -575,6 +576,7 @@ impl App {
             fog_vision_radius: 25,
             fog_start_explored: false, // true = map starts pre-revealed
             burn_progress: std::collections::HashMap::new(),
+            fire_intensity: 1.0,
         }
     }
 
@@ -1002,6 +1004,7 @@ impl App {
                 self.camera.wind_angle,
                 self.camera.wind_magnitude,
                 &self.wetness_data,
+                self.fire_intensity,
             );
             for &idx in &destroyed {
                 let bx = (idx % GRID_W as usize) as i32;
