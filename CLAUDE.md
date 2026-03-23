@@ -5,6 +5,7 @@ The current version number is in the `VERSION` file (integer). The version label
 - **Do NOT push** — only commit. The user will say "push it" explicitly when ready.
 - **Bump VERSION only when pushing**, not on every commit.
 - When the user says "push it": bump VERSION, amend/commit, then push.
+- **Always `cargo build` and `cargo test` before committing.** Shader errors only surface at runtime, so a clean compile is the minimum bar.
 
 ## Architecture
 Single-crate Rust project with wgpu. Shaders are WGSL files in `src/shaders/`.
