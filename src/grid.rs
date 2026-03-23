@@ -61,6 +61,8 @@ pub const BT_LIQUID_PUMP: u32 = 53;
 pub const BT_LIQUID_OUTPUT: u32 = 54;
 pub const BT_WALL_TORCH: u32 = 55;
 pub const BT_WALL_LAMP: u32 = 56;
+pub const BT_WORKBENCH: u32 = 57;
+pub const BT_KILN: u32 = 58;
 
 /// Generate WGSL `const BT_*: u32 = N;` lines for all block type constants.
 /// Prepend this to shader source so WGSL can use the same names as Rust.
@@ -92,6 +94,7 @@ pub fn wgsl_block_constants() -> String {
         ("BT_WIRE_BRIDGE", BT_WIRE_BRIDGE), ("BT_LIQUID_INTAKE", BT_LIQUID_INTAKE),
         ("BT_LIQUID_PUMP", BT_LIQUID_PUMP), ("BT_LIQUID_OUTPUT", BT_LIQUID_OUTPUT),
         ("BT_WALL_TORCH", BT_WALL_TORCH), ("BT_WALL_LAMP", BT_WALL_LAMP),
+        ("BT_WORKBENCH", BT_WORKBENCH), ("BT_KILN", BT_KILN),
     ];
     for &(name, val) in consts {
         s.push_str(&format!("const {}: u32 = {}u;\n", name, val));

@@ -106,6 +106,8 @@ pub struct BlockSelection {
     pub cannon: Option<u32>,
     pub crate_idx: Option<u32>,
     pub crate_world: (f32, f32),
+    pub workbench: Option<u32>,    // grid_idx of open workbench popup
+    pub workbench_world: (f32, f32),
 }
 
 /// A single selected item in the world.

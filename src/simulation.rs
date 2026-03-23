@@ -3,6 +3,7 @@
 
 use crate::*;
 use crate::item_defs::*;
+use crate::recipe_defs;
 use crate::zones::*;
 
 impl App {
@@ -1114,7 +1115,11 @@ impl App {
                                         x: pleb.x, y: pleb.y,
                                         stack: ItemStack::new(ITEM_BERRIES, 2),
                                     });
-                                    events.push((EventCategory::Farm, format!("{} harvested a crop (2 berries dropped)", pleb.name)));
+                                    self.ground_items.push(resources::GroundItem {
+                                        x: pleb.x + 0.2, y: pleb.y + 0.2,
+                                        stack: ItemStack::new(ITEM_FIBER, 2),
+                                    });
+                                    events.push((EventCategory::Farm, format!("{} harvested a crop (berries + fiber)", pleb.name)));
                                 } else if tbt == BT_BERRY_BUSH {
                                     self.ground_items.push(resources::GroundItem {
                                         x: pleb.x, y: pleb.y,
@@ -1142,11 +1147,21 @@ impl App {
                                         }
                                     }
                                     self.grid_dirty = true;
+                                    let drop_x = origin_x as f32 + 1.0;
+                                    let drop_y = origin_y as f32 + 1.0;
                                     self.ground_items.push(resources::GroundItem {
-                                        x: origin_x as f32 + 1.0, y: origin_y as f32 + 1.0,
+                                        x: drop_x, y: drop_y,
                                         stack: ItemStack::new(ITEM_WOOD, 10),
                                     });
-                                    events.push((EventCategory::Farm, format!("{} chopped a tree (10 wood)", pleb.name)));
+                                    self.ground_items.push(resources::GroundItem {
+                                        x: drop_x + 0.3, y: drop_y + 0.3,
+                                        stack: ItemStack::new(ITEM_SCRAP_WOOD, 4),
+                                    });
+                                    self.ground_items.push(resources::GroundItem {
+                                        x: drop_x - 0.3, y: drop_y + 0.2,
+                                        stack: ItemStack::new(ITEM_FIBER, 3),
+                                    });
+                                    events.push((EventCategory::Farm, format!("{} chopped a tree (wood + scrap + fiber)", pleb.name)));
                                 }
                             }
                             self.active_work.remove(&(tx, ty));
@@ -1209,6 +1224,27 @@ impl App {
                         if let Some(bp) = self.blueprints.get_mut(&(tx, ty)) {
                             bp.progress = new_progress;
                         }
+                    }
+                } else {
+                    pleb.activity = PlebActivity::Idle;
+                }
+            }
+        }
+
+        // --- Crafting: advance crafting progress ---
+        for pleb in self.plebs.iter_mut() {
+            if pleb.is_dead || pleb.is_enemy { continue; }
+            if let PlebActivity::Crafting(recipe_id, progress) = pleb.activity {
+                let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                if let Some(recipe) = recipe_reg.get(recipe_id) {
+                    let new_progress = progress + dt * self.time_speed / recipe.time;
+                    if new_progress >= 1.0 {
+                        // Crafting complete — give output to pleb
+                        pleb.inventory.add(recipe.output.item, recipe.output.count);
+                        events.push((EventCategory::Build, format!("{} crafted {}", pleb.name, recipe.name)));
+                        pleb.activity = PlebActivity::Idle;
+                    } else {
+                        pleb.activity = PlebActivity::Crafting(recipe_id, new_progress);
                     }
                 } else {
                     pleb.activity = PlebActivity::Idle;

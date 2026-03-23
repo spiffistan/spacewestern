@@ -1046,14 +1046,27 @@ impl App {
                         let bt_dig = block_type_rs(block);
                         let roof_h = block & 0xFF000000;
                         if bt_dig == BT_DIRT || bt_is!(bt_dig, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
-                            // Dirt or floor → dug ground depth 1 (20%)
                             self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
                             self.grid_dirty = true;
+                            // Clay terrain yields clay items when first dug
+                            if idx < self.terrain_data.len() && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY {
+                                self.ground_items.push(resources::GroundItem::new(
+                                    bx as f32 + 0.5, by as f32 + 0.5,
+                                    item_defs::ITEM_CLAY, 2,
+                                ));
+                            }
                         } else if bt_dig == BT_DUG_GROUND {
                             let depth = (block >> 8) & 0xFF;
                             if depth < 5 {
                                 self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, (depth + 1) as u8, 0) | roof_h;
                                 self.grid_dirty = true;
+                                // More clay on deeper digs
+                                if idx < self.terrain_data.len() && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY {
+                                    self.ground_items.push(resources::GroundItem::new(
+                                        bx as f32 + 0.5, by as f32 + 0.5,
+                                        item_defs::ITEM_CLAY, 1,
+                                    ));
+                                }
                             }
                         }
                     }
@@ -1194,6 +1207,14 @@ impl App {
             let pidx = by as u32 * GRID_W + bx as u32;
             self.block_sel.pump = if self.block_sel.pump == Some(pidx) { None } else { Some(pidx) };
             self.block_sel.pump_world = (bx as f32 + 0.5, by as f32 + 0.5);
+            return;
+        }
+
+        // Click workbench: show crafting recipe popup
+        if bt == BT_WORKBENCH && self.build_tool != BuildTool::Destroy {
+            let widx = by as u32 * GRID_W + bx as u32;
+            self.block_sel.workbench = if self.block_sel.workbench == Some(widx) { None } else { Some(widx) };
+            self.block_sel.workbench_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
 

@@ -23,3 +23,4 @@ pub mod zones;
 pub mod weather;
 pub mod resources;
 pub mod item_defs;
+pub mod recipe_defs;

@@ -1,0 +1,33 @@
+# Crafting recipes — defines what can be made, where, and from what.
+
+[[recipe]]
+id = 0
+name = "Rope"
+station = "workbench"
+time = 5.0
+inputs = [{item = 3, count = 4}]
+output = {item = 10, count = 1}
+
+[[recipe]]
+id = 1
+name = "Wooden Bucket"
+station = "workbench"
+time = 8.0
+inputs = [{item = 5, count = 3}]
+output = {item = 11, count = 1}
+
+[[recipe]]
+id = 2
+name = "Unfired Jug"
+station = "workbench"
+time = 6.0
+inputs = [{item = 4, count = 2}]
+output = {item = 13, count = 1}
+
+[[recipe]]
+id = 3
+name = "Clay Jug"
+station = "kiln"
+time = 30.0
+inputs = [{item = 13, count = 1}]
+output = {item = 12, count = 1}

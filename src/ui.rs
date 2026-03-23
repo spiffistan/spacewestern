@@ -1135,6 +1135,11 @@ impl App {
                                 format!("{} {:.0}%", action, pr * 100.0)
                             }
                             PlebActivity::Building(pr) => format!("Building {:.0}%", pr * 100.0),
+                            PlebActivity::Crafting(rid, pr) => {
+                                let rname = recipe_defs::RecipeRegistry::cached().get(*rid)
+                                    .map(|r| r.name.as_str()).unwrap_or("item");
+                                format!("Crafting {} {:.0}%", rname, pr * 100.0)
+                            }
                             PlebActivity::Staggering(_) => "Staggering!".to_string(),
                             PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                         };
@@ -3003,6 +3008,71 @@ impl App {
             }
         }
 
+        // --- Workbench recipe popup ---
+        if let Some(wb_idx) = self.block_sel.workbench {
+            let (wwx, wwy) = self.block_sel.workbench_world;
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let sx = ((wwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
+            let sy = ((wwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 40.0;
+            let mut still_valid = wb_idx < (GRID_W * GRID_H);
+            if still_valid {
+                let didx = wb_idx as usize;
+                if didx < self.grid_data.len() && block_type_rs(self.grid_data[didx]) != BT_WORKBENCH {
+                    still_valid = false;
+                }
+            }
+            if still_valid {
+                let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                let item_reg = item_defs::ItemRegistry::cached();
+                let recipes = recipe_reg.for_station("workbench");
+                // Gather pleb inventory if one is selected
+                let sel_inv: Vec<item_defs::ItemStack> = self.selected_pleb
+                    .and_then(|i| self.plebs.get(i))
+                    .map(|p| p.inventory.stacks.clone())
+                    .unwrap_or_default();
+                egui::Area::new(egui::Id::new("workbench_popup"))
+                    .fixed_pos(egui::pos2(sx, sy))
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Workbench").strong().size(12.0));
+                            ui.separator();
+                            for recipe in &recipes {
+                                let can_craft = recipe_defs::RecipeRegistry::can_craft(recipe, &sel_inv);
+                                let out_name = item_reg.name(recipe.output.item);
+                                let ingredients = recipe_defs::RecipeRegistry::ingredients_label(recipe);
+                                ui.horizontal(|ui| {
+                                    let label = format!("{} ({})", recipe.name, ingredients);
+                                    let text = egui::RichText::new(&label).size(10.0);
+                                    let text = if can_craft { text } else { text.weak() };
+                                    if ui.add_enabled(can_craft && self.selected_pleb.is_some(),
+                                        egui::Button::new(text).small()
+                                    ).clicked() {
+                                        // Start crafting: consume inputs, set activity
+                                        if let Some(pi) = self.selected_pleb {
+                                            if let Some(pleb) = self.plebs.get_mut(pi) {
+                                                for ing in &recipe.inputs {
+                                                    pleb.inventory.remove(ing.item, ing.count);
+                                                }
+                                                pleb.activity = PlebActivity::Crafting(recipe.id, 0.0);
+                                                log::info!("{} started crafting {}", pleb.name, recipe.name);
+                                            }
+                                        }
+                                    }
+                                    ui.label(egui::RichText::new(format!("→ {}", out_name)).size(10.0));
+                                });
+                            }
+                            ui.separator();
+                            if ui.small_button("Close").clicked() {
+                                still_valid = false;
+                            }
+                        });
+                    });
+            }
+            if !still_valid {
+                self.block_sel.workbench = None;
+            }
+        }
+
     }
 
     /// Draw text with a dark shadow for readability on bright backgrounds.
@@ -3095,6 +3165,7 @@ impl App {
                             PlebActivity::Hauling => (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80)),
                             PlebActivity::Farming(_) => (Some(farm_action), egui::Color32::from_rgb(80, 200, 80)),
                             PlebActivity::Building(_) => (Some("Building"), egui::Color32::from_rgb(100, 160, 220)),
+                            PlebActivity::Crafting(_, _) => (Some("Crafting"), egui::Color32::from_rgb(200, 160, 60)),
                             PlebActivity::Staggering(_) => (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40)),
                             PlebActivity::Crisis(_, _) => (None, egui::Color32::GRAY),
                         };

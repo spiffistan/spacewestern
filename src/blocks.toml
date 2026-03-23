@@ -914,3 +914,39 @@ label = "Wall Lamp"
 click = "wall_adjacent"
 place_height = 0
 rotatable = true
+
+[[block]]
+id = 57
+name = "Workbench"
+color = [0.50, 0.38, 0.20]
+render_style = 42.0
+light_transmission = 1.0
+is_furniture = true
+walkable = false
+is_removable = true
+is_flammable = true
+ignition_temp = 280.0
+thermal = { heat_capacity = 2.0, conductivity = 0.002, solar_absorption = 0.4 }
+[block.placement]
+category = "Crafting"
+icon = "🔨"
+label = "Bench"
+click = "simple"
+place_height = 1
+
+[[block]]
+id = 58
+name = "Kiln"
+color = [0.55, 0.45, 0.35]
+render_style = 43.0
+is_solid = true
+fluid_obstacle = true
+default_height = 2.0
+is_removable = true
+thermal = { heat_capacity = 10.0, conductivity = 0.015, solar_absorption = 0.8 }
+[block.placement]
+category = "Crafting"
+icon = "🏭"
+label = "Kiln"
+click = "simple"
+place_height = 2
