@@ -1565,154 +1565,203 @@ impl App {
             let bx = wx.floor() as i32;
             let by = wy.floor() as i32;
 
-            let mut block_info = String::from("OOB");
-            if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
-                let idx = (by as u32 * GRID_W + bx as u32) as usize;
-                let block = self.grid_data[idx];
-                let bt = block & 0xFF;
-                let bh = (block >> 8) & 0xFF;
-                let flags = (block >> 16) & 0xFF;
-                let reg = block_defs::BlockRegistry::cached();
-                let type_name = reg.name(bt);
-                let mut tags = String::new();
-                if flags & 2 != 0 { tags.push_str(" [Roofed]"); }
-                if flags & 1 != 0 { tags.push_str(if flags & 4 != 0 { " [Door:Open]" } else { " [Door:Closed]" }); }
-                if bh > 0 { block_info = format!("{} (h:{}){}", type_name, bh, tags); }
-                else { block_info = format!("{}{}", type_name, tags); }
-            }
+            let in_bounds = bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32;
+            let cursor_screen = ctx.input(|i| i.pointer.hover_pos().unwrap_or(egui::Pos2::ZERO));
 
-            #[cfg(not(target_arch = "wasm32"))]
-            let gas_info = {
-                let [smoke_r, o2, co2, temp] = self.debug.fluid_density;
-                // Check if this is a solid block (wall) — show block temp instead of air data
-                let (is_solid_wall, is_pipe_block) = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
-                    let ib = self.grid_data[(by as u32 * GRID_W + bx as u32) as usize];
-                    let ibt = ib & 0xFF;
-                    let ibh = (ib >> 8) & 0xFF;
-                    let solid = ibh > 0 && (ibt == 1 || ibt == 4 || ibt == 5 || ibt == 14 || (ibt >= 21 && ibt <= 25) || ibt == 35);
-                    let pipe = pipes::is_pipe_component(ibt);
-                    (solid, pipe)
-                } else { (false, false) };
-                let voltage_str = if self.debug.voltage > 0.01 {
-                    let v = self.debug.voltage;
-                    // Estimate current from voltage (I = V/R, assume R ≈ 10Ω for display)
-                    let r = 10.0f32; // approximate resistance
-                    let amps = v / r;
-                    let watts = v * amps;
-                    format!("\n⚡ {:.1}V | {:.2}A | {:.1}W", v, amps, watts)
-                } else { String::new() };
-                if is_solid_wall {
-                    format!("Smoke: —\nO2: —\nCO2: —\nWall temp: {:.1}°C{}", self.debug.block_temp, voltage_str)
-                } else if is_pipe_block {
-                    format!("Smoke: —\nO2: —\nCO2: —\nPipe temp: {:.1}°C{}", self.debug.block_temp, voltage_str)
-                } else {
-                    format!("Smoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C{}", smoke_r, o2, co2, temp, voltage_str)
-                }
-            };
-            #[cfg(target_arch = "wasm32")]
-            let gas_info = String::from("(gas readback: native only)");
-
-            // Show pipe state if hovering over any pipe/liquid component
-            let pipe_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
-                let pidx = by as u32 * GRID_W + bx as u32;
-                let pbt = self.grid_data[pidx as usize] & 0xFF;
-                let is_gas = pipes::is_gas_pipe_component(pbt);
-                let is_liq = pipes::is_liquid_pipe_component(pbt);
-                if is_gas {
-                    if let Some(cell) = self.pipe_network.cells.get(&pidx) {
-                        format!("\n--- Gas Pipe ---\nPressure: {:.2}\nSmoke: {:.3}\nO2: {:.3}\nCO2: {:.3}\nTemp: {:.1}°C",
-                            cell.pressure, cell.gas[0], cell.gas[1], cell.gas[2], cell.gas[3])
-                    } else { String::new() }
-                } else if is_liq {
-                    if let Some(cell) = self.liquid_network.cells.get(&pidx) {
-                        format!("\n--- Liquid Pipe ---\nPressure: {:.2}\nTemp: {:.1}°C",
-                            cell.pressure, cell.gas[3])
-                    } else { String::new() }
-                } else { String::new() }
-            } else {
-                String::new()
-            };
-
-            // Material thermal properties
-            let mat_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
-                let bt = self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] & 0xFF;
-                let mats = crate::materials::build_material_table();
-                if (bt as usize) < mats.len() {
-                    let m = &mats[bt as usize];
-                    if m.heat_capacity > 0.0 || m.conductivity > 0.0 {
-                        format!("\nHeat cap: {:.1} | Cond: {:.3}", m.heat_capacity, m.conductivity)
-                    } else { String::new() }
-                } else { String::new() }
-            } else { String::new() };
-
-            // Zone info
-            let zone_info = if bx >= 0 && by >= 0 {
-                let in_growing = self.zones.iter().any(|z| z.kind == zones::ZoneKind::Growing && z.tiles.contains(&(bx, by)));
-                if in_growing { "\n\u{1f33e} Growing Zone".to_string() } else { String::new() }
-            } else { String::new() };
-
-            // Ground water + elevation info
-            let ground_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
-                let gidx = (by as u32 * GRID_W + bx as u32) as usize;
-                let gb = self.grid_data[gidx];
-                let gbt = gb & 0xFF;
-                let gbh = (gb >> 8) & 0xFF;
-                let wt = if gidx < self.water_table.len() { self.water_table[gidx] } else { -2.0 };
-                let wt_label = if wt > 0.0 { "spring" } else if wt > -0.5 { "wet" } else if wt > -1.5 { "moderate" } else { "dry" };
-                let sw = self.debug.water_level;
-                let sw_label = if sw > 0.5 { "flooded" } else if sw > 0.15 { "puddle" } else if sw > 0.01 { "moist" } else { "dry" };
-                let elev = if gidx < self.elevation_data.len() { self.elevation_data[gidx] } else { 0.0 };
-                let mut info = format!("\n\u{26f0} Elevation: {:.1}", elev);
-                info += &format!("\n\u{1f4a7} Surface: {:.2} ({}) | Table: {:.1} ({})", sw, sw_label, wt, wt_label);
-                if gbt == BT_DUG_GROUND {
-                    info += &format!(" | Dug: {}", gbh);
-                }
-                // Terrain type and soil richness
-                if gidx < self.terrain_data.len() {
-                    let td = self.terrain_data[gidx];
-                    let tt = terrain_type(td);
-                    let tr = terrain_richness(td);
-                    let veg = (td >> 4) & 0x1F;
-                    let tt_name = match tt {
-                        0 => "Grass", 1 => "Sand", 2 => "Rocky", 3 => "Clay",
-                        4 => "Gravel", 5 => "Snow", 6 => "Marsh", 7 => "Loam",
-                        _ => "Unknown",
-                    };
-                    info += &format!("\n\u{1f30d} Terrain: {} | Soil: {}/31 | Veg: {}/31", tt_name, tr, veg);
-                }
-                info
-            } else { String::new() };
-
-            // Crop growth info
-            let crop_info = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
-                let cidx = (by as u32 * GRID_W + bx as u32) as usize;
-                let cb = self.grid_data[cidx];
-                let wt = if cidx < self.water_table.len() { self.water_table[cidx] } else { -3.0 };
-                let timer = self.crop_timers.get(&(cidx as u32)).copied().unwrap_or(0.0);
-                if let Some(cs) = zones::crop_status(cb, cidx as u32, timer,
-                    self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt, self.debug.water_level) {
-                    format!("\n\u{1f331} {} ({:.0}%) | Rate: {:.0}% | {}\n  Temp:{:.0}% Sun:{:.0}% Water:{:.0}%",
-                        cs.stage_name, cs.progress * 100.0, cs.growth_rate * 100.0, cs.limiting,
-                        cs.temp_factor * 100.0, cs.sun_factor * 100.0, cs.water_factor * 100.0)
-                } else { String::new() }
-            } else { String::new() };
-
-            let tip = format!(
-                "\u{1f4cd} ({:.1}, {:.1})\n{}{}{}{}{}{}{}",
-                wx, wy, block_info, gas_info, mat_info, pipe_info, zone_info, ground_info, crop_info
-            );
-
-            // Position tooltip near cursor
-            let cursor_screen = ctx.input(|i| {
-                i.pointer.hover_pos().unwrap_or(egui::Pos2::ZERO)
-            });
             egui::Area::new(egui::Id::new("info_tooltip"))
                 .fixed_pos(cursor_screen + egui::Vec2::new(15.0, 15.0))
                 .interactable(false)
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.label(egui::RichText::new("\u{1f50d} Info").strong().size(13.0));
-                        ui.label(egui::RichText::new(tip).monospace().size(11.0));
+                        ui.set_max_width(260.0);
+                        let heading = |ui: &mut egui::Ui, icon: &str, text: &str| {
+                            ui.label(egui::RichText::new(format!("{} {}", icon, text)).strong().size(11.0));
+                        };
+                        let row = |ui: &mut egui::Ui, label: &str, value: String| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(label).weak().size(10.0));
+                                ui.label(egui::RichText::new(value).monospace().size(10.0));
+                            });
+                        };
+                        let row_color = |ui: &mut egui::Ui, label: &str, value: String, color: egui::Color32| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(label).weak().size(10.0));
+                                ui.label(egui::RichText::new(value).monospace().size(10.0).color(color));
+                            });
+                        };
+
+                        // --- Header: position + block type ---
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("({:.0}, {:.0})", wx, wy)).monospace().size(10.0).weak());
+                            if in_bounds {
+                                let idx = (by as u32 * GRID_W + bx as u32) as usize;
+                                let block = self.grid_data[idx];
+                                let bt = block & 0xFF;
+                                let bh = (block >> 8) & 0xFF;
+                                let flags = (block >> 16) & 0xFF;
+                                let reg = block_defs::BlockRegistry::cached();
+                                let type_name = reg.name(bt);
+                                let mut label = type_name.to_string();
+                                if bh > 0 { label += &format!(" h:{}", bh); }
+                                if flags & 2 != 0 { label += " \u{1f3e0}"; } // roofed
+                                if flags & 1 != 0 { label += if flags & 4 != 0 { " \u{1f6aa}\u{2705}" } else { " \u{1f6aa}\u{274c}" }; }
+                                ui.label(egui::RichText::new(label).strong().size(11.0));
+                            }
+                        });
+
+                        if !in_bounds { return; }
+                        let idx = (by as u32 * GRID_W + bx as u32) as usize;
+                        let block = self.grid_data[idx];
+                        let bt = block & 0xFF;
+                        let bh = (block >> 8) & 0xFF;
+
+                        // --- Elevation + Terrain ---
+                        let elev = if idx < self.elevation_data.len() { self.elevation_data[idx] } else { 0.0 };
+                        if elev > 0.05 || idx < self.terrain_data.len() {
+                            ui.separator();
+                            heading(ui, "\u{26f0}", "Terrain");
+                            if elev > 0.05 {
+                                row(ui, "Elevation", format!("{:.1}", elev));
+                            }
+                            if idx < self.terrain_data.len() {
+                                let td = self.terrain_data[idx];
+                                let tt = terrain_type(td);
+                                let tt_name = match tt {
+                                    0 => "Grass", 1 => "Sand", 2 => "Rocky", 3 => "Clay",
+                                    4 => "Gravel", 5 => "Snow", 6 => "Marsh", 7 => "Loam",
+                                    _ => "?",
+                                };
+                                let tr = terrain_richness(td);
+                                let veg = (td >> 4) & 0x1F;
+                                row(ui, "Type", tt_name.to_string());
+                                row(ui, "Soil", format!("{}/31", tr));
+                                row(ui, "Vegetation", format!("{}/31", veg));
+                            }
+                        }
+
+                        // --- Atmosphere ---
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let [smoke_r, o2, co2, temp] = self.debug.fluid_density;
+                            let is_solid = bh > 0 && (bt == 1 || bt == 4 || bt == 5 || bt == 14 || (bt >= 21 && bt <= 25) || bt == 35);
+                            let is_pipe = pipes::is_pipe_component(bt);
+                            ui.separator();
+                            heading(ui, "\u{1f32b}", "Atmosphere");
+                            if is_solid {
+                                row(ui, "Wall temp", format!("{:.1}\u{b0}C", self.debug.block_temp));
+                            } else if is_pipe {
+                                row(ui, "Pipe temp", format!("{:.1}\u{b0}C", self.debug.block_temp));
+                            } else {
+                                let temp_col = if temp > 40.0 { egui::Color32::from_rgb(255, 120, 50) }
+                                    else if temp < 5.0 { egui::Color32::from_rgb(100, 150, 255) }
+                                    else { egui::Color32::from_rgb(180, 220, 180) };
+                                let o2_col = if o2 < 0.7 { egui::Color32::from_rgb(255, 80, 80) }
+                                    else { egui::Color32::from_rgb(150, 200, 150) };
+                                row_color(ui, "Temp", format!("{:.1}\u{b0}C", temp), temp_col);
+                                row_color(ui, "O\u{2082}", format!("{:.2}", o2), o2_col);
+                                if smoke_r > 0.01 { row(ui, "Smoke", format!("{:.3}", smoke_r)); }
+                                if co2 > 0.01 { row(ui, "CO\u{2082}", format!("{:.3}", co2)); }
+                            }
+                        }
+
+                        // --- Power ---
+                        if self.debug.voltage > 0.01 {
+                            ui.separator();
+                            heading(ui, "\u{26a1}", "Power");
+                            let v = self.debug.voltage;
+                            let v_col = if v > 15.0 { egui::Color32::from_rgb(255, 80, 80) }
+                                else if v > 1.0 { egui::Color32::from_rgb(120, 255, 120) }
+                                else { egui::Color32::from_rgb(150, 150, 150) };
+                            row_color(ui, "Voltage", format!("{:.1}V", v), v_col);
+                            let amps = v / 10.0;
+                            row(ui, "Current", format!("{:.2}A", amps));
+                            row(ui, "Power", format!("{:.1}W", v * amps));
+                        }
+
+                        // --- Pipes ---
+                        {
+                            let pidx = by as u32 * GRID_W + bx as u32;
+                            let is_gas = pipes::is_gas_pipe_component(bt);
+                            let is_liq = pipes::is_liquid_pipe_component(bt);
+                            if is_gas {
+                                if let Some(cell) = self.pipe_network.cells.get(&pidx) {
+                                    ui.separator();
+                                    heading(ui, "\u{1f4a8}", "Gas Pipe");
+                                    row(ui, "Pressure", format!("{:.2}", cell.pressure));
+                                    row(ui, "Temp", format!("{:.1}\u{b0}C", cell.gas[3]));
+                                    if cell.gas[0] > 0.01 { row(ui, "Smoke", format!("{:.3}", cell.gas[0])); }
+                                    row(ui, "O\u{2082}", format!("{:.3}", cell.gas[1]));
+                                    if cell.gas[2] > 0.01 { row(ui, "CO\u{2082}", format!("{:.3}", cell.gas[2])); }
+                                }
+                            } else if is_liq {
+                                if let Some(cell) = self.liquid_network.cells.get(&pidx) {
+                                    ui.separator();
+                                    heading(ui, "\u{1f4a7}", "Liquid Pipe");
+                                    row(ui, "Pressure", format!("{:.2}", cell.pressure));
+                                    row(ui, "Temp", format!("{:.1}\u{b0}C", cell.gas[3]));
+                                }
+                            }
+                        }
+
+                        // --- Water ---
+                        {
+                            let wt = if idx < self.water_table.len() { self.water_table[idx] } else { -2.0 };
+                            let sw = self.debug.water_level;
+                            if sw > 0.005 || wt > -1.0 {
+                                ui.separator();
+                                heading(ui, "\u{1f4a7}", "Water");
+                                if sw > 0.005 {
+                                    let label = if sw > 0.5 { "flooded" } else if sw > 0.15 { "puddle" } else { "moist" };
+                                    row(ui, "Surface", format!("{:.2} ({})", sw, label));
+                                }
+                                let wt_label = if wt > 0.0 { "spring" } else if wt > -0.5 { "wet" } else { "moderate" };
+                                row(ui, "Table", format!("{:.1} ({})", wt, wt_label));
+                            }
+                        }
+
+                        // --- Zone ---
+                        {
+                            let in_growing = self.zones.iter().any(|z| z.kind == zones::ZoneKind::Growing && z.tiles.contains(&(bx, by)));
+                            if in_growing {
+                                ui.separator();
+                                heading(ui, "\u{1f33e}", "Growing Zone");
+                            }
+                        }
+
+                        // --- Crop ---
+                        {
+                            let cb = self.grid_data[idx];
+                            let wt = if idx < self.water_table.len() { self.water_table[idx] } else { -3.0 };
+                            let timer = self.crop_timers.get(&(idx as u32)).copied().unwrap_or(0.0);
+                            if let Some(cs) = zones::crop_status(cb, idx as u32, timer,
+                                self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt, self.debug.water_level) {
+                                ui.separator();
+                                heading(ui, "\u{1f331}", &format!("{} ({:.0}%)", cs.stage_name, cs.progress * 100.0));
+                                let rate_col = if cs.growth_rate > 0.7 { egui::Color32::from_rgb(120, 255, 120) }
+                                    else if cs.growth_rate > 0.3 { egui::Color32::from_rgb(255, 220, 80) }
+                                    else { egui::Color32::from_rgb(255, 80, 80) };
+                                row_color(ui, "Growth", format!("{:.0}%  {}", cs.growth_rate * 100.0, cs.limiting), rate_col);
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("T:{:.0}%", cs.temp_factor * 100.0)).size(9.0).weak());
+                                    ui.label(egui::RichText::new(format!("S:{:.0}%", cs.sun_factor * 100.0)).size(9.0).weak());
+                                    ui.label(egui::RichText::new(format!("W:{:.0}%", cs.water_factor * 100.0)).size(9.0).weak());
+                                });
+                            }
+                        }
+
+                        // --- Material ---
+                        {
+                            let mats = crate::materials::build_material_table();
+                            if (bt as usize) < mats.len() {
+                                let m = &mats[bt as usize];
+                                if m.heat_capacity > 0.0 || m.conductivity > 0.0 {
+                                    ui.separator();
+                                    heading(ui, "\u{1f9f1}", "Material");
+                                    row(ui, "Heat cap", format!("{:.1}", m.heat_capacity));
+                                    row(ui, "Conductivity", format!("{:.3}", m.conductivity));
+                                }
+                            }
+                        }
                     });
                 });
         }
