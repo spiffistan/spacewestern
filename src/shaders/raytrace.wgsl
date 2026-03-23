@@ -86,18 +86,26 @@ struct Camera {
 @group(0) @binding(19) var sound_tex: texture_2d<f32>;
 @group(0) @binding(20) var<storage, read> elevation_buf: array<f32>;
 @group(0) @binding(21) var fog_tex: texture_2d<f32>;
+@group(0) @binding(22) var fog_sampler: sampler;
 
-// --- Fog of war helper ---
-fn apply_fog(color: vec3<f32>, bx: i32, by: i32) -> vec3<f32> {
+// --- Fog of war helper (bilinear-sampled for smooth edges) ---
+fn sample_fog(wx: f32, wy: f32) -> f32 {
+    // Map world coords to UV (center of each tile = center of texel)
+    let uv = vec2<f32>((wx + 0.5) / camera.grid_w, (wy + 0.5) / camera.grid_h);
+    return textureSampleLevel(fog_tex, fog_sampler, uv, 0.0).r;
+}
+
+fn apply_fog(color: vec3<f32>, wx: f32, wy: f32) -> vec3<f32> {
     if camera.fog_enabled < 0.5 { return color; }
-    if bx < 0 || by < 0 || bx >= i32(camera.grid_w) || by >= i32(camera.grid_h) { return color; }
-    let fog = textureLoad(fog_tex, vec2<i32>(bx, by), 0).r;
+    let fog = sample_fog(wx, wy);
     if fog < 0.01 {
         return vec3(0.0); // shrouded
     } else if fog < 0.5 {
-        // explored: desaturate + dim
+        // explored: desaturate + dim, fade smoothly at edges
+        let t = fog / 0.5; // 0 at deep explored, 1 at visible edge
         let gray = dot(color, vec3(0.299, 0.587, 0.114));
-        return mix(vec3(gray), color, 0.3) * 0.35;
+        let dimmed = mix(vec3(gray), color, 0.3) * 0.35;
+        return mix(dimmed, color, t * t); // smooth transition
     }
     return color; // visible
 }
@@ -1762,8 +1770,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fy = fract(world_y);
 
     // --- Fog of war early exit: skip all work for shrouded tiles ---
-    if camera.fog_enabled > 0.5 && bx >= 0 && by >= 0 && bx < i32(camera.grid_w) && by < i32(camera.grid_h) {
-        let fog_early = textureLoad(fog_tex, vec2<i32>(bx, by), 0).r;
+    if camera.fog_enabled > 0.5 {
+        let fog_early = sample_fog(world_x, world_y);
         if fog_early < 0.01 {
             textureStore(output, vec2<u32>(px, py), vec4(0.0, 0.0, 0.0, 1.0));
             return;
@@ -4086,7 +4094,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Temporal blend provides sufficient shadow smoothing.
 
     // Apply fog of war
-    color = apply_fog(color, bx, by);
+    color = apply_fog(color, world_x, world_y);
 
     textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
 }

@@ -712,6 +712,14 @@ impl App {
         });
 
         let compute_bgl = gfx.compute_pipeline.get_bind_group_layout(0);
+        let fog_sampler = gfx.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("fog-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let fluid_dye_sampler = gfx.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("fluid-dye-sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -749,6 +757,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
                     wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&gfx.fog_texture.create_view(&wgpu::TextureViewDescriptor::default())) },
+                    wgpu::BindGroupEntry { binding: 22, resource: wgpu::BindingResource::Sampler(&fog_sampler) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -777,6 +786,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
                     wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&gfx.fog_texture.create_view(&wgpu::TextureViewDescriptor::default())) },
+                    wgpu::BindGroupEntry { binding: 22, resource: wgpu::BindingResource::Sampler(&fog_sampler) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -805,6 +815,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
                     wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&gfx.fog_texture.create_view(&wgpu::TextureViewDescriptor::default())) },
+                    wgpu::BindGroupEntry { binding: 22, resource: wgpu::BindingResource::Sampler(&fog_sampler) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
@@ -833,6 +844,7 @@ impl App {
                     wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
                     wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&gfx.fog_texture.create_view(&wgpu::TextureViewDescriptor::default())) },
+                    wgpu::BindGroupEntry { binding: 22, resource: wgpu::BindingResource::Sampler(&fog_sampler) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
                     wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
