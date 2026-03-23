@@ -25,6 +25,7 @@ impl App {
 
     pub fn draw_ui(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: Vec<((i32,i32), bool)>, dt: f32) {
         let bp_ppp = self.ppp();
+        self.draw_resource_bar(ctx);
         self.draw_layers_bar(ctx);
         self.draw_layer_legend(ctx);
         self.draw_menu_bar(ctx, dt);
@@ -35,10 +36,12 @@ impl App {
         self.draw_overlays_and_popups(ctx, bp_cam, bp_ppp, dt);
         self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
         self.draw_world_labels(ctx, bp_cam);
+        self.draw_selection_info(ctx);
         self.draw_selection_actions(ctx);
         self.draw_notifications(ctx);
         self.draw_conditions_bar(ctx);
         self.draw_game_log(ctx);
+        self.draw_minimap(ctx);
     }
 
     fn draw_layers_bar(&mut self, ctx: &egui::Context) {
@@ -3543,6 +3546,255 @@ impl App {
                                 }
                             });
                     });
+            });
+    }
+
+    // --- Resource bar: colony-wide totals (top-left, below menu bar) ---
+    fn draw_resource_bar(&self, ctx: &egui::Context) {
+        // Count resources: ground items + crate contents + pleb inventories
+        let mut total_wood = 0u32;
+        let mut total_berries = 0u32;
+        let mut total_rocks = 0u32;
+        for item in &self.ground_items {
+            match item.kind {
+                resources::ItemKind::Wood(n) => total_wood += n,
+                resources::ItemKind::Berries(n) => total_berries += n,
+                resources::ItemKind::Rocks(n) => total_rocks += n,
+            }
+        }
+        for inv in self.crate_contents.values() {
+            total_berries += inv.berries;
+            total_rocks += inv.rocks;
+        }
+        for pleb in &self.plebs {
+            if !pleb.is_enemy {
+                total_berries += pleb.inventory.berries;
+                total_rocks += pleb.inventory.rocks;
+            }
+        }
+        let pleb_count = self.plebs.iter().filter(|p| !p.is_enemy).count();
+        let bp_count = self.blueprints.len();
+
+        egui::Area::new(egui::Id::new("resource_bar"))
+            .anchor(egui::Align2::LEFT_TOP, [10.0, 32.0])
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        ui.label(egui::RichText::new(format!("\u{1f464} {} colonists", pleb_count)).size(11.0));
+                        ui.separator();
+                        ui.label(egui::RichText::new(format!("\u{1fab5} {} wood", total_wood)).size(11.0));
+                        ui.label(egui::RichText::new(format!("\u{1fad0} {} berries", total_berries)).size(11.0));
+                        ui.label(egui::RichText::new(format!("\u{1faa8} {} rocks", total_rocks)).size(11.0));
+                        if bp_count > 0 {
+                            ui.separator();
+                            ui.label(egui::RichText::new(format!("\u{1f3d7} {} pending", bp_count))
+                                .size(11.0).weak());
+                        }
+                    });
+                });
+            });
+    }
+
+    // --- Selection info panel: details about selected block ---
+    fn draw_selection_info(&self, ctx: &egui::Context) {
+        if self.world_sel.is_empty() { return; }
+        let items = &self.world_sel.items;
+        if items.len() != 1 { return; } // only single selection
+        let item = &items[0];
+
+        // Pleb selection: show needs
+        if let Some(pi) = item.pleb_idx {
+            if let Some(pleb) = self.plebs.get(pi) {
+                egui::Area::new(egui::Id::new("selection_info"))
+                    .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
+                    .show(ctx, |ui| {
+                        egui::Frame::window(ui.style()).show(ui, |ui| {
+                            ui.set_min_width(180.0);
+                            ui.label(egui::RichText::new(&pleb.name).strong().size(13.0));
+                            let act = pleb.activity.inner();
+                            let act_str = match act {
+                                PlebActivity::Idle => "Idle",
+                                PlebActivity::Walking => "Walking",
+                                PlebActivity::Sleeping => "Sleeping",
+                                PlebActivity::Harvesting(_) => "Harvesting",
+                                PlebActivity::Eating => "Eating",
+                                PlebActivity::Hauling => "Hauling",
+                                PlebActivity::Farming(_) => "Farming",
+                                PlebActivity::Building(_) => "Building",
+                                PlebActivity::Crisis(_, _) => "Crisis",
+                            };
+                            ui.label(egui::RichText::new(act_str).size(10.0).weak());
+                            ui.separator();
+
+                            let bar = |ui: &mut egui::Ui, label: &str, val: f32, color: egui::Color32| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(label).size(10.0).monospace());
+                                    let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(100.0, 8.0), egui::Sense::hover());
+                                    let painter = ui.painter_at(rect);
+                                    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
+                                    painter.rect_filled(
+                                        egui::Rect::from_min_size(rect.min, egui::Vec2::new(100.0 * val.clamp(0.0, 1.0), 8.0)),
+                                        2.0, color,
+                                    );
+                                    ui.label(egui::RichText::new(format!("{:.0}%", val * 100.0)).size(9.0).weak());
+                                });
+                            };
+                            bar(ui, "HP  ", pleb.needs.health, egui::Color32::from_rgb(80, 200, 80));
+                            bar(ui, "HUN ", pleb.needs.hunger, egui::Color32::from_rgb(200, 160, 40));
+                            bar(ui, "RST ", pleb.needs.rest, egui::Color32::from_rgb(80, 120, 200));
+                            bar(ui, "WRM ", pleb.needs.warmth, egui::Color32::from_rgb(200, 100, 40));
+                            bar(ui, "O2  ", pleb.needs.oxygen, egui::Color32::from_rgb(100, 200, 220));
+
+                            if pleb.inventory.berries > 0 || pleb.inventory.rocks > 0 || pleb.inventory.carrying.is_some() {
+                                ui.separator();
+                                let mut inv_str = Vec::new();
+                                if pleb.inventory.berries > 0 { inv_str.push(format!("{} berries", pleb.inventory.berries)); }
+                                if pleb.inventory.rocks > 0 { inv_str.push(format!("{} rocks", pleb.inventory.rocks)); }
+                                if let Some(c) = pleb.inventory.carrying { inv_str.push(format!("[{}]", c)); }
+                                ui.label(egui::RichText::new(inv_str.join(" | ")).size(10.0).weak());
+                            }
+                        });
+                    });
+            }
+            return;
+        }
+
+        // Block selection: show block info
+        let bx = item.x;
+        let by = item.y;
+        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return; }
+        let idx = (by as u32 * GRID_W + bx as u32) as usize;
+        let block = self.grid_data[idx];
+        let bt = block & 0xFF;
+        let bh = (block >> 8) & 0xFF;
+        let flags = (block >> 16) & 0xFF;
+        let reg = block_defs::BlockRegistry::cached();
+        let type_name = reg.name(bt as u8);
+
+        egui::Area::new(egui::Id::new("selection_info"))
+            .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
+            .show(ctx, |ui| {
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(160.0);
+                    ui.label(egui::RichText::new(type_name).strong().size(13.0));
+
+                    let mut details = Vec::new();
+                    if bh > 0 { details.push(format!("Height: {}", bh)); }
+                    if flags & 2 != 0 { details.push("Roofed".to_string()); }
+                    if flags & 1 != 0 {
+                        details.push(if flags & 4 != 0 { "Door: Open" } else { "Door: Closed" }.to_string());
+                    }
+                    // Elevation
+                    if idx < self.elevation_data.len() {
+                        let elev = self.elevation_data[idx];
+                        if elev > 0.1 {
+                            details.push(format!("Elevation: {:.1}", elev));
+                        }
+                    }
+                    // Power
+                    if let Some(gfx) = &self.gfx {
+                        // Voltage info from debug readback
+                        if self.debug.voltage > 0.01 {
+                            details.push(format!("Voltage: {:.1}V", self.debug.voltage));
+                        }
+                    }
+                    // Blueprint
+                    if let Some(bp) = self.blueprints.get(&(bx, by)) {
+                        details.push(format!("Build: {:.0}%", bp.progress * 100.0));
+                        if bp.wood_needed > 0 {
+                            details.push(format!("Wood: {}/{}", bp.wood_delivered, bp.wood_needed));
+                        }
+                    }
+
+                    if !details.is_empty() {
+                        for d in &details {
+                            ui.label(egui::RichText::new(d).size(10.0).weak());
+                        }
+                    }
+                });
+            });
+    }
+
+    // --- Minimap: world overview (bottom-left corner, above build bar) ---
+    fn draw_minimap(&self, ctx: &egui::Context) {
+        let map_size = 120.0;
+        let gw = GRID_W as f32;
+        let gh = GRID_H as f32;
+
+        egui::Area::new(egui::Id::new("minimap"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -10.0])
+            .interactable(false)
+            .show(ctx, |ui| {
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::Vec2::splat(map_size), egui::Sense::hover(),
+                );
+                let painter = ui.painter_at(rect);
+
+                // Background
+                painter.rect_filled(rect, 3.0, egui::Color32::from_rgb(20, 20, 25));
+                painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)), egui::StrokeKind::Outside);
+
+                let to_map = |wx: f32, wy: f32| -> egui::Pos2 {
+                    egui::pos2(
+                        rect.min.x + (wx / gw) * map_size,
+                        rect.min.y + (wy / gh) * map_size,
+                    )
+                };
+
+                // Terrain: sample every 4th tile for performance
+                let step = 4u32;
+                let px_size = map_size / (gw / step as f32);
+                for ty in (0..GRID_H).step_by(step as usize) {
+                    for tx in (0..GRID_W).step_by(step as usize) {
+                        let idx = (ty * GRID_W + tx) as usize;
+                        let block = self.grid_data[idx];
+                        let bt = block & 0xFF;
+                        let bh = (block >> 8) & 0xFF;
+                        let elev = if idx < self.elevation_data.len() { self.elevation_data[idx] } else { 0.0 };
+
+                        let color = if bt == 3 {
+                            egui::Color32::from_rgb(30, 60, 120) // water
+                        } else if bh > 0 {
+                            egui::Color32::from_rgb(100, 95, 90) // wall/structure
+                        } else if bt == 8 || bt == 31 {
+                            egui::Color32::from_rgb(30, 60, 25) // trees/bushes
+                        } else {
+                            // Terrain: color by elevation
+                            let e = (elev * 12.0) as u8;
+                            egui::Color32::from_rgb(35 + e, 40 + e / 2, 20 + e / 3)
+                        };
+
+                        let pos = to_map(tx as f32, ty as f32);
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(pos, egui::Vec2::splat(px_size + 0.5)),
+                            0.0, color,
+                        );
+                    }
+                }
+
+                // Plebs as colored dots
+                for pleb in &self.plebs {
+                    let pos = to_map(pleb.x, pleb.y);
+                    let col = if pleb.is_enemy {
+                        egui::Color32::from_rgb(255, 50, 50)
+                    } else {
+                        egui::Color32::from_rgb(50, 220, 50)
+                    };
+                    painter.circle_filled(pos, 2.0, col);
+                }
+
+                // Camera viewport rectangle
+                let half_w = self.camera.screen_w * 0.5 / self.camera.zoom;
+                let half_h = self.camera.screen_h * 0.5 / self.camera.zoom;
+                let vp_min = to_map(self.camera.center_x - half_w, self.camera.center_y - half_h);
+                let vp_max = to_map(self.camera.center_x + half_w, self.camera.center_y + half_h);
+                painter.rect_stroke(
+                    egui::Rect::from_min_max(vp_min, vp_max),
+                    1.0, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150)),
+                    egui::StrokeKind::Outside,
+                );
             });
     }
 }
