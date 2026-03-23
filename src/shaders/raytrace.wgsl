@@ -61,7 +61,7 @@ struct Camera {
     sound_coupling: f32,
     enable_terrain_detail: f32,
     terrain_ao_strength: f32,
-    _pad4_c: f32,
+    fog_enabled: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;

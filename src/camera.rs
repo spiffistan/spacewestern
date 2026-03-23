@@ -59,5 +59,5 @@ pub struct CameraUniform {
     pub sound_coupling: f32,    // strength of sound→gas velocity coupling
     pub enable_terrain_detail: f32, // 1.0 = procedural terrain, 0.0 = flat colors
     pub terrain_ao_strength: f32,   // 0.0 = no AO, 1.0 = full structural shadow
-    pub _pad4_c: f32,
+    pub fog_enabled: f32,           // 1.0 = fog of war active, 0.0 = full map visible
 }

@@ -248,6 +248,14 @@ struct App {
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
     voltage_data: Vec<f32>,
     voltage_readback_pending: bool,
+    // Fog of war
+    fog_enabled: bool,
+    fog_visibility: Vec<u8>,     // 256×256, per-tile: 0=not visible, 255=visible
+    fog_explored: Vec<u8>,       // 256×256, per-tile: 0=shrouded, 255=explored
+    fog_texture_data: Vec<u8>,   // 256×256, composed for GPU upload
+    fog_dirty: bool,
+    fog_prev_tiles: Vec<(i32, i32)>, // per-pleb last known tile
+    fog_vision_radius: i32,
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -392,7 +400,7 @@ impl App {
                 prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
                 rain_intensity: 0.0, cloud_cover: 0.0, wind_magnitude: 0.0, wind_angle: 0.0,
                 use_shadow_map: 1.0, shadow_map_scale: 8.0, sound_speed: 0.0, sound_damping: 0.0,
-                sound_coupling: 0.0, enable_terrain_detail: 1.0, terrain_ao_strength: 2.5, _pad4_c: 0.0,
+                sound_coupling: 0.0, enable_terrain_detail: 1.0, terrain_ao_strength: 2.5, fog_enabled: 0.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -551,6 +559,13 @@ impl App {
             diag_preview: Vec::new(),
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
+            fog_enabled: false,
+            fog_visibility: vec![0u8; (GRID_W * GRID_H) as usize],
+            fog_explored: vec![255u8; (GRID_W * GRID_H) as usize], // start fully explored in sandbox
+            fog_texture_data: vec![255u8; (GRID_W * GRID_H) as usize], // start fully visible
+            fog_dirty: true,
+            fog_prev_tiles: Vec::new(),
+            fog_vision_radius: 25,
         }
     }
 
@@ -1114,6 +1129,7 @@ impl App {
         self.camera.use_shadow_map = if self.shadow_map_scale > 0 { 1.0 } else { 0.0 };
         self.camera.enable_terrain_detail = if self.enable_terrain_detail { 1.0 } else { 0.0 };
         self.camera.terrain_ao_strength = self.terrain_ao_strength;
+        self.camera.fog_enabled = if self.fog_enabled { 1.0 } else { 0.0 };
         self.camera.shadow_map_scale = self.shadow_map_scale.max(1) as f32;
 
         // Update camera uniform
