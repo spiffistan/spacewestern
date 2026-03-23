@@ -1105,7 +1105,7 @@ impl App {
                                 self.grid_data[tidx] = bp.block_data;
                                 self.grid_dirty = true;
                                 events.push((EventCategory::Build, format!("{} built {}", pleb.name,
-                                    block_defs::BlockRegistry::cached().name((bp.block_data & 0xFF) as u8))));
+                                    block_defs::BlockRegistry::cached().name(bp.block_data & 0xFF))));
                             }
                         }
                         self.active_work.remove(&(tx, ty));

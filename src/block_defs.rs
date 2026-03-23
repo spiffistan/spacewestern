@@ -126,16 +126,16 @@ impl BlockRegistry {
         BlockRegistry { defs, wall_ids, placeable }
     }
 
-    pub fn get(&self, id: u8) -> Option<&BlockDef> {
+    pub fn get(&self, id: u32) -> Option<&BlockDef> {
         self.defs.get(id as usize).and_then(|d| d.as_ref())
     }
 
-    pub fn name(&self, id: u8) -> &str {
+    pub fn name(&self, id: u32) -> &str {
         self.get(id).map(|d| d.name.as_str()).unwrap_or("Unknown")
     }
 
-    pub fn is_wall(&self, id: u8) -> bool {
-        self.wall_ids.contains(&id)
+    pub fn is_wall(&self, id: u32) -> bool {
+        self.wall_ids.contains(&(id as u8))
     }
 
     pub fn tools_in_category<'a>(&'a self, cat: &str) -> Vec<&'a (u8, PlacementDef)> {

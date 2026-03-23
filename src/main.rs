@@ -1316,7 +1316,7 @@ impl App {
 
         let reg = block_defs::BlockRegistry::cached();
         let (block_type_id, tiles) = match self.build_tool {
-            BuildTool::Destroy => (0u8, Self::filled_rect_tiles(sx, sy, ex, ey)),
+            BuildTool::Destroy => (0u32, Self::filled_rect_tiles(sx, sy, ex, ey)),
             BuildTool::Place(id) => {
                 let shape = reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref());
                 let t = match shape {
@@ -1335,7 +1335,8 @@ impl App {
         const CONN_E: u8 = 0x20;
         const CONN_S: u8 = 0x40;
         const CONN_W: u8 = 0x80;
-        let is_line_type = block_type_id == 15 || block_type_id == 36 || block_type_id == 46 || block_type_id == 49; // pipe, wire, restrictor, liquid pipe
+        let bid = block_type_id;
+        let is_line_type = bt_is!(bid, BT_PIPE, BT_WIRE, BT_RESTRICTOR, BT_LIQUID_PIPE);
 
         for (ti, &(tx, ty)) in tiles.iter().enumerate() {
             if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
@@ -1346,12 +1347,13 @@ impl App {
                 let block = self.grid_data[idx];
                 let bt = block_type_rs(block);
                 let bh = (block >> 8) & 0xFF;
-                let wire_anywhere = block_type_id == 36;
-                let gas_pipe_compat = (block_type_id == 15 || block_type_id == 46) && (bt == 15 || bt == 46 || bt == 50);
-                let liquid_pipe_compat = block_type_id == 49 && (bt == 49 || bt == 50);
+                let wire_anywhere = bid == BT_WIRE;
+                let btu = bt as u32;
+                let gas_pipe_compat = bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(btu, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
+                let liquid_pipe_compat = bid == BT_LIQUID_PIPE && bt_is!(btu, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
                 let pipe_compat = gas_pipe_compat || liquid_pipe_compat;
-                let same_type = bt == block_type_id || pipe_compat; // allow pipe↔restrictor
-                if ((bt == 0 || bt == 2) && bh == 0) || (wire_anywhere && bt != 36) || (is_line_type && same_type) {
+                let same_type = btu == bid || pipe_compat; // allow pipe↔restrictor
+                if ((btu == BT_AIR || btu == BT_DIRT) && bh == 0) || (wire_anywhere && btu != BT_WIRE) || (is_line_type && same_type) {
                     // Compute connection mask from neighbors in the line
                     let mut conn: u8 = 0;
                     if is_line_type && tiles.len() > 1 {
@@ -1377,9 +1379,10 @@ impl App {
                             if anx < 0 || any < 0 || anx >= GRID_W as i32 || any >= GRID_H as i32 { continue; }
                             let aidx = (any as u32 * GRID_W + anx as u32) as usize;
                             let abt = block_type_rs(self.grid_data[aidx]);
-                            let adj_gas_match = (block_type_id == 15 || block_type_id == 46) && (abt == 15 || abt == 46 || abt == 50);
-                            let adj_liq_match = block_type_id == 49 && (abt == 49 || abt == 50);
-                            if abt == block_type_id || adj_gas_match || adj_liq_match {
+                            let abt32 = abt as u32;
+                            let adj_gas_match = bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(abt32, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
+                            let adj_liq_match = bid == BT_LIQUID_PIPE && bt_is!(abt32, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
+                            if abt32 == bid || adj_gas_match || adj_liq_match {
                                 conn |= mask;
                             }
                         }
@@ -1389,7 +1392,7 @@ impl App {
                     }
 
                     if is_line_type && same_type {
-                        if bt == block_type_id {
+                        if btu == bid {
                             // Same type: just merge new connections into existing mask
                             let existing_h = ((block >> 8) & 0xFF) as u8;
                             let merged = existing_h | conn;
@@ -1401,16 +1404,16 @@ impl App {
                             let roof_h = block & 0xFF000000;
                             let base_h = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(1);
                             let height = base_h | existing_conn | conn;
-                            self.grid_data[idx] = make_block(block_type_id, height, roof_flag) | roof_h;
+                            self.grid_data[idx] = make_block(block_type_id as u8, height, roof_flag) | roof_h;
                         }
-                    } else if wire_anywhere && bt != 0 && bt != 2 {
+                    } else if wire_anywhere && btu != BT_AIR && btu != BT_DIRT {
                         self.grid_data[idx] |= 0x80 << 16; // wire overlay flag
                     } else {
                         let roof_flag = block_flags_rs(block) & 2;
                         let roof_h = block & 0xFF000000;
                         let base_h = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(3);
                         let height = if is_line_type { base_h | conn } else { base_h };
-                        self.place_or_blueprint(tx, ty, make_block(block_type_id, height, roof_flag) | roof_h);
+                        self.place_or_blueprint(tx, ty, make_block(block_type_id as u8, height, roof_flag) | roof_h);
                     }
 
                     // Update adjacent existing pipes/wires with reciprocal connection
@@ -1432,9 +1435,10 @@ impl App {
                             let nb = self.grid_data[nidx];
                             let nbt = block_type_rs(nb);
                             // Update same-type (or pipe↔restrictor↔bridge) neighbors with connection mask
-                            let recip_match = nbt == block_type_id
-                                || ((block_type_id == 15 || block_type_id == 46) && (nbt == 15 || nbt == 46 || nbt == 50))
-                                || (block_type_id == 49 && (nbt == 49 || nbt == 50));
+                            let nbt32 = nbt as u32;
+                            let recip_match = nbt32 == bid
+                                || (bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(nbt32, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
+                                || (bid == BT_LIQUID_PIPE && bt_is!(nbt32, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
                             if recip_match {
                                 let nh = ((nb >> 8) & 0xFF) as u8;
                                 if (nh & 0xF0) != 0 && (nh & their_bit) == 0 {
@@ -1990,7 +1994,7 @@ impl App {
                         self.can_place_at(tx, ty)
                             || (bridge_id == 50 && pipes::is_gas_pipe_component(tbt))
                             || (bridge_id == 50 && pipes::is_liquid_pipe_component(tbt))
-                            || (bridge_id == 51 && (tbt == 36 || is_conductor_rs(tbt, block_flags_rs(self.grid_data[tidx]))))
+                            || (bridge_id == 51 && (tbt as u32 == BT_WIRE || is_conductor_rs(tbt, block_flags_rs(self.grid_data[tidx]))))
                     });
                     if all_valid {
                         for (i, &(tx, ty)) in tiles.iter().enumerate() {
@@ -2000,7 +2004,7 @@ impl App {
                             let roof_h = tblock & 0xFF000000;
                             // flags: bits 3-4 = segment (0=entry, 1=middle, 2=exit), bits 5-6 = rotation
                             let seg_flags = roof_flag | ((i as u8) << 3) | ((self.build_rotation as u8) << 5);
-                            self.grid_data[tidx] = make_block(bridge_id, 1, seg_flags) | roof_h;
+                            self.grid_data[tidx] = make_block(bridge_id as u8, 1, seg_flags) | roof_h;
                         }
                         self.grid_dirty = true;
                         self.build_tool = BuildTool::None;
@@ -2128,17 +2132,18 @@ impl App {
                     let stays_selected = placement.map(|p| p.stays_selected).unwrap_or(false);
                     let click_mode = placement.map(|p| p.click.clone()).unwrap_or(block_defs::ClickMode::Simple);
 
+                    let bt32 = bt as u32;
                     let can_place = self.can_place_at(bx, by)
-                        || (id == 16 && bt == 15) // gas pump on gas pipe
-                        || (id == 53 && bt == 49) // liquid pump on liquid pipe
-                        || (id == 54 && bt == 49) // liquid output on liquid pipe
-                        || (id == 36 && bt != 36) // wire can go anywhere except on existing wire
-                        || (id == 15 && bt == 15) // pipe on pipe = merge connections
-                        || (id == 46 && (bt == 15 || bt == 46)) // restrictor on pipe or restrictor
-                        || (id == 49 && (bt == 49 || bt == 50)) // liquid pipe on liquid pipe or bridge
-                        || ((id == 42 || id == 43 || id == 45) && (bt == 36 || bt == 0 || bt == 2)); // switch/dimmer/breaker on wire or ground
+                        || (id == BT_PUMP && bt32 == BT_PIPE)
+                        || (id == BT_LIQUID_PUMP && bt32 == BT_LIQUID_PIPE)
+                        || (id == BT_LIQUID_OUTPUT && bt32 == BT_LIQUID_PIPE)
+                        || (id == BT_WIRE && bt32 != BT_WIRE)
+                        || (id == BT_PIPE && bt32 == BT_PIPE)
+                        || (id == BT_RESTRICTOR && bt_is!(bt32, BT_PIPE, BT_RESTRICTOR))
+                        || (id == BT_LIQUID_PIPE && bt_is!(bt32, BT_LIQUID_PIPE, BT_PIPE_BRIDGE))
+                        || (bt_is!(id, BT_SWITCH, BT_DIMMER, BT_BREAKER) && bt_is!(bt32, BT_WIRE, BT_AIR, BT_DIRT));
                     if can_place && click_mode != block_defs::ClickMode::None {
-                        if id == 36 && bt != 0 && bt != 2 {
+                        if id == BT_WIRE && bt32 != BT_AIR && bt32 != BT_DIRT {
                             // Wire on non-ground: add wire flag to existing block (bit 7)
                             self.grid_data[idx] |= 0x80 << 16; // set wire overlay flag
                         } else {
@@ -2147,17 +2152,17 @@ impl App {
                             let mut combined_flags = roof_flag | rot_flags | extra_flags;
                             let mut final_height = place_height;
                             // Switch starts ON (flag bit 2)
-                            if id == 42 { combined_flags |= 4; }
+                            if id == BT_SWITCH { combined_flags |= 4; }
                             // Dimmer starts at 100% (height = 10)
-                            if id == 43 { final_height = 10; }
+                            if id == BT_DIMMER { final_height = 10; }
                             // Fireplace starts at 50% intensity (height = 5)
-                            if id == 6 { final_height = 5; }
+                            if id == BT_FIREPLACE { final_height = 5; }
                             // Circuit breaker starts ON (flag bit 2), threshold in height = 15V
-                            if id == 45 { combined_flags |= 4; final_height = 15; }
+                            if id == BT_BREAKER { combined_flags |= 4; final_height = 15; }
                             // Restrictor starts at 50% opening (height lower nibble = 5)
-                            if id == 46 { final_height = 5; }
+                            if id == BT_RESTRICTOR { final_height = 5; }
                             // Single-click pipe/wire: auto-detect connections from adjacent matching blocks
-                            if id == 15 || id == 36 || id == 46 || id == 49 {
+                            if bt_is!(id, BT_PIPE, BT_WIRE, BT_RESTRICTOR, BT_LIQUID_PIPE) {
                                 let mut conn: u8 = 0;
                                 for &(ndx, ndy, mask) in &[(0i32,-1i32,0x10u8),(0,1,0x40),(1,0,0x20),(-1,0,0x80)] {
                                     let nx = bx + ndx;
@@ -2166,9 +2171,10 @@ impl App {
                                         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                                         let nbt = block_type_rs(self.grid_data[nidx]);
                                         // Connect to same type, or pipes↔restrictors
-                                        let is_pipe_match = ((id == 15 || id == 46) && (nbt == 15 || nbt == 46 || nbt == 50))
-                                            || (id == 49 && (nbt == 49 || nbt == 50));
-                                        if nbt == id || is_pipe_match {
+                                        let nbt32 = nbt as u32;
+                                        let is_pipe_match = (bt_is!(id, BT_PIPE, BT_RESTRICTOR) && bt_is!(nbt32, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
+                                            || (id == BT_LIQUID_PIPE && bt_is!(nbt32, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
+                                        if nbt as u32 == id || is_pipe_match {
                                             conn |= mask;
                                             // Also update neighbor's connection toward us
                                             // Skip if neighbor has mask=0 (auto-detect mode — already connects all directions)
@@ -2185,12 +2191,12 @@ impl App {
                                 final_height |= conn;
                             }
                             let roof_h = block & 0xFF000000;
-                            self.place_or_blueprint(bx, by, make_block(id, final_height, combined_flags) | roof_h);
+                            self.place_or_blueprint(bx, by, make_block(id as u8, final_height, combined_flags) | roof_h);
                         }
                         self.grid_dirty = true;
                         compute_roof_heights(&mut self.grid_data);
                         // Initialize cannon angle from build rotation
-                        if id == 29 {
+                        if id == BT_CANNON {
                             let angle = match self.build_rotation {
                                 0 => -std::f32::consts::FRAC_PI_2, // north
                                 1 => 0.0,                           // east
@@ -3054,7 +3060,7 @@ impl App {
                     let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                         let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || tbt == 15 || tbt == 46 || tbt == 50
+                        self.can_place_on(tx, ty, false) || bt_is!(tbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE)
                     } else { false };
                     ((tx, ty), ok)
                 } else if self.build_tool == BuildTool::Place(49) {
@@ -3062,7 +3068,7 @@ impl App {
                     let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                         let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || tbt == 49 || tbt == 50
+                        self.can_place_on(tx, ty, false) || bt_is!(tbt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE)
                     } else { false };
                     ((tx, ty), ok)
                 } else if matches!(self.build_tool, BuildTool::Place(50) | BuildTool::Place(51)) {
@@ -3072,7 +3078,7 @@ impl App {
                         let tbt = (self.grid_data[tidx] & 0xFF) as u8;
                         self.can_place_on(tx, ty, false)
                             || (self.build_tool == BuildTool::Place(50) && (pipes::is_gas_pipe_component(tbt) || pipes::is_liquid_pipe_component(tbt)))
-                            || (self.build_tool == BuildTool::Place(51) && tbt == 36)
+                            || (self.build_tool == BuildTool::Place(51) && tbt as u32 == BT_WIRE)
                     } else { false };
                     ((tx, ty), ok)
                 } else if matches!(self.build_tool, BuildTool::Place(53) | BuildTool::Place(54)) {
@@ -3080,15 +3086,15 @@ impl App {
                     let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                         let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || tbt == 49
+                        self.can_place_on(tx, ty, false) || tbt == BT_LIQUID_PIPE
                     } else { false };
                     ((tx, ty), ok)
                 } else if matches!(self.build_tool, BuildTool::Place(42) | BuildTool::Place(43) | BuildTool::Place(45)) {
-                    // Switch/Dimmer/Breaker/Varistor: on empty ground or on wire
+                    // Switch/Dimmer/Breaker: on empty ground or on wire
                     let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                         let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || tbt == 36
+                        self.can_place_on(tx, ty, false) || tbt == BT_WIRE
                     } else { false };
                     ((tx, ty), ok)
                 } else {

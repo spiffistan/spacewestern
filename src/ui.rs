@@ -1541,7 +1541,7 @@ impl App {
                 let bh = (block >> 8) & 0xFF;
                 let flags = (block >> 16) & 0xFF;
                 let reg = block_defs::BlockRegistry::cached();
-                let type_name = reg.name(bt as u8);
+                let type_name = reg.name(bt);
                 let mut tags = String::new();
                 if flags & 2 != 0 { tags.push_str(" [Roofed]"); }
                 if flags & 1 != 0 { tags.push_str(if flags & 4 != 0 { " [Door:Open]" } else { " [Door:Closed]" }); }
@@ -1938,7 +1938,7 @@ impl App {
                 if tile_px > 6.0 {
                     let bt = bp.block_data & 0xFF;
                     let reg = block_defs::BlockRegistry::cached();
-                    let name = reg.name(bt as u8);
+                    let name = reg.name(bt);
                     // Resource indicator
                     let res_text = if bp.wood_needed > 0 {
                         let color = if bp.resources_met() {
@@ -3168,7 +3168,7 @@ impl App {
 
         // Determine common properties
         let all_removable = items.iter().all(|item| {
-            reg.get(item.block_type as u8).map_or(false, |d| d.is_removable)
+            reg.get(item.block_type).map_or(false, |d| d.is_removable)
         });
         let all_same_type = items.iter().all(|item| item.block_type == items[0].block_type);
 
@@ -3180,9 +3180,9 @@ impl App {
             let pi = items[0].pleb_idx.unwrap();
             self.plebs.get(pi).map_or("Pleb".to_string(), |p| p.name.clone())
         } else if count == 1 {
-            reg.name(items[0].block_type as u8).to_string()
+            reg.name(items[0].block_type).to_string()
         } else if all_same_type && items[0].pleb_idx.is_none() {
-            format!("{}x {}", count, reg.name(items[0].block_type as u8))
+            format!("{}x {}", count, reg.name(items[0].block_type))
         } else {
             let mut parts = Vec::new();
             if pleb_count > 0 { parts.push(format!("{} pleb{}", pleb_count, if pleb_count > 1 { "s" } else { "" })); }
@@ -3211,13 +3211,13 @@ impl App {
 
                         // Harvest: available if any selected items are harvestable
                         let any_harvestable = items.iter().any(|item| {
-                            item.pleb_idx.is_none() && reg.get(item.block_type as u8).map_or(false, |d| d.is_harvestable)
+                            item.pleb_idx.is_none() && reg.get(item.block_type).map_or(false, |d| d.is_harvestable)
                         });
                         if any_harvestable {
                             if ui.small_button("Harvest").clicked() {
                                 for item in &items {
                                     if item.pleb_idx.is_some() { continue; }
-                                    if reg.get(item.block_type as u8).map_or(false, |d| d.is_harvestable) {
+                                    if reg.get(item.block_type).map_or(false, |d| d.is_harvestable) {
                                         self.manual_tasks.push(zones::WorkTask::Harvest(item.x, item.y));
                                     }
                                 }

@@ -3,7 +3,7 @@
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BuildTool {
     None,
-    Place(u8),    // block ID — replaces all material-specific variants
+    Place(u32),   // block ID — matches BT_* constants
     Destroy,
     Roof,
     RemoveFloor,
