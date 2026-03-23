@@ -132,6 +132,26 @@ struct ActiveCondition {
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
 
+// --- Gameplay tuning constants ---
+const DOUBLE_CLICK_FRAMES: u32 = 30;       // ~0.5s at 60fps
+const PLEB_CLICK_RADIUS: f32 = 0.5;        // world units to detect pleb click
+const ZOOM_FACTOR: f32 = 1.1;              // per scroll tick
+const ZOOM_MIN_MULT: f32 = 0.2;            // relative to base zoom
+const ZOOM_MAX_MULT: f32 = 8.0;            // relative to base zoom
+const BURST_SHOT_COUNT: u8 = 3;
+const LIGHTNING_SURGE_RADIUS: i32 = 12;
+const LIGHTNING_SURGE_VOLTAGE: f32 = 200.0;
+const LIGHTNING_BREAKER_RADIUS: i32 = 20;
+const WATER_INJECT_RADIUS: i32 = 3;
+const LIGHTMAP_MARGIN: f32 = 14.0;         // tiles of margin >= max light radius
+const MAX_SOUND_SOURCES: usize = 16;
+const SOUND_SOURCE_STRIDE: usize = 8;      // f32s per source in GPU buffer
+const READBACK_ALIGNMENT: u64 = 256;       // wgpu COPY_BYTES_PER_ROW_ALIGNMENT
+const DRAG_THRESHOLD: f64 = 3.0;           // pixels before drag is detected
+const CAMERA_START_HOUR: f32 = 8.0;        // game starts at 08:00
+const DEFAULT_WINDOW_SIZE: (u32, u32) = (1440, 900);
+const WINDOW_SCALE: f32 = 0.75;            // fraction of monitor size
+
 
 /// GPU debug readback state (shift-hover info tool).
 #[derive(Clone, Debug)]
@@ -643,7 +663,7 @@ impl App {
             last_mouse_y: 0.0,
             dragging_light: None,
             start_time: Instant::now(),
-            time_of_day: DAY_DURATION * (8.0 / 24.0), // start at 08:00
+            time_of_day: DAY_DURATION * (CAMERA_START_HOUR / 24.0),
             time_paused: false,
             time_speed: 0.5,
             last_frame_time: Instant::now(),
@@ -794,6 +814,49 @@ impl App {
         }
     }
 
+    /// Inject a voltage surge into conductors near (cx, cy) and trip nearby breakers.
+    fn lightning_surge(&mut self, cx: i32, cy: i32) {
+        let gfx = match &self.gfx { Some(g) => g, None => return };
+        let mut surge_count = 0u32;
+        for dy in -LIGHTNING_SURGE_RADIUS..=LIGHTNING_SURGE_RADIUS {
+            for dx in -LIGHTNING_SURGE_RADIUS..=LIGHTNING_SURGE_RADIUS {
+                let nx = cx + dx;
+                let ny = cy + dy;
+                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                let dist_sq = (dx * dx + dy * dy) as f32;
+                if dist_sq > (LIGHTNING_SURGE_RADIUS * LIGHTNING_SURGE_RADIUS) as f32 { continue; }
+                let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                let bt = block_type_rs(self.grid_data[nidx]);
+                let flags = block_flags_rs(self.grid_data[nidx]);
+                if is_conductor_rs(bt, flags) {
+                    let dist = dist_sq.sqrt();
+                    let surge = LIGHTNING_SURGE_VOLTAGE * (1.0 - dist / LIGHTNING_SURGE_RADIUS as f32).max(0.0);
+                    gfx.queue.write_buffer(
+                        &gfx.voltage_buffer,
+                        (nidx as u64) * 4,
+                        bytemuck::bytes_of(&surge),
+                    );
+                    surge_count += 1;
+                }
+            }
+        }
+        log::warn!("LIGHTNING SURGE: center=({},{}) hit {} conductors, max={}V", cx, cy, surge_count, LIGHTNING_SURGE_VOLTAGE);
+        // Trip breakers in nearby area
+        for dy in -LIGHTNING_BREAKER_RADIUS..=LIGHTNING_BREAKER_RADIUS {
+            for dx in -LIGHTNING_BREAKER_RADIUS..=LIGHTNING_BREAKER_RADIUS {
+                let bnx = cx + dx;
+                let bny = cy + dy;
+                if bnx < 0 || bny < 0 || bnx >= GRID_W as i32 || bny >= GRID_H as i32 { continue; }
+                let bnidx = (bny as u32 * GRID_W + bnx as u32) as usize;
+                let cb = self.grid_data[bnidx];
+                if (cb & 0xFF) as u32 == BT_BREAKER && ((cb >> 16) & 4) != 0 {
+                    self.grid_data[bnidx] = cb & !(4u32 << 16);
+                    self.grid_dirty = true;
+                }
+            }
+        }
+    }
+
     /// Convert world block coordinates to window screen pixels
     #[allow(dead_code)]
     fn world_to_screen(&self, wx: f32, wy: f32) -> (f32, f32) {
@@ -809,7 +872,7 @@ impl App {
             let idx = cidx as usize;
             if idx < self.grid_data.len() {
                 let block = self.grid_data[idx];
-                if (block & 0xFF) == 33 {
+                if (block & 0xFF) as u32 == BT_CRATE {
                     // Store item count in height byte (bits 8-15)
                     self.grid_data[idx] = (block & 0xFFFF00FF) | ((count as u32) << 8);
                     self.grid_dirty = true;
@@ -894,7 +957,7 @@ impl App {
         let bt = block_type_rs(block);
         let bh = (block >> 8) & 0xFF;
         if on_furniture {
-            return bt == 9; // bench
+            return bt as u32 == BT_BENCH;
         }
         if !((bt == 0 || bt == 2) && bh == 0) {
             return false;
@@ -938,7 +1001,7 @@ impl App {
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
-        if bt == 6 || bt == 7 {
+        if bt as u32 == BT_FIREPLACE || bt as u32 == BT_CEILING_LIGHT {
             self.dragging_light = Some((bx as u32, by as u32));
             log::info!("Picked up light at ({}, {})", bx, by);
             return true;
@@ -1128,7 +1191,7 @@ impl App {
                 let b = grid[(ny as u32 * GRID_W + nx as u32) as usize];
                 let bt = b & 0xFF;
                 let bh = (b >> 8) & 0xFF;
-                if bh > 0 && matches!(bt, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) {
+                if bh > 0 && bt_is!(bt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) {
                     return true;
                 }
             }
@@ -1204,7 +1267,7 @@ impl App {
                 let block = self.grid_data[idx];
                 let bt = block & 0xFF;
                 // Replace floor types (26/27/28) with dirt (2)
-                if matches!(bt, 26 | 27 | 28) {
+                if bt_is!(bt as u32, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
                     let roof_flag = (block >> 16) & 2;
                     let roof_h = block & 0xFF000000;
                     self.grid_data[idx] = make_block(2, 0, roof_flag as u8) | roof_h;
@@ -1554,59 +1617,16 @@ impl App {
             self.fluid_params.splat_vy = 0.0;
             self.fluid_params.splat_radius = 1.5;
             self.fluid_params.splat_active = 1.0;
-            // Inject voltage surge immediately into the voltage buffer
-            if let Some(gfx) = &self.gfx {
-                let lcx = wx.floor() as i32;
-                let lcy = wy.floor() as i32;
-                let radius = 12i32;
-                let mut surge_count = 0u32;
-                for dy in -radius..=radius {
-                    for dx in -radius..=radius {
-                        let nx = lcx + dx;
-                        let ny = lcy + dy;
-                        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
-                        let dist_sq = (dx * dx + dy * dy) as f32;
-                        if dist_sq > (radius * radius) as f32 { continue; }
-                        let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
-                        let bt = block_type_rs(self.grid_data[nidx]);
-                        let lflags = block_flags_rs(self.grid_data[nidx]);
-                        if is_conductor_rs(bt, lflags) {
-                            let dist = dist_sq.sqrt();
-                            let surge = 200.0 * (1.0 - dist / radius as f32).max(0.0);
-                            gfx.queue.write_buffer(
-                                &gfx.voltage_buffer,
-                                (nidx as u64) * 4,
-                                bytemuck::bytes_of(&surge),
-                            );
-                            surge_count += 1;
-                        }
-                    }
-                }
-                log::warn!("LIGHTNING SURGE (click): center=({},{}) hit {} conductors, max=200V", lcx, lcy, surge_count);
-                // Trip breakers
-                for dy in -20..=20i32 {
-                    for dx in -20..=20i32 {
-                        let bnx = lcx + dx;
-                        let bny = lcy + dy;
-                        if bnx < 0 || bny < 0 || bnx >= GRID_W as i32 || bny >= GRID_H as i32 { continue; }
-                        let bnidx = (bny as u32 * GRID_W + bnx as u32) as usize;
-                        let cb = self.grid_data[bnidx];
-                        if (cb & 0xFF) == 45 && ((cb >> 16) & 4) != 0 {
-                            self.grid_data[bnidx] = cb & !(4u32 << 16);
-                            self.grid_dirty = true;
-                        }
-                    }
-                }
-            }
+            self.lightning_surge(wx.floor() as i32, wy.floor() as i32);
             self.log_event(EventCategory::Weather, format!("Lightning strike at ({:.0}, {:.0})", wx, wy));
             return;
         }
         if self.sandbox_tool == SandboxTool::InjectWater {
-            // Inject water into the water texture at clicked position (3-tile radius)
+            // Inject water into the water texture at clicked position
             if let Some(gfx) = &self.gfx {
                 let cx = bx;
                 let cy = by;
-                let radius = 3i32;
+                let radius = WATER_INJECT_RADIUS;
                 for dy in -radius..=radius {
                     for dx in -radius..=radius {
                         let nx = cx + dx;
@@ -1668,7 +1688,7 @@ impl App {
         }
 
         // Click cannon: select for rotation, or fire if already selected
-        if bt == 29 && self.build_tool == BuildTool::None {
+        if bt as u32 == BT_CANNON && self.build_tool == BuildTool::None {
             let cannon_idx = by as u32 * GRID_W + bx as u32;
             if self.block_sel.cannon == Some(cannon_idx) {
                 // Already selected — fire!
@@ -1704,7 +1724,7 @@ impl App {
                 log::info!("Selected cannon at ({}, {})", bx, by);
             }
             return;
-        } else if self.block_sel.cannon.is_some() && bt != 29 {
+        } else if self.block_sel.cannon.is_some() && bt as u32 != BT_CANNON {
             // Clicked away from cannon — deselect
             self.block_sel.cannon = None;
         }
@@ -1726,13 +1746,13 @@ impl App {
         }
 
         // Click on rock (no build tool): open context menu
-        if bt == 34 && self.build_tool == BuildTool::None {
+        if bt as u32 == BT_ROCK && self.build_tool == BuildTool::None {
             self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
             return;
         }
 
         // Click on storage crate: toggle inspection popup
-        if bt == 33 && self.build_tool != BuildTool::Destroy {
+        if bt as u32 == BT_CRATE && self.build_tool != BuildTool::Destroy {
             let cidx = by as u32 * GRID_W + bx as u32;
             self.block_sel.crate_idx = if self.block_sel.crate_idx == Some(cidx) { None } else { Some(cidx) };
             self.block_sel.crate_world = (bx as f32 + 0.5, by as f32 + 0.5);
@@ -1744,7 +1764,7 @@ impl App {
             // Check if clicking on any pleb
             let mut clicked_pleb = None;
             for (i, p) in self.plebs.iter().enumerate() {
-                if ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt() < 0.5 {
+                if ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt() < PLEB_CLICK_RADIUS {
                     clicked_pleb = Some(i);
                     break;
                 }
@@ -1761,7 +1781,7 @@ impl App {
             }
 
             // Double-click detection: interact on double-click, select on single
-            let is_double = self.frame_count - self.last_click_frame < 30 // ~0.5s at 60fps
+            let is_double = self.frame_count - self.last_click_frame < DOUBLE_CLICK_FRAMES
                 && self.last_click_pos == (bx, by);
             self.last_click_frame = self.frame_count;
             self.last_click_pos = (bx, by);
@@ -2050,7 +2070,7 @@ impl App {
                 }
                 BuildTool::Place(11) => {
                     // Table lamp: can only be placed on benches (type 9)
-                    if bt == 9 {
+                    if bt as u32 == BT_BENCH {
                         let roof_h = block & 0xFF000000;
                         let roof_flag = flags & 2;
                         self.grid_data[idx] = make_block(11, 1, roof_flag) | roof_h;
@@ -2061,8 +2081,7 @@ impl App {
                 }
                 BuildTool::Place(12) => {
                     // Fan: can be placed on a wall OR on the ground
-                    let wall_types = [1i32, 4, 5, 14, 21, 22, 23, 24, 25];
-                    let on_wall = wall_types.contains(&(bt as i32)) && (block >> 8) & 0xFF > 0;
+                    let on_wall = bt_is!(bt as u32, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0;
                     let on_ground = self.can_place_at(bx, by);
                     if on_wall {
                         let wall_h = ((block >> 8) & 0xFF) as u8;
@@ -2087,7 +2106,7 @@ impl App {
                     // Outlet/Inlet: can place on ground OR on walls
                     let on_ground = self.can_place_at(bx, by);
                     let bt_at = block_type_rs(block);
-                    let on_wall = matches!(bt_at, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && (block >> 8) & 0xFF > 0;
+                    let on_wall = bt_is!(bt_at as u32, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0;
                     if on_ground || on_wall {
                         let height = if on_wall { ((block >> 8) & 0xFF) as u8 } else { 1 };
                         let roof_flag = flags & 2;
@@ -2188,8 +2207,7 @@ impl App {
                 }
                 BuildTool::Window => {
                     // Window (glass): replaces wall blocks
-                    let wall_types = [1u32, 4, 14, 21, 22, 23, 24, 25];
-                    if wall_types.contains(&(bt as u32)) && (block >> 8) & 0xFF > 0 {
+                    if bt_is!(bt as u32, BT_STONE, BT_WALL, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0 {
                         let height = ((block >> 8) & 0xFF) as u8;
                         let roof_flag = flags & 2;
                         let roof_h = block & 0xFF000000;
@@ -2201,8 +2219,7 @@ impl App {
                 }
                 BuildTool::Door => {
                     // Door: replaces wall blocks with door
-                    let wall_types = [1u32, 5, 14, 21, 22, 23, 24, 25];
-                    if wall_types.contains(&(bt as u32)) && (block >> 8) & 0xFF > 0 {
+                    if bt_is!(bt as u32, BT_STONE, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0 {
                         let roof_h = block & 0xFF000000;
                         // Door: height 1, flag bit0=is_door, starts closed (bit2=0)
                         self.grid_data[idx] = make_block(4, 1, 1) | roof_h;
@@ -2214,7 +2231,7 @@ impl App {
                 BuildTool::RemoveFloor => {
                     let block = self.grid_data[idx];
                     let bt_here = block_type_rs(block);
-                    if matches!(bt_here, 26 | 27 | 28) {
+                    if bt_is!(bt_here as u32, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
                         let roof_flag = block_flags_rs(block) & 2;
                         let roof_h = block & 0xFF000000;
                         self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
@@ -2240,14 +2257,14 @@ impl App {
                     if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                         let bt_dig = block_type_rs(block);
                         let roof_h = block & 0xFF000000;
-                        if bt_dig == 2 || (bt_dig >= 26 && bt_dig <= 28) {
+                        if bt_dig as u32 == BT_DIRT || bt_is!(bt_dig as u32, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
                             // Dirt or floor → dug ground depth 1 (20%)
-                            self.grid_data[idx] = make_block(32, 1, 0) | roof_h;
+                            self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
                             self.grid_dirty = true;
-                        } else if bt_dig == 32 {
+                        } else if bt_dig as u32 == BT_DUG_GROUND {
                             let depth = (block >> 8) & 0xFF;
                             if depth < 5 {
-                                self.grid_data[idx] = make_block(32, (depth + 1) as u8, 0) | roof_h;
+                                self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, (depth + 1) as u8, 0) | roof_h;
                                 self.grid_dirty = true;
                             }
                         }
@@ -2334,7 +2351,7 @@ impl App {
         }
 
         // Toggle valve open/closed
-        if bt == 18 {
+        if bt as u32 == BT_VALVE {
             let new_flags = flags ^ 4; // toggle bit2 (is_open)
             let new_block = (block & 0xFF00FFFF) | ((new_flags as u32) << 16);
             self.grid_data[idx] = new_block;
@@ -2345,7 +2362,7 @@ impl App {
         }
 
         // Toggle switch on/off
-        if bt == 42 && self.build_tool != BuildTool::Destroy {
+        if bt as u32 == BT_SWITCH && self.build_tool != BuildTool::Destroy {
             let new_flags = flags ^ 4; // toggle bit2
             let new_block = (block & 0xFF00FFFF) | ((new_flags as u32) << 16);
             self.grid_data[idx] = new_block;
@@ -2356,7 +2373,7 @@ impl App {
         }
 
         // Click dimmer, restrictor, or fireplace: show slider popup (shared UI)
-        if (bt == 43 || bt == 46 || bt == 6) && self.build_tool != BuildTool::Destroy {
+        if (bt as u32 == BT_DIMMER || bt as u32 == BT_RESTRICTOR || bt as u32 == BT_FIREPLACE) && self.build_tool != BuildTool::Destroy {
             let didx = by as u32 * GRID_W + bx as u32;
             self.block_sel.dimmer = if self.block_sel.dimmer == Some(didx) { None } else { Some(didx) };
             self.block_sel.dimmer_world = (bx as f32 + 0.5, by as f32 + 0.5);
@@ -2364,7 +2381,7 @@ impl App {
         }
 
         // Click circuit breaker: reset (turn back ON) if tripped
-        if bt == 45 && self.build_tool != BuildTool::Destroy {
+        if bt as u32 == BT_BREAKER && self.build_tool != BuildTool::Destroy {
             let is_on = (flags & 4) != 0;
             if !is_on {
                 // Reset breaker (turn ON)
@@ -2377,7 +2394,7 @@ impl App {
         }
 
         // Click fan: show speed popup (similar to pump)
-        if bt == 12 && self.build_tool != BuildTool::Destroy {
+        if bt as u32 == BT_FAN && self.build_tool != BuildTool::Destroy {
             let fidx = by as u32 * GRID_W + bx as u32;
             self.block_sel.fan = if self.block_sel.fan == Some(fidx) { None } else { Some(fidx) };
             self.block_sel.fan_world = (bx as f32 + 0.5, by as f32 + 0.5);
@@ -2385,7 +2402,7 @@ impl App {
         }
 
         // Click pump: toggle pump speed popup
-        if bt == 16 {
+        if bt as u32 == BT_PUMP {
             let pidx = by as u32 * GRID_W + bx as u32;
             self.block_sel.pump = if self.block_sel.pump == Some(pidx) { None } else { Some(pidx) };
             self.block_sel.pump_world = (bx as f32 + 0.5, by as f32 + 0.5);
@@ -2731,6 +2748,15 @@ impl App {
             }
         }
 
+        // Lightning voltage surge: handle natural lightning (heavy rain) via deferred injection
+        // (must run before gfx borrow since it needs &mut self)
+        if let Some((lx, ly)) = self.lightning_strike {
+            if !self.lightning_surge_done {
+                self.lightning_surge_done = true;
+                self.lightning_surge(lx.floor() as i32, ly.floor() as i32);
+            }
+        }
+
         let gfx = self.gfx.as_ref().unwrap();
 
         // Re-upload grid if dirty (door toggled etc.)
@@ -2751,40 +2777,6 @@ impl App {
             self.grid_dirty = false;
             self.pipe_network.rebuild(&self.grid_data);
             self.liquid_network.rebuild_with(&self.grid_data, pipes::is_liquid_pipe_component);
-        }
-
-        // Lightning voltage surge: also handle natural lightning (heavy rain) via deferred injection
-        if let Some((lx, ly)) = self.lightning_strike {
-            if !self.lightning_surge_done {
-                self.lightning_surge_done = true;
-                let cx = lx.floor() as i32;
-                let cy = ly.floor() as i32;
-                let radius = 12i32;
-                let mut surge_count = 0u32;
-                for dy in -radius..=radius {
-                    for dx in -radius..=radius {
-                        let nx = cx + dx;
-                        let ny = cy + dy;
-                        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
-                        let dist_sq = (dx * dx + dy * dy) as f32;
-                        if dist_sq > (radius * radius) as f32 { continue; }
-                        let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
-                        let bt = block_type_rs(self.grid_data[nidx]);
-                        let flags = block_flags_rs(self.grid_data[nidx]);
-                        if is_conductor_rs(bt, flags) {
-                            let dist = dist_sq.sqrt();
-                            let surge = 200.0 * (1.0 - dist / radius as f32).max(0.0);
-                            gfx.queue.write_buffer(
-                                &gfx.voltage_buffer,
-                                (nidx as u64) * 4,
-                                bytemuck::bytes_of(&surge),
-                            );
-                            surge_count += 1;
-                        }
-                    }
-                }
-                log::warn!("LIGHTNING SURGE (natural): center=({},{}) hit {} conductors", cx, cy, surge_count);
-            }
         }
 
         // Tick pipe network simulation — store outlet injections for post-shader application
@@ -2917,7 +2909,7 @@ impl App {
         // Compute lightmap viewport bounds (grid coordinates with margin for light propagation)
         let half_w = self.camera.screen_w * 0.5 / self.camera.zoom;
         let half_h = self.camera.screen_h * 0.5 / self.camera.zoom;
-        let lm_margin = 14.0; // tiles of margin (>= max light radius)
+        let lm_margin = LIGHTMAP_MARGIN;
         self.camera.lm_vp_min_x = (self.camera.center_x - half_w - lm_margin).max(0.0);
         self.camera.lm_vp_min_y = (self.camera.center_y - half_h - lm_margin).max(0.0);
         self.camera.lm_vp_max_x = (self.camera.center_x + half_w + lm_margin).min(GRID_W as f32);
@@ -3032,15 +3024,15 @@ impl App {
                         let bbt = b & 0xFF;
                         let bbh = (b >> 8) & 0xFF;
                         if self.build_tool == BuildTool::Window {
-                            matches!(bbt, 1 | 4 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
+                            bt_is!(bbt, BT_STONE, BT_WALL, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && bbh > 0
                         } else if self.build_tool == BuildTool::Door {
-                            matches!(bbt, 1 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
+                            bt_is!(bbt, BT_STONE, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && bbh > 0
                         } else if matches!(self.build_tool, BuildTool::Place(19) | BuildTool::Place(20)) {
-                            matches!(bbt, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
+                            bt_is!(bbt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && bbh > 0
                         } else if self.build_tool == BuildTool::Place(12) {
-                            matches!(bbt, 1 | 4 | 5 | 14 | 21 | 22 | 23 | 24 | 25) && bbh > 0
+                            bt_is!(bbt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && bbh > 0
                         } else {
-                            (bbt == 1 || bbt == 4) && bbh > 0
+                            bt_is!(bbt, BT_STONE, BT_WALL) && bbh > 0
                         }
                     } else { false };
                     // Inlet/Outlet/Fan can also place on ground
@@ -3267,7 +3259,7 @@ impl App {
                     buffer: &gfx.debug_readback_buffer,
                     layout: wgpu::TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some(256), // must be multiple of COPY_BYTES_PER_ROW_ALIGNMENT
+                        bytes_per_row: Some(READBACK_ALIGNMENT as u32),
                         rows_per_image: Some(1),
                     },
                 },
@@ -3288,7 +3280,7 @@ impl App {
                 },
                 wgpu::TexelCopyBufferInfo {
                     buffer: &gfx.water_readback_buffer,
-                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(1) },
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(READBACK_ALIGNMENT as u32), rows_per_image: Some(1) },
                 },
                 wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
             );
@@ -3344,8 +3336,8 @@ impl App {
                     wgpu::TexelCopyBufferInfo {
                         buffer: &gfx.pleb_air_readback_buffer,
                         layout: wgpu::TexelCopyBufferLayout {
-                            offset: (i * 256) as u64,
-                            bytes_per_row: Some(256),
+                            offset: (i as u64) * READBACK_ALIGNMENT,
+                            bytes_per_row: Some(READBACK_ALIGNMENT as u32),
                             rows_per_image: Some(1),
                         },
                     },
@@ -3382,12 +3374,11 @@ impl App {
             gfx.queue.write_buffer(&gfx.camera_buffer, 0, bytemuck::bytes_of(&self.camera));
 
             // Pack active sound sources into buffer
-            let max_sources = 16usize;
-            let mut source_data = vec![0.0f32; 1 + max_sources * 8];
-            let count = self.sound_sources.len().min(max_sources);
+            let mut source_data = vec![0.0f32; 1 + MAX_SOUND_SOURCES * SOUND_SOURCE_STRIDE];
+            let count = self.sound_sources.len().min(MAX_SOUND_SOURCES);
             source_data[0] = count as f32;
-            for (i, src) in self.sound_sources.iter().enumerate().take(max_sources) {
-                let base = 1 + i * 8;
+            for (i, src) in self.sound_sources.iter().enumerate().take(MAX_SOUND_SOURCES) {
+                let base = 1 + i * SOUND_SOURCE_STRIDE;
                 source_data[base] = src.x;
                 source_data[base + 1] = src.y;
                 source_data[base + 2] = src.amplitude;
@@ -3660,14 +3651,14 @@ impl App {
                 {
                     let num_plebs = self.plebs.len();
                     if num_plebs > 0 {
-                        let read_size = (num_plebs * 256) as u64;
+                        let read_size = num_plebs as u64 * READBACK_ALIGNMENT;
                         let buffer_slice = gfx.pleb_air_readback_buffer.slice(..read_size);
                         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
                         gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
                         let data = buffer_slice.get_mapped_range();
                         self.pleb_air_data.resize(num_plebs, AirReadback::default());
                         for i in 0..num_plebs {
-                            let offset = i * 256; // 256-byte aligned
+                            let offset = i * READBACK_ALIGNMENT as usize;
                             let f16_data: &[u16] = bytemuck::cast_slice(&data[offset..offset + 8]);
                             self.pleb_air_data[i] = AirReadback {
                                 smoke: half_to_f32(f16_data[0]),
@@ -3752,7 +3743,7 @@ impl App {
                 PhysicalKey::Code(KeyCode::Space) => {
                     if self.selected_pleb.is_some() && self.burst_queue == 0 {
                         if self.burst_mode {
-                            self.burst_queue = 3;
+                            self.burst_queue = BURST_SHOT_COUNT;
                             self.burst_delay = 0.0; // fire first shot immediately
                         } else {
                             self.burst_queue = 1;
@@ -3862,9 +3853,9 @@ impl ApplicationHandler for App {
                 .or_else(|| event_loop.available_monitors().next());
             let (w, h) = if let Some(m) = monitor {
                 let size = m.size();
-                ((size.width as f32 * 0.75) as u32, (size.height as f32 * 0.75) as u32)
+                ((size.width as f32 * WINDOW_SCALE) as u32, (size.height as f32 * WINDOW_SCALE) as u32)
             } else {
-                (1440, 900)
+                DEFAULT_WINDOW_SIZE
             };
             Window::default_attributes()
                 .with_title("Rayworld")
@@ -3929,7 +3920,7 @@ impl ApplicationHandler for App {
             if self.mouse_pressed {
                 let dx = position.x - self.last_mouse_x;
                 let dy = position.y - self.last_mouse_y;
-                if dx.abs() > 3.0 || dy.abs() > 3.0 {
+                if dx.abs() > DRAG_THRESHOLD || dy.abs() > DRAG_THRESHOLD {
                     self.mouse_dragged = true;
                 }
                 let shift_held = self.pressed_keys.contains(&KeyCode::ShiftLeft)
@@ -3978,11 +3969,11 @@ impl ApplicationHandler for App {
                 };
         let base_zoom = (self.camera.screen_w / 64.0).min(self.camera.screen_h / 64.0);
                 if scroll > 0.0 {
-                    self.camera.zoom *= 1.1;
+                    self.camera.zoom *= ZOOM_FACTOR;
                 } else if scroll < 0.0 {
-                    self.camera.zoom /= 1.1;
+                    self.camera.zoom /= ZOOM_FACTOR;
                 }
-                self.camera.zoom = self.camera.zoom.clamp(base_zoom * 0.2, base_zoom * 8.0);
+                self.camera.zoom = self.camera.zoom.clamp(base_zoom * ZOOM_MIN_MULT, base_zoom * ZOOM_MAX_MULT);
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
