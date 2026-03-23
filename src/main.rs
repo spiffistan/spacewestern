@@ -72,6 +72,7 @@ mod placement;
 pub(crate) use placement::compute_diagonal_wall_tiles;
 
 mod input;
+mod fog;
 
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
