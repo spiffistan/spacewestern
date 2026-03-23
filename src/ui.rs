@@ -37,7 +37,6 @@ impl App {
         self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
         self.draw_world_labels(ctx, bp_cam);
         self.draw_selection_info(ctx);
-        self.draw_selection_actions(ctx);
         self.draw_notifications(ctx);
         self.draw_conditions_bar(ctx);
         self.draw_game_log(ctx);
@@ -770,6 +769,8 @@ impl App {
                                     self.sandbox_tool = SandboxTool::None;
                                 } else {
                                     self.build_category = Some(name);
+                                    self.world_sel = WorldSelection::none();
+                                    self.selected_pleb = None;
                                     if name == "Sandbox" {
                                         self.build_tool = BuildTool::None;
                                     } else {
@@ -783,45 +784,66 @@ impl App {
                 });
             });
 
-        // --- Build items panel (horizontal row, right of category bar) ---
-        if let Some(cat) = self.build_category {
+        // --- Build items / Selection actions panel (center bottom, single column) ---
+        // Shows build tools when a category is active, or selection actions when items are selected.
+        // These are mutually exclusive: selecting something closes build menu.
+        let has_selection = !self.world_sel.is_empty();
+        let show_build = self.build_category.is_some() && !has_selection;
+
+        if show_build || has_selection {
+            let cat = self.build_category;
             egui::Area::new(egui::Id::new("build_items"))
-                .anchor(egui::Align2::LEFT_BOTTOM, [160.0, -10.0])
+                .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -10.0])
                 .show(ctx, |ui| {
                     egui::Frame::window(ui.style()).show(ui, |ui| {
-                        let tool = &mut self.build_tool;
+
+                    if has_selection {
+                        // --- Selection action buttons ---
+                        self.draw_selection_actions_inner(ui);
+                    } else if let Some(cat) = cat {
+                        // --- Build tool items ---
                         let tile_size = 60.0;
                         let icon_s = 24.0;
                         let label_s = 11.0;
 
-                        // Square icon button helper
-                        let mut icon_btn = |ui: &mut egui::Ui, t: BuildTool, icon: &str, label: &str| {
-                            let selected = *tool == t;
-                            let (rect, response) = ui.allocate_exact_size(
-                                egui::Vec2::splat(tile_size), egui::Sense::click(),
-                            );
-                            let painter = ui.painter_at(rect);
-                            let bg = if selected {
-                                egui::Color32::from_rgb(60, 80, 110)
-                            } else if response.hovered() {
-                                egui::Color32::from_rgb(55, 58, 65)
-                            } else {
-                                egui::Color32::from_rgb(40, 42, 48)
-                            };
-                            painter.rect_filled(rect, 4.0, bg);
-                            painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
-                            painter.text(rect.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
-                                icon, egui::FontId::proportional(icon_s), egui::Color32::WHITE);
-                            painter.text(rect.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
-                                label, egui::FontId::proportional(label_s), egui::Color32::from_gray(190));
-                            if response.clicked() {
-                                *tool = if *tool == t { BuildTool::None } else { t };
-                            }
+                        // Count items per category for 1 vs 2 column layout
+                        let item_count: usize = match cat {
+                            "Walls" => 7, "Floor" => 6, "Build" => 8, "Opening" => 2,
+                            "Gas" => 8, "Liquid" => 5, "Power" => 14, "Vent" => 1,
+                            "Zones" => 3, "Physics" => 1, _ => 5,
                         };
-
-                        // Items flow horizontally (rightward)
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing = egui::Vec2::new(4.0, 4.0);
+                        let items_per_row = if item_count > 10 { (item_count + 1) / 2 } else { item_count };
+                        // Horizontal rows, left-to-right, wrapping to 2nd row if >10
+                        egui::Grid::new("build_items_grid").num_columns(items_per_row)
+                            .spacing([4.0, 4.0]).show(ui, |ui| {
+                            // Rebind icon_btn to add end_row tracking
+                            let col_counter = std::cell::Cell::new(0usize);
+                            let mut icon_btn = |ui: &mut egui::Ui, t: BuildTool, icon: &str, label: &str| {
+                                let selected = self.build_tool == t;
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size), egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if selected {
+                                    egui::Color32::from_rgb(60, 80, 110)
+                                } else if response.hovered() {
+                                    egui::Color32::from_rgb(55, 58, 65)
+                                } else {
+                                    egui::Color32::from_rgb(40, 42, 48)
+                                };
+                                painter.rect_filled(rect, 4.0, bg);
+                                painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
+                                painter.text(rect.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
+                                    icon, egui::FontId::proportional(icon_s), egui::Color32::WHITE);
+                                painter.text(rect.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
+                                    label, egui::FontId::proportional(label_s), egui::Color32::from_gray(190));
+                                if response.clicked() {
+                                    self.build_tool = if self.build_tool == t { BuildTool::None } else { t };
+                                }
+                                let c = col_counter.get() + 1;
+                                col_counter.set(c);
+                                if c % items_per_row == 0 { ui.end_row(); }
+                            };
                             match cat {
                                 "Walls" => {
                                     icon_btn(ui, BuildTool::Place(21), "\u{1fab5}", "Wood");
@@ -1047,8 +1069,9 @@ impl App {
                             };
                             ui.label(egui::RichText::new(hint).weak().size(13.0));
                         }
-                    });
-                });
+                    } // end else (build tools)
+                    }); // Frame
+                }); // Area
         }
 
     }
@@ -3303,8 +3326,8 @@ impl App {
         }
     }
 
-    /// Draw action bar for the currently selected world items (bottom-right, flows left).
-    fn draw_selection_actions(&mut self, ctx: &egui::Context) {
+    /// Draw selection action buttons inline (called from draw_build_bar when items are selected).
+    fn draw_selection_actions_inner(&mut self, ui: &mut egui::Ui) {
         if self.world_sel.is_empty() { return; }
 
         let reg = block_defs::BlockRegistry::cached();
@@ -3336,69 +3359,91 @@ impl App {
             parts.join(", ")
         };
 
-        egui::Area::new(egui::Id::new("selection_actions"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -60.0])
-            .show(ctx, |ui| {
-                egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(&label).strong().size(11.0));
-                        ui.separator();
+        // Action buttons: square icons with labels, same style as build bar
+        let tile_size = 48.0;
+        let icon_s = 20.0;
+        let label_s = 9.0;
 
-                        // Destroy: available if all items are removable
-                        if all_removable {
-                            if ui.small_button("Destroy").clicked() {
-                                let positions: Vec<(i32, i32)> = items.iter().map(|i| (i.x, i.y)).collect();
-                                for (x, y) in positions {
-                                    self.destroy_block_at(x, y);
-                                }
-                                self.world_sel = WorldSelection::none();
-                            }
-                        }
+        // Collect available actions as (icon, label, id)
+        let mut actions: Vec<(&str, &str, u32)> = Vec::new();
+        if all_removable {
+            actions.push(("\u{274c}", "Destroy", 0));
+        }
+        let any_harvestable = items.iter().any(|item| {
+            item.pleb_idx.is_none() && reg.get(item.block_type).map_or(false, |d| d.is_harvestable)
+        });
+        if any_harvestable {
+            actions.push(("\u{1f33e}", "Harvest", 1));
+        }
+        let bp_items: Vec<(i32, i32)> = items.iter()
+            .filter(|i| self.blueprints.contains_key(&(i.x, i.y)))
+            .map(|i| (i.x, i.y))
+            .collect();
+        if !bp_items.is_empty() {
+            actions.push(("\u{1f6d1}", "Cancel", 2));
+        }
+        if count == 1 && items[0].block_type == BT_CRATE {
+            actions.push(("\u{1f4e6}", "Inspect", 3));
+        }
 
-                        // Harvest: available if any selected items are harvestable
-                        let any_harvestable = items.iter().any(|item| {
-                            item.pleb_idx.is_none() && reg.get(item.block_type).map_or(false, |d| d.is_harvestable)
-                        });
-                        if any_harvestable {
-                            if ui.small_button("Harvest").clicked() {
-                                for item in &items {
-                                    if item.pleb_idx.is_some() { continue; }
-                                    if reg.get(item.block_type).map_or(false, |d| d.is_harvestable) {
-                                        self.manual_tasks.push(zones::WorkTask::Harvest(item.x, item.y));
-                                    }
-                                }
-                            }
-                        }
+        // Title
+        ui.label(egui::RichText::new(&label).strong().size(11.0));
+        if !actions.is_empty() {
+            ui.separator();
+        }
 
-                        // Blueprint cancel: for any selected tile with a blueprint
-                        {
-                            let bp_items: Vec<(i32, i32)> = items.iter()
-                                .filter(|i| self.blueprints.contains_key(&(i.x, i.y)))
-                                .map(|i| (i.x, i.y))
-                                .collect();
-                            if !bp_items.is_empty() {
-                                let label = if bp_items.len() == 1 { "Cancel Build" } else { "Cancel All Builds" };
-                                if ui.small_button(label).clicked() {
-                                    for (x, y) in bp_items {
-                                        self.cancel_blueprint(x, y);
-                                    }
+        // Square action buttons in a single column
+        let tile_size = 48.0;
+        let icon_s = 20.0;
+        let label_s = 9.0;
+        for &(icon, act_label, id) in &actions {
+                        let (rect, response) = ui.allocate_exact_size(
+                            egui::Vec2::new(tile_size, tile_size), egui::Sense::click(),
+                        );
+                        let painter = ui.painter_at(rect);
+                        let bg = if response.hovered() {
+                            egui::Color32::from_rgb(60, 65, 75)
+                        } else {
+                            egui::Color32::from_rgb(42, 44, 50)
+                        };
+                        painter.rect_filled(rect, 4.0, bg);
+                        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
+                        painter.text(rect.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
+                            icon, egui::FontId::proportional(icon_s), egui::Color32::WHITE);
+                        painter.text(rect.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
+                            act_label, egui::FontId::proportional(label_s), egui::Color32::from_gray(190));
+
+                        if response.clicked() {
+                            match id {
+                                0 => {
+                                    let positions: Vec<(i32, i32)> = items.iter().map(|i| (i.x, i.y)).collect();
+                                    for (x, y) in positions { self.destroy_block_at(x, y); }
                                     self.world_sel = WorldSelection::none();
                                 }
-                            }
-                        }
-
-                        // Single-item actions
-                        if count == 1 {
-                            let item = &items[0];
-                            if item.block_type == BT_CRATE {
-                                if ui.small_button("Inspect").clicked() {
-                                    let cidx = item.y as u32 * GRID_W + item.x as u32;
-                                    self.block_sel.crate_idx = Some(cidx);
-                                    self.block_sel.crate_world = (item.x as f32 + 0.5, item.y as f32 + 0.5);
+                                1 => {
+                                    for item in &items {
+                                        if item.pleb_idx.is_some() { continue; }
+                                        if reg.get(item.block_type).map_or(false, |d| d.is_harvestable) {
+                                            self.manual_tasks.push(zones::WorkTask::Harvest(item.x, item.y));
+                                        }
+                                    }
                                 }
+                                2 => {
+                                    for (x, y) in &bp_items { self.cancel_blueprint(*x, *y); }
+                                    self.world_sel = WorldSelection::none();
+                                }
+                                3 => {
+                                    if count == 1 {
+                                        let item = &items[0];
+                                        let cidx = item.y as u32 * GRID_W + item.x as u32;
+                                        self.block_sel.crate_idx = Some(cidx);
+                                        self.block_sel.crate_world = (item.x as f32 + 0.5, item.y as f32 + 0.5);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
-                    });
+                    }
 
                     // Detail section below actions (for plants, plebs, etc.)
                     if count == 1 && items[0].pleb_idx.is_none() {
@@ -3487,8 +3532,6 @@ impl App {
                             }
                         }
                     }
-                });
-            });
     }
 
     /// Draw the in-game event log (bottom-right, scrolling).
@@ -3627,23 +3670,19 @@ impl App {
         let bp_count = self.blueprints.len();
 
         egui::Area::new(egui::Id::new("resource_bar"))
-            .anchor(egui::Align2::LEFT_TOP, [10.0, 32.0])
+            .anchor(egui::Align2::LEFT_TOP, [10.0, 100.0])
             .interactable(false)
             .show(ctx, |ui| {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.0;
-                        ui.label(egui::RichText::new(format!("\u{1f464} {} colonists", pleb_count)).size(11.0));
-                        ui.separator();
-                        ui.label(egui::RichText::new(format!("\u{1fab5} {} wood", total_wood)).size(11.0));
-                        ui.label(egui::RichText::new(format!("\u{1fad0} {} berries", total_berries)).size(11.0));
-                        ui.label(egui::RichText::new(format!("\u{1faa8} {} rocks", total_rocks)).size(11.0));
-                        if bp_count > 0 {
-                            ui.separator();
-                            ui.label(egui::RichText::new(format!("\u{1f3d7} {} pending", bp_count))
-                                .size(11.0).weak());
-                        }
-                    });
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(egui::RichText::new(format!("\u{1f464} {} colonists", pleb_count)).size(11.0));
+                    ui.label(egui::RichText::new(format!("\u{1fab5} {} wood", total_wood)).size(11.0));
+                    ui.label(egui::RichText::new(format!("\u{1fad0} {} berries", total_berries)).size(11.0));
+                    ui.label(egui::RichText::new(format!("\u{1faa8} {} rocks", total_rocks)).size(11.0));
+                    if bp_count > 0 {
+                        ui.label(egui::RichText::new(format!("\u{1f3d7} {} pending", bp_count))
+                            .size(11.0).weak());
+                    }
                 });
             });
     }
@@ -3659,7 +3698,7 @@ impl App {
         if let Some(pi) = item.pleb_idx {
             if let Some(pleb) = self.plebs.get(pi) {
                 egui::Area::new(egui::Id::new("selection_info"))
-                    .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
+                    .anchor(egui::Align2::RIGHT_TOP, [-10.0, 130.0])
                     .show(ctx, |ui| {
                         egui::Frame::window(ui.style()).show(ui, |ui| {
                             ui.set_min_width(180.0);
@@ -3779,7 +3818,7 @@ impl App {
         let gh = GRID_H as f32;
 
         egui::Area::new(egui::Id::new("minimap"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -10.0])
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -180.0])
             .interactable(false)
             .show(ctx, |ui| {
                 let (rect, _) = ui.allocate_exact_size(

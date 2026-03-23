@@ -342,11 +342,28 @@ fn terrain_detail(
     let t_grain = f32((tdata >> 9u) & 0xFu) / 15.0;       // 0..1 texture grain
     let t_rough = f32((tdata >> 13u) & 0x3u) / 3.0;        // 0..1 roughness
 
-    // --- 1. Base soil color from terrain type ---
-    let soil_base = terrain_base_color(t_type);
-    // Add per-tile noise variation (subtle, prevents tiling artifacts)
+    // --- 1. Base soil color — bilinear blend between neighboring terrain types ---
+    // This eliminates hard tile-edge transitions between terrain types.
+    let bl_gx = wx - 0.5;
+    let bl_gy = wy - 0.5;
+    let bl_ix = i32(floor(bl_gx));
+    let bl_iy = i32(floor(bl_gy));
+    let bl_fx = fract(bl_gx);
+    let bl_fy = fract(bl_gy);
+    let bl_ux = bl_fx * bl_fx * (3.0 - 2.0 * bl_fx);
+    let bl_uy = bl_fy * bl_fy * (3.0 - 2.0 * bl_fy);
+    let bl_gw = i32(camera.grid_w);
+    let bl_gh = i32(camera.grid_h);
+    let bl_w = u32(camera.grid_w);
+    let bl_c00 = terrain_base_color(terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] & 0xFu);
+    let bl_c10 = terrain_base_color(terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] & 0xFu);
+    let bl_c01 = terrain_base_color(terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] & 0xFu);
+    let bl_c11 = terrain_base_color(terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] & 0xFu);
+    var soil_base = mix(mix(bl_c00, bl_c10, bl_ux), mix(bl_c01, bl_c11, bl_ux), bl_uy);
+    // Per-pixel noise variation
     let soil_noise = value_noise(pos * 0.4 + vec2(97.3, 41.2));
-    var color = mix(soil_base, soil_base * (0.85 + soil_noise * 0.3), 0.5);
+    soil_base = mix(soil_base, soil_base * (0.85 + soil_noise * 0.3), 0.5);
+    var color = soil_base;
 
     // Compacted soil: darker, smoother, worn path appearance
     if t_compact > 0.05 {
