@@ -121,10 +121,22 @@ pub fn roof_height_rs(b: u32) -> u8 {
     ((b >> 24) & 0xFF) as u8
 }
 
+/// Extract roof flag (bit 1 of flags byte) and roof height (top byte), for use
+/// when replacing a block but preserving its roof data.
+pub fn extract_roof_data(block: u32) -> (u8, u32) {
+    let roof_flag = block_flags_rs(block) & 2;
+    let roof_h = block & 0xFF000000;
+    (roof_flag, roof_h)
+}
+
 /// Is this block type part of the electrical power network?
 /// Checks block type and wire overlay flag. Matches the GPU-side is_conductor() in power.wgsl.
 pub fn is_conductor_rs(bt: u32, flags: u8) -> bool {
-    matches!(bt, 36..=43 | 45 | 48 | 51 | 56 | 7 | 10..=12 | 16) || (flags & 0x80) != 0
+    bt_is!(bt, BT_WIRE, BT_SOLAR, BT_BATTERY_S, BT_BATTERY_M, BT_BATTERY_L,
+        BT_WIND_TURBINE, BT_SWITCH, BT_DIMMER, BT_BREAKER, BT_FLOODLIGHT,
+        BT_WIRE_BRIDGE, BT_WALL_LAMP,
+        BT_CEILING_LIGHT, BT_FLOOR_LAMP, BT_TABLE_LAMP, BT_FAN, BT_PUMP)
+        || (flags & 0x80) != 0
 }
 
 /// Is this block type a ground/floor tile (walkable base, not a placed object)?

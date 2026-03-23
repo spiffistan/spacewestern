@@ -99,6 +99,25 @@ impl App {
         result
     }
 
+    /// Place a multi-tile block. Validates all tiles, then places with per-tile flags.
+    /// `flags_fn(tile_index, roof_flag) -> combined_flags` computes the flags byte for each tile.
+    /// Returns true if placement succeeded.
+    pub(crate) fn place_multi_tiles(
+        &mut self, tiles: &[(i32, i32)], block_id: u8, height: u8,
+        flags_fn: impl Fn(usize, u8) -> u8,
+    ) -> bool {
+        let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
+        if !all_valid { return false; }
+        for (i, &(tx, ty)) in tiles.iter().enumerate() {
+            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+            let (roof_flag, roof_h) = extract_roof_data(self.grid_data[tidx]);
+            self.grid_data[tidx] = make_block(block_id, height, flags_fn(i, roof_flag)) | roof_h;
+        }
+        self.grid_dirty = true;
+        self.build_tool = BuildTool::None;
+        true
+    }
+
     /// Check if a tile is valid for wall-adjacent placement and return the facing direction.
     /// If multiple walls, uses build_rotation to disambiguate.
     /// Returns None if no adjacent wall or tile isn't floor-level.
@@ -744,86 +763,40 @@ impl App {
                 BuildTool::Place(37) => {
                     // Solar panel: 3×3 multi-tile placement
                     let tiles = self.solar_tiles(bx, by);
-                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
-                    if all_valid {
-                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
-                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                            let tblock = self.grid_data[tidx];
-                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
-                            let roof_h = tblock & 0xFF000000;
-                            // flags: bits 3-4 = column (0-2), bits 5-6 = row (0-2)
-                            let col = (i % 3) as u8;
-                            let row = (i / 3) as u8;
-                            let seg_flags = roof_flag | (col << 3) | (row << 5);
-                            self.grid_data[tidx] = make_block(37, 0, seg_flags) | roof_h;
-                        }
-                        self.grid_dirty = true;
+                    if self.place_multi_tiles(&tiles, 37, 0, |i, rf| {
+                        rf | (((i % 3) as u8) << 3) | (((i / 3) as u8) << 5)
+                    }) {
                         compute_roof_heights(&mut self.grid_data);
                         log::info!("Placed solar panel at ({}, {})", bx, by);
-                        self.build_tool = BuildTool::None;
                     }
                 }
                 BuildTool::Place(41) => {
                     // Wind turbine: 2×2 placement with rotation stored in flags
                     let tiles = [(bx, by), (bx+1, by), (bx, by+1), (bx+1, by+1)];
-                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
-                    if all_valid {
-                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
-                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                            let tblock = self.grid_data[tidx];
-                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
-                            let roof_h = tblock & 0xFF000000;
-                            let col = (i % 2) as u8;
-                            let row = (i / 2) as u8;
-                            // bits 3-4 = col, bits 5-6 = row, bit 7 = rotation (0=N-S, 1=E-W)
-                            let rot_bit = if self.build_rotation % 2 == 1 { 0x40u8 } else { 0u8 };
-                            let seg_flags = roof_flag | (col << 3) | (row << 5) | rot_bit;
-                            self.grid_data[tidx] = make_block(41, 2, seg_flags) | roof_h;
-                        }
-                        self.grid_dirty = true;
+                    let rot_bit = if self.build_rotation % 2 == 1 { 0x40u8 } else { 0u8 };
+                    if self.place_multi_tiles(&tiles, 41, 2, |i, rf| {
+                        rf | (((i % 2) as u8) << 3) | (((i / 2) as u8) << 5) | rot_bit
+                    }) {
                         compute_roof_heights(&mut self.grid_data);
-                        self.build_tool = BuildTool::None;
                     }
                 }
                 BuildTool::Place(39) => {
-                    // Medium battery: 2-tile placement (like bed)
+                    // Medium battery: 2-tile placement
                     let tiles = self.bed_tiles(bx, by, self.build_rotation);
-                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
-                    if all_valid {
-                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
-                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                            let tblock = self.grid_data[tidx];
-                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
-                            let roof_h = tblock & 0xFF000000;
-                            let seg_flags = roof_flag | ((i as u8) << 3) | ((self.build_rotation as u8) << 5);
-                            self.grid_data[tidx] = make_block(39, 1, seg_flags) | roof_h;
-                        }
-                        self.grid_dirty = true;
-                        self.build_tool = BuildTool::None;
-                    }
+                    let rot = self.build_rotation as u8;
+                    self.place_multi_tiles(&tiles, 39, 1, |i, rf| {
+                        rf | ((i as u8) << 3) | (rot << 5)
+                    });
                 }
                 BuildTool::Place(40) => {
                     // Large battery: 2×2 placement
                     let tiles = [(bx, by), (bx+1, by), (bx, by+1), (bx+1, by+1)];
-                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
-                    if all_valid {
-                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
-                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                            let tblock = self.grid_data[tidx];
-                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
-                            let roof_h = tblock & 0xFF000000;
-                            let col = (i % 2) as u8;
-                            let row = (i / 2) as u8;
-                            let seg_flags = roof_flag | (col << 3) | (row << 5);
-                            self.grid_data[tidx] = make_block(40, 1, seg_flags) | roof_h;
-                        }
-                        self.grid_dirty = true;
-                        self.build_tool = BuildTool::None;
-                    }
+                    self.place_multi_tiles(&tiles, 40, 1, |i, rf| {
+                        rf | (((i % 2) as u8) << 3) | (((i / 2) as u8) << 5)
+                    });
                 }
                 BuildTool::Place(50) | BuildTool::Place(51) => {
                     // Pipe bridge (50) or Wire bridge (51): 3-tile placement
-                    // Can be placed on existing pipes/wires (replaces them with bridge tiles)
                     let bridge_id = match self.build_tool { BuildTool::Place(id) => id, _ => 50 };
                     let tiles = self.bridge_tiles(bx, by, self.build_rotation);
                     let all_valid = tiles.iter().all(|&(tx, ty)| {
@@ -836,13 +809,11 @@ impl App {
                             || (bridge_id == 51 && (tbt == BT_WIRE || is_conductor_rs(tbt, block_flags_rs(self.grid_data[tidx]))))
                     });
                     if all_valid {
+                        let rot = self.build_rotation as u8;
                         for (i, &(tx, ty)) in tiles.iter().enumerate() {
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                            let tblock = self.grid_data[tidx];
-                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
-                            let roof_h = tblock & 0xFF000000;
-                            // flags: bits 3-4 = segment (0=entry, 1=middle, 2=exit), bits 5-6 = rotation
-                            let seg_flags = roof_flag | ((i as u8) << 3) | ((self.build_rotation as u8) << 5);
+                            let (roof_flag, roof_h) = extract_roof_data(self.grid_data[tidx]);
+                            let seg_flags = roof_flag | ((i as u8) << 3) | (rot << 5);
                             self.grid_data[tidx] = make_block(bridge_id as u8, 1, seg_flags) | roof_h;
                         }
                         self.grid_dirty = true;
@@ -852,64 +823,32 @@ impl App {
                 BuildTool::Place(52) => {
                     // Liquid Intake: 2-tile — one on ground, one on water/dug
                     let tiles = self.bed_tiles(bx, by, self.build_rotation);
-                    // Determine which tile is ground and which is water
                     let (ground_idx, water_idx) = self.intake_tile_assignment(&tiles);
                     if let (Some(gi), Some(wi)) = (ground_idx, water_idx) {
-                        let gt = tiles[gi]; let wt = tiles[wi];
-                        // Place ground segment (seg 0)
-                        let tidx_g = (gt.1 as u32 * GRID_W + gt.0 as u32) as usize;
-                        let tb_g = self.grid_data[tidx_g];
-                        let rf_g = ((tb_g >> 16) & 0xFF) as u8 & 2;
-                        let rh_g = tb_g & 0xFF000000;
-                        let flags_g = rf_g | (0u8 << 3) | ((self.build_rotation as u8) << 5);
-                        self.grid_data[tidx_g] = make_block(52, 1, flags_g) | rh_g;
-                        // Place water segment (seg 1)
-                        let tidx_w = (wt.1 as u32 * GRID_W + wt.0 as u32) as usize;
-                        let tb_w = self.grid_data[tidx_w];
-                        let rf_w = ((tb_w >> 16) & 0xFF) as u8 & 2;
-                        let rh_w = tb_w & 0xFF000000;
-                        let flags_w = rf_w | (1u8 << 3) | ((self.build_rotation as u8) << 5);
-                        self.grid_data[tidx_w] = make_block(52, 1, flags_w) | rh_w;
+                        let rot = self.build_rotation as u8;
+                        for &(seg, ti) in &[(0u8, gi), (1u8, wi)] {
+                            let (tx, ty) = tiles[ti];
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let (rf, rh) = extract_roof_data(self.grid_data[tidx]);
+                            self.grid_data[tidx] = make_block(52, 1, rf | (seg << 3) | (rot << 5)) | rh;
+                        }
                         self.grid_dirty = true;
                         self.build_tool = BuildTool::None;
                     }
                 }
                 BuildTool::Place(9) => {
-                    // Bench: multi-tile placement
+                    // Bench: 3-tile placement
                     let tiles = self.bench_tiles(bx, by, self.build_rotation);
-                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
-                    if all_valid {
-                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
-                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                            let tblock = self.grid_data[tidx];
-                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
-                            let roof_h = tblock & 0xFF000000;
-                            // flags: bit3-4 = segment (0,1,2), bit5-6 = rotation
-                            let seg_flags = roof_flag | ((i as u8) << 3) | ((self.build_rotation as u8) << 5);
-                            self.grid_data[tidx] = make_block(9, 1, seg_flags) | roof_h;
-                        }
-                        self.grid_dirty = true;
+                    let rot = self.build_rotation as u8;
+                    if self.place_multi_tiles(&tiles, 9, 1, |i, rf| rf | ((i as u8) << 3) | (rot << 5)) {
                         log::info!("Placed bench at ({}, {})", bx, by);
-                        self.build_tool = BuildTool::None;
                     }
                 }
                 BuildTool::Place(30) => {
-                    // Bed: multi-tile placement
+                    // Bed: 2-tile placement
                     let tiles = self.bed_tiles(bx, by, self.build_rotation);
-                    let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
-                    if all_valid {
-                        for (i, &(tx, ty)) in tiles.iter().enumerate() {
-                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                            let tblock = self.grid_data[tidx];
-                            let roof_flag = ((tblock >> 16) & 0xFF) as u8 & 2;
-                            let roof_h = tblock & 0xFF000000;
-                            // flags: bit3 = segment (0=head, 1=foot), bit5-6 = rotation
-                            let seg_flags = roof_flag | ((i as u8) << 3) | ((self.build_rotation as u8) << 5);
-                            self.grid_data[tidx] = make_block(30, 0, seg_flags) | roof_h;
-                        }
-                        self.grid_dirty = true;
-                        self.build_tool = BuildTool::None;
-                    }
+                    let rot = self.build_rotation as u8;
+                    self.place_multi_tiles(&tiles, 30, 0, |i, rf| rf | ((i as u8) << 3) | (rot << 5));
                 }
                 BuildTool::Place(11) => {
                     // Table lamp: can only be placed on benches (type 9)
@@ -924,38 +863,27 @@ impl App {
                 }
                 BuildTool::Place(12) => {
                     // Fan: can be placed on a wall OR on the ground
-                    let on_wall = bt_is!(bt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0;
+                    let on_wall = is_wall_block(bt) && block_height_rs(block) > 0;
                     let on_ground = self.can_place_at(bx, by);
-                    if on_wall {
-                        let wall_h = ((block >> 8) & 0xFF) as u8;
-                        let roof_flag = flags & 2;
-                        let roof_h = block & 0xFF000000;
+                    if on_wall || on_ground {
+                        let (roof_flag, roof_h) = extract_roof_data(block);
+                        let height = if on_wall { block_height_rs(block) } else { 1 };
                         let dir_flags = roof_flag | ((self.build_rotation as u8) << 3);
-                        self.grid_data[idx] = make_block(12, wall_h, dir_flags) | roof_h;
+                        self.grid_data[idx] = make_block(12, height, dir_flags) | roof_h;
                         self.grid_dirty = true;
                         log::info!("Placed fan at ({}, {}) dir={}", bx, by, self.build_rotation);
-                        self.build_tool = BuildTool::None;
-                    } else if on_ground {
-                        let roof_flag = flags & 2;
-                        let dir_flags = (self.build_rotation as u8) << 3;
-                        let roof_h = block & 0xFF000000;
-                        self.grid_data[idx] = make_block(12, 1, roof_flag | dir_flags) | roof_h;
-                        self.grid_dirty = true;
-                        log::info!("Placed fan on ground at ({}, {}) dir={}", bx, by, self.build_rotation);
                         self.build_tool = BuildTool::None;
                     }
                 }
                 BuildTool::Place(19) | BuildTool::Place(20) => {
                     // Outlet/Inlet: can place on ground OR on walls
+                    let on_wall = is_wall_block(bt) && block_height_rs(block) > 0;
                     let on_ground = self.can_place_at(bx, by);
-                    let bt_at = block_type_rs(block);
-                    let on_wall = bt_is!(bt_at, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0;
                     if on_ground || on_wall {
-                        let height = if on_wall { ((block >> 8) & 0xFF) as u8 } else { 1 };
-                        let roof_flag = flags & 2;
+                        let height = if on_wall { block_height_rs(block) } else { 1 };
+                        let (roof_flag, roof_h) = extract_roof_data(block);
                         let rot_flags = (self.build_rotation as u8) << 3;
                         let bt_new = if self.build_tool == BuildTool::Place(19) { 19 } else { 20 };
-                        let roof_h = block & 0xFF000000;
                         self.grid_data[idx] = make_block(bt_new, height, roof_flag | rot_flags) | roof_h;
                         self.grid_dirty = true;
                         log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
