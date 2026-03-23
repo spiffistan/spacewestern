@@ -2,7 +2,14 @@
 //! Extracted from main.rs to keep it manageable.
 
 use crate::*;
-use crate::grid::{generate_water_table, generate_elevation, compute_terrain_ao, adjust_water_table_for_elevation};
+use crate::grid::{generate_water_table, generate_elevation, compute_terrain_ao, adjust_water_table_for_elevation, wgsl_block_constants};
+
+/// Prepend generated block type constants to a WGSL shader source.
+fn shader_with_constants(source: &str) -> String {
+    let mut s = wgsl_block_constants();
+    s.push_str(source);
+    s
+}
 
 impl App {
     pub(crate) async fn init_gfx_async(&mut self, window: Arc<Window>) {
@@ -227,7 +234,7 @@ impl App {
         // --- Lightmap seed pipeline (writes to texture A) ---
         let lightmap_seed_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lightmap-seed"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/lightmap.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/lightmap.wgsl")).into()),
         });
 
         let seed_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -327,7 +334,7 @@ impl App {
         // --- Lightmap propagation pipeline (reads texture_2d, writes storage) ---
         let lightmap_prop_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lightmap-propagate"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/lightmap_propagate.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/lightmap_propagate.wgsl")).into()),
         });
 
         let prop_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -569,13 +576,13 @@ impl App {
 
         // --- Fluid shader modules ---
         let fluid_sim_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fluid-sim"), source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluid.wgsl").into()),
+            label: Some("fluid-sim"), source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/fluid.wgsl")).into()),
         });
         let fluid_pressure_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("fluid-pressure"), source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluid_pressure.wgsl").into()),
         });
         let fluid_dye_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("fluid-dye"), source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluid_dye.wgsl").into()),
+            label: Some("fluid-dye"), source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/fluid_dye.wgsl")).into()),
         });
 
         // --- Fluid pipelines ---
@@ -778,7 +785,7 @@ impl App {
         // --- Raytrace compute pipeline (now also reads the lightmap) ---
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("raytrace-compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/raytrace.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/raytrace.wgsl")).into()),
         });
 
         let compute_bind_group_layout =
@@ -1432,7 +1439,7 @@ impl App {
         let shadow_map_write_view = shadow_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shadow-map-compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadow_map.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/shadow_map.wgsl")).into()),
         });
         let shadow_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("shadow-map-bgl"),
@@ -1469,7 +1476,7 @@ impl App {
         // --- Power grid pipeline ---
         let power_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("power-compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/power.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/power.wgsl")).into()),
         });
         let power_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("power-bgl"),
@@ -1506,7 +1513,7 @@ impl App {
         // --- Ground water simulation pipeline (textures already created above) ---
         let water_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("water-compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/water.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/water.wgsl")).into()),
         });
         let water_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("water-bgl"),
@@ -1560,7 +1567,7 @@ impl App {
         });
         let sound_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("sound-compute"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/sound.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_with_constants(include_str!("shaders/sound.wgsl")).into()),
         });
         let sound_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sound-bgl"),

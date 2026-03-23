@@ -120,7 +120,7 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
         var color = vec3<f32>(mat.light_color_r, mat.light_color_g, mat.light_color_b);
 
         // Electric lights: OFF without power (voltage < 2V)
-        if bt == 7u || bt == 10u || bt == 11u || bt == 48u {
+        if bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FLOODLIGHT {
             let vidx = u32(by) * u32(camera.grid_w) + u32(bx);
             let lv = voltage[vidx];
             if lv < 2.0 {
@@ -131,7 +131,7 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // Fireplace: apply flicker
-        if bt == 6u {
+        if bt == BT_FIREPLACE {
             let wx = f32(bx) + 0.5;
             let wy = f32(by) + 0.5;
             let phase = fire_hash(vec2<f32>(wx, wy)) * 6.28;

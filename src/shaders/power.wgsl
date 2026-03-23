@@ -36,28 +36,28 @@ fn is_conductor(bt: u32, flags: u32) -> bool {
     // Also: any block with wire overlay flag (bit 7 of flags)
     let has_wire = (flags & 0x80u) != 0u;
     // Switch (42): only conducts when ON (flag bit 2)
-    if bt == 42u { return (flags & 4u) != 0u; }
+    if bt == BT_SWITCH { return (flags & 4u) != 0u; }
     // Circuit breaker (45): only conducts when ON (flag bit 2)
-    if bt == 45u { return (flags & 4u) != 0u; }
+    if bt == BT_BREAKER { return (flags & 4u) != 0u; }
     // Dimmer (43): always conducts (voltage scaling handled separately)
     // Wire bridge (51): always conducts (axis-restricted in relaxation)
-    return bt == 36u || bt == 37u || bt == 38u || bt == 39u || bt == 40u || bt == 41u || bt == 43u || bt == 51u
-        || bt == 7u || bt == 12u || bt == 10u || bt == 11u || bt == 16u || bt == 48u || has_wire;
+    return bt == BT_WIRE || bt == BT_SOLAR || bt == BT_BATTERY_S || bt == BT_BATTERY_M || bt == BT_BATTERY_L || bt == BT_WIND_TURBINE || bt == BT_DIMMER || bt == BT_WIRE_BRIDGE
+        || bt == BT_CEILING_LIGHT || bt == BT_FAN || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_PUMP || bt == BT_FLOODLIGHT || has_wire;
 }
 
 fn is_battery(bt: u32) -> bool {
-    return bt == 38u || bt == 39u || bt == 40u;
+    return bt == BT_BATTERY_S || bt == BT_BATTERY_M || bt == BT_BATTERY_L;
 }
 
 // Is this block a power source?
 fn is_generator(bt: u32) -> bool {
-    return bt == 37u || bt == 41u; // Solar panel, Wind turbine
+    return bt == BT_SOLAR || bt == BT_WIND_TURBINE; // Solar panel, Wind turbine
 }
 
 // Is this block a power consumer?
 fn is_consumer(bt: u32) -> bool {
     // Electric light=7, Standing lamp=10, Table lamp=11, Fan=12, Pump=16, Floodlight=48
-    return bt == 7u || bt == 10u || bt == 11u || bt == 12u || bt == 16u || bt == 48u;
+    return bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FAN || bt == BT_PUMP || bt == BT_FLOODLIGHT;
 }
 
 @compute @workgroup_size(8, 8)
@@ -80,11 +80,11 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- Generators: inject voltage ---
     if is_generator(bt) {
         var target_v = 0.0;
-        if bt == 37u {
+        if bt == BT_SOLAR {
             // Solar panel: output from sun intensity and clouds
             let solar_output = camera.sun_intensity * (1.0 - camera.cloud_cover * 0.8);
             target_v = solar_output * 12.0;
-        } else if bt == 41u {
+        } else if bt == BT_WIND_TURBINE {
             // Wind turbine: output from wind perpendicular to blade axis
             // Rotation stored in flags bit 6 (0x40): 0=N-S wind, 1=E-W wind
             let wt_flags = (block >> 16u) & 0xFFu;
@@ -121,12 +121,12 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
         var drain_rate = 0.0008;      // small battery
         var charge_rate = 0.02;       // how fast it charges from solar
         var self_discharge = 0.99995;
-        if bt == 39u {
+        if bt == BT_BATTERY_M {
             drain_rate = 0.00044;     // medium: 1.8x capacity
             charge_rate = 0.011;
             self_discharge = 0.99998;
         }
-        if bt == 40u {
+        if bt == BT_BATTERY_L {
             drain_rate = 0.00023;     // large: 3.5x capacity
             charge_rate = 0.006;
             self_discharge = 0.99999;
@@ -179,7 +179,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // --- Circuit breaker: auto-trip on overvoltage ---
-    if bt == 45u {
+    if bt == BT_BREAKER {
         let breaker_on = (flags & 4u) != 0u;
         if breaker_on {
             // Threshold stored in height byte (default 15V)
@@ -202,12 +202,12 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- Consumers: draw current (reduce voltage) ---
     // Load divided by 8 iterations per frame to keep total drain constant
     var load = 0.0;
-    if bt == 7u { load = 0.006; }   // Ceiling light: ~5W
-    if bt == 10u { load = 0.006; }  // Standing lamp: ~5W
-    if bt == 11u { load = 0.004; }  // Table lamp: ~3W
-    if bt == 12u { load = 0.012; }  // Fan: ~10W
-    if bt == 16u { load = 0.010; }  // Pump: ~8W
-    if bt == 48u { load = 0.030; }  // Floodlight: ~25W
+    if bt == BT_CEILING_LIGHT { load = 0.006; }   // Ceiling light: ~5W
+    if bt == BT_FLOOR_LAMP { load = 0.006; }  // Standing lamp: ~5W
+    if bt == BT_TABLE_LAMP { load = 0.004; }  // Table lamp: ~3W
+    if bt == BT_FAN { load = 0.012; }  // Fan: ~10W
+    if bt == BT_PUMP { load = 0.010; }  // Pump: ~8W
+    if bt == BT_FLOODLIGHT { load = 0.030; }  // Floodlight: ~25W
 
     // --- Voltage relaxation ---
     // Wires connect to direct 4-neighbors only.
@@ -218,7 +218,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     var neighbor_count = 0.0;
 
     let has_wire = (flags & 0x80u) != 0u;
-    if bt == 36u || bt == 51u || has_wire {
+    if bt == BT_WIRE || bt == BT_WIRE_BRIDGE || has_wire {
         // Wire / Wire Bridge: directional relaxation
         let height_byte = (block >> 8u) & 0xFFu;
         let conn_mask = height_byte >> 4u;
@@ -226,7 +226,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
         let wb_rot = (flags >> 5u) & 3u; // bridge rotation
 
         // Wire bridge entry/exit: also connect to partner tile (teleport across middle)
-        if bt == 51u && (wb_seg == 0u || wb_seg == 2u) {
+        if bt == BT_WIRE_BRIDGE && (wb_seg == 0u || wb_seg == 2u) {
             let sign = select(2, -2, wb_seg == 2u);
             var pdx = 0; var pdy = 0;
             if wb_rot == 0u { pdy = sign; }
@@ -250,7 +250,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
         let dir_mask = array<u32, 4>(2u, 8u, 4u, 1u); // E, W, S, N
         for (var d = 0; d < 4; d++) {
             // Wire bridge: restrict which adjacent tiles can connect
-            if bt == 51u {
+            if bt == BT_WIRE_BRIDGE {
                 let is_ew = d < 2; // d=0,1 are E,W
                 let is_ns = d >= 2; // d=2,3 are S,N
                 let bridge_is_ns = wb_rot % 2u == 0u;
@@ -299,7 +299,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if nx < 0 || ny < 0 || nx >= i32(gw) || ny >= i32(gh) { continue; }
                 let nidx = u32(ny) * gw + u32(nx);
                 let nbt = block_type(grid[nidx]);
-                if nbt == 36u { // wire
+                if nbt == BT_WIRE { // wire
                     let dist = sqrt(f32(dx * dx + dy * dy));
                     if dist < best_dist {
                         best_dist = dist;
@@ -325,7 +325,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     var new_v = mix(voltage[idx], avg, 0.6); // fast relaxation for wires
 
     // Dimmer/rheostat: variable resistor that scales voltage and emits heat from the drop
-    if bt == 43u {
+    if bt == BT_DIMMER {
         let dim_level = f32((block >> 8u) & 0xFFu) / 10.0;
         // Find highest neighbor voltage (the "input" side)
         var max_neigh = 0.0;
@@ -384,7 +384,7 @@ fn main_power(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // I²R heating: wire resistance is low, so only significant at high currents
-    let resistance = select(0.01, 0.1, bt == 36u); // wire=low, others=higher
+    let resistance = select(0.01, 0.1, bt == BT_WIRE); // wire=low, others=higher
     let heat = total_current * total_current * resistance * 0.001;
     block_temps[idx] += heat;
 }

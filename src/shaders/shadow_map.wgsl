@@ -132,12 +132,12 @@ fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_e
         let is_roofed_floor = has_roof(block) && bh < 0.5;
 
         // Skip non-shadow-casting blocks
-        let is_pipe = (bt >= 15u && bt <= 20u) || bt == 46u || bt == 49u || bt == 50u || bt == 52u || bt == 53u || bt == 54u;
-        let is_skip = bt == 32u || bt == 33u || bt == 34u || bt == 36u || bt == 43u || bt == 45u || bt == 51u || bt == 6u;
+        let is_pipe = (bt >= BT_PIPE && bt <= BT_INLET) || bt == BT_RESTRICTOR || bt == BT_LIQUID_PIPE || bt == BT_PIPE_BRIDGE || bt == BT_LIQUID_INTAKE || bt == BT_LIQUID_PUMP || bt == BT_LIQUID_OUTPUT;
+        let is_skip = bt == BT_DUG_GROUND || bt == BT_CRATE || bt == BT_ROCK || bt == BT_WIRE || bt == BT_DIMMER || bt == BT_BREAKER || bt == BT_WIRE_BRIDGE || bt == BT_FIREPLACE;
         if is_pipe || is_skip { continue; }
 
         // Diagonal wall
-        if bt == 44u {
+        if bt == BT_DIAGONAL {
             let sfx = fract(sx);
             let sfy = fract(sy);
             let svar = (block_flags(block) >> 3u) & 3u;
@@ -160,7 +160,7 @@ fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_e
         }
 
         // Glass: partial tinted transmission
-        if bt == 5u {
+        if bt == BT_GLASS {
             let window_frac = 1.0 - WINDOW_SILL_FRAC - WINDOW_LINTEL_FRAC;
             let wall_frac = 1.0 - window_frac;
             if current_h < bh {
@@ -174,7 +174,7 @@ fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_e
         }
 
         // Trees: partial shadow
-        if bt == 8u {
+        if bt == BT_TREE {
             if current_h < bh {
                 light *= 0.6;
                 tint *= vec3<f32>(0.85, 0.95, 0.85);
@@ -184,7 +184,7 @@ fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_e
         }
 
         // Berry bush / crop: soft shadow
-        if bt == 31u || bt == 47u {
+        if bt == BT_BERRY_BUSH || bt == BT_CROP {
             light *= 0.7;
             if light < 0.02 { return vec4<f32>(tint, 0.0); }
             continue;

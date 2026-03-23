@@ -60,6 +60,43 @@ pub const BT_LIQUID_INTAKE: u32 = 52;
 pub const BT_LIQUID_PUMP: u32 = 53;
 pub const BT_LIQUID_OUTPUT: u32 = 54;
 
+/// Generate WGSL `const BT_*: u32 = N;` lines for all block type constants.
+/// Prepend this to shader source so WGSL can use the same names as Rust.
+pub fn wgsl_block_constants() -> String {
+    let mut s = String::from("// --- Block type constants (generated from grid.rs) ---\n");
+    let consts: &[(&str, u32)] = &[
+        ("BT_AIR", BT_AIR), ("BT_STONE", BT_STONE), ("BT_DIRT", BT_DIRT),
+        ("BT_WATER", BT_WATER), ("BT_WALL", BT_WALL), ("BT_GLASS", BT_GLASS),
+        ("BT_FIREPLACE", BT_FIREPLACE), ("BT_CEILING_LIGHT", BT_CEILING_LIGHT),
+        ("BT_TREE", BT_TREE), ("BT_BENCH", BT_BENCH), ("BT_FLOOR_LAMP", BT_FLOOR_LAMP),
+        ("BT_TABLE_LAMP", BT_TABLE_LAMP), ("BT_FAN", BT_FAN), ("BT_COMPOST", BT_COMPOST),
+        ("BT_INSULATED", BT_INSULATED), ("BT_PIPE", BT_PIPE), ("BT_PUMP", BT_PUMP),
+        ("BT_TANK", BT_TANK), ("BT_VALVE", BT_VALVE), ("BT_OUTLET", BT_OUTLET),
+        ("BT_INLET", BT_INLET), ("BT_WOOD_WALL", BT_WOOD_WALL),
+        ("BT_STEEL_WALL", BT_STEEL_WALL), ("BT_SANDSTONE", BT_SANDSTONE),
+        ("BT_GRANITE", BT_GRANITE), ("BT_LIMESTONE", BT_LIMESTONE),
+        ("BT_WOOD_FLOOR", BT_WOOD_FLOOR), ("BT_STONE_FLOOR", BT_STONE_FLOOR),
+        ("BT_CONCRETE_FLOOR", BT_CONCRETE_FLOOR), ("BT_CANNON", BT_CANNON),
+        ("BT_BED", BT_BED), ("BT_BERRY_BUSH", BT_BERRY_BUSH),
+        ("BT_DUG_GROUND", BT_DUG_GROUND), ("BT_CRATE", BT_CRATE),
+        ("BT_ROCK", BT_ROCK), ("BT_MUD_WALL", BT_MUD_WALL), ("BT_WIRE", BT_WIRE),
+        ("BT_SOLAR", BT_SOLAR), ("BT_BATTERY_S", BT_BATTERY_S),
+        ("BT_BATTERY_M", BT_BATTERY_M), ("BT_BATTERY_L", BT_BATTERY_L),
+        ("BT_WIND_TURBINE", BT_WIND_TURBINE), ("BT_SWITCH", BT_SWITCH),
+        ("BT_DIMMER", BT_DIMMER), ("BT_DIAGONAL", BT_DIAGONAL),
+        ("BT_BREAKER", BT_BREAKER), ("BT_RESTRICTOR", BT_RESTRICTOR),
+        ("BT_CROP", BT_CROP), ("BT_FLOODLIGHT", BT_FLOODLIGHT),
+        ("BT_LIQUID_PIPE", BT_LIQUID_PIPE), ("BT_PIPE_BRIDGE", BT_PIPE_BRIDGE),
+        ("BT_WIRE_BRIDGE", BT_WIRE_BRIDGE), ("BT_LIQUID_INTAKE", BT_LIQUID_INTAKE),
+        ("BT_LIQUID_PUMP", BT_LIQUID_PUMP), ("BT_LIQUID_OUTPUT", BT_LIQUID_OUTPUT),
+    ];
+    for &(name, val) in consts {
+        s.push_str(&format!("const {}: u32 = {}u;\n", name, val));
+    }
+    s.push('\n');
+    s
+}
+
 /// Pack a block into a u32: [type:8 | height:8 | flags:8 | roof_height:8]
 pub fn make_block(block_type: u8, height: u8, flags: u8) -> u32 {
     (block_type as u32) | ((height as u32) << 8) | ((flags as u32) << 16)

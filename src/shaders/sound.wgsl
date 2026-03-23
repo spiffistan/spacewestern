@@ -46,19 +46,19 @@ fn is_wall(x: i32, y: i32) -> bool {
     // Open doors transmit sound
     if is_door(b) && is_open(b) { return false; }
     // Glass transmits some sound (partial attenuation handled elsewhere)
-    if bt == 5u { return false; }
+    if bt == BT_GLASS { return false; }
     // Pipes, restrictors, bridges, liquid pipes/equipment: height = connection mask, not wall
-    if (bt >= 15u && bt <= 20u) || bt == 46u || bt == 49u || bt == 50u || bt == 52u || bt == 53u || bt == 54u { return false; }
+    if (bt >= BT_PIPE && bt <= BT_INLET) || bt == BT_RESTRICTOR || bt == BT_LIQUID_PIPE || bt == BT_PIPE_BRIDGE || bt == BT_LIQUID_INTAKE || bt == BT_LIQUID_PUMP || bt == BT_LIQUID_OUTPUT { return false; }
     // Wires, wire bridges: height = connection mask
-    if bt == 36u || bt == 51u { return false; }
+    if bt == BT_WIRE || bt == BT_WIRE_BRIDGE { return false; }
     // Dimmer/varistor, breaker: height = level/threshold
-    if bt == 43u || bt == 45u { return false; }
+    if bt == BT_DIMMER || bt == BT_BREAKER { return false; }
     // Fireplace: height = intensity
-    if bt == 6u { return false; }
+    if bt == BT_FIREPLACE { return false; }
     // Crates, rocks, dug ground: not real walls
-    if bt == 32u || bt == 33u || bt == 34u { return false; }
+    if bt == BT_DUG_GROUND || bt == BT_CRATE || bt == BT_ROCK { return false; }
     // Furniture (bench, bed, lamps): sound passes over
-    if bt == 9u || bt == 10u || bt == 11u || bt == 30u { return false; }
+    if bt == BT_BENCH || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_BED { return false; }
     return true;
 }
 

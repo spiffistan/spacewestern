@@ -50,16 +50,16 @@ fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn get_elevation(b: u32) -> f32 {
     let bt = block_type(b);
     let bh = block_height(b);
-    if bt == 32u {
+    if bt == BT_DUG_GROUND {
         // Dug ground: depth stored in height byte, negative elevation
         return -f32(bh);
     }
     // Walls and solid blocks: treated as very high (water can't flow onto them)
-    if bh > 0u && bt != 8u && bt != 6u && bt != 7u && bt != 10u && bt != 31u
-        && bt != 33u && bt != 34u && bt != 36u && bt != 43u && bt != 47u
-        && bt != 45u && bt != 46u
-        && !(bt >= 15u && bt <= 20u) // gas pipe components
-        && bt != 49u && bt != 50u && bt != 52u && bt != 53u && bt != 54u {
+    if bh > 0u && bt != BT_TREE && bt != BT_FIREPLACE && bt != BT_CEILING_LIGHT && bt != BT_FLOOR_LAMP && bt != BT_BERRY_BUSH
+        && bt != BT_CRATE && bt != BT_ROCK && bt != BT_WIRE && bt != BT_DIMMER && bt != BT_CROP
+        && bt != BT_BREAKER && bt != BT_RESTRICTOR
+        && !(bt >= BT_PIPE && bt <= BT_INLET) // gas pipe components
+        && bt != BT_LIQUID_PIPE && bt != BT_PIPE_BRIDGE && bt != BT_LIQUID_INTAKE && bt != BT_LIQUID_PUMP && bt != BT_LIQUID_OUTPUT {
         return 10.0; // effectively a wall — water won't flow here
     }
     return 0.0; // ground level

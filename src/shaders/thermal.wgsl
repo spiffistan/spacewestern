@@ -55,7 +55,7 @@ fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
     var block_temp = block_temps[idx];
 
     // Skip pipe blocks (15-20) — their temperature is managed by CPU pipe network
-    let is_pipe = bt >= 15u && bt <= 20u;
+    let is_pipe = bt >= BT_PIPE && bt <= BT_INLET;
     if is_pipe { return; }
 
     // Skip air/dirt floor with no thermal mass — their temperature is the air temperature

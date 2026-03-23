@@ -245,7 +245,7 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Fire source: extra turbulent kick at fire blocks
     let block = grid[u32(pos.y) * u32(params.sim_w) + u32(pos.x)];
     let bt = block & 0xFFu;
-    if bt == 6u {
+    if bt == BT_FIREPLACE {
         let fire_intensity = f32((block >> 8u) & 0xFFu) / 10.0;
         let center = vec2<f32>(f32(pos.x) + 0.5, f32(pos.y) + 0.5);
         let phase = fract(sin(dot(center, vec2(127.1, 311.7))) * 43758.5) * 6.28;
@@ -258,7 +258,7 @@ fn main_advect_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Fan: force velocity in fan direction (overrides pressure correction)
     // Acts as a one-way valve — always pushes forward, resists reverse flow
-    if bt == 12u {
+    if bt == BT_FAN {
         let dir_bits = (block >> 19u) & 3u;  // bits 3-4 of flags
         var fan_dir = vec2(0.0, 0.0);
         if dir_bits == 0u { fan_dir = vec2(0.0, -1.0); }

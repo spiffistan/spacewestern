@@ -168,7 +168,7 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         let bt = block & 0xFFu;
-        if bt == 6u {
+        if bt == BT_FIREPLACE {
             // Fire block: O2-dependent combustion with adjustable intensity
             // Intensity stored in height byte (0-10 → 0.0-1.0)
             let fire_intensity = f32((block >> 8u) & 0xFFu) / 10.0;
@@ -344,9 +344,9 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if nx < 0 || ny < 0 || nx >= i32(params.sim_w) || ny >= i32(params.sim_h) { continue; }
                 let nb = grid[u32(ny) * gw + u32(nx)];
                 let nbt = nb & 0xFFu;
-                let n_solid = nbt == 1u || nbt == 4u || nbt == 14u
-                    || (nbt >= 21u && nbt <= 25u) || nbt == 35u;
-                let n_pipe = nbt >= 15u && nbt <= 20u;
+                let n_solid = nbt == BT_STONE || nbt == BT_WALL || nbt == BT_INSULATED
+                    || (nbt >= BT_WOOD_WALL && nbt <= BT_LIMESTONE) || nbt == BT_MUD_WALL;
+                let n_pipe = nbt >= BT_PIPE && nbt <= BT_INLET;
 
                 if n_pipe {
                     // Pipe: radiates its internal gas temperature to surrounding air
@@ -364,15 +364,15 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let opp_dye = vec2<i32>(ox * 2 + 1, oy * 2 + 1);
                     let opp_temp = textureLoad(dye_in, opp_dye, 0).a;
                     var conductivity = 0.0;
-                    if nbt == 1u { conductivity = 0.012; }       // stone
-                    else if nbt == 4u { conductivity = 0.008; }  // generic wall
-                    else if nbt == 14u { conductivity = 0.0; }   // insulated (zero)
-                    else if nbt == 21u { conductivity = 0.003; } // wood
-                    else if nbt == 22u { conductivity = 0.06; }  // steel
-                    else if nbt == 23u { conductivity = 0.010; } // sandstone
-                    else if nbt == 24u { conductivity = 0.015; } // granite
-                    else if nbt == 25u { conductivity = 0.008; } // limestone
-                    else if nbt == 35u { conductivity = 0.004; } // mud wall
+                    if nbt == BT_STONE { conductivity = 0.012; }       // stone
+                    else if nbt == BT_WALL { conductivity = 0.008; }  // generic wall
+                    else if nbt == BT_INSULATED { conductivity = 0.0; }   // insulated (zero)
+                    else if nbt == BT_WOOD_WALL { conductivity = 0.003; } // wood
+                    else if nbt == BT_STEEL_WALL { conductivity = 0.06; }  // steel
+                    else if nbt == BT_SANDSTONE { conductivity = 0.010; } // sandstone
+                    else if nbt == BT_GRANITE { conductivity = 0.015; } // granite
+                    else if nbt == BT_LIMESTONE { conductivity = 0.008; } // limestone
+                    else if nbt == BT_MUD_WALL { conductivity = 0.004; } // mud wall
                     let diff = opp_temp - result.a;
                     result.a += diff * conductivity * 0.5;
                 }

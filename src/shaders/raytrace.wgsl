@@ -196,8 +196,8 @@ fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 fn is_glass(b: u32) -> bool { return block_type(b) == 5u; }
 // Structural wall types that form the building envelope (not equipment/furniture)
 fn matches_wall_type(bt: u32) -> bool {
-    return bt == 1u || bt == 4u || bt == 5u || bt == 14u
-        || (bt >= 21u && bt <= 25u) || bt == 35u || bt == 44u;
+    return bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
+        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL;
 }
 
 fn get_block(x: i32, y: i32) -> u32 {
@@ -600,7 +600,7 @@ fn trace_interior_sun_ray(wx: f32, wy: f32, sun_dir: vec2<f32>) -> vec4<f32> {
         }
 
         // Hit a glass block — ray passes through with tint/absorption
-        if bt == 5u {
+        if bt == BT_GLASS {
             let window_open_frac = 1.0 - WINDOW_SILL_FRAC - WINDOW_LINTEL_FRAC;
             let absorption = GLASS_ABSORPTION * step_size * window_open_frac;
             light *= (1.0 - absorption);
@@ -628,7 +628,7 @@ fn trace_interior_sun_ray(wx: f32, wy: f32, sun_dir: vec2<f32>) -> vec4<f32> {
         // Block with height
         if bh > 0u {
             // Furniture (benches): sun passes over if ray is above furniture height
-            if bt == 9u && fbh <= ray_h {
+            if bt == BT_BENCH && fbh <= ray_h {
                 continue;
             }
             // Walls and everything else: always block the interior sun ray
@@ -707,12 +707,12 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
         if get_material(sbt).light_intensity > 0.0 { continue; } // skip light sources
 
         if sbh == 0u { continue; } // open floor
-        if (sbt >= 15u && sbt <= 20u) || sbt == 46u || sbt == 49u || sbt == 50u || sbt == 52u || sbt == 53u || sbt == 54u { continue; }
-        if sbt == 51u { continue; } // wire bridge
-        if sbt == 32u { continue; } // dug ground doesn't block light
-        if sbt == 36u { continue; } // wire (height = connection mask, not visual)
-        if sbt == 43u { continue; } // dimmer/varistor (height = level, not visual)
-        if sbt == 45u { continue; } // breaker (height = threshold, not visual)
+        if (sbt >= BT_PIPE && sbt <= BT_INLET) || sbt == BT_RESTRICTOR || sbt == BT_LIQUID_PIPE || sbt == BT_PIPE_BRIDGE || sbt == BT_LIQUID_INTAKE || sbt == BT_LIQUID_PUMP || sbt == BT_LIQUID_OUTPUT { continue; }
+        if sbt == BT_WIRE_BRIDGE { continue; } // wire bridge
+        if sbt == BT_DUG_GROUND { continue; } // dug ground doesn't block light
+        if sbt == BT_WIRE { continue; } // wire (height = connection mask, not visual)
+        if sbt == BT_DIMMER { continue; } // dimmer/varistor (height = level, not visual)
+        if sbt == BT_BREAKER { continue; } // breaker (height = threshold, not visual)
 
         // Doors: open = pass through, closed = block (regardless of height)
         if is_door(sb) {
@@ -725,21 +725,21 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
         }
 
         // Glass: partial transmission
-        if sbt == 5u {
+        if sbt == BT_GLASS {
             vis *= 0.5;
             if vis < 0.02 { return 0.0; }
             continue;
         }
 
         // Trees: partial transmission through foliage
-        if sbt == 8u {
+        if sbt == BT_TREE {
             vis *= 0.4;
             if vis < 0.02 { return 0.0; }
             continue;
         }
 
         // Berry bushes + crops: soft dappled shadow
-        if sbt == 31u || sbt == 47u {
+        if sbt == BT_BERRY_BUSH || sbt == BT_CROP {
             vis *= 0.6;
             if vis < 0.02 { return 0.0; }
             continue;
@@ -792,7 +792,7 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             let light_h = mat.light_height;
 
             // Electric lights: brightness proportional to voltage, off only at 0V
-            if bt == 7u || bt == 10u || bt == 11u || bt == 48u {
+            if bt == BT_CEILING_LIGHT || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_FLOODLIGHT {
                 let light_idx = u32(ny) * u32(camera.grid_w) + u32(nx);
                 let lv = voltage[light_idx];
                 if lv < 0.1 {
@@ -811,7 +811,7 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
             }
 
             // Fireplace: apply flicker animation
-            if bt == 6u {
+            if bt == BT_FIREPLACE {
                 let phase = fire_hash(vec2<f32>(lcx, lcy)) * 6.28;
                 let flicker = fire_flicker(time + phase);
                 intensity *= (0.7 + 0.3 * flicker);
@@ -823,7 +823,7 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
 
             // Floodlight: directional cone (rotation in flags bits 3-4)
             var dir_atten = 1.0;
-            if bt == 48u {
+            if bt == BT_FLOODLIGHT {
                 let fl_flags = block_flags(nb);
                 let fl_dir = (fl_flags >> 3u) & 3u;
                 var light_dx = 0.0;
@@ -882,7 +882,7 @@ fn compute_directional_bleed(wx: f32, wy: f32) -> vec4<f32> {
             let bt = block_type(nb);
 
             // Only windows (glass) and open doors are portals
-            let is_window = bt == 5u;
+            let is_window = bt == BT_GLASS;
             let is_open_door = is_door(nb) && is_open(nb);
             if !is_window && !is_open_door { continue; }
 
@@ -1473,17 +1473,17 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_roofed_floor = has_roof(block) && bh < 0.5;
 
         // Pipe components (15-20), dug ground (32), crates (33), rocks (34) don't cast shadows
-        let is_pipe_block = (bt >= 15u && bt <= 20u) || bt == 46u || bt == 49u || bt == 50u || bt == 52u || bt == 53u || bt == 54u;
-        let is_dug_block = bt == 32u;
-        let is_crate_block = bt == 33u; // height = item count, not visual
-        let is_rock_block = bt == 34u;
-        let is_wire_block = bt == 36u || bt == 51u; // height = connection mask, not visual
-        let is_dimmer_block = bt == 43u || bt == 6u; // height = level/intensity, not visual
-        let is_breaker_block = bt == 45u; // height = trip threshold, not visual
+        let is_pipe_block = (bt >= BT_PIPE && bt <= BT_INLET) || bt == BT_RESTRICTOR || bt == BT_LIQUID_PIPE || bt == BT_PIPE_BRIDGE || bt == BT_LIQUID_INTAKE || bt == BT_LIQUID_PUMP || bt == BT_LIQUID_OUTPUT;
+        let is_dug_block = bt == BT_DUG_GROUND;
+        let is_crate_block = bt == BT_CRATE; // height = item count, not visual
+        let is_rock_block = bt == BT_ROCK;
+        let is_wire_block = bt == BT_WIRE || bt == BT_WIRE_BRIDGE; // height = connection mask, not visual
+        let is_dimmer_block = bt == BT_DIMMER || bt == BT_FIREPLACE; // height = level/intensity, not visual
+        let is_breaker_block = bt == BT_BREAKER; // height = trip threshold, not visual
         let is_plant_block = false; // berry bush + crop now cast soft shadows (handled below)
 
         // Diagonal wall: only occlude if ray is on the wall half
-        let is_diag_block = bt == 44u;
+        let is_diag_block = bt == BT_DIAGONAL;
         var diag_open = false;
         if is_diag_block {
             let sfx = fract(sx);
@@ -1504,7 +1504,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         }
 
         // --- Tree: sprite-shaped semi-transparent shadow ---
-        if bt == 8u {
+        if bt == BT_TREE {
             let tree_flags = block_flags(block);
             let is_large = (tree_flags & 32u) != 0u;
             let quadrant = (tree_flags >> 3u) & 3u;
@@ -1574,7 +1574,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
                 }
             }
             // Skip the normal block shadow test for trees
-        } else if bt == 31u || bt == 47u {
+        } else if bt == BT_BERRY_BUSH || bt == BT_CROP {
             // Berry bush / crop: soft dappled shadow (lighter than trees)
             if effective_h > current_h {
                 let plant_seed = sx * 97.3 + sy * 213.5 + camera.time * 0.3;
@@ -1880,7 +1880,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         face_color -= vec3<f32>(mortar);
 
         // Glass face: window between sill and lintel with frame detail
-        if btype == 5u {
+        if btype == BT_GLASS {
             let sill_t = WINDOW_SILL_FRAC;
             let lintel_t = 1.0 - WINDOW_LINTEL_FRAC;
             let in_window = wall_face_t > sill_t && wall_face_t < lintel_t;
@@ -1914,7 +1914,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // Insulated wall face: show insulation core between outer panels
-        if btype == 14u {
+        if btype == BT_INSULATED {
             let core_top = 0.2;
             let core_bot = 0.85;
             let in_core_face = wall_face_t > core_top && wall_face_t < core_bot;
@@ -1933,7 +1933,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // Mud wall face: rounded profile, craggy with straw
-        if btype == 35u {
+        if btype == BT_MUD_WALL {
             // Rounded profile: bulges out in the middle
             let bulge = sin(wall_face_t * 3.14159) * 0.12;
             let mud_v = fract(sin(fx * 37.1 + wall_face_t * 73.7) * 43758.5) * 0.06 - 0.03;
@@ -1998,8 +1998,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Pre-pass: draw wire connections underneath power equipment
     // For battery, solar, wind, switch, dimmer — show wire entering from adjacent wire blocks
-    let is_power_equip = btype == 37u || btype == 38u || btype == 39u || btype == 40u
-        || btype == 41u || btype == 42u || btype == 43u;
+    let is_power_equip = btype == BT_SOLAR || btype == BT_BATTERY_S || btype == BT_BATTERY_M || btype == BT_BATTERY_L
+        || btype == BT_WIND_TURBINE || btype == BT_SWITCH || btype == BT_DIMMER;
     if is_power_equip {
         let ground_col = vec3<f32>(0.42, 0.35, 0.22);
         color = ground_col;
@@ -2030,34 +2030,34 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    if btype == 5u {
+    if btype == BT_GLASS {
         // Glass block: render with thin inset
         let glass_result = render_glass_block(world_x, world_y, fx, fy, bx, by);
         color = glass_result.xyz;
         is_glass_pixel = glass_result.w > 0.5;
-    } else if btype == 6u {
+    } else if btype == BT_FIREPLACE {
         // Fireplace: animated emissive rendering
         color = render_fireplace(world_x, world_y, fx, fy, camera.time);
-    } else if btype == 7u {
+    } else if btype == BT_CEILING_LIGHT {
         // Electric light: ceiling fixture rendering
         color = render_electric_light(world_x, world_y, fx, fy, camera.time);
-    } else if btype == 8u {
+    } else if btype == BT_TREE {
         // Tree: sprite-based rendering
         let tree_result = render_tree(world_x, world_y, fx, fy, bheight, bflags);
         color = tree_result.xyz;
         is_tree_pixel = tree_result.w > 0.01;
-    } else if btype == 9u {
+    } else if btype == BT_BENCH {
         // Bench
         color = render_bench(fx, fy, bflags);
-    } else if btype == 10u {
+    } else if btype == BT_FLOOR_LAMP {
         // Standing lamp (emissive)
         color = render_standing_lamp(fx, fy, camera.time);
-    } else if btype == 11u {
+    } else if btype == BT_TABLE_LAMP {
         // Table lamp: bulb circle is emissive, bench surface is not
         let tl = render_table_lamp(fx, fy);
         color = tl.xyz;
         is_table_lamp_bulb = tl.w > 0.5;
-    } else if btype == 48u {
+    } else if btype == BT_FLOODLIGHT {
         // Floodlight: compact housing with bright directional lens
         let fl_cx = fx - 0.5;
         let fl_cy = fy - 0.5;
@@ -2098,7 +2098,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = block_base_color(2u, 0u); // ground
         }
-    } else if btype == 12u {
+    } else if btype == BT_FAN {
         // Fan: metallic gray housing with grille and bold direction arrow
         // Outer frame (dark steel border)
         let edge = f32(fx < 0.08 || fx > 0.92 || fy < 0.08 || fy > 0.92);
@@ -2135,7 +2135,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if on_shaft || on_head {
             color = vec3(0.85, 0.88, 0.92); // bright white-silver arrow
         }
-    } else if btype == 13u {
+    } else if btype == BT_COMPOST {
         // Compost: brown-green organic heap with texture
         let noise = fract(sin(world_x * 13.7 + world_y * 7.3) * 43758.5);
         let heap = smoothstep(0.45, 0.2, length(vec2(fx - 0.5, fy - 0.5)));
@@ -2143,12 +2143,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Slight steam wisps
         let wisp = sin(world_x * 31.0 + camera.time * 2.0) * sin(world_y * 29.0 + camera.time * 1.7);
         color += vec3(0.05) * max(wisp, 0.0) * heap;
-    } else if (btype >= 15u && btype <= 20u) || btype == 46u || btype == 49u || btype == 50u || btype == 52u || btype == 53u || btype == 54u {
+    } else if (btype >= BT_PIPE && btype <= BT_INLET) || btype == BT_RESTRICTOR || btype == BT_LIQUID_PIPE || btype == BT_PIPE_BRIDGE || btype == BT_LIQUID_INTAKE || btype == BT_LIQUID_PUMP || btype == BT_LIQUID_OUTPUT {
         // Piping system: auto-connected thin pipe rendering (gas, liquid, bridge, liquid equipment)
         // Background: wall-mounted inlets on stone, liquid intake water-side on water, rest on dirt
-        if (btype == 19u || btype == 20u) && bheight > 1u {
+        if (btype == BT_OUTLET || btype == BT_INLET) && bheight > 1u {
             color = block_base_color(1u, 0u); // stone wall background for wall-mounted
-        } else if btype == 52u && ((bflags >> 3u) & 3u) == 1u {
+        } else if btype == BT_LIQUID_INTAKE && ((bflags >> 3u) & 3u) == 1u {
             // Liquid intake water-side segment: render water underneath
             color = block_base_color(3u, 0u); // water background
             // Animated water surface
@@ -2167,21 +2167,21 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let n_w = block_type(get_block(bx - 1, by));
         // If mask is set, use it; otherwise auto-detect (backward compatible)
         // Liquid pipes only connect to liquid pipes/bridges; gas to gas/restrictors/bridges
-        let is_liquid = btype == 49u || btype == 52u || btype == 53u || btype == 54u;
+        let is_liquid = btype == BT_LIQUID_PIPE || btype == BT_LIQUID_INTAKE || btype == BT_LIQUID_PUMP || btype == BT_LIQUID_OUTPUT;
         // Gas neighbors: standard pipe types. Liquid neighbors: liquid pipe types.
-        let ln_n = n_n == 49u || n_n == 50u || n_n == 52u || n_n == 53u || n_n == 54u;
-        let ln_s = n_s == 49u || n_s == 50u || n_s == 52u || n_s == 53u || n_s == 54u;
-        let ln_e = n_e == 49u || n_e == 50u || n_e == 52u || n_e == 53u || n_e == 54u;
-        let ln_w = n_w == 49u || n_w == 50u || n_w == 52u || n_w == 53u || n_w == 54u;
-        let gn_n = (n_n >= 15u && n_n <= 20u) || n_n == 46u || n_n == 50u;
-        let gn_s = (n_s >= 15u && n_s <= 20u) || n_s == 46u || n_s == 50u;
-        let gn_e = (n_e >= 15u && n_e <= 20u) || n_e == 46u || n_e == 50u;
-        let gn_w = (n_w >= 15u && n_w <= 20u) || n_w == 46u || n_w == 50u;
+        let ln_n = n_n == BT_LIQUID_PIPE || n_n == BT_PIPE_BRIDGE || n_n == BT_LIQUID_INTAKE || n_n == BT_LIQUID_PUMP || n_n == BT_LIQUID_OUTPUT;
+        let ln_s = n_s == BT_LIQUID_PIPE || n_s == BT_PIPE_BRIDGE || n_s == BT_LIQUID_INTAKE || n_s == BT_LIQUID_PUMP || n_s == BT_LIQUID_OUTPUT;
+        let ln_e = n_e == BT_LIQUID_PIPE || n_e == BT_PIPE_BRIDGE || n_e == BT_LIQUID_INTAKE || n_e == BT_LIQUID_PUMP || n_e == BT_LIQUID_OUTPUT;
+        let ln_w = n_w == BT_LIQUID_PIPE || n_w == BT_PIPE_BRIDGE || n_w == BT_LIQUID_INTAKE || n_w == BT_LIQUID_PUMP || n_w == BT_LIQUID_OUTPUT;
+        let gn_n = (n_n >= BT_PIPE && n_n <= BT_INLET) || n_n == BT_RESTRICTOR || n_n == BT_PIPE_BRIDGE;
+        let gn_s = (n_s >= BT_PIPE && n_s <= BT_INLET) || n_s == BT_RESTRICTOR || n_s == BT_PIPE_BRIDGE;
+        let gn_e = (n_e >= BT_PIPE && n_e <= BT_INLET) || n_e == BT_RESTRICTOR || n_e == BT_PIPE_BRIDGE;
+        let gn_w = (n_w >= BT_PIPE && n_w <= BT_INLET) || n_w == BT_RESTRICTOR || n_w == BT_PIPE_BRIDGE;
         var cn = select(gn_n, ln_n, is_liquid);
         var cs = select(gn_s, ln_s, is_liquid);
         var ce = select(gn_e, ln_e, is_liquid);
         var cw = select(gn_w, ln_w, is_liquid);
-        if pipe_conn_mask != 0u && (btype == 15u || btype == 46u || btype == 49u) {
+        if pipe_conn_mask != 0u && (btype == BT_PIPE || btype == BT_RESTRICTOR || btype == BT_LIQUID_PIPE) {
             cn = cn && (pipe_conn_mask & 1u) != 0u; // N
             ce = ce && (pipe_conn_mask & 2u) != 0u; // E
             cs = cs && (pipe_conn_mask & 4u) != 0u; // S
@@ -2191,7 +2191,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let cx = fx - 0.5;
         let cy = fy - 0.5;
 
-        if btype == 16u {
+        if btype == BT_PUMP {
             // --- Pump: square block connected to pipes ---
             let pump_r = 0.30;
             let pipe_r = 0.15;
@@ -2210,7 +2210,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                     color = vec3(0.28, 0.35, 0.30);
                 }
             }
-        } else if btype == 17u {
+        } else if btype == BT_TANK {
             // --- Tank: rounded cylinder with fill indicator ---
             let tank_rx = 0.42; // wider
             let tank_ry = 0.35;
@@ -2250,9 +2250,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // else: background (dirt floor) already set above
         } else {
             // --- Pipe / Pump / Valve / Outlet / Inlet / Restrictor: round pipe ---
-            var pipe_r = select(0.15, 0.12, btype == 49u); // gas pipes wider, liquid slightly thinner
+            var pipe_r = select(0.15, 0.12, btype == BT_LIQUID_PIPE); // gas pipes wider, liquid slightly thinner
             // Restrictor (46): constriction — narrower in the middle
-            let is_restrictor = btype == 46u;
+            let is_restrictor = btype == BT_RESTRICTOR;
             if is_restrictor {
                 // Narrow in center, wider at edges (hourglass shape)
                 let center_dist = length(vec2(cx, cy));
@@ -2318,11 +2318,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if is_restrictor {
                     pipe_base = vec3<f32>(0.55, 0.40, 0.25);
                     pipe_bright = vec3<f32>(0.75, 0.58, 0.35);
-                } else if btype == 49u {
+                } else if btype == BT_LIQUID_PIPE {
                     // Liquid pipe: blue tint
                     pipe_base = vec3<f32>(0.30, 0.40, 0.55);
                     pipe_bright = vec3<f32>(0.50, 0.62, 0.78);
-                } else if btype == 50u {
+                } else if btype == BT_PIPE_BRIDGE {
                     // Pipe bridge: slightly different shade to indicate crossing
                     pipe_base = vec3<f32>(0.42, 0.44, 0.48);
                     pipe_bright = vec3<f32>(0.64, 0.67, 0.72);
@@ -2357,7 +2357,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
 
                 // Pipe bridge: segment-specific visual overlay
-                if btype == 50u {
+                if btype == BT_PIPE_BRIDGE {
                     let br_seg = (bflags >> 3u) & 3u;
                     let br_rot = (bflags >> 5u) & 3u;
                     let bridge_is_ns = br_rot % 2u == 0u;
@@ -2382,7 +2382,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
 
                 // Valve overlay
-                if btype == 18u {
+                if btype == BT_VALVE {
                     let valve_open = is_open(block);
                     let vc = select(vec3(0.65, 0.15, 0.15), vec3(0.15, 0.55, 0.15), valve_open);
                     let bar_along = select(abs(cy), abs(cx), ce || cw);
@@ -2394,7 +2394,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
 
                 // Liquid Intake (52): blue/teal box straddling water
-                if btype == 52u {
+                if btype == BT_LIQUID_INTAKE {
                     let seg52 = (bflags >> 3u) & 3u;
                     if cdist < 0.25 {
                         color = vec3(0.25, 0.40, 0.55);
@@ -2411,7 +2411,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
 
                 // Liquid Pump (53): blue-green pump body
-                if btype == 53u {
+                if btype == BT_LIQUID_PUMP {
                     let pump53_r = 0.28;
                     if cdist < pump53_r {
                         let shade53 = 1.0 - cdist / pump53_r * 0.3;
@@ -2423,7 +2423,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
 
                 // Liquid Output (54): nozzle spraying water
-                if btype == 54u {
+                if btype == BT_LIQUID_OUTPUT {
                     if cdist < 0.20 {
                         color = vec3(0.30, 0.45, 0.55);
                         if cdist > 0.16 { color = vec3(0.22, 0.35, 0.45); }
@@ -2440,8 +2440,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             // Inlet/Outlet: rendered AFTER and ON TOP of everything (overlays wall sprite)
-            if btype == 19u || btype == 20u {
-                let is_outlet = btype == 19u;
+            if btype == BT_OUTLET || btype == BT_INLET {
+                let is_outlet = btype == BT_OUTLET;
                 let dir_bits = (bflags >> 3u) & 3u;
                 var fan_dx = 0.0;
                 var fan_dy = 0.0;
@@ -2487,15 +2487,15 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
         }
-    } else if btype == 30u {
+    } else if btype == BT_BED {
         // Bed: 2-tile piece
         color = render_bed(fx, fy, bflags);
-    } else if btype == 31u {
+    } else if btype == BT_BERRY_BUSH {
         // Berry bush: leafy mound with berries
         let bush_result = render_berry_bush(fx, fy, world_x, world_y, camera.time);
         color = bush_result.xyz;
         is_tree_pixel = bush_result.w > 0.01;
-    } else if btype == 32u {
+    } else if btype == BT_DUG_GROUND {
         // Dug ground: excavated pit, 20% per depth level (max 5 = one full block)
         let depth = f32(bheight); // 1-5, each = 20% of a block
         let depth_frac = depth / 5.0; // 0.0-1.0
@@ -2510,7 +2510,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if depth >= 1.0 {
             color *= 1.0 - depth_frac * 0.15;
         }
-    } else if btype == 33u {
+    } else if btype == BT_CRATE {
         // Storage crate: wooden box with planks and brackets
         // bheight = number of stored items (0-10)
         let ground = vec3<f32>(0.45, 0.35, 0.20);
@@ -2574,7 +2574,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = ground;
         }
-    } else if btype == 34u {
+    } else if btype == BT_ROCK {
         // Rock: dark natural stone on dirt, irregular shape with outline
         let ground = vec3<f32>(0.42, 0.35, 0.22);
         // Irregular shape: offset center + multi-frequency noise distortion
@@ -2613,7 +2613,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = ground;
         }
-    } else if btype == 36u || btype == 51u {
+    } else if btype == BT_WIRE || btype == BT_WIRE_BRIDGE {
         // Wire / Wire Bridge: copper conductor with directional segments
         let ground = vec3<f32>(0.42, 0.35, 0.22);
         // Connection mask stored in height byte bits 4-7: bit4=N, bit5=E, bit6=S, bit7=W
@@ -2633,10 +2633,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let wf_e2 = (get_block(bx + 1, by) >> 16u) & 0x80u;
             let wf_n2 = (get_block(bx, by - 1) >> 16u) & 0x80u;
             let wf_s2 = (get_block(bx, by + 1) >> 16u) & 0x80u;
-            let pwr_w = n_w == 36u || n_w == 37u || n_w == 38u || n_w == 39u || n_w == 40u || n_w == 41u || n_w == 42u || n_w == 43u || n_w == 45u || n_w == 51u || n_w == 48u || n_w == 7u || n_w == 12u || n_w == 10u;
-            let pwr_e = n_e == 36u || n_e == 37u || n_e == 38u || n_e == 39u || n_e == 40u || n_e == 41u || n_e == 42u || n_e == 43u || n_e == 45u || n_e == 7u || n_e == 12u || n_e == 10u;
-            let pwr_n = n_n == 36u || n_n == 37u || n_n == 38u || n_n == 39u || n_n == 40u || n_n == 41u || n_n == 42u || n_n == 43u || n_n == 45u || n_n == 7u || n_n == 12u || n_n == 10u;
-            let pwr_s = n_s == 36u || n_s == 37u || n_s == 38u || n_s == 39u || n_s == 40u || n_s == 41u || n_s == 42u || n_s == 43u || n_s == 45u || n_s == 7u || n_s == 12u || n_s == 10u;
+            let pwr_w = n_w == BT_WIRE || n_w == BT_SOLAR || n_w == BT_BATTERY_S || n_w == BT_BATTERY_M || n_w == BT_BATTERY_L || n_w == BT_WIND_TURBINE || n_w == BT_SWITCH || n_w == BT_DIMMER || n_w == BT_BREAKER || n_w == BT_WIRE_BRIDGE || n_w == BT_FLOODLIGHT || n_w == BT_CEILING_LIGHT || n_w == BT_FAN || n_w == BT_FLOOR_LAMP;
+            let pwr_e = n_e == BT_WIRE || n_e == BT_SOLAR || n_e == BT_BATTERY_S || n_e == BT_BATTERY_M || n_e == BT_BATTERY_L || n_e == BT_WIND_TURBINE || n_e == BT_SWITCH || n_e == BT_DIMMER || n_e == BT_BREAKER || n_e == BT_CEILING_LIGHT || n_e == BT_FAN || n_e == BT_FLOOR_LAMP;
+            let pwr_n = n_n == BT_WIRE || n_n == BT_SOLAR || n_n == BT_BATTERY_S || n_n == BT_BATTERY_M || n_n == BT_BATTERY_L || n_n == BT_WIND_TURBINE || n_n == BT_SWITCH || n_n == BT_DIMMER || n_n == BT_BREAKER || n_n == BT_CEILING_LIGHT || n_n == BT_FAN || n_n == BT_FLOOR_LAMP;
+            let pwr_s = n_s == BT_WIRE || n_s == BT_SOLAR || n_s == BT_BATTERY_S || n_s == BT_BATTERY_M || n_s == BT_BATTERY_L || n_s == BT_WIND_TURBINE || n_s == BT_SWITCH || n_s == BT_DIMMER || n_s == BT_BREAKER || n_s == BT_CEILING_LIGHT || n_s == BT_FAN || n_s == BT_FLOOR_LAMP;
             conn_w = pwr_w || wf_w2 != 0u;
             conn_e = pwr_e || wf_e2 != 0u;
             conn_n = pwr_n || wf_n2 != 0u;
@@ -2680,7 +2680,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let pulse = sin(world_x * 4.0 + world_y * 4.0 - camera.time * 8.0) * 0.5 + 0.5;
             wire_col += vec3<f32>(0.08, 0.06, 0.01) * pulse * glow_intensity;
             // Wire bridge: segment-specific visual
-            if btype == 51u {
+            if btype == BT_WIRE_BRIDGE {
                 let wb_seg = (bflags >> 3u) & 3u;
                 let wb_rot = (bflags >> 5u) & 3u;
                 let bridge_is_ns = wb_rot % 2u == 0u;
@@ -2707,7 +2707,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = ground;
         }
-    } else if btype == 37u {
+    } else if btype == BT_SOLAR {
         // Solar panel: 3×3 tile panel. Segment info in flags: bits3-4=col, bits5-6=row
         let seg_col = f32((bflags >> 3u) & 3u);
         let seg_row = f32((bflags >> 5u) & 3u);
@@ -2745,7 +2745,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if v > 0.5 {
             color += vec3<f32>(0.02, 0.06, 0.01) * clamp(v / 12.0, 0.0, 1.0);
         }
-    } else if btype == 38u {
+    } else if btype == BT_BATTERY_S {
         // Battery: green casing with charge indicator
         let margin = 0.12;
         let on_case = fx > margin && fx < (1.0 - margin) && fy > margin && fy < (1.0 - margin);
@@ -2770,7 +2770,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = vec3<f32>(0.42, 0.35, 0.22); // ground
         }
-    } else if btype == 39u {
+    } else if btype == BT_BATTERY_M {
         // Medium battery (2 tiles): darker green, seamless across tiles
         let seg = (bflags >> 3u) & 1u;
         let rot = (bflags >> 5u) & 3u;
@@ -2793,7 +2793,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 else { color = vec3<f32>(0.12, 0.12, 0.12); }
             }
         } else { color = vec3<f32>(0.42, 0.35, 0.22); }
-    } else if btype == 40u {
+    } else if btype == BT_BATTERY_L {
         // Large battery (2×2): industrial green, seamless across 4 tiles
         let col40 = (bflags >> 3u) & 1u;
         let row40 = (bflags >> 5u) & 1u;
@@ -2821,7 +2821,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Panel lines
             if abs(gx40 - 0.5) < 0.008 { color *= 0.85; }
         } else { color = vec3<f32>(0.42, 0.35, 0.22); }
-    } else if btype == 41u {
+    } else if btype == BT_WIND_TURBINE {
         // Wind turbine: 2×2 with 3 long blades spinning from center hub
         // Segment: bits 3-4 = col (0-1), bits 5-6 = row (0-1), bit 6 (0x40) = rotation
         let wt_col = f32((bflags >> 3u) & 1u);
@@ -2900,7 +2900,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if wv > 0.5 && wt_dist < 0.06 {
             color += vec3<f32>(0.1, 0.15, 0.05) * clamp(wv / 12.0, 0.0, 1.0);
         }
-    } else if btype == 42u {
+    } else if btype == BT_SWITCH {
         // Switch: toggle box on wire
         let ground = vec3<f32>(0.42, 0.35, 0.22);
         let sw_on = (bflags & 4u) != 0u;
@@ -2926,7 +2926,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = ground;
         }
-    } else if btype == 43u {
+    } else if btype == BT_DIMMER {
         // Dimmer: rotary knob on wire
         let ground = vec3<f32>(0.42, 0.35, 0.22);
         let dim_level = f32(bheight) / 10.0;
@@ -2949,7 +2949,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = ground;
         }
-    } else if btype == 45u {
+    } else if btype == BT_BREAKER {
         // Circuit breaker: box with trip indicator on wire
         let ground = vec3<f32>(0.42, 0.35, 0.22);
         let breaker_on = (bflags & 4u) != 0u;
@@ -2990,7 +2990,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = ground;
         }
-    } else if btype == 14u {
+    } else if btype == BT_INSULATED {
         // Insulated wall: outer shell with fiberglass insulation core
         let edge = 0.15; // outer shell thickness
         let in_core = fx > edge && fx < (1.0 - edge) && fy > edge && fy < (1.0 - edge);
@@ -3016,7 +3016,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 color -= vec3<f32>(0.05);
             }
         }
-    } else if btype == 35u {
+    } else if btype == BT_MUD_WALL {
         // Mud wall: organic rounded shape with craggy surface texture
         let cx = fx - 0.5;
         let cy = fy - 0.5;
@@ -3048,7 +3048,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if dist > 0.38 {
             color *= 0.7;
         }
-    } else if btype == 44u {
+    } else if btype == BT_DIAGONAL {
         // Diagonal wall: half-cell wall, half floor
         let diag_variant = (bflags >> 3u) & 3u;
         let on_wall = diag_is_wall(fx, fy, diag_variant);
@@ -3079,7 +3079,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 color = fc;
             }
         }
-    } else if btype == 47u {
+    } else if btype == BT_CROP {
         // Crop: growth stages shown as increasingly green/tall plants
         let stage = bheight; // 0=planted, 1=sprout, 2=growing, 3=mature
         let ground = vec3<f32>(0.40, 0.32, 0.18); // tilled soil (darker than dirt)
@@ -3130,7 +3130,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Procedural terrain detail (ground-level blocks only) ---
     // Replace this block with sprite sampling when migrating to sprites.
-    if camera.enable_terrain_detail > 0.5 && bheight == 0u && (btype == 2u || btype == 0u) {
+    if camera.enable_terrain_detail > 0.5 && bheight == 0u && (btype == BT_DIRT || btype == BT_AIR) {
         // Dirt / air (ground): full terrain detail with grass, flowers, pebbles
         let td_idx = u32(by) * u32(camera.grid_w) + u32(bx);
         let td_wt = water_table_buf[td_idx];
@@ -3139,7 +3139,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let effective_wt = td_wt - td_elev * 0.3;
         color = terrain_detail(color, world_x, world_y, bx, by,
             effective_wt, camera.rain_intensity, camera.wind_angle, camera.time);
-    } else if camera.enable_terrain_detail > 0.5 && bheight > 0u && btype == 1u {
+    } else if camera.enable_terrain_detail > 0.5 && bheight > 0u && btype == BT_STONE {
         // Stone block surface: cracks, veins, strata
         color = stone_detail(color, world_x, world_y);
     }
@@ -3178,21 +3178,21 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Open door: treat as floor-level opening (overrides wall type)
     let door_is_open = is_door(block) && is_open(block);
     // Trees: transparent sprite pixels are ground-level; canopy keeps height for shadows
-    let is_tree_ground = (btype == 8u || btype == 31u) && !is_tree_pixel;
-    let is_pipe = (btype >= 15u && btype <= 20u) || btype == 46u || btype == 49u || btype == 50u || btype == 52u || btype == 53u || btype == 54u;
-    let is_dug = btype == 32u; // dug ground: height = depth, not visual height
-    let is_rock = btype == 34u;
-    let is_crate = btype == 33u; // crate height = item count, not visual height
-    let is_wire = btype == 36u || btype == 51u; // wire height = connection mask, not visual
-    let is_dimmer = btype == 43u || btype == 6u; // height = level/intensity, not visual
-    let is_breaker = btype == 45u; // breaker height = threshold, not visual
-    let is_plant = btype == 47u; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
-    let is_diag_open = btype == 44u && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
+    let is_tree_ground = (btype == BT_TREE || btype == BT_BERRY_BUSH) && !is_tree_pixel;
+    let is_pipe = (btype >= BT_PIPE && btype <= BT_INLET) || btype == BT_RESTRICTOR || btype == BT_LIQUID_PIPE || btype == BT_PIPE_BRIDGE || btype == BT_LIQUID_INTAKE || btype == BT_LIQUID_PUMP || btype == BT_LIQUID_OUTPUT;
+    let is_dug = btype == BT_DUG_GROUND; // dug ground: height = depth, not visual height
+    let is_rock = btype == BT_ROCK;
+    let is_crate = btype == BT_CRATE; // crate height = item count, not visual height
+    let is_wire = btype == BT_WIRE || btype == BT_WIRE_BRIDGE; // wire height = connection mask, not visual
+    let is_dimmer = btype == BT_DIMMER || btype == BT_FIREPLACE; // height = level/intensity, not visual
+    let is_breaker = btype == BT_BREAKER; // breaker height = threshold, not visual
+    let is_plant = btype == BT_CROP; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
+    let is_diag_open = btype == BT_DIAGONAL && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
     let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_plant || is_diag_open);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)
-    if btype != 8u {
+    if btype != BT_TREE {
         color += vec3<f32>(effective_fheight * 0.03);
     }
 
@@ -3200,7 +3200,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let water_level = textureLoad(water_tex, vec2<i32>(bx, by), 0).r;
     let wt_idx = u32(by) * 256u + u32(bx);
     let wt_depth = water_table_buf[wt_idx]; // negative = below ground, positive = spring
-    let is_ground_tile = btype == 2u || btype == 26u || btype == 27u || btype == 28u || btype == 32u;
+    let is_ground_tile = btype == BT_DIRT || btype == BT_WOOD_FLOOR || btype == BT_STONE_FLOOR || btype == BT_CONCRETE_FLOOR || btype == BT_DUG_GROUND;
     if is_ground_tile && effective_height == 0u {
         // Water table coloring: subtle moisture for high water table (even without surface water)
         let wt_moisture = clamp((wt_depth + 1.5) / 2.0, 0.0, 0.5); // 0 at -1.5, 0.5 at +0.5
@@ -3236,13 +3236,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Water overlay is rendered in the main overlay chain below (layer 12)
 
     // Wall side faces (3D bevel) — skip for doors and trees
-    if effective_height > 0u && btype != 8u && btype != 44u {
+    if effective_height > 0u && btype != BT_TREE && btype != BT_DIAGONAL {
         color += wall_side_shade(world_x, world_y, bx, by, effective_height);
     }
 
     // Wire overlay: draw wire on top of walls/blocks that have wire flag (bit 7)
     let has_wire_flag = (bflags & 0x80u) != 0u;
-    if has_wire_flag && btype != 36u {
+    if has_wire_flag && btype != BT_WIRE {
         // Same wire rendering logic as standalone wire, but overlaid
         let wn_w = block_type(get_block(bx - 1, by));
         let wn_e = block_type(get_block(bx + 1, by));
@@ -3252,10 +3252,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let wf_e = (get_block(bx + 1, by) >> 16u) & 0x80u;
         let wf_n = (get_block(bx, by - 1) >> 16u) & 0x80u;
         let wf_s = (get_block(bx, by + 1) >> 16u) & 0x80u;
-        let wc_w = wn_w == 36u || wn_w == 37u || wn_w == 38u || wf_w != 0u;
-        let wc_e = wn_e == 36u || wn_e == 37u || wn_e == 38u || wf_e != 0u;
-        let wc_n = wn_n == 36u || wn_n == 37u || wn_n == 38u || wf_n != 0u;
-        let wc_s = wn_s == 36u || wn_s == 37u || wn_s == 38u || wf_s != 0u;
+        let wc_w = wn_w == BT_WIRE || wn_w == BT_SOLAR || wn_w == BT_BATTERY_S || wf_w != 0u;
+        let wc_e = wn_e == BT_WIRE || wn_e == BT_SOLAR || wn_e == BT_BATTERY_S || wf_e != 0u;
+        let wc_n = wn_n == BT_WIRE || wn_n == BT_SOLAR || wn_n == BT_BATTERY_S || wf_n != 0u;
+        let wc_s = wn_s == BT_WIRE || wn_s == BT_SOLAR || wn_s == BT_BATTERY_S || wf_s != 0u;
         let ww = 0.06;
         var on_overlay_wire = false;
         if wc_w { on_overlay_wire = on_overlay_wire || (fx < 0.5 && abs(fy - 0.5) < ww); }
@@ -3329,7 +3329,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    if get_material(btype).is_emissive > 0.5 && (btype != 11u || is_table_lamp_bulb) {
+    if get_material(btype).is_emissive > 0.5 && (btype != BT_TABLE_LAMP || is_table_lamp_bulb) {
         // Emissive block (fireplace/electric light): not affected by shadow/lighting.
         // Just clamp and output directly.
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -3337,7 +3337,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    if btype == 5u && is_glass_pixel {
+    if btype == BT_GLASS && is_glass_pixel {
         // Glass pixel: translucent with tinted light + additive fire
         let glass_light = light_factor * 0.6 + 0.4;
         color = color * (ambient + sun_color * glass_light * 0.9 * shadow_tint);
@@ -3372,7 +3372,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Water effect (type 3 = water, type 32 depth>=1 = ground water at 20%+)
-    let is_water = btype == 3u || (btype == 32u && bheight >= 1u);
+    let is_water = btype == BT_WATER || (btype == BT_DUG_GROUND && bheight >= 1u);
     if is_water {
         let t = camera.time;
         // Multi-octave ripple normals
@@ -3382,7 +3382,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ripple = (rip1 + rip2 + rip3) * 0.02;
 
         // Depth-dependent base color (deeper = darker blue)
-        let depth_factor = select(1.0, f32(bheight) / 5.0, btype == 32u);
+        let depth_factor = select(1.0, f32(bheight) / 5.0, btype == BT_DUG_GROUND);
         let shallow = vec3<f32>(0.15, 0.38, 0.55);
         let deep = vec3<f32>(0.06, 0.18, 0.40);
         var water_color = mix(shallow, deep, depth_factor * 0.7);
@@ -3406,17 +3406,17 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         water_color += vec3<f32>(ripple * 0.3, ripple * 0.5, ripple * 0.8);
 
         // Edge darkening (shoreline)
-        if btype == 3u {
+        if btype == BT_WATER {
             let edge_dist = min(min(fx, 1.0 - fx), min(fy, 1.0 - fy));
             // Check neighbors for non-water
             let n_n = block_type(get_block(bx, by - 1));
             let n_s = block_type(get_block(bx, by + 1));
             let n_e = block_type(get_block(bx + 1, by));
             let n_w = block_type(get_block(bx - 1, by));
-            let shore_n = f32(n_n != 3u) * smoothstep(0.3, 0.0, fy);
-            let shore_s = f32(n_s != 3u) * smoothstep(0.7, 1.0, fy);
-            let shore_e = f32(n_e != 3u) * smoothstep(0.7, 1.0, fx);
-            let shore_w = f32(n_w != 3u) * smoothstep(0.3, 0.0, fx);
+            let shore_n = f32(n_n != BT_WATER) * smoothstep(0.3, 0.0, fy);
+            let shore_s = f32(n_s != BT_WATER) * smoothstep(0.7, 1.0, fy);
+            let shore_e = f32(n_e != BT_WATER) * smoothstep(0.7, 1.0, fx);
+            let shore_w = f32(n_w != BT_WATER) * smoothstep(0.3, 0.0, fx);
             let shore = max(max(shore_n, shore_s), max(shore_e, shore_w));
             water_color = mix(water_color, vec3<f32>(0.30, 0.28, 0.22), shore * 0.5);
         }
@@ -3560,7 +3560,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Per-pixel proximity glow from nearby light sources.
     // Applies to all visible surfaces EXCEPT structural wall tops (which would bleed onto roof).
     // Equipment, furniture, batteries, pipes etc. inside buildings all receive light.
-    let is_furniture = get_material(btype).is_furniture > 0.5 && !(btype == 11u && is_table_lamp_bulb);
+    let is_furniture = get_material(btype).is_furniture > 0.5 && !(btype == BT_TABLE_LAMP && is_table_lamp_bulb);
     let is_structural_wall = is_roofed && camera.show_roofs < 0.5
         && matches_wall_type(btype) && bheight > 0u;
     let receives_glow = is_indoor || is_furniture
@@ -3824,9 +3824,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let v = voltage[grid_idx_p];
         let norm_v = clamp(v / 12.0, 0.0, 1.0);
         // Is this block part of the power grid?
-        let is_pwr_infra = btype == 36u || btype == 37u || btype == 38u || btype == 39u
-            || btype == 40u || btype == 41u || btype == 42u || btype == 43u || btype == 45u || btype == 48u || btype == 51u
-            || btype == 7u || btype == 10u || btype == 11u || btype == 12u || btype == 16u
+        let is_pwr_infra = btype == BT_WIRE || btype == BT_SOLAR || btype == BT_BATTERY_S || btype == BT_BATTERY_M
+            || btype == BT_BATTERY_L || btype == BT_WIND_TURBINE || btype == BT_SWITCH || btype == BT_DIMMER || btype == BT_BREAKER || btype == BT_FLOODLIGHT || btype == BT_WIRE_BRIDGE
+            || btype == BT_CEILING_LIGHT || btype == BT_FLOOR_LAMP || btype == BT_TABLE_LAMP || btype == BT_FAN || btype == BT_PUMP
             || (bflags & 0x80u) != 0u; // wire overlay on wall
         if is_pwr_infra {
             if norm_v > 0.01 {
@@ -3865,9 +3865,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
         let norm_a = clamp(total_current * 0.5, 0.0, 1.0);
-        let is_amp_infra = btype == 36u || btype == 37u || btype == 38u || btype == 39u
-            || btype == 40u || btype == 41u || btype == 42u || btype == 43u || btype == 48u || btype == 51u
-            || btype == 7u || btype == 10u || btype == 11u || btype == 12u || btype == 16u
+        let is_amp_infra = btype == BT_WIRE || btype == BT_SOLAR || btype == BT_BATTERY_S || btype == BT_BATTERY_M
+            || btype == BT_BATTERY_L || btype == BT_WIND_TURBINE || btype == BT_SWITCH || btype == BT_DIMMER || btype == BT_FLOODLIGHT || btype == BT_WIRE_BRIDGE
+            || btype == BT_CEILING_LIGHT || btype == BT_FLOOR_LAMP || btype == BT_TABLE_LAMP || btype == BT_FAN || btype == BT_PUMP
             || (bflags & 0x80u) != 0u;
         if norm_a > 0.005 {
             var amp_color = mix(vec3<f32>(0.05, 0.05, 0.15), vec3<f32>(0.4, 0.8, 1.0), clamp(norm_a * 2.0, 0.0, 1.0));
