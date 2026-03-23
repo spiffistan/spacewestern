@@ -1038,88 +1038,128 @@ fn render_fireplace(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> 
     return color;
 }
 
-// Render fire overlay for burning blocks. Returns RGBA where A = fire opacity.
-// Multi-layer effect: ember bed → flame tongues → hot core → sparks → smoke wisps.
-// `intensity` 0-1 controls progression from smoldering to roaring.
-fn render_fire_overlay(wx: f32, wy: f32, fx: f32, fy: f32, time: f32, intensity: f32) -> vec4<f32> {
-    // Per-tile phase so adjacent burning blocks don't flicker in sync
-    let phase = fire_hash(vec2<f32>(wx, wy)) * 6.28;
-    let flicker = fire_flicker(time + phase);
+// --- Noise functions for fire rendering ---
+// 2D value noise with smooth interpolation
+fn noise2d(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f); // smoothstep interpolation
+    let a = fire_hash(i);
+    let b = fire_hash(i + vec2<f32>(1.0, 0.0));
+    let c = fire_hash(i + vec2<f32>(0.0, 1.0));
+    let d = fire_hash(i + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
 
+// Fractal Brownian motion — layered noise for turbulent fire shapes
+fn fbm_fire(p: vec2<f32>, octaves: i32) -> f32 {
+    var val = 0.0;
+    var amp = 0.5;
+    var freq = 1.0;
+    var pos = p;
+    for (var i = 0; i < octaves; i++) {
+        val += amp * noise2d(pos * freq);
+        freq *= 2.0;
+        amp *= 0.5;
+        pos += vec2<f32>(1.7, 3.1); // offset each octave to reduce axis-alignment
+    }
+    return val;
+}
+
+// Fire color ramp: maps noise value 0-1 to fire color
+// 0.0 = transparent/black, 0.3 = deep red, 0.5 = orange, 0.7 = yellow, 0.9 = white
+fn fire_color_ramp(t: f32) -> vec3<f32> {
+    if t < 0.25 {
+        // Black → deep red
+        let s = t / 0.25;
+        return mix(vec3<f32>(0.05, 0.0, 0.0), vec3<f32>(0.6, 0.05, 0.0), s);
+    } else if t < 0.5 {
+        // Deep red → orange
+        let s = (t - 0.25) / 0.25;
+        return mix(vec3<f32>(0.6, 0.05, 0.0), vec3<f32>(1.0, 0.4, 0.0), s);
+    } else if t < 0.75 {
+        // Orange → yellow
+        let s = (t - 0.5) / 0.25;
+        return mix(vec3<f32>(1.0, 0.4, 0.0), vec3<f32>(1.0, 0.8, 0.1), s);
+    } else {
+        // Yellow → white-hot
+        let s = (t - 0.75) / 0.25;
+        return mix(vec3<f32>(1.0, 0.8, 0.1), vec3<f32>(1.0, 0.95, 0.8), s);
+    }
+}
+
+// Render fire overlay for burning blocks. Returns RGBA where A = fire opacity.
+// Uses FBM noise scrolling upward to create realistic turbulent flame shapes.
+fn render_fire_overlay(wx: f32, wy: f32, fx: f32, fy: f32, time: f32, intensity: f32) -> vec4<f32> {
+    // Per-tile offset so adjacent fires don't look identical
+    let tile_offset = fire_hash(vec2<f32>(floor(wx), floor(wy))) * 100.0;
+
+    // --- Flame shape: noise field scrolling upward ---
+    // UV coordinates in noise space: x follows tile position, y scrolls up with time
+    let noise_scale = 4.0; // how detailed the flame texture is
+    let rise_speed = 3.0 * (0.8 + 0.4 * intensity); // flames rise faster at higher intensity
+    let noise_uv = vec2<f32>(
+        fx * noise_scale + tile_offset,
+        fy * noise_scale - time * rise_speed + tile_offset * 0.7
+    );
+
+    // Multi-octave turbulent noise for flame shape
+    let flame_noise = fbm_fire(noise_uv, 4);
+
+    // --- Flame mask: defines where flames can appear ---
+    // Flames are tallest at center-bottom, taper toward edges and top
+    // In top-down view: fire is visible everywhere but edges flicker
     let cx = fx - 0.5;
     let cy = fy - 0.5;
     let dist = sqrt(cx * cx + cy * cy);
-    let angle = atan2(cy, cx);
 
-    // === Layer 1: Ember bed (always present, even at low intensity) ===
-    let ember_t = time * 1.5 + phase;
-    let e1 = sin(wx * 17.0 + ember_t * 2.3) * sin(wy * 19.0 + ember_t * 1.7);
-    let e2 = sin(wx * 31.0 - ember_t * 3.1) * sin(wy * 23.0 + ember_t * 2.9);
-    let e3 = sin(wx * 47.0 + ember_t * 1.1) * sin(wy * 37.0 - ember_t * 2.0);
-    let ember_glow = clamp(e1 * 0.4 + e2 * 0.3 + e3 * 0.2 + 0.2, 0.0, 1.0);
-    let ember_color = mix(
-        vec3<f32>(0.25, 0.06, 0.02),  // dark charcoal
-        vec3<f32>(0.9, 0.3, 0.05),    // glowing orange
-        ember_glow * intensity
-    );
-    var fire_opacity = clamp(intensity * 0.4 + ember_glow * 0.3, 0.0, 1.0);
-    var fire_color = ember_color;
+    // Edge fade: flames are cut off beyond tile edge
+    let edge_mask = smoothstep(0.5, 0.25, dist);
 
-    // === Layer 2: Flame tongues (multiple overlapping waves) ===
-    let flame_t = time * 3.0 + phase;
-    let f1 = sin(angle * 3.0 + flame_t * 4.7) * 0.5 + 0.5;
-    let f2 = sin(angle * 5.0 - flame_t * 6.3 + 1.5) * 0.5 + 0.5;
-    let f3 = sin(angle * 7.0 + flame_t * 3.2 + 3.0) * 0.5 + 0.5;
-    let tongue_pattern = f1 * 0.5 + f2 * 0.3 + f3 * 0.2;
+    // Shape variation: irregular edges using a second noise layer
+    let edge_noise = fbm_fire(vec2<f32>(
+        wx * 6.0 + tile_offset * 0.3,
+        wy * 6.0 - time * 1.5
+    ), 3);
+    let irregular_edge = edge_mask * (0.6 + 0.4 * edge_noise);
 
-    // Flames grow from edges inward — more coverage at higher intensity
-    let flame_reach = 0.15 + intensity * 0.35; // max radius of flame coverage
-    let radial_fade = smoothstep(flame_reach, flame_reach * 0.3, dist);
-    let flame_strength = tongue_pattern * radial_fade * intensity;
+    // Combine noise with mask — threshold controls flame coverage
+    let threshold = 0.65 - intensity * 0.35; // lower threshold = more fire coverage
+    let raw_flame = (flame_noise - threshold) / (1.0 - threshold);
+    let flame = clamp(raw_flame * irregular_edge, 0.0, 1.0);
 
-    // Upward bias: flames lick toward -Y (north = "up" in top-down view)
-    let upward_bias = clamp(-cy * 2.0 + 0.5, 0.0, 1.0);
-    let biased_flame = flame_strength * (0.6 + 0.4 * upward_bias);
+    // --- Color: map flame intensity through the color ramp ---
+    let color_val = flame * (0.7 + 0.3 * intensity); // boost toward white at high intensity
+    var fire_col = fire_color_ramp(color_val);
 
-    let flame_col = mix(FIRE_COLOR, FIRE_COLOR_HOT, biased_flame * flicker);
-    fire_color = mix(fire_color, flame_col, clamp(biased_flame * 1.5, 0.0, 1.0));
-    fire_opacity = max(fire_opacity, biased_flame);
+    // Flicker modulation (whole-tile brightness variation)
+    let flicker = fire_flicker(time + tile_offset);
+    fire_col *= (0.75 + 0.25 * flicker);
 
-    // === Layer 3: Hot core (bright center at high intensity) ===
-    let core_radius = 0.15 * intensity;
-    if dist < core_radius && intensity > 0.3 {
-        let core_t = 1.0 - dist / core_radius;
-        let core_bright = core_t * core_t * intensity;
-        fire_color = mix(fire_color, FIRE_COLOR_HOT * (1.0 + 0.2 * flicker), core_bright);
-        fire_opacity = max(fire_opacity, core_bright);
+    // --- Ember base: glowing patches beneath the flames ---
+    let ember_noise = fbm_fire(vec2<f32>(wx * 3.0 + time * 0.5, wy * 3.0 + time * 0.3), 3);
+    let ember_glow = clamp(ember_noise * 2.0 - 0.6, 0.0, 1.0) * intensity;
+    let ember_col = mix(vec3<f32>(0.15, 0.02, 0.0), vec3<f32>(0.8, 0.2, 0.02), ember_glow);
+
+    // Blend embers under flames
+    var final_color = mix(ember_col, fire_col, clamp(flame * 2.0, 0.0, 1.0));
+
+    // --- Sparks: bright points drifting upward ---
+    let spark_noise = noise2d(vec2<f32>(wx * 12.0 + tile_offset, wy * 12.0 - time * 8.0));
+    let spark = smoothstep(0.92, 0.96, spark_noise) * intensity;
+    if spark > 0.01 {
+        final_color = mix(final_color, vec3<f32>(1.0, 0.95, 0.7), spark);
     }
 
-    // === Layer 4: Sparks (bright hot dots that appear and fade) ===
-    let spark_t = time * 5.0 + phase;
-    let spark_seed = fire_hash(vec2<f32>(wx + floor(spark_t), wy + floor(spark_t * 0.7)));
-    let spark_life = fract(spark_t * 0.3 + spark_seed);
-    let spark_x = fract(spark_seed * 3.7 + 0.2) - 0.5;
-    let spark_y = fract(spark_seed * 5.3 + 0.8) - 0.5 - spark_life * 0.3; // drift upward
-    let spark_dist = sqrt((cx - spark_x * 0.3) * (cx - spark_x * 0.3) + (cy - spark_y * 0.3) * (cy - spark_y * 0.3));
-    let spark_brightness = max(0.0, 1.0 - spark_dist * 20.0) * (1.0 - spark_life) * intensity;
-    if spark_brightness > 0.01 {
-        fire_color = mix(fire_color, vec3<f32>(1.0, 0.95, 0.7), spark_brightness);
-        fire_opacity = max(fire_opacity, spark_brightness);
-    }
+    // --- Opacity: fire is visible where flame or embers are ---
+    let opacity = clamp(flame * 1.5 + ember_glow * 0.5 + spark, 0.0, 1.0);
 
-    // === Layer 5: Smoke wisps at edges (dark, translucent) ===
-    let smoke_t = time * 0.8 + phase;
-    let smoke_noise = sin(angle * 4.0 + smoke_t * 2.0) * sin(dist * 10.0 + smoke_t * 3.0);
-    let smoke_band = smoothstep(0.25, 0.5, dist) * smoothstep(0.6, 0.45, dist);
-    let smoke_amount = max(0.0, smoke_noise * 0.5 + 0.3) * smoke_band * intensity * 0.4;
-    if smoke_amount > 0.01 {
-        fire_color = mix(fire_color, vec3<f32>(0.15, 0.12, 0.10), smoke_amount);
-    }
+    // --- Charring: darken the block underneath (applied via reduced opacity at edges) ---
+    // Blocks should look charred even where flames aren't directly visible
+    let char_amount = intensity * 0.3 * (1.0 - flame);
+    final_color = mix(final_color, vec3<f32>(0.05, 0.03, 0.02), char_amount * edge_mask);
 
-    // Overall flicker modulation
-    fire_opacity *= (0.7 + 0.3 * flicker);
-
-    return vec4(fire_color, clamp(fire_opacity, 0.0, 1.0));
+    return vec4(final_color, clamp(opacity, 0.0, 1.0));
 }
 
 // Render electric light block from top-down: ceiling-mounted fixture seen from above
