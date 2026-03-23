@@ -618,9 +618,8 @@ impl App {
             if let Some(sel_idx) = self.selected_pleb {
                 if let Some(pleb) = self.plebs.get(sel_idx) {
                     let pleb_name = pleb.name.clone();
-                    let carrying = pleb.inventory.carrying;
-                    let rocks = pleb.inventory.rocks;
-                    let berries = pleb.inventory.berries;
+                    let carrying_label = pleb.inventory.carrying_label();
+                    let is_carrying = pleb.inventory.is_carrying();
                     let health = pleb.needs.health;
                     let hunger = pleb.needs.hunger;
                     let rest = pleb.needs.rest;
@@ -696,43 +695,22 @@ impl App {
                                 let painter = ui.painter_at(slot);
                                 painter.rect_filled(slot, 3.0, egui::Color32::from_rgb(45, 48, 55));
                                 painter.rect_stroke(slot, 3.0, egui::Stroke::new(1.0, egui::Color32::from_gray(80)), egui::StrokeKind::Outside);
-                                if carrying.is_some() {
-                                    // Draw rock icon
+                                if is_carrying {
                                     painter.circle_filled(slot.center(), 8.0, egui::Color32::from_rgb(90, 85, 78));
                                     painter.circle_filled(slot.center() + egui::Vec2::new(-2.0, -2.0), 3.0, egui::Color32::from_rgb(110, 105, 98));
                                 }
                                 ui.vertical(|ui| {
                                     ui.label(egui::RichText::new("Hands").size(9.0).weak());
-                                    if let Some(c) = carrying {
-                                        ui.label(egui::RichText::new(c).size(10.0));
+                                    if is_carrying {
+                                        ui.label(egui::RichText::new(&carrying_label).size(10.0));
                                     } else {
                                         ui.label(egui::RichText::new("Empty").size(10.0).weak());
                                     }
                                 });
                             });
 
-                            // Inventory items
-                            if berries > 0 || rocks > 0 {
-                                ui.add_space(4.0);
-                                if rocks > 0 {
-                                    ui.horizontal(|ui| {
-                                        let (slot, _) = ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::hover());
-                                        let painter = ui.painter_at(slot);
-                                        painter.rect_filled(slot, 2.0, egui::Color32::from_rgb(40, 42, 48));
-                                        painter.circle_filled(slot.center(), 6.0, egui::Color32::from_rgb(80, 76, 70));
-                                        ui.label(egui::RichText::new(format!("Rock x{}", rocks)).size(10.0));
-                                    });
-                                }
-                                if berries > 0 {
-                                    ui.horizontal(|ui| {
-                                        let (slot, _) = ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::hover());
-                                        let painter = ui.painter_at(slot);
-                                        painter.rect_filled(slot, 2.0, egui::Color32::from_rgb(40, 42, 48));
-                                        painter.circle_filled(slot.center(), 6.0, egui::Color32::from_rgb(180, 40, 60));
-                                        ui.label(egui::RichText::new(format!("Berry x{}", berries)).size(10.0));
-                                    });
-                                }
-                            } else if carrying.is_none() {
+                            // Inventory items (generic — shows all stacks)
+                            if !is_carrying {
                                 ui.label(egui::RichText::new("No items").weak().size(10.0));
                             }
 
@@ -1095,9 +1073,7 @@ impl App {
                 air_o2: f32,
                 air_co2: f32,
                 activity: String,
-                berries: u32,
-                rocks: u32,
-                carrying: Option<&'static str>,
+                inventory_label: String,
                 is_crisis: bool,
                 crisis_reason: Option<&'static str>,
                 shift_label: &'static str,
@@ -1168,9 +1144,7 @@ impl App {
                             act_str
                         }
                     },
-                    berries: p.inventory.berries,
-                    rocks: p.inventory.rocks,
-                    carrying: p.inventory.carrying,
+                    inventory_label: p.inventory.carrying_label(),
                     is_crisis: p.activity.is_crisis(),
                     crisis_reason: p.activity.crisis_reason(),
                     shift_label: p.schedule.preset.label(),
@@ -1423,7 +1397,7 @@ impl App {
                     // Find nearest available pleb and nearest crate
                     let mut best_pleb: Option<(usize, f32)> = None;
                     for (i, p) in self.plebs.iter().enumerate() {
-                        if p.activity.is_crisis() || p.inventory.carrying.is_some() || p.is_enemy { continue; }
+                        if p.activity.is_crisis() || p.inventory.is_carrying() || p.is_enemy { continue; }
                         let dist = ((p.x - hx as f32 - 0.5).powi(2) + (p.y - hy as f32 - 0.5).powi(2)).sqrt();
                         if best_pleb.is_none() || dist < best_pleb.unwrap().1 {
                             best_pleb = Some((i, dist));
@@ -2693,57 +2667,44 @@ impl App {
                 if center.x < screen_rect.min.x - 20.0 || center.x > screen_rect.max.x + 20.0
                     || center.y < screen_rect.min.y - 20.0 || center.y > screen_rect.max.y + 20.0 { continue; }
                 let r = (tile_px * 0.18).max(3.0);
-                match item.kind {
-                    resources::ItemKind::Berries(n) => {
-                        // Berry basket: brown basket circle with purple berries on top
-                        let basket_col = egui::Color32::from_rgb(140, 100, 50);
-                        let berry_col = egui::Color32::from_rgb(120, 40, 140);
-                        item_painter.circle_filled(center, r, basket_col);
-                        // Small berry dots
-                        let br = r * 0.4;
-                        for i in 0..n.min(4) {
-                            let angle = i as f32 * 1.6 + 0.3;
-                            let bx = center.x + angle.cos() * r * 0.45;
-                            let by = center.y + angle.sin() * r * 0.45;
-                            item_painter.circle_filled(egui::pos2(bx, by), br, berry_col);
-                        }
-                        // Count label
-                        if tile_px > 6.0 {
-                            Self::world_label(&item_painter,
-                                egui::pos2(center.x, center.y + r + 2.0),
-                                egui::Align2::CENTER_TOP,
-                                &format!("{}x", n), 9.0, egui::Color32::WHITE);
-                        }
+                let n = item.stack.count;
+                let iid = item.stack.item_id;
+                if iid == item_defs::ITEM_BERRIES {
+                    // Berry basket: brown basket circle with purple berries on top
+                    let basket_col = egui::Color32::from_rgb(140, 100, 50);
+                    let berry_col = egui::Color32::from_rgb(120, 40, 140);
+                    item_painter.circle_filled(center, r, basket_col);
+                    let br = r * 0.4;
+                    for i in 0..(n as u32).min(4) {
+                        let angle = i as f32 * 1.6 + 0.3;
+                        let bx = center.x + angle.cos() * r * 0.45;
+                        let by = center.y + angle.sin() * r * 0.45;
+                        item_painter.circle_filled(egui::pos2(bx, by), br, berry_col);
                     }
-                    resources::ItemKind::Rocks(n) => {
-                        let rock_col = egui::Color32::from_rgb(120, 120, 115);
-                        item_painter.circle_filled(center, r, rock_col);
-                        if tile_px > 6.0 {
-                            Self::world_label(&item_painter,
-                                egui::pos2(center.x, center.y + r + 2.0),
-                                egui::Align2::CENTER_TOP,
-                                &format!("{}x", n), 9.0, egui::Color32::WHITE);
-                        }
+                } else if iid == item_defs::ITEM_ROCK {
+                    let rock_col = egui::Color32::from_rgb(120, 120, 115);
+                    item_painter.circle_filled(center, r, rock_col);
+                } else if iid == item_defs::ITEM_WOOD {
+                    // Wood pile: brown logs
+                    let wood_col = egui::Color32::from_rgb(120, 80, 40);
+                    let log_w = r * 1.2;
+                    let log_h = r * 0.4;
+                    for i in 0..(n as u32).min(3) {
+                        let ly = center.y - log_h * 0.8 + i as f32 * log_h * 0.8;
+                        item_painter.rect_filled(
+                            egui::Rect::from_center_size(egui::pos2(center.x, ly), egui::vec2(log_w, log_h)),
+                            log_h * 0.3, wood_col,
+                        );
                     }
-                    resources::ItemKind::Wood(n) => {
-                        // Wood pile: brown logs
-                        let wood_col = egui::Color32::from_rgb(120, 80, 40);
-                        let log_w = r * 1.2;
-                        let log_h = r * 0.4;
-                        for i in 0..n.min(3) {
-                            let ly = center.y - log_h * 0.8 + i as f32 * log_h * 0.8;
-                            item_painter.rect_filled(
-                                egui::Rect::from_center_size(egui::pos2(center.x, ly), egui::vec2(log_w, log_h)),
-                                log_h * 0.3, wood_col,
-                            );
-                        }
-                        if tile_px > 6.0 {
-                            Self::world_label(&item_painter,
-                                egui::pos2(center.x, center.y + r + 2.0),
-                                egui::Align2::CENTER_TOP,
-                                &format!("{}x", n), 9.0, egui::Color32::WHITE);
-                        }
-                    }
+                } else {
+                    // Generic item: colored circle
+                    item_painter.circle_filled(center, r, egui::Color32::from_rgb(100, 100, 80));
+                }
+                if tile_px > 6.0 {
+                    Self::world_label(&item_painter,
+                        egui::pos2(center.x, center.y + r + 2.0),
+                        egui::Align2::CENTER_TOP,
+                        &format!("{}x", n), 9.0, egui::Color32::WHITE);
                 }
             }
         }
@@ -3018,13 +2979,11 @@ impl App {
                             ui.label(egui::RichText::new(format!("Storage Crate ({}/{})", total, CRATE_MAX_ITEMS)).strong().size(12.0));
                             ui.separator();
                             if let Some(inv) = inv {
-                                let has_items = inv.rocks > 0 || inv.berries > 0;
-                                if has_items {
-                                    if inv.rocks > 0 {
-                                        ui.label(egui::RichText::new(format!("Rocks: {}", inv.rocks)).size(11.0));
-                                    }
-                                    if inv.berries > 0 {
-                                        ui.label(egui::RichText::new(format!("Berries: {}", inv.berries)).size(11.0));
+                                if !inv.stacks.is_empty() {
+                                    for stack in &inv.stacks {
+                                        let reg = item_defs::ItemRegistry::cached();
+                                        let name = reg.name(stack.item_id);
+                                        ui.label(egui::RichText::new(format!("{}: {}", name, stack.count)).size(11.0));
                                     }
                                 } else {
                                     ui.label(egui::RichText::new("Empty").weak().size(10.0));

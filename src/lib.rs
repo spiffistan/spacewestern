@@ -22,3 +22,4 @@ pub mod physics;
 pub mod zones;
 pub mod weather;
 pub mod resources;
+pub mod item_defs;

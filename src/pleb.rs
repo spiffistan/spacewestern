@@ -270,7 +270,7 @@ impl Pleb {
             selected: if selected { 1.0 } else { 0.0 },
             torch: if self.torch_on { 1.0 } else { 0.0 },
             headlight: if self.headlight_on { 1.0 } else { 0.0 },
-            carrying: if self.inventory.carrying.is_some() { 1.0 } else { 0.0 },
+            carrying: if self.inventory.is_carrying() { 1.0 } else { 0.0 },
             health: self.needs.health,
             skin_r: a.skin_r, skin_g: a.skin_g, skin_b: a.skin_b,
             hair_style: a.hair_style as f32,

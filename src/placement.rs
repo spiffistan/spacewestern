@@ -692,7 +692,7 @@ impl App {
             // Find nearest available pleb
             let mut best_pleb: Option<(usize, f32)> = None;
             for (i, p) in self.plebs.iter().enumerate() {
-                if p.activity.is_crisis() || p.inventory.carrying.is_some() || p.is_enemy { continue; }
+                if p.activity.is_crisis() || p.inventory.is_carrying() || p.is_enemy { continue; }
                 let dist = ((p.x - bx as f32 - 0.5).powi(2) + (p.y - by as f32 - 0.5).powi(2)).sqrt();
                 if best_pleb.is_none() || dist < best_pleb.unwrap().1 {
                     best_pleb = Some((i, dist));
@@ -711,8 +711,8 @@ impl App {
                 let ix = item.x.floor() as i32;
                 let iy = item.y.floor() as i32;
                 if ix == bx && iy == by {
-                    if menu.title.is_empty() { menu.title = format!("{}", item.kind.label()); }
-                    if let resources::ItemKind::Berries(_n) = item.kind {
+                    if menu.title.is_empty() { menu.title = item.stack.label(); }
+                    if item.stack.item_id == item_defs::ITEM_BERRIES {
                         menu.actions.push((format!("Eat 1 berry ({})", pleb_name), ContextAction::Eat(i)));
                         has_actions = true;
                     }

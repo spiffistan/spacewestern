@@ -1,47 +1,127 @@
 //! Resource types, inventories, and storage crate contents.
+//! Uses the data-driven item system from item_defs.
+
+use crate::item_defs::*;
 
 /// Maximum items a single storage crate can hold.
 pub const CRATE_MAX_ITEMS: u32 = 10;
 
-/// Inventory of a storage crate.
+/// Inventory of a storage crate — holds mixed item stacks.
 #[derive(Clone, Debug, Default)]
 pub struct CrateInventory {
-    pub rocks: u32,
-    pub berries: u32,
+    pub stacks: Vec<ItemStack>,
 }
 
 impl CrateInventory {
-    pub fn total(&self) -> u32 { self.rocks + self.berries }
-    pub fn space(&self) -> u32 { CRATE_MAX_ITEMS.saturating_sub(self.total()) }
-}
+    pub fn total(&self) -> u32 {
+        self.stacks.iter().map(|s| s.count as u32).sum()
+    }
 
-/// What a pleb is currently carrying in their hands.
-#[derive(Clone, Debug, Default)]
-pub struct PlebInventory {
-    pub berries: u32,
-    pub rocks: u32,
-    pub carrying: Option<&'static str>,
-}
+    pub fn space(&self) -> u32 {
+        CRATE_MAX_ITEMS.saturating_sub(self.total())
+    }
 
-/// Item type for ground items.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ItemKind {
-    Berries(u32),
-    Rocks(u32),
-    Wood(u32),
-}
+    /// Count of a specific item type.
+    pub fn count_of(&self, item_id: u16) -> u32 {
+        self.stacks.iter()
+            .filter(|s| s.item_id == item_id)
+            .map(|s| s.count as u32)
+            .sum()
+    }
 
-impl ItemKind {
-    pub fn label(&self) -> String {
-        match self {
-            ItemKind::Berries(n) => format!("{} berries", n),
-            ItemKind::Rocks(n) => format!("{} rocks", n),
-            ItemKind::Wood(n) => format!("{} wood", n),
+    /// Add items, respecting capacity. Returns how many were actually added.
+    pub fn add(&mut self, item_id: u16, count: u16) -> u16 {
+        let can_add = (self.space() as u16).min(count);
+        if can_add == 0 { return 0; }
+        if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
+            stack.count += can_add;
+        } else {
+            self.stacks.push(ItemStack::new(item_id, can_add));
+        }
+        can_add
+    }
+
+    /// Remove items. Returns how many were actually removed.
+    pub fn remove(&mut self, item_id: u16, count: u16) -> u16 {
+        if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
+            let take = stack.count.min(count);
+            stack.count -= take;
+            if stack.count == 0 {
+                self.stacks.retain(|s| s.count > 0);
+            }
+            take
+        } else {
+            0
         }
     }
-    pub fn count(&self) -> u32 {
-        match self { ItemKind::Berries(n) | ItemKind::Rocks(n) | ItemKind::Wood(n) => *n }
+
+    // Legacy accessors for existing code during migration
+    pub fn rocks(&self) -> u32 { self.count_of(ITEM_ROCK) }
+    pub fn berries(&self) -> u32 { self.count_of(ITEM_BERRIES) }
+}
+
+/// What a pleb is currently carrying.
+#[derive(Clone, Debug, Default)]
+pub struct PlebInventory {
+    pub stacks: Vec<ItemStack>,
+}
+
+impl PlebInventory {
+    /// Count of a specific item type in inventory.
+    pub fn count_of(&self, item_id: u16) -> u32 {
+        self.stacks.iter()
+            .filter(|s| s.item_id == item_id)
+            .map(|s| s.count as u32)
+            .sum()
     }
+
+    /// Add items to inventory (merges into existing stack or creates new).
+    pub fn add(&mut self, item_id: u16, count: u16) {
+        if count == 0 { return; }
+        if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
+            stack.count += count;
+        } else {
+            self.stacks.push(ItemStack::new(item_id, count));
+        }
+    }
+
+    /// Remove items from inventory. Returns how many were actually removed.
+    pub fn remove(&mut self, item_id: u16, count: u16) -> u16 {
+        if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
+            let take = stack.count.min(count);
+            stack.count -= take;
+            if stack.count == 0 {
+                self.stacks.retain(|s| s.count > 0);
+            }
+            take
+        } else {
+            0
+        }
+    }
+
+    /// Is the pleb carrying anything?
+    pub fn is_carrying(&self) -> bool {
+        !self.stacks.is_empty()
+    }
+
+    /// What item type is the pleb primarily carrying? (first non-empty stack)
+    pub fn carrying_type(&self) -> Option<u16> {
+        self.stacks.first().map(|s| s.item_id)
+    }
+
+    /// Label for what's being carried.
+    pub fn carrying_label(&self) -> String {
+        if let Some(stack) = self.stacks.first() {
+            stack.label()
+        } else {
+            "Nothing".to_string()
+        }
+    }
+
+    // Legacy accessors for existing code during migration
+    pub fn berries(&self) -> u32 { self.count_of(ITEM_BERRIES) }
+    pub fn rocks(&self) -> u32 { self.count_of(ITEM_ROCK) }
+    pub fn wood(&self) -> u32 { self.count_of(ITEM_WOOD) }
 }
 
 /// An item sitting on the ground, waiting to be hauled.
@@ -49,5 +129,11 @@ impl ItemKind {
 pub struct GroundItem {
     pub x: f32,
     pub y: f32,
-    pub kind: ItemKind,
+    pub stack: ItemStack,
+}
+
+impl GroundItem {
+    pub fn new(x: f32, y: f32, item_id: u16, count: u16) -> Self {
+        Self { x, y, stack: ItemStack::new(item_id, count) }
+    }
 }

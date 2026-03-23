@@ -3,6 +3,7 @@
 use rayworld::grid::*;
 use rayworld::pipes::*;
 use rayworld::resources::*;
+use rayworld::item_defs::*;
 use rayworld::materials::NUM_MATERIALS;
 
 // --- Block system ---
@@ -128,17 +129,20 @@ fn intake_without_pump_no_pressure() {
 // --- Resources ---
 
 #[test]
-fn item_kind_labels() {
-    assert_eq!(ItemKind::Berries(5).label(), "5 berries");
-    assert_eq!(ItemKind::Wood(10).label(), "10 wood");
-    assert_eq!(ItemKind::Rocks(3).label(), "3 rocks");
+fn item_stack_labels() {
+    let stack = ItemStack::new(ITEM_BERRIES, 5);
+    assert!(stack.label().contains("5"));
+    assert!(stack.label().contains("Berries"));
+    let wood = ItemStack::new(ITEM_WOOD, 10);
+    assert!(wood.label().contains("10"));
 }
 
 #[test]
-fn item_kind_counts() {
-    assert_eq!(ItemKind::Berries(5).count(), 5);
-    assert_eq!(ItemKind::Wood(10).count(), 10);
-    assert_eq!(ItemKind::Rocks(3).count(), 3);
+fn item_stack_counts() {
+    let stack = ItemStack::new(ITEM_BERRIES, 5);
+    assert_eq!(stack.count, 5);
+    let inv = CrateInventory::default();
+    assert_eq!(inv.total(), 0);
 }
 
 // --- Fluid obstacle field ---

@@ -2,6 +2,7 @@
 //! Extracted from render() to keep main.rs manageable.
 
 use crate::*;
+use crate::item_defs::*;
 use crate::zones::*;
 
 impl App {
@@ -492,7 +493,7 @@ impl App {
                         let reason = pleb.activity.crisis_reason().unwrap_or("Crisis");
                         if reason == "Starving!" {
                             // Arrived near bush — harvest or eat
-                            if pleb.inventory.berries > 0 {
+                            if pleb.inventory.count_of(ITEM_BERRIES) > 0 {
                                 pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Eating), reason);
                             } else if env.near_berry_bush {
                                 if let Some((bx, by)) = env.nearest_berry_bush {
@@ -530,7 +531,7 @@ impl App {
                     let path_done = pleb.path_idx >= pleb.path.len();
 
                     // Phase 1: not carrying anything → pick up item at harvest_target
-                    if (path_done || at_pickup) && pleb.inventory.carrying.is_none() {
+                    if (path_done || at_pickup) && !pleb.inventory.is_carrying() {
                         if let Some((rx, ry)) = pleb.harvest_target {
                             let ridx = (ry as u32 * GRID_W + rx as u32) as usize;
                             let is_rock = ridx < self.grid_data.len() && (self.grid_data[ridx] & 0xFF) == 34;
@@ -539,39 +540,22 @@ impl App {
                                 let flag_bits = (self.grid_data[ridx] >> 16) & 2;
                                 self.grid_data[ridx] = make_block(2, 0, flag_bits as u8) | roof_bits;
                                 self.grid_dirty = true;
-                                pleb.inventory.rocks += 1;
-                                pleb.inventory.carrying = Some("Rock");
+                                pleb.inventory.add(ITEM_ROCK, 1);
                                 pleb.harvest_target = None;
                                 events.push((EventCategory::Haul, format!("{} picked up a rock", pleb.name)));
                             } else if let Some(wi) = self.ground_items.iter().position(|item| {
                                 item.x.floor() as i32 == rx && item.y.floor() as i32 == ry
                             }) {
                                 // Pick up any ground item
-                                let item_kind = self.ground_items[wi].kind;
-                                let count = item_kind.count();
-                                let take = count.min(10);
-                                match item_kind {
-                                    resources::ItemKind::Wood(_) => {
-                                        let t = count.min(5);
-                                        if count <= t { self.ground_items.remove(wi); }
-                                        else { self.ground_items[wi].kind = resources::ItemKind::Wood(count - t); }
-                                        pleb.inventory.rocks = t;
-                                        pleb.inventory.carrying = Some("Wood");
-                                        events.push((EventCategory::Haul, format!("{} picked up {} wood", pleb.name, t)));
-                                    }
-                                    resources::ItemKind::Berries(_) => {
-                                        self.ground_items.remove(wi);
-                                        pleb.inventory.berries = take;
-                                        pleb.inventory.carrying = Some("Berries");
-                                        events.push((EventCategory::Haul, format!("{} picked up {} berries", pleb.name, take)));
-                                    }
-                                    resources::ItemKind::Rocks(_) => {
-                                        self.ground_items.remove(wi);
-                                        pleb.inventory.rocks = take;
-                                        pleb.inventory.carrying = Some("Rock");
-                                        events.push((EventCategory::Haul, format!("{} picked up {} rocks", pleb.name, take)));
-                                    }
-                                }
+                                let item_id = self.ground_items[wi].stack.item_id;
+                                let count = self.ground_items[wi].stack.count;
+                                let max_take = if item_id == ITEM_WOOD { 5u16 } else { 10 };
+                                let take = count.min(max_take);
+                                if count <= take { self.ground_items.remove(wi); }
+                                else { self.ground_items[wi].stack.count -= take; }
+                                pleb.inventory.add(item_id, take);
+                                let name = ItemRegistry::cached().name(item_id);
+                                events.push((EventCategory::Haul, format!("{} picked up {} {}", pleb.name, take, name)));
                                 pleb.harvest_target = None;
                             } else {
                                 // Item gone
@@ -580,7 +564,7 @@ impl App {
                                 pleb.activity = PlebActivity::Idle;
                             }
                             // If we picked something up, walk to delivery target
-                            if pleb.inventory.carrying.is_some() {
+                            if pleb.inventory.is_carrying() {
                                 if let Some((cx, cy)) = pleb.haul_target {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                                     let adj = adjacent_walkable(&self.grid_data, cx, cy).unwrap_or((cx, cy));
@@ -592,9 +576,9 @@ impl App {
                         } else { pleb.activity = PlebActivity::Idle; }
                     }
                     // Phase 2: carrying item → deliver at haul_target
-                    else if (path_done || at_delivery) && pleb.inventory.carrying.is_some() {
+                    else if (path_done || at_delivery) && pleb.inventory.is_carrying() {
                         if let Some((cx, cy)) = pleb.haul_target {
-                            let is_blueprint = pleb.inventory.carrying == Some("Wood")
+                            let is_blueprint = pleb.inventory.wood() > 0
                                 && self.blueprints.contains_key(&(cx, cy));
                             let is_crate = {
                                 let ci = (cy as u32 * GRID_W + cx as u32) as usize;
@@ -603,10 +587,10 @@ impl App {
                             if is_blueprint {
                                 // Deliver wood to blueprint
                                 if let Some(bp) = self.blueprints.get_mut(&(cx, cy)) {
-                                    let deliver = pleb.inventory.rocks.min(bp.wood_needed - bp.wood_delivered);
+                                    let have = pleb.inventory.wood() as u32;
+                                    let deliver = have.min(bp.wood_needed - bp.wood_delivered);
                                     bp.wood_delivered += deliver;
-                                    pleb.inventory.rocks -= deliver;
-                                    if pleb.inventory.rocks == 0 { pleb.inventory.carrying = None; }
+                                    pleb.inventory.remove(ITEM_WOOD, deliver as u16);
                                     events.push((EventCategory::Haul, format!("{} delivered {} wood ({}/{})",
                                         pleb.name, deliver, bp.wood_delivered, bp.wood_needed)));
                                 }
@@ -614,38 +598,33 @@ impl App {
                                 pleb.haul_target = None;
                                 pleb.activity = PlebActivity::Idle;
                             } else if is_crate {
-                                // Deposit in crate
+                                // Deposit all carried items in crate
                                 let cidx = cy as u32 * GRID_W + cx as u32;
                                 let inv = self.crate_contents.entry(cidx).or_default();
-                                if pleb.inventory.carrying == Some("Rock") {
-                                    let can_store = inv.space().min(pleb.inventory.rocks);
-                                    inv.rocks += can_store;
-                                    pleb.inventory.rocks -= can_store;
-                                    if pleb.inventory.rocks == 0 { pleb.inventory.carrying = None; }
+                                let carried: Vec<(u16, u16)> = pleb.inventory.stacks.iter()
+                                    .map(|s| (s.item_id, s.count)).collect();
+                                for (item_id, count) in carried {
+                                    let stored = inv.add(item_id, count);
+                                    pleb.inventory.remove(item_id, stored);
                                 }
-                                if pleb.inventory.carrying.is_none() { pleb.haul_target = None; pleb.activity = PlebActivity::Idle; }
+                                if !pleb.inventory.is_carrying() { pleb.haul_target = None; pleb.activity = PlebActivity::Idle; }
+                                // Inline crate visual sync (can't call self.sync_crate_visual inside pleb borrow)
                                 if let Some(inv) = self.crate_contents.get(&cidx) {
                                     let count = inv.total().min(CRATE_MAX_ITEMS) as u8;
                                     let ci = cidx as usize;
-                                    if ci < self.grid_data.len() && (self.grid_data[ci] & 0xFF) == 33 {
+                                    if ci < self.grid_data.len() && (self.grid_data[ci] & 0xFF) == BT_CRATE {
                                         self.grid_data[ci] = (self.grid_data[ci] & 0xFFFF00FF) | ((count as u32) << 8);
                                         self.grid_dirty = true;
                                     }
                                 }
                                 events.push((EventCategory::Haul, format!("{} deposited items", pleb.name)));
                             } else {
-                                // Drop at storage zone tile (or any other target)
-                                let kind = match pleb.inventory.carrying {
-                                    Some("Wood") => resources::ItemKind::Wood(pleb.inventory.rocks),
-                                    Some("Rock") => resources::ItemKind::Rocks(pleb.inventory.rocks),
-                                    _ => resources::ItemKind::Berries(pleb.inventory.berries),
-                                };
-                                self.ground_items.push(resources::GroundItem {
-                                    x: cx as f32 + 0.5, y: cy as f32 + 0.5, kind,
-                                });
-                                pleb.inventory.carrying = None;
-                                pleb.inventory.rocks = 0;
-                                pleb.inventory.berries = 0;
+                                // Drop at storage zone tile
+                                for stack in pleb.inventory.stacks.drain(..) {
+                                    self.ground_items.push(resources::GroundItem {
+                                        x: cx as f32 + 0.5, y: cy as f32 + 0.5, stack,
+                                    });
+                                }
                                 pleb.haul_target = None;
                                 pleb.activity = PlebActivity::Idle;
                                 events.push((EventCategory::Haul, format!("{} stored items", pleb.name)));
@@ -1133,13 +1112,13 @@ impl App {
                                     // Drop harvest on ground near pleb
                                     self.ground_items.push(resources::GroundItem {
                                         x: pleb.x, y: pleb.y,
-                                        kind: resources::ItemKind::Berries(2),
+                                        stack: ItemStack::new(ITEM_BERRIES, 2),
                                     });
                                     events.push((EventCategory::Farm, format!("{} harvested a crop (2 berries dropped)", pleb.name)));
                                 } else if tbt == BT_BERRY_BUSH {
                                     self.ground_items.push(resources::GroundItem {
                                         x: pleb.x, y: pleb.y,
-                                        kind: resources::ItemKind::Berries(3),
+                                        stack: ItemStack::new(ITEM_BERRIES, 3),
                                     });
                                     events.push((EventCategory::Farm, format!("{} harvested berries (3 berries dropped)", pleb.name)));
                                 } else if tbt == BT_TREE {
@@ -1165,7 +1144,7 @@ impl App {
                                     self.grid_dirty = true;
                                     self.ground_items.push(resources::GroundItem {
                                         x: origin_x as f32 + 1.0, y: origin_y as f32 + 1.0,
-                                        kind: resources::ItemKind::Wood(10),
+                                        stack: ItemStack::new(ITEM_WOOD, 10),
                                     });
                                     events.push((EventCategory::Farm, format!("{} chopped a tree (10 wood)", pleb.name)));
                                 }
@@ -1275,7 +1254,7 @@ impl App {
                         // Find nearest wood ground item
                         let mut best_wood: Option<(usize, f32)> = None;
                         for (i, item) in self.ground_items.iter().enumerate() {
-                            if let resources::ItemKind::Wood(_) = item.kind {
+                            if item.stack.item_id == ITEM_WOOD {
                                 let d = ((item.x - bx as f32 - 0.5).powi(2) + (item.y - by as f32 - 0.5).powi(2)).sqrt();
                                 if best_wood.is_none() || d < best_wood.unwrap().1 {
                                     best_wood = Some((i, d));
@@ -1496,7 +1475,7 @@ fn tick_pleb_activity(
                 // Drop berries on ground near pleb
                 ground_items.push(resources::GroundItem {
                     x: pleb.x, y: pleb.y,
-                    kind: resources::ItemKind::Berries(3),
+                    stack: ItemStack::new(ITEM_BERRIES, 3),
                 });
                 pleb.harvest_target = None;
                 log::info!("{} harvested 3 berries (dropped on ground)", pleb.name);
@@ -1520,8 +1499,8 @@ fn tick_pleb_activity(
         PlebActivity::Eating => {
             let mut ate = false;
             // Try eating from inventory first
-            if pleb.inventory.berries > 0 {
-                pleb.inventory.berries -= 1;
+            if pleb.inventory.count_of(ITEM_BERRIES) > 0 {
+                pleb.inventory.remove(ITEM_BERRIES, 1);
                 pleb.needs.hunger = (pleb.needs.hunger + BERRY_HUNGER_RESTORE).min(1.0);
                 log::info!("{} ate a berry from inventory (hunger: {:.0}%)",
                     pleb.name, pleb.needs.hunger * 100.0);
@@ -1532,21 +1511,19 @@ fn tick_pleb_activity(
                 if let Some((tx, ty)) = pleb.harvest_target {
                     if let Some(gi) = ground_items.iter_mut().position(|item| {
                         item.x.floor() as i32 == tx && item.y.floor() as i32 == ty
-                            && matches!(item.kind, resources::ItemKind::Berries(_))
+                            && item.stack.item_id == ITEM_BERRIES
                     }) {
-                        if let resources::ItemKind::Berries(n) = ground_items[gi].kind {
-                            pleb.needs.hunger = (pleb.needs.hunger + BERRY_HUNGER_RESTORE).min(1.0);
-                            if n <= 1 { ground_items.remove(gi); }
-                            else { ground_items[gi].kind = resources::ItemKind::Berries(n - 1); }
-                            log::info!("{} ate a berry from ground (hunger: {:.0}%)",
-                                pleb.name, pleb.needs.hunger * 100.0);
-                            ate = true;
-                        }
+                        pleb.needs.hunger = (pleb.needs.hunger + BERRY_HUNGER_RESTORE).min(1.0);
+                        if ground_items[gi].stack.count <= 1 { ground_items.remove(gi); }
+                        else { ground_items[gi].stack.count -= 1; }
+                        log::info!("{} ate a berry from ground (hunger: {:.0}%)",
+                            pleb.name, pleb.needs.hunger * 100.0);
+                        ate = true;
                     }
                 }
             }
             pleb.harvest_target = None;
-            if was_crisis && pleb.needs.hunger < 0.3 && (pleb.inventory.berries > 0 || ate) {
+            if was_crisis && pleb.needs.hunger < 0.3 && (pleb.inventory.count_of(ITEM_BERRIES) > 0 || ate) {
                 pleb.activity = PlebActivity::Crisis(
                     Box::new(PlebActivity::Eating),
                     crisis_reason.unwrap_or("Starving"),
@@ -1564,7 +1541,7 @@ fn tick_pleb_activity(
 
     if pleb.needs.hunger < 0.10 && is_idle_or_walk {
         // CRISIS: Starving
-        if pleb.inventory.berries > 0 {
+        if pleb.inventory.count_of(ITEM_BERRIES) > 0 {
             pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Eating), "Starving!");
         } else if let Some((bx, by)) = env.nearest_berry_bush {
             if env.near_berry_bush {
@@ -1608,15 +1585,15 @@ fn tick_pleb_activity(
     } else if !pleb.activity.is_crisis() {
         // Non-crisis auto-behaviors
         if pleb.activity == PlebActivity::Idle || pleb.activity == PlebActivity::Walking {
-            if pleb.needs.hunger < 0.25 && pleb.inventory.berries > 0 {
+            if pleb.needs.hunger < 0.25 && pleb.inventory.count_of(ITEM_BERRIES) > 0 {
                 pleb.activity = PlebActivity::Eating;
-            } else if pleb.needs.hunger < 0.25 && pleb.inventory.berries == 0 {
+            } else if pleb.needs.hunger < 0.25 && pleb.inventory.count_of(ITEM_BERRIES) == 0 {
                 // Find nearest berries on the ground (storage zones or loose)
                 let px = pleb.x.floor() as i32;
                 let py = pleb.y.floor() as i32;
                 let mut best_berry: Option<(i32, i32, f32)> = None;
                 for item in ground_items.iter() {
-                    if let resources::ItemKind::Berries(_) = item.kind {
+                    if item.stack.item_id == ITEM_BERRIES {
                         let bx = item.x.floor() as i32;
                         let by = item.y.floor() as i32;
                         let d = ((px - bx).pow(2) + (py - by).pow(2)) as f32;
@@ -1651,7 +1628,7 @@ fn tick_pleb_activity(
                         send_pleb_to(pleb, grid, terrain, (bx, by), PlebActivity::Walking);
                     }
                 }
-            } else if pleb.needs.hunger < 0.4 && pleb.inventory.berries == 0 {
+            } else if pleb.needs.hunger < 0.4 && pleb.inventory.count_of(ITEM_BERRIES) == 0 {
                 if env.near_berry_bush && pleb.harvest_target.is_none() {
                     if let Some((bx, by)) = env.nearest_berry_bush {
                         pleb.harvest_target = Some((bx, by));

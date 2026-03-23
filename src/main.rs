@@ -14,7 +14,7 @@ mod materials;
 mod grid;
 mod sprites;
 mod block_defs;
-mod item_defs;
+pub mod item_defs;
 
 use materials::{GpuMaterial, build_material_table};
 use grid::*;
