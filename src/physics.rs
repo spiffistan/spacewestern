@@ -203,7 +203,7 @@ pub struct Impact {
     pub block_x: i32, pub block_y: i32,
     pub kinetic_energy: f32,
     pub destroy_block: bool,
-    pub is_grenade: bool,
+    pub projectile_id: ProjectileId,
 }
 
 /// Result of a bullet hitting a pleb.
@@ -452,7 +452,7 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
     None // clear path
 }
 
-/// Tick all physics bodies. Returns list of cannonball impacts for block destruction.
+/// Tick all physics bodies. Returns impacts, bullet hits, and explosion events.
 pub fn tick_bodies(
     bodies: &mut Vec<PhysicsBody>,
     dt: f32,
@@ -463,8 +463,10 @@ pub fn tick_bodies(
     all_plebs: &[(f32, f32, usize)], // (x, y, pleb_index) for bullet collision
     selected_pleb: Option<usize>,
     ricochets_enabled: bool,
-) -> (Vec<Impact>, Vec<BulletHit>) {
+    sound_sources: &[(f32, f32, f32)], // (x, y, amplitude) for sound→body force
+) -> (Vec<Impact>, Vec<BulletHit>, Vec<ExplosionEvent>) {
     let mut impacts = Vec::new();
+    let mut explosions = Vec::new();
     let wind_threshold = 5.0; // minimum wind speed to push a box
 
     for body in bodies.iter_mut() {
@@ -472,34 +474,34 @@ pub fn tick_bodies(
         body.prev_x = body.x;
         body.prev_y = body.y;
 
-        // --- Bullet fast path: DDA ray march through grid (no skipped cells) ---
-        if body.body_type == BodyType::Bullet {
+        let def = projectile_def(body.kind);
+
+        // --- Hitscan fast path: DDA ray march through grid (no skipped cells) ---
+        if def.traversal == TraversalMode::Hitscan {
             let x0 = body.x;
             let y0 = body.y;
             let x1 = body.x + body.vx * dt;
             let y1 = body.y + body.vy * dt;
 
             if let Some(hit) = dda_bullet_trace(grid, x0, y0, x1, y1) {
-                if ricochets_enabled {
-                    // Ricochet: reflect velocity off the wall face, lose 40% speed
+                if ricochets_enabled && def.impact.ricochet {
+                    let keep = 1.0 - def.impact.ricochet_loss;
                     body.x = hit.x;
                     body.y = hit.y;
                     if hit.hit_x_face {
-                        body.vx = -body.vx * 0.6;
-                        body.vy *= 0.6;
-                        // Nudge away from wall to prevent sticking
+                        body.vx = -body.vx * keep;
+                        body.vy *= keep;
                         body.x += if body.vx > 0.0 { 0.05 } else { -0.05 };
                     } else {
-                        body.vy = -body.vy * 0.6;
-                        body.vx *= 0.6;
+                        body.vy = -body.vy * keep;
+                        body.vx *= keep;
                         body.y += if body.vy > 0.0 { 0.05 } else { -0.05 };
                     }
-                    // Kill bullet if too slow after ricochet
-                    if body.vx.abs() + body.vy.abs() < 3.0 {
+                    if body.vx.abs() + body.vy.abs() < def.remove_speed_threshold {
                         body.vx = 0.0; body.vy = 0.0;
                     }
                 } else {
-                    body.vx = 0.0; body.vy = 0.0; // mark for removal (no ricochet)
+                    body.vx = 0.0; body.vy = 0.0;
                 }
             } else {
                 body.x = x1;
@@ -543,6 +545,22 @@ pub fn tick_bodies(
                         body.vy += fdy * force * dt;
                     }
                 }
+            }
+        }
+
+        // --- Sound pressure force ---
+        for &(sx, sy, amplitude) in sound_sources {
+            let sdx = body.x - sx;
+            let sdy = body.y - sy;
+            let dist = (sdx * sdx + sdy * sdy).sqrt().max(0.5);
+            let pressure = amplitude / dist; // cylindrical falloff, same as pleb damage
+            let force_threshold = 1.0; // ~80 dB minimum to push
+            if pressure > force_threshold {
+                let push = (pressure - force_threshold) * 0.08 / body.mass;
+                let nx = sdx / dist;
+                let ny = sdy / dist;
+                body.vx += nx * push * dt;
+                body.vy += ny * push * dt;
             }
         }
 
@@ -630,7 +648,7 @@ pub fn tick_bodies(
         }
 
         // --- Velocity cap ---
-        let max_speed = if body.body_type == BodyType::Cannonball { 40.0 } else { 30.0 };
+        let max_speed = def.max_speed;
         let speed = (body.vx * body.vx + body.vy * body.vy).sqrt();
         if speed > max_speed {
             body.vx *= max_speed / speed;
@@ -658,25 +676,24 @@ pub fn tick_bodies(
                 body.vy *= -body.bounce;
             }
 
-            // Cannonball impact on wall hit
-            if body.body_type == BodyType::Cannonball && (hit_wall_x || hit_wall_y) {
-                let ke = 0.5 * body.mass * speed * speed;
+            // Projectile impact on wall hit (block destruction check)
+            if def.impact.destroy_multiplier > 0.0 && (hit_wall_x || hit_wall_y) {
+                let ke = 0.5 * body.mass * speed * speed * def.impact.destroy_multiplier;
                 let hit_bx = if hit_wall_x { nx.floor() as i32 } else { body.x.floor() as i32 };
                 let hit_by = if hit_wall_y { ny.floor() as i32 } else { body.y.floor() as i32 };
 
-                // Block strength lookup (simplified — uses material table concept)
                 let mut destroy = false;
                 if hit_bx >= 0 && hit_by >= 0 && hit_bx < GRID_W as i32 && hit_by < GRID_H as i32 {
                     let b = grid[(hit_by as u32 * GRID_W + hit_bx as u32) as usize];
                     let bt = block_type_rs(b);
                     let strength = match bt {
-                        5 => 5.0,    // glass: very fragile
-                        9 => 10.0,   // bench: fragile
-                        21 => 20.0,  // wood wall: breakable
-                        1 | 4 | 23 | 25 => 100.0, // stone/sandstone/limestone
-                        24 => 200.0, // granite: very tough
-                        22 => 300.0, // steel: nearly indestructible
-                        14 => 500.0, // insulated: reinforced
+                        BT_GLASS => 5.0,
+                        BT_BENCH => 10.0,
+                        BT_WOOD_WALL => 20.0,
+                        BT_STONE | BT_WALL | BT_SANDSTONE | BT_LIMESTONE => 100.0,
+                        BT_GRANITE => 200.0,
+                        BT_STEEL_WALL => 300.0,
+                        BT_INSULATED => 500.0,
                         _ => 50.0,
                     };
                     destroy = ke > strength;
@@ -687,7 +704,7 @@ pub fn tick_bodies(
                     block_x: hit_bx, block_y: hit_by,
                     kinetic_energy: ke,
                     destroy_block: destroy,
-                    is_grenade: false,
+                    projectile_id: body.kind,
                 });
             }
         } else {
@@ -696,8 +713,8 @@ pub fn tick_bodies(
             body.y = ny;
         }
 
-        // Cannonball: stop and mark for removal when speed is very low
-        if body.body_type == BodyType::Cannonball && body.on_ground() && speed < 0.5 {
+        // Data-driven stop: mark for removal when speed drops below threshold
+        if def.remove_when_stopped && body.on_ground() && speed < def.remove_speed_threshold {
             body.vx = 0.0;
             body.vy = 0.0;
         }
@@ -709,20 +726,37 @@ pub fn tick_bodies(
         }
     }
 
-    // Grenade emission: continuously emit toxic gas while on ground with fuse remaining
+    // Fuse emission + explosion detection (data-driven)
     for body in bodies.iter_mut() {
-        if body.body_type == BodyType::Grenade && body.on_ground() && body.fuse_timer > 0.0 {
-            body.fuse_timer -= dt;
-            // Stop movement once on ground (grenade sits and hisses)
-            body.vx = 0.0;
-            body.vy = 0.0;
-            impacts.push(Impact {
-                x: body.x, y: body.y,
-                block_x: body.x.floor() as i32, block_y: body.y.floor() as i32,
-                kinetic_energy: 0.0,
-                destroy_block: false,
-                is_grenade: true,
-            });
+        let def = projectile_def(body.kind);
+
+        // One-time explosion on first landing
+        if !body.has_landed && body.on_ground() {
+            if let Some(expl) = &def.impact.explosion {
+                body.has_landed = true;
+                explosions.push(ExplosionEvent {
+                    x: body.x, y: body.y,
+                    def: expl.clone(),
+                });
+            }
+        }
+
+        // Continuous fuse emission while grounded
+        if let Some(fuse) = &def.fuse {
+            if body.on_ground() && body.fuse_timer > 0.0 {
+                body.fuse_timer -= dt;
+                if fuse.freeze_on_ground {
+                    body.vx = 0.0;
+                    body.vy = 0.0;
+                }
+                impacts.push(Impact {
+                    x: body.x, y: body.y,
+                    block_x: body.x.floor() as i32, block_y: body.y.floor() as i32,
+                    kinetic_energy: 0.0,
+                    destroy_block: false,
+                    projectile_id: body.kind,
+                });
+            }
         }
     }
 
@@ -731,7 +765,8 @@ pub fn tick_bodies(
     let hit_radius = 0.45f32;
     let mut bullets_hit = std::collections::HashSet::new();
     for (bi, body) in bodies.iter().enumerate() {
-        if body.body_type != BodyType::Bullet { continue; }
+        let def = projectile_def(body.kind);
+        if def.hit_damage <= 0.0 { continue; } // only projectiles with direct-hit damage
         let bx0 = body.prev_x;
         let by0 = body.prev_y;
         let bx1 = body.x;
@@ -764,23 +799,31 @@ pub fn tick_bodies(
         });
     }
 
-    // Remove projectiles that are out of bounds, stopped, or fuse expired
+    // Remove projectiles: data-driven removal logic
     bodies.retain(|b| {
-        if b.body_type == BodyType::Grenade {
-            let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
-            in_bounds && (b.fuse_timer > 0.0 || !b.on_ground())
-        } else if b.body_type == BodyType::Bullet {
-            let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
-            let moving = (b.vx.abs() + b.vy.abs()) > 1.0;
-            in_bounds && moving && b.z > -0.1
-        } else if b.body_type == BodyType::Cannonball {
-            let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
-            let moving = (b.vx.abs() + b.vy.abs()) > 0.3 || b.z > 0.1;
-            in_bounds && moving
-        } else {
-            true
+        let def = projectile_def(b.kind);
+        let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
+        if !in_bounds { return false; }
+
+        // Fuse-based: remove when fuse expired and on ground
+        if def.fuse.is_some() {
+            return b.fuse_timer > 0.0 || !b.on_ground();
         }
+
+        // Hitscan: remove when stopped or below ground
+        if def.traversal == TraversalMode::Hitscan {
+            let moving = (b.vx.abs() + b.vy.abs()) > def.remove_speed_threshold;
+            return moving && b.z > -0.1;
+        }
+
+        // Ballistic with removal: remove when stopped on ground
+        if def.remove_when_stopped {
+            let moving = (b.vx.abs() + b.vy.abs()) > def.remove_speed_threshold || b.z > 0.1;
+            return moving;
+        }
+
+        true // keep (e.g. WoodBox)
     });
 
-    (impacts, bullet_hits)
+    (impacts, bullet_hits, explosions)
 }

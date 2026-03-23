@@ -40,7 +40,7 @@ mod simulation;
 use pipes::PipeNetwork;
 
 mod physics;
-use physics::{PhysicsBody, tick_bodies, pleb_body_collision, nearest_body};
+use physics::{PhysicsBody, tick_bodies, pleb_body_collision, nearest_body, projectile_def, PROJ_BULLET};
 
 mod zones;
 use zones::{Zone, ZoneKind};

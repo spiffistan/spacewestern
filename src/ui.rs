@@ -1110,6 +1110,7 @@ impl App {
                                 format!("{} {:.0}%", action, pr * 100.0)
                             }
                             PlebActivity::Building(pr) => format!("Building {:.0}%", pr * 100.0),
+                            PlebActivity::Staggering(_) => "Staggering!".to_string(),
                             PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                         };
                         if let Some(reason) = p.activity.crisis_reason() {
@@ -3073,6 +3074,7 @@ impl App {
                             PlebActivity::Hauling => (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80)),
                             PlebActivity::Farming(_) => (Some(farm_action), egui::Color32::from_rgb(80, 200, 80)),
                             PlebActivity::Building(_) => (Some("Building"), egui::Color32::from_rgb(100, 160, 220)),
+                            PlebActivity::Staggering(_) => (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40)),
                             PlebActivity::Crisis(_, _) => (None, egui::Color32::GRAY),
                         };
                         if let Some(text) = act_text {

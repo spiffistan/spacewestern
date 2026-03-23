@@ -673,6 +673,27 @@ impl App {
                     pleb.needs.flee_target = None;
                 }
 
+                // Apply knockback velocity (from explosions)
+                if pleb.knockback_vx.abs() + pleb.knockback_vy.abs() > 0.01 {
+                    let kx = pleb.x + pleb.knockback_vx * dt;
+                    let ky = pleb.y + pleb.knockback_vy * dt;
+                    if is_walkable_pos(&self.grid_data, kx, ky) {
+                        pleb.x = kx;
+                        pleb.y = ky;
+                    }
+                    pleb.knockback_vx *= (1.0 - 5.0 * dt).max(0.0);
+                    pleb.knockback_vy *= (1.0 - 5.0 * dt).max(0.0);
+                }
+
+                // Stagger tick
+                if let PlebActivity::Staggering(remaining) = pleb.activity {
+                    if remaining - dt <= 0.0 {
+                        pleb.activity = PlebActivity::Idle;
+                    } else {
+                        pleb.activity = PlebActivity::Staggering(remaining - dt);
+                    }
+                }
+
                 pleb.prev_x = pleb.x;
                 pleb.prev_y = pleb.y;
             }
@@ -788,7 +809,10 @@ impl App {
             // Collect pleb positions for bullet collision
             let pleb_positions: Vec<(f32, f32, usize)> = self.plebs.iter().enumerate()
                 .map(|(i, p)| (p.x, p.y, i)).collect();
-            let (impacts, bullet_hits) = tick_bodies(
+            // Extract sound source data for physics body force coupling
+            let sound_data: Vec<(f32, f32, f32)> = self.sound_sources.iter()
+                .map(|s| (s.x, s.y, s.amplitude)).collect();
+            let (impacts, bullet_hits, explosion_events) = tick_bodies(
                 &mut self.physics_bodies,
                 dt,
                 &self.grid_data,
@@ -798,13 +822,17 @@ impl App {
                 &pleb_positions,
                 self.selected_pleb,
                 self.enable_ricochets,
+                &sound_data,
             );
 
-            // Apply bullet hits to plebs
+            // Apply bullet hits to plebs (data-driven damage)
             for hit in &bullet_hits {
                 if let Some(pleb) = self.plebs.get_mut(hit.pleb_idx) {
-                    events.push((EventCategory::Combat, format!("{} hit! ({:.0}% hp)", pleb.name, (pleb.needs.health - 0.2).max(0.0) * 100.0)));
-                    pleb.needs.health -= 0.2;
+                    // Look up damage from the projectile that hit (scan bodies for the source)
+                    // For now use a fixed lookup since bullets are the only hitscan type
+                    let dmg = projectile_def(PROJ_BULLET).hit_damage;
+                    events.push((EventCategory::Combat, format!("{} hit! ({:.0}% hp)", pleb.name, (pleb.needs.health - dmg).max(0.0) * 100.0)));
+                    pleb.needs.health -= dmg;
                     self.fluid_params.splat_x = hit.x;
                     self.fluid_params.splat_y = hit.y;
                     self.fluid_params.splat_radius = 0.3;
@@ -812,42 +840,107 @@ impl App {
                 }
             }
 
-            // Handle projectile impacts — destroy blocks, inject smoke/toxic gas
+            // Handle projectile impacts — data-driven sound, smoke, gas emission
             for impact in &impacts {
+                let def = projectile_def(impact.projectile_id);
+
                 if impact.destroy_block {
                     self.destroy_block_at(impact.block_x, impact.block_y);
-                    log::info!("Cannonball destroyed block at ({}, {}) KE={:.0}",
+                    log::info!("Projectile destroyed block at ({}, {}) KE={:.0}",
                         impact.block_x, impact.block_y, impact.kinetic_energy);
                 }
-                if impact.is_grenade {
-                    // Grenade: inject toxic cloud (high smoke + CO2) via direct dye write
-                    // Stored in grenade_impacts for the render pass to write to dye texture
-                    self.grenade_impacts.push((impact.x, impact.y));
-                    // Grenade explosion: inject sound shockwave (~130 dB)
-                    if self.sound_enabled {
-                        self.sound_sources.push(SoundSource {
-                            x: impact.x, y: impact.y,
-                            amplitude: db_to_amplitude(130.0), frequency: 0.0,
-                            phase: 0.0, pattern: 0, duration: 0.15,
-                        });
-                    }
-                } else {
-                    // Cannonball impact: sound (~110 dB)
-                    if self.sound_enabled {
-                        self.sound_sources.push(SoundSource {
-                            x: impact.x, y: impact.y,
-                            amplitude: db_to_amplitude(110.0), frequency: 0.0,
-                            phase: 0.0, pattern: 0, duration: 0.08,
-                        });
-                    }
-                    // Cannonball: inject smoke burst via splat
+
+                // Impact sound
+                if def.impact.sound_db > 0.0 && self.sound_enabled {
+                    self.sound_sources.push(SoundSource {
+                        x: impact.x, y: impact.y,
+                        amplitude: db_to_amplitude(def.impact.sound_db),
+                        frequency: 0.0, phase: 0.0, pattern: 0,
+                        duration: def.impact.sound_duration,
+                    });
+                }
+
+                // Impact smoke splat
+                if def.impact.smoke_radius > 0.0 {
                     self.fluid_params.splat_x = impact.x;
                     self.fluid_params.splat_y = impact.y;
                     self.fluid_params.splat_vx = 0.0;
                     self.fluid_params.splat_vy = 0.0;
-                    self.fluid_params.splat_radius = 2.0;
+                    self.fluid_params.splat_radius = def.impact.smoke_radius;
                     self.fluid_params.splat_active = 1.0;
                 }
+
+                // Fuse gas emission (written to dye texture in render pass)
+                if def.fuse.is_some() {
+                    self.grenade_impacts.push((impact.x, impact.y));
+                }
+            }
+
+            // Process explosion events — blast force, knockback, sound, fluid burst
+            for expl in &explosion_events {
+                let radius = expl.def.radius;
+                let force = expl.def.force;
+
+                // Push physics bodies outward
+                for body in &mut self.physics_bodies {
+                    let dx = body.x - expl.x;
+                    let dy = body.y - expl.y;
+                    let dist = (dx * dx + dy * dy).sqrt().max(0.3);
+                    if dist > radius { continue; }
+                    let falloff = 1.0 / (dist * dist);
+                    let impulse = force * falloff / body.mass;
+                    let nx = dx / dist;
+                    let ny = dy / dist;
+                    body.vx += nx * impulse;
+                    body.vy += ny * impulse;
+                    body.vz += impulse * 0.3; // upward kick
+                    body.spin_x += ny * impulse * 0.2;
+                    body.spin_y -= nx * impulse * 0.2;
+                }
+
+                // Knock back plebs
+                for pleb in &mut self.plebs {
+                    let dx = pleb.x - expl.x;
+                    let dy = pleb.y - expl.y;
+                    let dist = (dx * dx + dy * dy).sqrt().max(0.5);
+                    if dist > radius { continue; }
+                    let falloff = 1.0 / (dist * dist);
+                    let impulse = force * falloff * 0.5;
+                    let nx = dx / dist;
+                    let ny = dy / dist;
+                    pleb.knockback_vx += nx * impulse;
+                    pleb.knockback_vy += ny * impulse;
+                    // Stagger if close enough
+                    if dist < radius * 0.5 && !pleb.activity.is_crisis() {
+                        pleb.activity = PlebActivity::Staggering(0.6);
+                        pleb.path.clear();
+                    }
+                    // Explosion damage (falls off with distance)
+                    if expl.def.damage > 0.0 {
+                        let dmg = expl.def.damage / (dist * dist).max(1.0);
+                        pleb.needs.health = (pleb.needs.health - dmg).max(0.0);
+                    }
+                }
+
+                // Explosion sound
+                if expl.def.sound_db > 0.0 && self.sound_enabled {
+                    self.sound_sources.push(SoundSource {
+                        x: expl.x, y: expl.y,
+                        amplitude: db_to_amplitude(expl.def.sound_db),
+                        frequency: 0.0, phase: 0.0, pattern: 0,
+                        duration: expl.def.sound_duration,
+                    });
+                }
+
+                // Fluid burst (expanding pressure wave)
+                self.fluid_params.splat_x = expl.x;
+                self.fluid_params.splat_y = expl.y;
+                self.fluid_params.splat_vx = 0.0;
+                self.fluid_params.splat_vy = 0.0;
+                self.fluid_params.splat_radius = 4.0;
+                self.fluid_params.splat_active = 1.0;
+
+                events.push((EventCategory::Combat, format!("Explosion at ({:.0}, {:.0})", expl.x, expl.y)));
             }
         }
 

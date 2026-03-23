@@ -39,6 +39,7 @@ pub enum PlebActivity {
     Hauling,          // carrying item to a storage crate
     Farming(f32),     // progress 0-1, planting or harvesting a crop
     Building(f32),    // progress 0-1, constructing a blueprint
+    Staggering(f32),  // knockback recovery timer (seconds remaining)
     /// Crisis override — pleb acts autonomously, ignoring player input.
     /// Inner activity is what they're doing (Walking to food/bed, Harvesting, Eating, Sleeping).
     Crisis(Box<PlebActivity>, &'static str), // (inner_activity, reason_label)
@@ -175,6 +176,8 @@ pub struct Pleb {
     pub wander_timer: f32,
     pub work_target: Option<(i32, i32)>, // position of current work task
     pub schedule: PlebSchedule,
+    pub knockback_vx: f32, // explosion knockback velocity (decays over time)
+    pub knockback_vy: f32,
 }
 
 /// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
@@ -253,6 +256,8 @@ impl Pleb {
             wander_timer: 0.0,
             work_target: None,
             schedule: PlebSchedule::default(),
+            knockback_vx: 0.0,
+            knockback_vy: 0.0,
         }
     }
 
