@@ -1,0 +1,276 @@
+//! Shared types, enums, and small structs used across the game.
+
+use crate::grid::*;
+
+// --- Sandbox ---
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SandboxTool {
+    None,
+    Lightning,
+    InjectWater,
+    TriggerDrought,
+    SoundPlace(usize),  // index into SANDBOX_SOUNDS
+}
+
+/// Sandbox sound presets: (name, dB, frequency, pattern, duration)
+pub const SANDBOX_SOUNDS: &[(&str, f32, f32, u32, f32)] = &[
+    ("Whisper",       20.0,  0.0, 0, 0.3),    // soft impulse
+    ("Conversation",  60.0,  0.0, 0, 0.2),    // talking impulse
+    ("Alarm Bell",    80.0,  8.0, 1, 5.0),    // continuous sine
+    ("Lawnmower",     90.0,  4.0, 1, 4.0),    // low freq continuous
+    ("Gunshot",      100.0,  0.0, 0, 0.05),   // sharp impulse
+    ("Siren",        105.0, 12.0, 1, 6.0),    // high freq continuous
+    ("Cannon",       110.0,  0.0, 0, 0.08),   // heavy impulse
+    ("Thunder",      120.0,  0.0, 0, 0.2),    // rumbling impulse
+    ("Grenade",      130.0,  0.0, 0, 0.15),   // explosion
+    ("Explosion",    170.0,  0.0, 0, 0.25),   // massive blast
+];
+
+// --- Notifications & Conditions ---
+
+/// Event notification (Rimworld-style right panel).
+#[derive(Clone, Debug)]
+pub struct GameNotification {
+    pub id: u32,
+    pub title: String,
+    pub description: String,
+    pub category: NotifCategory,
+    pub icon: &'static str,
+    pub time_created: f32,
+    pub dismissed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NotifCategory {
+    Threat,   // red
+    Warning,  // yellow
+    Positive, // green
+    Info,     // gray
+}
+
+impl NotifCategory {
+    pub fn color(&self) -> egui::Color32 {
+        match self {
+            NotifCategory::Threat => egui::Color32::from_rgb(180, 40, 40),
+            NotifCategory::Warning => egui::Color32::from_rgb(180, 160, 40),
+            NotifCategory::Positive => egui::Color32::from_rgb(40, 160, 60),
+            NotifCategory::Info => egui::Color32::from_rgb(80, 80, 90),
+        }
+    }
+}
+
+/// Active world condition with gameplay effects.
+#[derive(Clone, Debug)]
+pub struct ActiveCondition {
+    pub id: u32,
+    pub name: String,
+    pub icon: &'static str,
+    pub category: NotifCategory,
+    pub remaining: f32,   // game seconds remaining (0 = permanent until removed)
+    pub duration: f32,    // total duration (for progress bar)
+}
+
+// --- Debug & Selection ---
+
+/// GPU debug readback state (ctrl-hover info tool).
+#[derive(Clone, Debug)]
+pub struct DebugReadback {
+    pub mode: bool,
+    pub fluid_density: [f32; 4],
+    pub block_temp: f32,
+    pub block_temp_pending: bool,
+    pub voltage: f32,
+    pub voltage_pending: bool,
+    pub fluid_pending: bool,
+    pub water_level: f32,
+    pub water_pending: bool,
+}
+
+impl Default for DebugReadback {
+    fn default() -> Self {
+        Self { mode: false, fluid_density: [0.0; 4], block_temp: 15.0, block_temp_pending: false, voltage: 0.0, voltage_pending: false, fluid_pending: false, water_level: 0.0, water_pending: false }
+    }
+}
+
+/// Which popup/slider is open for a selected block.
+#[derive(Clone, Debug, Default)]
+pub struct BlockSelection {
+    pub pump: Option<u32>,
+    pub pump_world: (f32, f32),
+    pub fan: Option<u32>,
+    pub fan_world: (f32, f32),
+    pub dimmer: Option<u32>,
+    pub dimmer_world: (f32, f32),
+    pub cannon: Option<u32>,
+    pub crate_idx: Option<u32>,
+    pub crate_world: (f32, f32),
+}
+
+/// A single selected item in the world.
+#[derive(Clone, Debug)]
+pub struct SelectedItem {
+    pub x: i32, pub y: i32, pub w: i32, pub h: i32, // bounding box (grid coords)
+    pub block_type: u32,                  // 0 = pleb (not a block)
+    pub pleb_idx: Option<usize>,          // Some(idx) if this is a pleb
+}
+
+pub const SEL_PLEB: u32 = u32::MAX; // sentinel block_type for pleb selections
+
+/// What's currently selected in the world (Rimworld-style).
+#[derive(Clone, Debug, Default)]
+pub struct WorldSelection {
+    pub items: Vec<SelectedItem>,
+}
+
+impl WorldSelection {
+    pub fn none() -> Self { WorldSelection { items: Vec::new() } }
+    pub fn single(x: i32, y: i32, w: i32, h: i32, block_type: u32) -> Self {
+        WorldSelection { items: vec![SelectedItem { x, y, w, h, block_type, pleb_idx: None }] }
+    }
+    pub fn single_pleb(pleb_idx: usize, x: i32, y: i32) -> Self {
+        WorldSelection { items: vec![SelectedItem { x, y, w: 1, h: 1, block_type: SEL_PLEB, pleb_idx: Some(pleb_idx) }] }
+    }
+    pub fn is_empty(&self) -> bool { self.items.is_empty() }
+}
+
+// --- Event Log ---
+
+/// In-game event log entry.
+#[derive(Clone, Debug)]
+pub struct GameEvent {
+    pub time: f32,           // game time when event occurred
+    pub message: String,
+    pub category: EventCategory,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EventCategory {
+    Farm,    // green
+    Combat,  // red
+    Need,    // yellow
+    Build,   // blue
+    Weather, // gray
+    Haul,    // brown
+    General, // white
+}
+
+impl EventCategory {
+    pub fn icon(&self) -> &'static str {
+        match self {
+            EventCategory::Farm => "\u{1f33e}",
+            EventCategory::Combat => "\u{2694}",
+            EventCategory::Need => "\u{1f4a4}",
+            EventCategory::Build => "\u{1f528}",
+            EventCategory::Weather => "\u{26c8}",
+            EventCategory::Haul => "\u{1f4e6}",
+            EventCategory::General => "\u{2139}",
+        }
+    }
+    pub fn color(&self) -> [u8; 3] {
+        match self {
+            EventCategory::Farm => [80, 200, 80],
+            EventCategory::Combat => [255, 80, 80],
+            EventCategory::Need => [220, 200, 60],
+            EventCategory::Build => [80, 150, 255],
+            EventCategory::Weather => [160, 160, 170],
+            EventCategory::Haul => [180, 140, 80],
+            EventCategory::General => [200, 200, 200],
+        }
+    }
+}
+
+pub const MAX_LOG_ENTRIES: usize = 100;
+
+// --- Context Menu ---
+
+/// A context menu action that can be performed.
+#[derive(Clone)]
+pub enum ContextAction {
+    /// Send selected pleb to harvest a block at (grid_x, grid_y)
+    Harvest(i32, i32),
+    /// Haul a block/item at (grid_x, grid_y) to nearest crate
+    Haul(i32, i32),
+    /// Eat a ground item at index
+    Eat(usize),
+    /// Move selected pleb to world position
+    MoveTo(f32, f32),
+}
+
+/// Unified context menu with a title, position, and list of labeled actions.
+pub struct ContextMenu {
+    pub screen_x: f32,
+    pub screen_y: f32,
+    pub title: String,
+    pub actions: Vec<(String, ContextAction)>,
+}
+
+impl ContextMenu {
+    pub fn new(sx: f32, sy: f32, title: impl Into<String>) -> Self {
+        ContextMenu { screen_x: sx, screen_y: sy, title: title.into(), actions: Vec::new() }
+    }
+    pub fn action(mut self, label: impl Into<String>, action: ContextAction) -> Self {
+        self.actions.push((label.into(), action));
+        self
+    }
+}
+
+// --- Sound ---
+
+/// An active sound source in the world.
+#[derive(Clone, Debug)]
+pub struct SoundSource {
+    pub x: f32, pub y: f32,
+    pub amplitude: f32,
+    pub frequency: f32,  // Hz (for sine pattern)
+    pub phase: f32,      // accumulated phase
+    pub pattern: u32,    // 0=impulse, 1=sine, 2=noise
+    pub duration: f32,   // remaining seconds
+}
+
+/// Convert game decibels to wave equation amplitude.
+/// Reference: 80 dB = amplitude 1.0 (alarm bell at source).
+/// Uses compressed log scale: amp = 10^((dB - 80) / 40).
+pub fn db_to_amplitude(db: f32) -> f32 {
+    10.0f32.powf((db - 80.0) / 40.0)
+}
+
+/// Convert wave equation amplitude back to game decibels.
+pub fn amplitude_to_db(amp: f32) -> f32 {
+    if amp <= 0.0 { return 0.0; }
+    80.0 + 40.0 * amp.log10()
+}
+
+// --- Blueprint ---
+
+/// A pending construction — placed as a ghost, built by plebs over time.
+#[derive(Clone, Debug)]
+pub struct Blueprint {
+    pub block_data: u32,      // target block (from make_block)
+    pub progress: f32,        // 0.0-1.0 construction progress
+    pub build_time: f32,      // total seconds to build
+    pub wood_needed: u32,     // wood required to start
+    pub wood_delivered: u32,  // wood deposited so far
+}
+
+impl Blueprint {
+    pub fn new(block_data: u32) -> Self {
+        let bt = block_data & 0xFF;
+        let (build_time, wood_needed) = match bt as u32 {
+            BT_WOOD_WALL => (3.0, 3),
+            BT_WOOD_FLOOR => (1.5, 2),
+            BT_STONE | BT_WALL | BT_GLASS | BT_INSULATED |
+            BT_STEEL_WALL | BT_SANDSTONE | BT_GRANITE |
+            BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL => (3.0, 0),
+            BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0),
+            BT_BENCH | BT_BED => (2.0, 2),
+            BT_FIREPLACE | BT_CRATE | BT_CANNON => (2.0, 0),
+            _ => (1.0, 0),
+        };
+        Blueprint { block_data, progress: 0.0, build_time, wood_needed, wood_delivered: 0 }
+    }
+
+    pub fn resources_met(&self) -> bool {
+        self.wood_delivered >= self.wood_needed
+    }
+}
