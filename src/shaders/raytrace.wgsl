@@ -116,7 +116,7 @@ fn apply_fog(color: vec3<f32>, wx: f32, wy: f32) -> vec3<f32> {
 // --- Pleb struct (must match Rust GpuPleb layout exactly) ---
 struct GpuPleb {
     x: f32, y: f32, angle: f32, selected: f32,
-    torch: f32, headlight: f32, carrying: f32, _pad1: f32,
+    torch: f32, headlight: f32, carrying: f32, health: f32,
     skin_r: f32, skin_g: f32, skin_b: f32, hair_style: f32,
     hair_r: f32, hair_g: f32, hair_b: f32, _pad2: f32,
     shirt_r: f32, shirt_g: f32, shirt_b: f32, _pad3: f32,
@@ -3444,6 +3444,41 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = block_base_color(btype, bflags);
     }
 
+    // --- Level indicator bar for adjustable blocks ---
+    // Generalized: any block with a variable level gets a thin bar at the bottom.
+    // Level is read from the height byte, normalized to 0..1 by max_level.
+    {
+        var adj_level = -1.0;   // negative = not adjustable
+        var adj_color = vec3(1.0, 0.8, 0.2); // default: warm yellow
+        var adj_max = 10.0;
+        if btype == BT_DIMMER {
+            adj_level = f32(bheight); adj_max = 10.0;
+            adj_color = vec3(1.0, 0.9, 0.3); // brightness yellow
+        } else if btype == BT_RESTRICTOR {
+            adj_level = f32(bheight & 0xFu); adj_max = 10.0;
+            adj_color = vec3(0.3, 0.7, 1.0); // flow blue
+        } else if btype == BT_FIREPLACE {
+            adj_level = f32(bheight); adj_max = 10.0;
+            adj_color = vec3(1.0, 0.5, 0.15); // fire orange
+        } else if btype == BT_FAN {
+            // Fan speed stored in height byte
+            adj_level = f32(bheight); adj_max = 10.0;
+            adj_color = vec3(0.3, 0.8, 0.9); // teal
+        }
+        if adj_level >= 0.0 {
+            let bar_y = fy - 0.92; // bottom of tile
+            let bar_x = (fx - 0.1) / 0.8; // 80% width centered
+            if bar_y > 0.0 && bar_y < 0.06 && bar_x > 0.0 && bar_x < 1.0 {
+                let fill = adj_level / adj_max;
+                if bar_x < fill {
+                    color = mix(color, adj_color, 0.8);
+                } else {
+                    color = mix(color, vec3(0.1), 0.5); // dark empty portion
+                }
+            }
+        }
+    }
+
     // --- Procedural terrain detail (ground-level blocks only) ---
     // Replace this block with sprite sampling when migrating to sprites.
     let is_scorched_dirt = btype == BT_DIRT && (bflags & 1u) != 0u;
@@ -3872,12 +3907,44 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
 
-            // Direction indicator: small bright dot at front edge
-            let front_x = p.x + cos(p.angle) * 0.30;
-            let front_y = p.y + sin(p.angle) * 0.30;
-            let front_dist = length(vec2(world_x - front_x, world_y - front_y));
-            if front_dist < 0.05 {
-                color = vec3(0.95, 0.95, 1.0);
+            // Corpse: desaturate and add red X
+            if p.health <= 0.0 {
+                let gray = dot(color, vec3(0.3, 0.5, 0.2));
+                color = mix(vec3(gray * 0.5), vec3(0.25, 0.18, 0.15), 0.3);
+                // Red X in the corner (northeast quadrant of the pleb)
+                let xc_x = pdx + 0.22;
+                let xc_y = pdy + 0.22;
+                let x_arm1 = abs(xc_x - xc_y);  // diagonal /
+                let x_arm2 = abs(xc_x + xc_y);  // diagonal \.
+                if (x_arm1 < 0.04 || x_arm2 < 0.04) && abs(xc_x) < 0.12 && abs(xc_y) < 0.12 {
+                    color = vec3(0.85, 0.15, 0.10);
+                }
+            } else {
+                // Direction indicator: small bright dot at front edge (living only)
+                let front_x = p.x + cos(p.angle) * 0.30;
+                let front_y = p.y + sin(p.angle) * 0.30;
+                let front_dist = length(vec2(world_x - front_x, world_y - front_y));
+                if front_dist < 0.05 {
+                    color = vec3(0.95, 0.95, 1.0);
+                }
+
+                // Health bar (only when damaged, below pleb)
+                if p.health < 0.95 {
+                    let bar_cx = world_x - p.x;
+                    let bar_cy = world_y - p.y - 0.38; // below pleb
+                    if abs(bar_cy) < 0.03 && abs(bar_cx) < 0.18 {
+                        let bar_t = (bar_cx + 0.18) / 0.36; // 0..1 across bar
+                        if bar_t < p.health {
+                            // Green→yellow→red based on health
+                            var bar_col = vec3(0.2, 0.8, 0.2);
+                            if p.health < 0.5 { bar_col = mix(vec3(0.9, 0.2, 0.1), vec3(0.9, 0.8, 0.1), p.health * 2.0); }
+                            else { bar_col = mix(vec3(0.9, 0.8, 0.1), vec3(0.2, 0.8, 0.2), (p.health - 0.5) * 2.0); }
+                            color = bar_col;
+                        } else {
+                            color = vec3(0.15, 0.12, 0.10); // empty bar background
+                        }
+                    }
+                }
             }
         }
     }

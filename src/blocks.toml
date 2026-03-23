@@ -75,6 +75,7 @@ render_style = 2.0
 is_emissive = true
 walkable = true
 is_removable = true
+adjustable = true
 light = { intensity = 0.9, color = [1.0, 0.55, 0.15], radius = 6.0, height = 1.0 }
 thermal = { heat_capacity = 3.0, conductivity = 0.01, solar_absorption = 0.7 }
 [block.placement]
@@ -169,6 +170,7 @@ is_solid = true
 fluid_obstacle = true
 default_height = 3.0
 is_removable = true
+adjustable = true
 shows_wall_face = true
 thermal = { heat_capacity = 1.0, conductivity = 0.05, solar_absorption = 0.8 }
 [block.placement]
@@ -686,6 +688,7 @@ color = [0.48, 0.45, 0.40]
 render_style = 29.0
 walkable = true
 is_removable = true
+adjustable = true
 light_transmission = 1.0
 [block.placement]
 category = "Power"
@@ -832,6 +835,7 @@ render_style = 31.0
 is_solid = true
 fluid_obstacle = true
 is_removable = true
+adjustable = true
 thermal = { heat_capacity = 1.0, conductivity = 0.03, solar_absorption = 0.5 }
 [block.placement]
 category = "Piping"

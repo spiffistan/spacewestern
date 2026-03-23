@@ -377,6 +377,7 @@ impl App {
         let sel = self.selected_pleb;
 
         for (i, pleb) in self.plebs.iter_mut().enumerate() {
+            if pleb.is_dead { continue; } // corpses don't act
             let is_selected = sel == Some(i);
 
             // Q/E rotation for selected pleb
@@ -1396,13 +1397,18 @@ impl App {
             }
         }
 
-        // --- Remove dead plebs ---
-        for pleb in &self.plebs {
-            if pleb.needs.health <= 0.0 {
+        // --- Mark dead plebs as corpses ---
+        for pleb in &mut self.plebs {
+            if pleb.needs.health <= 0.0 && !pleb.is_dead {
+                pleb.is_dead = true;
+                pleb.activity = PlebActivity::Idle;
+                pleb.path.clear();
+                pleb.work_target = None;
+                pleb.haul_target = None;
+                pleb.harvest_target = None;
                 events.push((EventCategory::Combat, format!("{} has died!", pleb.name)));
             }
         }
-        self.plebs.retain(|p| p.needs.health > 0.0);
 
         // Push all collected events to the game log
         for (cat, msg) in events {

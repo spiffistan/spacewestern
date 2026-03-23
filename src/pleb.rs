@@ -147,7 +147,7 @@ impl PlebAppearance {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuPleb {
     pub x: f32, pub y: f32, pub angle: f32, pub selected: f32,
-    pub torch: f32, pub headlight: f32, pub carrying: f32, pub _pad1: f32,
+    pub torch: f32, pub headlight: f32, pub carrying: f32, pub health: f32,
     pub skin_r: f32, pub skin_g: f32, pub skin_b: f32, pub hair_style: f32,
     pub hair_r: f32, pub hair_g: f32, pub hair_b: f32, pub _pad2: f32,
     pub shirt_r: f32, pub shirt_g: f32, pub shirt_b: f32, pub _pad3: f32,
@@ -178,6 +178,7 @@ pub struct Pleb {
     pub schedule: PlebSchedule,
     pub knockback_vx: f32, // explosion knockback velocity (decays over time)
     pub knockback_vy: f32,
+    pub is_dead: bool,     // corpse: stays in world but doesn't act
 }
 
 /// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
@@ -258,6 +259,7 @@ impl Pleb {
             schedule: PlebSchedule::default(),
             knockback_vx: 0.0,
             knockback_vy: 0.0,
+            is_dead: false,
         }
     }
 
@@ -269,7 +271,7 @@ impl Pleb {
             torch: if self.torch_on { 1.0 } else { 0.0 },
             headlight: if self.headlight_on { 1.0 } else { 0.0 },
             carrying: if self.inventory.carrying.is_some() { 1.0 } else { 0.0 },
-            _pad1: 0.0,
+            health: self.needs.health,
             skin_r: a.skin_r, skin_g: a.skin_g, skin_b: a.skin_b,
             hair_style: a.hair_style as f32,
             hair_r: a.hair_r, hair_g: a.hair_g, hair_b: a.hair_b, _pad2: 0.0,

@@ -31,6 +31,7 @@ pub struct BlockDef {
     #[serde(default)] pub is_wall: bool,
     #[serde(default)] pub is_plant: bool,     // plants: no shadow casting, harvestable
     #[serde(default)] pub is_harvestable: bool, // can be harvested via work queue
+    #[serde(default)] pub adjustable: bool,  // has a variable level (dimmer, restrictor, etc.)
 
     #[serde(default)] pub light: Option<LightDef>,
     #[serde(default)] pub thermal: Option<ThermalDef>,
