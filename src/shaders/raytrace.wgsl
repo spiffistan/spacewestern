@@ -3256,7 +3256,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_plant = btype == BT_CROP; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
     let is_diag_open = btype == BT_DIAGONAL && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
     // --- Fire overlay for burning blocks ---
-    let mat = get_material(btype);
+    // (reuses `mat` from earlier get_material(btype) call)
     if mat.is_flammable > 0.5 {
         let fire_tidx = u32(by) * u32(camera.grid_w) + u32(bx);
         let fire_temp = block_temps[fire_tidx];
