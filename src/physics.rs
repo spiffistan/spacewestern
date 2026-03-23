@@ -1,6 +1,164 @@
 //! Physics bodies — moveable objects that interact with the fluid sim and plebs.
+//! Projectile types are data-driven via ProjectileDef lookup table.
 
 use crate::grid::*;
+use std::sync::OnceLock;
+
+// --- Data-driven projectile system ---
+
+pub type ProjectileId = u16;
+
+pub const PROJ_WOOD_BOX: ProjectileId = 0;
+pub const PROJ_CANNONBALL: ProjectileId = 1;
+pub const PROJ_GRENADE: ProjectileId = 2;
+pub const PROJ_BULLET: ProjectileId = 3;
+
+/// How a projectile moves through the world.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TraversalMode {
+    /// Normal arc: gravity, bounce, friction, wall collision.
+    Ballistic,
+    /// DDA ray march per frame (bullets, fast projectiles).
+    Hitscan,
+}
+
+/// What happens when a projectile hits a wall or the ground.
+#[derive(Clone, Debug)]
+pub struct ImpactEffect {
+    pub sound_db: f32,
+    pub sound_duration: f32,
+    pub destroy_multiplier: f32, // 0 = never destroys, 1 = normal KE check
+    pub smoke_radius: f32,
+    pub explosion: Option<ExplosionDef>,
+    pub ricochet: bool,
+    pub ricochet_loss: f32,      // speed fraction lost per bounce (0.4 = lose 40%)
+}
+
+/// Continuous emission while on ground with fuse > 0.
+#[derive(Clone, Debug)]
+pub struct FuseEmission {
+    pub duration: f32,
+    pub gas: [f32; 4], // [smoke, O2, CO2, temp] injected per tick
+    pub radius: i32,
+    pub freeze_on_ground: bool,
+}
+
+/// One-time explosion event (blast wave, damage, force).
+#[derive(Clone, Debug)]
+pub struct ExplosionDef {
+    pub radius: f32,      // effective radius (tiles)
+    pub force: f32,       // impulse at epicenter (tiles/sec)
+    pub damage: f32,      // health damage at epicenter (0-1)
+    pub sound_db: f32,    // detonation sound
+    pub sound_duration: f32,
+    pub block_ke: f32,    // KE applied to blocks for destruction
+    pub fire_radius: f32, // ignite flammable blocks (0 = no fire)
+}
+
+/// Full definition of a projectile type.
+#[derive(Clone, Debug)]
+pub struct ProjectileDef {
+    pub name: &'static str,
+    pub mass: f32,
+    pub friction: f32,
+    pub bounce: f32,
+    pub size: f32,
+    pub render_height: f32,
+    pub max_speed: f32,
+    pub traversal: TraversalMode,
+    pub impact: ImpactEffect,
+    pub fuse: Option<FuseEmission>,
+    pub hit_damage: f32,              // direct-hit damage (hitscan projectiles)
+    pub remove_when_stopped: bool,
+    pub remove_speed_threshold: f32,
+}
+
+/// Runtime explosion event emitted by tick_bodies.
+#[derive(Debug)]
+pub struct ExplosionEvent {
+    pub x: f32,
+    pub y: f32,
+    pub def: ExplosionDef,
+}
+
+fn build_projectile_defs() -> Vec<ProjectileDef> {
+    vec![
+        // PROJ_WOOD_BOX (0)
+        ProjectileDef {
+            name: "Wood Box",
+            mass: 20.0, friction: 0.85, bounce: 0.3,
+            size: 0.45, render_height: 1.5, max_speed: 30.0,
+            traversal: TraversalMode::Ballistic,
+            impact: ImpactEffect {
+                sound_db: 0.0, sound_duration: 0.0,
+                destroy_multiplier: 0.0, smoke_radius: 0.0,
+                explosion: None, ricochet: false, ricochet_loss: 0.0,
+            },
+            fuse: None, hit_damage: 0.0,
+            remove_when_stopped: false, remove_speed_threshold: 0.0,
+        },
+        // PROJ_CANNONBALL (1)
+        ProjectileDef {
+            name: "Cannonball",
+            mass: 5.0, friction: 0.6, bounce: 0.2,
+            size: 0.12, render_height: 0.5, max_speed: 40.0,
+            traversal: TraversalMode::Ballistic,
+            impact: ImpactEffect {
+                sound_db: 110.0, sound_duration: 0.08,
+                destroy_multiplier: 1.0, smoke_radius: 2.0,
+                explosion: None, ricochet: false, ricochet_loss: 0.0,
+            },
+            fuse: None, hit_damage: 0.0,
+            remove_when_stopped: true, remove_speed_threshold: 0.5,
+        },
+        // PROJ_GRENADE (2) — toxic grenade with fuse + explosion on landing
+        ProjectileDef {
+            name: "Toxic Grenade",
+            mass: 0.8, friction: 0.8, bounce: 0.3,
+            size: 0.08, render_height: 0.3, max_speed: 30.0,
+            traversal: TraversalMode::Ballistic,
+            impact: ImpactEffect {
+                sound_db: 0.0, sound_duration: 0.0, // landing itself is quiet
+                destroy_multiplier: 0.0, smoke_radius: 0.0,
+                explosion: Some(ExplosionDef {
+                    radius: 6.0, force: 20.0, damage: 0.15,
+                    sound_db: 130.0, sound_duration: 0.15,
+                    block_ke: 0.0, fire_radius: 0.0,
+                }),
+                ricochet: false, ricochet_loss: 0.0,
+            },
+            fuse: Some(FuseEmission {
+                duration: 12.0,
+                gas: [0.6, 0.2, 0.8, 15.0], // smoke, O2, CO2, temp
+                radius: 1,
+                freeze_on_ground: true,
+            }),
+            hit_damage: 0.0,
+            remove_when_stopped: false, remove_speed_threshold: 0.0,
+        },
+        // PROJ_BULLET (3)
+        ProjectileDef {
+            name: "Bullet",
+            mass: 0.01, friction: 0.0, bounce: 0.0,
+            size: 0.02, render_height: 0.05, max_speed: 120.0,
+            traversal: TraversalMode::Hitscan,
+            impact: ImpactEffect {
+                sound_db: 0.0, sound_duration: 0.0,
+                destroy_multiplier: 0.0, smoke_radius: 0.0,
+                explosion: None, ricochet: true, ricochet_loss: 0.4,
+            },
+            fuse: None, hit_damage: 0.2,
+            remove_when_stopped: true, remove_speed_threshold: 1.0,
+        },
+    ]
+}
+
+static PROJECTILE_DEFS: OnceLock<Vec<ProjectileDef>> = OnceLock::new();
+
+pub fn projectile_def(id: ProjectileId) -> &'static ProjectileDef {
+    let defs = PROJECTILE_DEFS.get_or_init(build_projectile_defs);
+    &defs[id as usize]
+}
 
 /// A physics body in the world (continuous position, not grid-aligned).
 #[derive(Clone, Debug)]
@@ -23,8 +181,10 @@ pub struct PhysicsBody {
     pub size: f32,
     pub render_height: f32,
     pub body_type: BodyType,
-    pub fuse_timer: f32, // seconds remaining for grenade emission (0 = inactive)
-    pub prev_x: f32,     // position at start of frame (for accurate line-segment collision)
+    pub kind: ProjectileId,    // data-driven type (replaces body_type after migration)
+    pub fuse_timer: f32,       // seconds remaining for fuse emission (0 = inactive)
+    pub has_landed: bool,      // true after first ground contact (for one-time explosion)
+    pub prev_x: f32,          // position at start of frame (for line-segment collision)
     pub prev_y: f32,
 }
 
@@ -65,7 +225,8 @@ impl PhysicsBody {
             bounce: 0.3,
             size: 0.45,
             render_height: 1.5,
-            body_type: BodyType::WoodBox, fuse_timer: 0.0, prev_x: x, prev_y: y,
+            body_type: BodyType::WoodBox, kind: PROJ_WOOD_BOX,
+            fuse_timer: 0.0, has_landed: false, prev_x: x, prev_y: y,
         }
     }
 
@@ -86,7 +247,8 @@ impl PhysicsBody {
             bounce: 0.2, // low bounce — cannonballs don't bounce much
             size: 0.12,
             render_height: 0.5,
-            body_type: BodyType::Cannonball, fuse_timer: 0.0, prev_x: x, prev_y: y,
+            body_type: BodyType::Cannonball, kind: PROJ_CANNONBALL,
+            fuse_timer: 0.0, has_landed: false, prev_x: x, prev_y: y,
         }
     }
 
@@ -106,7 +268,8 @@ impl PhysicsBody {
             bounce: 0.3,
             size: 0.08,
             render_height: 0.3,
-            body_type: BodyType::Grenade, fuse_timer: 12.0, prev_x: x, prev_y: y,
+            body_type: BodyType::Grenade, kind: PROJ_GRENADE,
+            fuse_timer: 12.0, has_landed: false, prev_x: x, prev_y: y,
         }
     }
 
@@ -126,7 +289,8 @@ impl PhysicsBody {
             bounce: 0.0,
             size: 0.02,
             render_height: 0.05,
-            body_type: BodyType::Bullet, fuse_timer: 0.0, prev_x: x, prev_y: y,
+            body_type: BodyType::Bullet, kind: PROJ_BULLET,
+            fuse_timer: 0.0, has_landed: false, prev_x: x, prev_y: y,
         }
     }
 
