@@ -3761,20 +3761,34 @@ impl App {
             .anchor(egui::Align2::LEFT_TOP, [10.0, 100.0])
             .interactable(false)
             .show(ctx, |ui| {
-                egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.label(egui::RichText::new(format!("\u{1f464} {} colonists", pleb_count)).size(11.0));
-                    for (item_id, count) in &sorted {
-                        let def = item_reg.get(*item_id);
-                        let icon = def.map(|d| d.icon.as_str()).unwrap_or("?");
-                        let name = def.map(|d| d.name.as_str()).unwrap_or("Unknown");
-                        ui.label(egui::RichText::new(format!("{} {} {}", icon, count, name)).size(11.0));
-                    }
-                    if bp_count > 0 {
-                        ui.label(egui::RichText::new(format!("\u{1f3d7} {} pending", bp_count))
-                            .size(11.0).weak());
-                    }
-                });
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::Vec2::new(240.0, (2 + sorted.len() + if bp_count > 0 { 1 } else { 0 }) as f32 * 16.0),
+                    egui::Sense::hover(),
+                );
+                let painter = ui.painter_at(rect);
+                let font = egui::FontId::proportional(12.0);
+                let white = egui::Color32::from_gray(230);
+                let mut y = rect.min.y;
+                let x = rect.min.x;
+                let line_h = 16.0;
+
+                Self::shadow_text(&painter, egui::pos2(x, y), egui::Align2::LEFT_TOP,
+                    &format!("\u{1f464} {} colonists", pleb_count), font.clone(), white);
+                y += line_h;
+
+                for (item_id, count) in &sorted {
+                    let def = item_reg.get(*item_id);
+                    let icon = def.map(|d| d.icon.as_str()).unwrap_or("?");
+                    let name = def.map(|d| d.name.as_str()).unwrap_or("Unknown");
+                    Self::shadow_text(&painter, egui::pos2(x, y), egui::Align2::LEFT_TOP,
+                        &format!("{} {} {}", icon, count, name), font.clone(), white);
+                    y += line_h;
+                }
+                if bp_count > 0 {
+                    Self::shadow_text(&painter, egui::pos2(x, y), egui::Align2::LEFT_TOP,
+                        &format!("\u{1f3d7} {} pending", bp_count), font.clone(),
+                        egui::Color32::from_gray(160));
+                }
             });
     }
 
