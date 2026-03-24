@@ -2110,7 +2110,7 @@ impl App {
                 if !tiles.is_empty() {
                     let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
                     let painter = ctx.layer_painter(egui::LayerId::new(
-                        egui::Order::Middle, egui::Id::new("drag_preview"),
+                        egui::Order::Background, egui::Id::new("drag_preview"),
                     ));
                     let is_destroy = self.build_tool == BuildTool::Destroy;
                     let is_remove_floor = self.build_tool == BuildTool::RemoveFloor;
@@ -2240,7 +2240,7 @@ impl App {
             let p0 = self.world_to_screen_ui(sx.min(ex), sy.min(ey), bp_cam);
             let p1 = self.world_to_screen_ui(sx.max(ex), sy.max(ey), bp_cam);
             let sel_drag_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle, egui::Id::new("select_drag"),
+                egui::Order::Background, egui::Id::new("select_drag"),
             ));
             sel_drag_painter.rect_filled(
                 egui::Rect::from_min_max(p0, p1), 0.0,
@@ -2264,7 +2264,7 @@ impl App {
         // World selection brackets (Rimworld-style corner markers per item)
         if !self.world_sel.is_empty() {
             let sel_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle, egui::Id::new("world_selection"),
+                egui::Order::Background, egui::Id::new("world_selection"),
             ));
             let stroke = egui::Stroke::new(2.0, egui::Color32::WHITE);
             for item in &self.world_sel.items {
@@ -2320,7 +2320,7 @@ impl App {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
             let bp_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle, egui::Id::new("construction_blueprints"),
+                egui::Order::Background, egui::Id::new("construction_blueprints"),
             ));
             let screen_rect = ctx.screen_rect();
             for (&(bx, by), bp) in &self.blueprints {
@@ -2381,7 +2381,7 @@ impl App {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
 
             let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle,
+                egui::Order::Background,
                 egui::Id::new("blueprint"),
             ));
 
@@ -2484,7 +2484,7 @@ impl App {
         if self.placing_pleb {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle,
+                egui::Order::Background,
                 egui::Id::new("pleb_ghost"),
             ));
             let (hwx, hwy) = self.hover_world;
@@ -2506,7 +2506,7 @@ impl App {
             if pleb.path_idx < pleb.path.len() {
                 let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
                 let painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Middle,
+                    egui::Order::Background,
                     egui::Id::new("pleb_path"),
                 ));
                 let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
@@ -2563,7 +2563,7 @@ impl App {
         if self.show_pipe_overlay && !self.pipe_network.cells.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle,
+                egui::Order::Background,
                 egui::Id::new("pipe_overlay"),
             ));
             let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
@@ -2612,7 +2612,7 @@ impl App {
         if self.show_liquid_overlay && !self.liquid_network.cells.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle,
+                egui::Order::Background,
                 egui::Id::new("liquid_overlay"),
             ));
             let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
@@ -2649,7 +2649,7 @@ impl App {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
             let flow_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle,
+                egui::Order::Background,
                 egui::Id::new("flow_overlay"),
             ));
             let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
@@ -2819,7 +2819,7 @@ impl App {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
             let cannon_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle, egui::Id::new("cannons"),
+                egui::Order::Background, egui::Id::new("cannons"),
             ));
             for (&cannon_idx, &angle) in &self.cannon_angles {
                 let cx = (cannon_idx % GRID_W) as f32 + 0.5;
@@ -2853,7 +2853,7 @@ impl App {
         if self.lightning_flash > 0.01 {
             let flash_alpha = (self.lightning_flash * 180.0).min(255.0) as u8;
             let flash_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle, egui::Id::new("lightning_flash"),
+                egui::Order::Background, egui::Id::new("lightning_flash"),
             ));
             let screen_rect = egui::Rect::from_min_max(
                 egui::pos2(0.0, 0.0),
@@ -2919,7 +2919,7 @@ impl App {
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
             if tile_px > 6.0 { // only show labels when zoomed in enough
                 let label_painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Middle, egui::Id::new("voltage_labels"),
+                    egui::Order::Background, egui::Id::new("voltage_labels"),
                 ));
                 let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
                     let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
@@ -2968,7 +2968,7 @@ impl App {
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
             if tile_px > 3.0 { // only draw when zoomed in enough
                 let cable_painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Middle, egui::Id::new("power_cables"),
+                    egui::Order::Background, egui::Id::new("power_cables"),
                 ));
                 let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
                     let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
@@ -3030,7 +3030,7 @@ impl App {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
             let item_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle, egui::Id::new("ground_items"),
+                egui::Order::Background, egui::Id::new("ground_items"),
             ));
             let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
                 let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
@@ -3186,7 +3186,7 @@ impl App {
         if !self.physics_bodies.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Middle,
+                egui::Order::Background,
                 egui::Id::new("physics_bodies"),
             ));
             let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
@@ -3595,7 +3595,7 @@ impl App {
                 };
 
                 let label_painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Middle, egui::Id::new("world_labels"),
+                    egui::Order::Background, egui::Id::new("world_labels"),
                 ));
 
                 // Pleb name + activity labels
