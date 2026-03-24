@@ -24,23 +24,195 @@ impl App {
     }
 
     pub fn draw_ui(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: Vec<((i32,i32), bool)>, dt: f32) {
-        let bp_ppp = self.ppp();
-        self.draw_resource_bar(ctx);
-        self.draw_layers_bar(ctx);
-        self.draw_layer_legend(ctx);
-        self.draw_menu_bar(ctx, dt);
-        self.draw_inventory_window(ctx);
-        self.draw_build_bar(ctx);
-        self.draw_colonist_bar(ctx);
-        self.draw_context_menus(ctx, bp_ppp, bp_cam);
-        self.draw_overlays_and_popups(ctx, bp_cam, bp_ppp, dt);
-        self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
-        self.draw_world_labels(ctx, bp_cam);
-        self.draw_selection_info(ctx);
-        self.draw_notifications(ctx);
-        self.draw_conditions_bar(ctx);
-        self.draw_game_log(ctx);
-        self.draw_minimap(ctx);
+        match self.game_state {
+            GameState::MainMenu => self.draw_main_menu(ctx),
+            GameState::MapGen => self.draw_map_gen_screen(ctx),
+            GameState::Playing => {
+                let bp_ppp = self.ppp();
+                self.draw_resource_bar(ctx);
+                self.draw_layers_bar(ctx);
+                self.draw_layer_legend(ctx);
+                self.draw_menu_bar(ctx, dt);
+                self.draw_inventory_window(ctx);
+                self.draw_build_bar(ctx);
+                self.draw_colonist_bar(ctx);
+                self.draw_context_menus(ctx, bp_ppp, bp_cam);
+                self.draw_overlays_and_popups(ctx, bp_cam, bp_ppp, dt);
+                self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
+                self.draw_world_labels(ctx, bp_cam);
+                self.draw_selection_info(ctx);
+                self.draw_notifications(ctx);
+                self.draw_conditions_bar(ctx);
+                self.draw_game_log(ctx);
+                self.draw_minimap(ctx);
+            }
+        }
+    }
+
+    fn draw_main_menu(&mut self, ctx: &egui::Context) {
+        // Full-screen dark overlay
+        let screen = ctx.screen_rect();
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground, egui::Id::new("main_menu_bg"),
+        ));
+        painter.rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(10, 12, 18, 230));
+
+        egui::Area::new(egui::Id::new("main_menu"))
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(20.0);
+                    ui.label(egui::RichText::new("RAYWORLD").size(36.0).strong()
+                        .color(egui::Color32::from_rgb(200, 180, 120)));
+                    ui.label(egui::RichText::new("A colony survival game").size(14.0)
+                        .color(egui::Color32::from_gray(140)));
+                    ui.add_space(30.0);
+
+                    let btn_size = egui::Vec2::new(200.0, 36.0);
+                    if ui.add_sized(btn_size, egui::Button::new(
+                        egui::RichText::new("New Game").size(16.0)
+                    )).clicked() {
+                        self.game_state = GameState::MapGen;
+                    }
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(format!("v{}", include_str!("../VERSION").trim()))
+                        .size(10.0).color(egui::Color32::from_gray(80)));
+                });
+            });
+    }
+
+    fn draw_map_gen_screen(&mut self, ctx: &egui::Context) {
+        // Dark overlay
+        let screen = ctx.screen_rect();
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground, egui::Id::new("mapgen_bg"),
+        ));
+        painter.rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(10, 12, 18, 220));
+
+        let mut start_game = false;
+
+        egui::Window::new("New Game — Map Generator")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    // ═══ LEFT: Sliders ═══
+                    ui.vertical(|ui| {
+                        ui.set_max_width(180.0);
+                        ui.label(egui::RichText::new("Terrain").strong().size(12.0));
+                        ui.add_space(2.0);
+
+                        let slider = |ui: &mut egui::Ui, label: &str, val: &mut f32, color: egui::Color32| {
+                            ui.horizontal(|ui| {
+                                let (dot_rect, _) = ui.allocate_exact_size(egui::Vec2::splat(8.0), egui::Sense::hover());
+                                ui.painter_at(dot_rect).rect_filled(dot_rect, 2.0, color);
+                                ui.label(egui::RichText::new(label).size(9.0).monospace());
+                                ui.spacing_mut().slider_width = 60.0;
+                                ui.add(egui::Slider::new(val, 0.0..=1.0).show_value(false));
+                            });
+                        };
+
+                        slider(ui, "Grass ", &mut self.terrain_params.grass, egui::Color32::from_rgb(107, 92, 56));
+                        slider(ui, "Loam  ", &mut self.terrain_params.loam, egui::Color32::from_rgb(97, 77, 46));
+                        slider(ui, "Clay  ", &mut self.terrain_params.clay, egui::Color32::from_rgb(128, 97, 64));
+                        slider(ui, "Chalky", &mut self.terrain_params.chalky, egui::Color32::from_rgb(173, 168, 153));
+                        slider(ui, "Rocky ", &mut self.terrain_params.rocky, egui::Color32::from_rgb(115, 107, 97));
+                        slider(ui, "Gravel", &mut self.terrain_params.gravel, egui::Color32::from_rgb(122, 117, 107));
+                        slider(ui, "Peat  ", &mut self.terrain_params.peat, egui::Color32::from_rgb(56, 46, 31));
+                        slider(ui, "Marsh ", &mut self.terrain_params.marsh, egui::Color32::from_rgb(77, 89, 56));
+
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Ponds").size(10.0));
+                            ui.spacing_mut().slider_width = 60.0;
+                            ui.add(egui::Slider::new(&mut self.terrain_params.pond_density, 0.0..=1.0).show_value(false));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Seed").size(10.0));
+                            let mut seed_i = self.terrain_params.seed as i32;
+                            if ui.add(egui::DragValue::new(&mut seed_i).range(0..=9999)).changed() {
+                                self.terrain_params.seed = seed_i.max(0) as u32;
+                            }
+                            if ui.small_button("Random").clicked() {
+                                self.terrain_params.seed = (self.frame_count.wrapping_mul(2654435761)) % 10000;
+                            }
+                        });
+
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(format!("Map: {}×{}", GRID_W, GRID_H)).size(9.0).weak());
+                        ui.add_space(4.0);
+                        if ui.button("Preview").clicked() {
+                            self.terrain_data = grid::generate_terrain_with_params(
+                                &self.elevation_data, &self.water_table, &self.terrain_params);
+                            self.terrain_dirty = true;
+                        }
+                    });
+
+                    ui.separator();
+
+                    // ═══ RIGHT: Preview ═══
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new("Preview").strong().size(11.0));
+                        let preview_size = 256.0;
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::Vec2::splat(preview_size), egui::Sense::hover());
+                        let painter = ui.painter_at(rect);
+                        painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 20));
+
+                        let scale = preview_size / GRID_W as f32;
+                        let colors: [egui::Color32; 8] = [
+                            egui::Color32::from_rgb(107, 92, 56),
+                            egui::Color32::from_rgb(173, 168, 153),
+                            egui::Color32::from_rgb(115, 107, 97),
+                            egui::Color32::from_rgb(128, 97, 64),
+                            egui::Color32::from_rgb(122, 117, 107),
+                            egui::Color32::from_rgb(56, 46, 31),
+                            egui::Color32::from_rgb(77, 89, 56),
+                            egui::Color32::from_rgb(97, 77, 46),
+                        ];
+                        let step = 4u32;
+                        let px_size = scale * step as f32;
+                        for ty in (0..GRID_H).step_by(step as usize) {
+                            for tx in (0..GRID_W).step_by(step as usize) {
+                                let idx = (ty * GRID_W + tx) as usize;
+                                if idx < self.terrain_data.len() {
+                                    let tt = (self.terrain_data[idx] & 0xF) as usize;
+                                    if tt < 8 {
+                                        let px = rect.min.x + tx as f32 * scale;
+                                        let py = rect.min.y + ty as f32 * scale;
+                                        painter.rect_filled(
+                                            egui::Rect::from_min_size(
+                                                egui::pos2(px, py), egui::vec2(px_size, px_size)),
+                                            0.0, colors[tt]);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(egui::RichText::new("← Back").size(12.0)).clicked() {
+                        self.game_state = GameState::MainMenu;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(egui::RichText::new("Start Game →").size(14.0).strong()).clicked() {
+                            start_game = true;
+                        }
+                    });
+                });
+            });
+
+        if start_game {
+            // Regenerate world with final params
+            self.terrain_data = grid::generate_terrain_with_params(
+                &self.elevation_data, &self.water_table, &self.terrain_params);
+            self.terrain_dirty = true;
+            self.game_state = GameState::Playing;
+        }
     }
 
     fn draw_layers_bar(&mut self, ctx: &egui::Context) {
@@ -556,8 +728,8 @@ impl App {
                 if ui.button("Priorities").clicked() {
                     self.show_priorities = !self.show_priorities;
                 }
-                if ui.button("Map Gen").clicked() {
-                    self.show_map_gen = !self.show_map_gen;
+                if ui.button("Main Menu").clicked() {
+                    self.game_state = GameState::MainMenu;
                 }
 
                 // Debug menu
@@ -1654,10 +1826,9 @@ impl App {
             if !open { self.show_priorities = false; }
         }
 
-        // Map Generator window
-        if self.show_map_gen {
-            let mut open = true;
-            let mut regenerate = false;
+        // Map generator is now in GameState::MapGen screen
+        if false { // dead code — kept for reference, remove later
+            let (mut open, mut regenerate) = (true, false);
             egui::Window::new("Map Generator")
                 .open(&mut open)
                 .default_pos(egui::pos2(200.0, 100.0))
@@ -1765,7 +1936,7 @@ impl App {
                         });
                     });
                 });
-            if !open { self.show_map_gen = false; }
+            if !open { /* removed */ }
             if regenerate {
                 self.terrain_data = grid::generate_terrain_with_params(
                     &self.elevation_data, &self.water_table, &self.terrain_params);

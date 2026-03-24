@@ -2,6 +2,15 @@
 
 use crate::grid::*;
 
+// --- Game State ---
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GameState {
+    MainMenu,
+    MapGen,
+    Playing,
+}
+
 // --- Sandbox ---
 
 #[derive(Clone, Copy, Debug, PartialEq)]
