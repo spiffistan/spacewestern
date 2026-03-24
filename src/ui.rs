@@ -1487,8 +1487,11 @@ impl App {
             .fixed_pos(egui::Pos2::new(menu.screen_x / bp_ppp, menu.screen_y / bp_ppp))
             .show(ctx, |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
-                    for (label, action) in &menu.actions {
-                        if ui.button(egui::RichText::new(label).size(11.0)).clicked() {
+                    for (label, action, enabled) in &menu.actions {
+                        let text = egui::RichText::new(label).size(11.0);
+                        let text = if *enabled { text } else { text.weak() };
+                        let btn = ui.add_enabled(*enabled, egui::Button::new(text));
+                        if btn.clicked() {
                             chosen_action = Some(action.clone());
                             close = true;
                         }
@@ -1589,6 +1592,23 @@ impl App {
                             pleb.path_idx = 1;
                             pleb.activity = PlebActivity::Walking;
                             pleb.work_target = None;
+                            pleb.harvest_target = None;
+                            pleb.haul_target = None;
+                        }
+                    }
+                }
+                ContextAction::DigClay(dx, dy) => {
+                    // Pleb walks to clay tile, digs it, drops clay
+                    // The pleb auto-fetches a bucket if they don't have one
+                    if let Some(sel_idx) = self.selected_pleb {
+                        let pleb = &mut self.plebs[sel_idx];
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (dx, dy));
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 0;
+                            pleb.activity = PlebActivity::Walking;
+                            pleb.work_target = Some((dx, dy));
                             pleb.harvest_target = None;
                             pleb.haul_target = None;
                         }

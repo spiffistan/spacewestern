@@ -198,14 +198,19 @@ pub enum ContextAction {
     Eat(usize),
     /// Move selected pleb to world position
     MoveTo(f32, f32),
+    /// Dig clay at (grid_x, grid_y) — pleb auto-fetches bucket
+    DigClay(i32, i32),
 }
+
+/// A context menu action entry: (label, action, enabled).
+pub type MenuAction = (String, ContextAction, bool);
 
 /// Unified context menu with a title, position, and list of labeled actions.
 pub struct ContextMenu {
     pub screen_x: f32,
     pub screen_y: f32,
     pub title: String,
-    pub actions: Vec<(String, ContextAction)>,
+    pub actions: Vec<MenuAction>,
 }
 
 impl ContextMenu {
@@ -213,7 +218,7 @@ impl ContextMenu {
         ContextMenu { screen_x: sx, screen_y: sy, title: title.into(), actions: Vec::new() }
     }
     pub fn action(mut self, label: impl Into<String>, action: ContextAction) -> Self {
-        self.actions.push((label.into(), action));
+        self.actions.push((label.into(), action, true));
         self
     }
 }

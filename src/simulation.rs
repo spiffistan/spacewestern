@@ -1384,6 +1384,20 @@ impl App {
                             } else if tbt == BT_WELL {
                                 // Start drinking at well
                                 pleb.activity = PlebActivity::Drinking(0.0);
+                            } else if tbt == BT_DIRT && tidx < self.terrain_data.len()
+                                && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY
+                                && pleb.inventory.count_of(ITEM_WOODEN_BUCKET) > 0
+                            {
+                                // Dig clay: convert to dug ground, drop clay
+                                let roof_h = self.grid_data[tidx] & 0xFF000000;
+                                self.grid_data[tidx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
+                                self.grid_dirty = true;
+                                self.ground_items.push(resources::GroundItem::new(
+                                    tx as f32 + 0.5, ty as f32 + 0.5, ITEM_CLAY, 2,
+                                ));
+                                events.push((EventCategory::Farm, format!("{} dug clay", pleb.name)));
+                                pleb.work_target = None;
+                                pleb.activity = PlebActivity::Idle;
                             } else {
                                 pleb.activity = PlebActivity::Farming(0.0);
                             }

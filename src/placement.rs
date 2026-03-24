@@ -676,14 +676,14 @@ impl App {
             } else { true };
             if can_harvest {
                 menu.title = if bt == BT_BERRY_BUSH { "Berry Bush".into() } else { "Crop".into() };
-                menu.actions.push((format!("Harvest ({})", pleb_name), ContextAction::Harvest(bx, by)));
+                menu.actions.push((format!("Harvest ({})", pleb_name), ContextAction::Harvest(bx, by), true));
                 has_actions = true;
             }
         }
 
         // Tree: chop down for wood
         if sel_pleb.is_some() && bt == BT_TREE {
-            menu.actions.push((format!("Chop down ({})", pleb_name), ContextAction::Harvest(bx, by)));
+            menu.actions.push((format!("Chop down ({})", pleb_name), ContextAction::Harvest(bx, by), true));
             has_actions = true;
         }
 
@@ -701,7 +701,26 @@ impl App {
             }
             if let Some((pi, _)) = best_pleb {
                 let pn = self.plebs[pi].name.clone();
-                menu.actions.push((format!("Haul to storage ({})", pn), ContextAction::Haul(bx, by)));
+                menu.actions.push((format!("Haul to storage ({})", pn), ContextAction::Haul(bx, by), true));
+                has_actions = true;
+            }
+        }
+
+        // Dig clay on clay terrain
+        if sel_pleb.is_some() && bt == BT_DIRT {
+            let tidx = (by as u32 * GRID_W + bx as u32) as usize;
+            if tidx < self.terrain_data.len() && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY {
+                // Check if any bucket exists (in pleb inventory, crates, or on ground)
+                let bucket_in_inv = self.plebs.iter().any(|p| !p.is_enemy && p.inventory.count_of(item_defs::ITEM_WOODEN_BUCKET) > 0);
+                let bucket_in_crate = self.crate_contents.values().any(|c| c.count_of(item_defs::ITEM_WOODEN_BUCKET) > 0);
+                let bucket_on_ground = self.ground_items.iter().any(|gi| gi.stack.item_id == item_defs::ITEM_WOODEN_BUCKET);
+                let has_bucket = bucket_in_inv || bucket_in_crate || bucket_on_ground;
+                menu.title = "Clay Deposit".into();
+                if has_bucket {
+                    menu.actions.push((format!("Dig clay ({})", pleb_name), ContextAction::DigClay(bx, by), true));
+                } else {
+                    menu.actions.push(("Dig clay (no bucket)".into(), ContextAction::DigClay(bx, by), false));
+                }
                 has_actions = true;
             }
         }
@@ -714,11 +733,11 @@ impl App {
                 if ix == bx && iy == by {
                     if menu.title.is_empty() { menu.title = item.stack.label(); }
                     if item.stack.item_id == item_defs::ITEM_BERRIES {
-                        menu.actions.push((format!("Eat 1 berry ({})", pleb_name), ContextAction::Eat(i)));
+                        menu.actions.push((format!("Eat 1 berry ({})", pleb_name), ContextAction::Eat(i), true));
                         has_actions = true;
                     }
                     // Haul any ground item to nearest crate
-                    menu.actions.push((format!("Haul {} ({})", item.stack.label(), pleb_name), ContextAction::Haul(bx, by)));
+                    menu.actions.push((format!("Haul {} ({})", item.stack.label(), pleb_name), ContextAction::Haul(bx, by), true));
                     has_actions = true;
                 }
             }
@@ -727,7 +746,7 @@ impl App {
         // Move to (fallback when pleb selected but no specific action)
         if sel_pleb.is_some() && !has_actions {
             menu.title = "Move".into();
-            menu.actions.push((format!("Move here ({})", pleb_name), ContextAction::MoveTo(wx, wy)));
+            menu.actions.push((format!("Move here ({})", pleb_name), ContextAction::MoveTo(wx, wy), true));
             has_actions = true;
         }
 
