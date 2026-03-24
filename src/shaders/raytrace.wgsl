@@ -311,11 +311,11 @@ fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
 // Terrain hue palette — indexed by terrain type (bits 0-3 of terrain_buf)
 // 0=grass, 1=sand, 2=rocky, 3=clay, 4=gravel, 5=snow, 6=marsh, 7=loam
 fn terrain_base_color(terrain_type: u32) -> vec3<f32> {
-    if terrain_type == 1u { return vec3(0.72, 0.62, 0.42); }  // sand: warm tan
+    if terrain_type == 1u { return vec3(0.68, 0.66, 0.60); }  // chalky: pale grey-white
     if terrain_type == 2u { return vec3(0.45, 0.42, 0.38); }  // rocky: grey
     if terrain_type == 3u { return vec3(0.50, 0.38, 0.25); }  // clay: reddish brown
     if terrain_type == 4u { return vec3(0.48, 0.46, 0.42); }  // gravel: grey-brown
-    if terrain_type == 5u { return vec3(0.85, 0.88, 0.92); }  // snow: white
+    if terrain_type == 5u { return vec3(0.22, 0.18, 0.12); }  // peat: dark brown-black
     if terrain_type == 6u { return vec3(0.30, 0.35, 0.22); }  // marsh: dark green-brown
     if terrain_type == 7u { return vec3(0.38, 0.30, 0.18); }  // loam: dark fertile
     return vec3(0.42, 0.36, 0.22);                            // grass: default earth
@@ -394,24 +394,41 @@ fn terrain_detail(
                 grass_green = vec3(0.15, 0.32, 0.08);
                 grass_yellow = vec3(0.28, 0.35, 0.12);
             }
-            // Sand/gravel: sparse, yellowed scrub
+            // Chalky/gravel: sparse, yellowed scrub
             if t_type == 1u || t_type == 4u {
                 grass_green = vec3(0.35, 0.38, 0.18);
                 grass_yellow = vec3(0.45, 0.42, 0.22);
             }
+            // Peat: dark mossy tones
+            if t_type == 5u {
+                grass_green = vec3(0.18, 0.28, 0.10);
+                grass_yellow = vec3(0.25, 0.30, 0.15);
+            }
             var grass_col = mix(grass_green, grass_yellow, grass_hue * 0.5);
             grass_col = mix(grass_col, grass_col * 0.7, moisture * 0.3);
 
-            // Grass blade detail
+            // Grass blade detail — mix of short and long grass
             let blade_seed = hash2(floor(pos * 6.0));
             let blade_angle = blade_seed * 6.28 + wind_angle * 0.3;
             let blade_dir = vec2(cos(blade_angle), sin(blade_angle));
             let blade_pos = fract(pos * 6.0);
             let along_blade = dot(blade_pos - 0.5, blade_dir);
             let across_blade = abs(dot(blade_pos - 0.5, vec2(-blade_dir.y, blade_dir.x)));
-            let on_blade = f32(across_blade < 0.08 && along_blade > -0.15 && along_blade < 0.25);
-            let blade_t = clamp((along_blade + 0.15) / 0.4, 0.0, 1.0);
-            let blade_col = mix(grass_col * 0.7, grass_col * 1.2, blade_t);
+
+            // Long grass: sparser, taller blades interspersed (using coarser grid)
+            let long_seed = hash2(floor(pos * 3.0));
+            let is_long_grass = long_seed > 0.7 && t_veg > 0.4;
+            let blade_width = select(0.08, 0.06, is_long_grass);
+            let blade_min = select(-0.15, -0.2, is_long_grass);
+            let blade_max = select(0.25, 0.4, is_long_grass);
+
+            let on_blade = f32(across_blade < blade_width && along_blade > blade_min && along_blade < blade_max);
+            let blade_t = clamp((along_blade - blade_min) / (blade_max - blade_min), 0.0, 1.0);
+            var blade_col = mix(grass_col * 0.7, grass_col * 1.2, blade_t);
+            // Long grass tips: lighter, sun-bleached
+            if is_long_grass && blade_t > 0.7 {
+                blade_col = mix(blade_col, vec3(0.55, 0.52, 0.30), (blade_t - 0.7) * 3.0);
+            }
             let grass_vis = grass_amount * mix(0.5, on_blade * 0.8 + 0.2, 0.6);
             color = mix(color, blade_col, clamp(grass_vis, 0.0, 0.85));
 
@@ -458,17 +475,31 @@ fn terrain_detail(
         }
     }
 
-    // Sand ripples (only on sand terrain)
+    // Chalky soil: pale streaks and exposed chalk fragments
     if t_type == 1u {
-        let ripple = sin(wx * 3.0 + wy * 1.5 + value_noise(pos * 0.3) * 4.0) * 0.5 + 0.5;
-        color = mix(color, color * 1.08, ripple * 0.3);
+        let chalk_streak = sin(wx * 2.5 + wy * 1.2 + value_noise(pos * 0.4) * 3.0) * 0.5 + 0.5;
+        color = mix(color, vec3(0.78, 0.76, 0.70), chalk_streak * 0.25);
+        // White chalk fragments
+        let frag = value_noise(pos * 12.0);
+        if frag > 0.88 {
+            color = mix(color, vec3(0.82, 0.80, 0.75), (frag - 0.88) * 8.0 * 0.4);
+        }
     }
 
-    // Snow sparkle (only on snow terrain)
+    // Peat: dark wet sheen, waterlogged patches
     if t_type == 5u {
-        let sparkle = value_noise(pos * 20.0 + vec2(time * 0.5, 0.0));
-        if sparkle > 0.95 {
-            color = mix(color, vec3(1.0), (sparkle - 0.95) * 20.0 * 0.3);
+        let wet_patch = value_noise(pos * 3.0 + vec2(17.3, 41.7));
+        if wet_patch > 0.5 {
+            let wet_t = (wet_patch - 0.5) * 2.0;
+            color = mix(color, color * vec3(0.7, 0.75, 0.8), wet_t * 0.4); // dark wet sheen
+        }
+    }
+
+    // Marsh: water glints near ponds
+    if t_type == 6u {
+        let glint = value_noise(pos * 8.0 + vec2(time * 0.3, 0.0));
+        if glint > 0.92 {
+            color = mix(color, vec3(0.4, 0.55, 0.7), (glint - 0.92) * 12.0 * 0.3);
         }
     }
 
@@ -4427,11 +4458,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Match colors to legend
         var tc = vec3(0.42, 0.36, 0.22); // default grass
         if tt == 0u { tc = vec3(0.42, 0.36, 0.22); }      // Grass
-        else if tt == 1u { tc = vec3(0.72, 0.62, 0.42); }  // Sand
+        else if tt == 1u { tc = vec3(0.68, 0.66, 0.60); }  // Chalky
         else if tt == 2u { tc = vec3(0.45, 0.42, 0.38); }  // Rocky
         else if tt == 3u { tc = vec3(0.50, 0.38, 0.25); }  // Clay
         else if tt == 4u { tc = vec3(0.48, 0.46, 0.42); }  // Gravel
-        else if tt == 5u { tc = vec3(0.85, 0.88, 0.92); }  // Snow
+        else if tt == 5u { tc = vec3(0.22, 0.18, 0.12); }  // Peat
         else if tt == 6u { tc = vec3(0.30, 0.35, 0.22); }  // Marsh
         else if tt == 7u { tc = vec3(0.38, 0.30, 0.18); }  // Loam
         // Blend with subtle base color for depth

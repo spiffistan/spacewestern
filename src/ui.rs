@@ -284,11 +284,11 @@ impl App {
                                     ui.label(egui::RichText::new("Terrain Type").size(10.0).strong());
                                     grad(ui, &[
                                         (egui::Color32::from_rgb(107, 92, 56), "Grass"),
-                                        (egui::Color32::from_rgb(184, 158, 107), "Sand"),
+                                        (egui::Color32::from_rgb(173, 168, 153), "Chalky"),
                                         (egui::Color32::from_rgb(115, 107, 97), "Rocky"),
                                         (egui::Color32::from_rgb(128, 97, 64), "Clay"),
                                         (egui::Color32::from_rgb(122, 117, 107), "Gravel"),
-                                        (egui::Color32::from_rgb(217, 224, 235), "Snow"),
+                                        (egui::Color32::from_rgb(56, 46, 31), "Peat"),
                                         (egui::Color32::from_rgb(77, 89, 56), "Marsh"),
                                         (egui::Color32::from_rgb(97, 77, 46), "Loam"),
                                     ]);
@@ -1947,8 +1947,8 @@ impl App {
                                 let td = self.terrain_data[idx];
                                 let tt = terrain_type(td);
                                 let tt_name = match tt {
-                                    0 => "Grass", 1 => "Sand", 2 => "Rocky", 3 => "Clay",
-                                    4 => "Gravel", 5 => "Snow", 6 => "Marsh", 7 => "Loam",
+                                    0 => "Grass", 1 => "Chalky", 2 => "Rocky", 3 => "Clay",
+                                    4 => "Gravel", 5 => "Peat", 6 => "Marsh", 7 => "Loam",
                                     _ => "?",
                                 };
                                 let tr = terrain_richness(td);

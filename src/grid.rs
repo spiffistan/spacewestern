@@ -764,11 +764,11 @@ pub fn generate_elevation(grid: &[u32]) -> Vec<f32> {
 
 // Terrain type constants (stored in bits 0-3 of terrain_data)
 pub const TERRAIN_GRASS: u32 = 0;
-pub const TERRAIN_SAND: u32 = 1;
+pub const TERRAIN_CHALKY: u32 = 1;
 pub const TERRAIN_ROCKY: u32 = 2;
 pub const TERRAIN_CLAY: u32 = 3;
 pub const TERRAIN_GRAVEL: u32 = 4;
-pub const TERRAIN_SNOW: u32 = 5;
+pub const TERRAIN_PEAT: u32 = 5;
 pub const TERRAIN_MARSH: u32 = 6;
 pub const TERRAIN_LOAM: u32 = 7;
 
@@ -848,30 +848,43 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
             let wt = if idx < water_table.len() { water_table[idx] } else { -2.0 };
 
             // --- Biome noise layers ---
-            // Temperature gradient (N-S axis + noise)
-            let temp_noise = noise(fx * 0.02 + 1000.0, fy * 0.02 + 1000.0);
-            let temperature = temp_noise + (fy / h as f32) * 0.3; // warmer to south
+            // Moisture gradient (noise-driven)
+            let moisture_noise = noise(fx * 0.02 + 1000.0, fy * 0.02 + 1000.0);
+            let moisture = moisture_noise + wt * 0.3; // wetter near high water table
 
             // Aridity (separate noise field)
             let arid_noise = noise(fx * 0.025 + 2000.0, fy * 0.025 + 2000.0);
-            let aridity = arid_noise - wt * 0.2; // wetter near high water table
+            let aridity = arid_noise - wt * 0.2;
 
             // Rocky factor: increases with elevation
             let rock_noise = noise(fx * 0.04 + 3000.0, fy * 0.04 + 3000.0);
             let rockiness = (elev * 0.25 + rock_noise * 0.5).min(1.0);
 
-            // --- Terrain type assignment ---
-            let terrain_type = if elev > 3.0 && rockiness > 0.6 {
+            // Pond detection: small circular low-spots in the landscape
+            // Multiple ponds from noise peaks
+            let pond_noise = noise(fx * 0.015 + 6000.0, fy * 0.015 + 6000.0);
+            let pond_detail = noise(fx * 0.05 + 7000.0, fy * 0.05 + 7000.0);
+            let pond_factor = (pond_noise * 0.7 + pond_detail * 0.3 + wt * 0.3).max(0.0);
+            // pond_factor > 0.85 = water, 0.7-0.85 = marsh ring, 0.55-0.7 = clay ring
+
+            // --- Terrain type assignment (temperate) ---
+            let terrain_type = if pond_factor > 0.85 {
+                TERRAIN_MARSH  // pond center (very wet)
+            } else if pond_factor > 0.7 {
+                TERRAIN_MARSH  // marsh ring around ponds
+            } else if pond_factor > 0.55 {
+                TERRAIN_CLAY   // clay deposits around ponds
+            } else if elev > 3.0 && rockiness > 0.6 {
                 TERRAIN_ROCKY
             } else if wt > -0.3 {
                 TERRAIN_MARSH  // near springs / waterlogged
             } else if aridity > 0.75 {
-                TERRAIN_SAND
+                TERRAIN_CHALKY // dry exposed chalky soil
             } else if rockiness > 0.5 {
                 TERRAIN_GRAVEL
-            } else if temperature < 0.25 {
-                TERRAIN_SNOW
-            } else if aridity < 0.35 && temperature > 0.4 {
+            } else if moisture > 0.6 && elev < 1.0 {
+                TERRAIN_PEAT   // boggy low-lying wet areas
+            } else if aridity < 0.35 {
                 TERRAIN_LOAM   // fertile lowland
             } else if aridity < 0.5 {
                 TERRAIN_CLAY
@@ -880,16 +893,15 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
             };
 
             // --- Vegetation density ---
-            // More veg with moisture, less on rock/sand/snow
             let veg_base = match terrain_type {
                 TERRAIN_GRASS => 0.6 + (1.0 - aridity) * 0.4,
                 TERRAIN_LOAM => 0.7 + (1.0 - aridity) * 0.3,
-                TERRAIN_MARSH => 0.5 + temp_noise * 0.3,
+                TERRAIN_MARSH => 0.4 + moisture_noise * 0.3,
                 TERRAIN_CLAY => 0.3 + (1.0 - aridity) * 0.3,
-                TERRAIN_SAND => 0.05,
+                TERRAIN_CHALKY => 0.15 + moisture_noise * 0.1,
                 TERRAIN_ROCKY => 0.02,
                 TERRAIN_GRAVEL => 0.1 + (1.0 - aridity) * 0.15,
-                TERRAIN_SNOW => 0.0,
+                TERRAIN_PEAT => 0.25 + moisture_noise * 0.2,
                 _ => 0.3,
             };
             let veg_noise = noise(fx * 0.15 + 4000.0, fy * 0.15 + 4000.0);
@@ -897,14 +909,14 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
 
             // --- Grain/texture scale ---
             let grain = match terrain_type {
-                TERRAIN_SAND => 6,    // medium ripple
+                TERRAIN_CHALKY => 6,  // chalky crumble
                 TERRAIN_ROCKY => 12,  // coarse
                 TERRAIN_GRAVEL => 10, // coarse-medium
                 TERRAIN_GRASS => 4,   // fine
                 TERRAIN_LOAM => 3,    // fine
                 TERRAIN_MARSH => 5,   // medium
                 TERRAIN_CLAY => 4,    // fine-medium
-                TERRAIN_SNOW => 2,    // very fine (smooth)
+                TERRAIN_PEAT => 3,    // fine, soft
                 _ => 5,
             };
 
@@ -912,8 +924,8 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
             let roughness = match terrain_type {
                 TERRAIN_ROCKY => 3,
                 TERRAIN_GRAVEL => 2,
-                TERRAIN_SAND => 1,
-                TERRAIN_SNOW => 0,
+                TERRAIN_CHALKY => 1,
+                TERRAIN_PEAT => 0,
                 _ => 1,
             };
 
@@ -923,10 +935,10 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
                 TERRAIN_GRASS => 0.6,
                 TERRAIN_CLAY => 0.5,
                 TERRAIN_MARSH => 0.7,
-                TERRAIN_SAND => 0.1,
+                TERRAIN_PEAT => 0.55,
+                TERRAIN_CHALKY => 0.15,
                 TERRAIN_GRAVEL => 0.15,
                 TERRAIN_ROCKY => 0.05,
-                TERRAIN_SNOW => 0.0,
                 _ => 0.4,
             };
             let rich_noise = noise(fx * 0.08 + 5000.0, fy * 0.08 + 5000.0);
@@ -938,10 +950,10 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
                 TERRAIN_LOAM => 10,
                 TERRAIN_MARSH => 14,
                 TERRAIN_GRASS => 8,
-                TERRAIN_SAND => 2,
+                TERRAIN_PEAT => 13,
+                TERRAIN_CHALKY => 3,
                 TERRAIN_GRAVEL => 3,
                 TERRAIN_ROCKY => 1,
-                TERRAIN_SNOW => 4,
                 _ => 6,
             };
 
