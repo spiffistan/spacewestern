@@ -627,6 +627,7 @@ impl App {
                     let is_carrying = pleb.inventory.is_carrying();
                     let health = pleb.needs.health;
                     let hunger = pleb.needs.hunger;
+                    let thirst = pleb.needs.thirst;
                     let rest = pleb.needs.rest;
                     let warmth = pleb.needs.warmth;
                     let oxygen = pleb.needs.oxygen;
@@ -687,6 +688,7 @@ impl App {
                             };
                             bar(ui, "HP  ", health, egui::Color32::from_rgb(200, 60, 60));
                             bar(ui, "Food", hunger, egui::Color32::from_rgb(200, 160, 40));
+                            bar(ui, "Water", thirst, egui::Color32::from_rgb(60, 140, 220));
                             bar(ui, "Rest", rest, egui::Color32::from_rgb(80, 120, 200));
                             bar(ui, "Warm", warmth, egui::Color32::from_rgb(200, 100, 40));
                             bar(ui, "O2  ", oxygen, egui::Color32::from_rgb(100, 200, 220));
@@ -1099,6 +1101,7 @@ impl App {
                 hair: [f32; 3],
                 health: f32,
                 hunger: f32,
+                thirst: f32,
                 rest: f32,
                 warmth: f32,
                 oxygen: f32,
@@ -1125,6 +1128,7 @@ impl App {
                     hair: [a.hair_r, a.hair_g, a.hair_b],
                     health: p.needs.health,
                     hunger: p.needs.hunger,
+                    thirst: p.needs.thirst,
                     rest: p.needs.rest,
                     warmth: p.needs.warmth,
                     oxygen: p.needs.oxygen,
@@ -1177,6 +1181,7 @@ impl App {
                                     .map(|r| r.name.as_str()).unwrap_or("item");
                                 format!("Crafting {} {:.0}%", rname, pr * 100.0)
                             }
+                            PlebActivity::Drinking(pr) => format!("Drinking {:.0}%", pr * 100.0),
                             PlebActivity::Staggering(_) => "Staggering!".to_string(),
                             PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                         };
@@ -3294,6 +3299,7 @@ impl App {
                             if tidx < self.grid_data.len() {
                                 let tbt = self.grid_data[tidx] & 0xFF;
                                 if tbt as u32 == BT_WORKBENCH || tbt as u32 == BT_KILN { "Crafting" }
+                                else if tbt as u32 == BT_WELL { "Drinking" }
                                 else if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" }
                                 else if tbt == BT_TREE { "Chopping" }
                                 else { "Planting" }
@@ -3312,6 +3318,7 @@ impl App {
                                     let label = match work_action {
                                         "Harvesting" | "Chopping" => "Walking to harvest",
                                         "Crafting" => "Walking to craft",
+                                        "Drinking" => "Walking to drink",
                                         _ => "Walking to plant",
                                     };
                                     (Some(label), egui::Color32::from_rgb(120, 200, 80))
@@ -3330,6 +3337,7 @@ impl App {
                             PlebActivity::Farming(_) => (Some(work_action), egui::Color32::from_rgb(80, 200, 80)),
                             PlebActivity::Building(_) => (Some("Building"), egui::Color32::from_rgb(100, 160, 220)),
                             PlebActivity::Crafting(_, _) => (Some("Crafting"), egui::Color32::from_rgb(200, 160, 60)),
+                            PlebActivity::Drinking(_) => (Some("Drinking"), egui::Color32::from_rgb(80, 160, 220)),
                             PlebActivity::Staggering(_) => (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40)),
                             PlebActivity::Crisis(_, _) => (None, egui::Color32::GRAY),
                         };
@@ -3819,6 +3827,7 @@ impl App {
                                 PlebActivity::Farming(_) => "Farming",
                                 PlebActivity::Building(_) => "Building",
                                 PlebActivity::Crafting(_, _) => "Crafting",
+                                PlebActivity::Drinking(_) => "Drinking",
                                 PlebActivity::Staggering(_) => "Staggering",
                                 PlebActivity::Crisis(_, _) => "Crisis",
                             };
@@ -3840,6 +3849,7 @@ impl App {
                             };
                             bar(ui, "HP  ", pleb.needs.health, egui::Color32::from_rgb(80, 200, 80));
                             bar(ui, "HUN ", pleb.needs.hunger, egui::Color32::from_rgb(200, 160, 40));
+                            bar(ui, "H2O ", pleb.needs.thirst, egui::Color32::from_rgb(60, 140, 220));
                             bar(ui, "RST ", pleb.needs.rest, egui::Color32::from_rgb(80, 120, 200));
                             bar(ui, "WRM ", pleb.needs.warmth, egui::Color32::from_rgb(200, 100, 40));
                             bar(ui, "O2  ", pleb.needs.oxygen, egui::Color32::from_rgb(100, 200, 220));

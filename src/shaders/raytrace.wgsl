@@ -150,7 +150,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 58u)];
+    return materials[min(bt, 59u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -4516,8 +4516,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             if btype == BT_FAN || btype == BT_PUMP {
                 hover_tint = vec3(0.3, 0.8, 0.9); is_hover = true;
             }
-            // Workbench, kiln: crafting gold
-            if btype == BT_WORKBENCH || btype == BT_KILN {
+            // Workbench, kiln, well: utility gold
+            if btype == BT_WORKBENCH || btype == BT_KILN || btype == BT_WELL {
                 hover_tint = vec3(0.9, 0.7, 0.2); is_hover = true;
             }
             if is_hover {

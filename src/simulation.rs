@@ -1367,6 +1367,9 @@ impl App {
                                     pleb.work_target = None;
                                     pleb.activity = PlebActivity::Idle;
                                 }
+                            } else if tbt == BT_WELL {
+                                // Start drinking at well
+                                pleb.activity = PlebActivity::Drinking(0.0);
                             } else {
                                 pleb.activity = PlebActivity::Farming(0.0);
                             }
@@ -1776,6 +1779,17 @@ fn tick_pleb_activity(
                 pleb.activity = PlebActivity::Idle;
             }
         }
+        PlebActivity::Drinking(progress) => {
+            let new_progress = progress + dt * time_speed / WELL_DRINK_TIME;
+            if new_progress >= 1.0 {
+                pleb.needs.thirst = (pleb.needs.thirst + WELL_THIRST_RESTORE).min(1.0);
+                log::info!("{} drank from well (thirst: {:.0}%)", pleb.name, pleb.needs.thirst * 100.0);
+                pleb.activity = PlebActivity::Idle;
+                pleb.work_target = None;
+            } else {
+                pleb.activity = PlebActivity::Drinking(new_progress);
+            }
+        }
         _ => {}
     }
 
@@ -1796,6 +1810,20 @@ fn tick_pleb_activity(
             } else {
                 send_pleb_to(pleb, grid, terrain, (bx, by),
                     PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Starving!"));
+            }
+        }
+    } else if pleb.needs.thirst < 0.10 && is_idle_or_walk {
+        // CRISIS: Dehydrated — seek nearest well
+        if let Some((wx, wy)) = find_nearest_well(grid, pleb.x.floor() as i32, pleb.y.floor() as i32) {
+            let adj = adjacent_walkable(grid, wx, wy).unwrap_or((wx, wy));
+            let dist = ((pleb.x - wx as f32 - 0.5).powi(2) + (pleb.y - wy as f32 - 0.5).powi(2)).sqrt();
+            if dist < 1.5 {
+                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Drinking(0.0)), "Dehydrated!");
+                pleb.work_target = Some((wx, wy));
+            } else {
+                send_pleb_to(pleb, grid, terrain, adj,
+                    PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Dehydrated!"));
+                pleb.work_target = Some((wx, wy));
             }
         }
     } else if pleb.needs.rest < 0.08 && is_idle_or_walk && !pleb.activity.is_crisis() {
@@ -1856,6 +1884,21 @@ fn tick_pleb_activity(
                         pleb.harvest_target = Some((bx, by)); // eat target
                         pleb.work_target = None;
                         pleb.haul_target = None;
+                    }
+                }
+            } else if pleb.needs.thirst < 0.30 && pleb.work_target.is_none() {
+                // Auto-drink: seek nearest well when thirsty (but not crisis)
+                let px = pleb.x.floor() as i32;
+                let py = pleb.y.floor() as i32;
+                if let Some((wx, wy)) = find_nearest_well(grid, px, py) {
+                    let dist = ((pleb.x - wx as f32 - 0.5).powi(2) + (pleb.y - wy as f32 - 0.5).powi(2)).sqrt();
+                    if dist < 1.5 {
+                        pleb.activity = PlebActivity::Drinking(0.0);
+                        pleb.work_target = Some((wx, wy));
+                    } else {
+                        let adj = adjacent_walkable(grid, wx, wy).unwrap_or((wx, wy));
+                        send_pleb_to(pleb, grid, terrain, adj, PlebActivity::Walking);
+                        pleb.work_target = Some((wx, wy));
                     }
                 }
             } else if !matches!(pleb.activity, PlebActivity::Sleeping) {

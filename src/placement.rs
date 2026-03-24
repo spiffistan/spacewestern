@@ -645,7 +645,7 @@ impl App {
             BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL |
             BT_WOOD_FLOOR | BT_STONE_FLOOR | BT_CONCRETE_FLOOR |
             BT_FIREPLACE | BT_BENCH | BT_BED | BT_CRATE | BT_CANNON |
-            BT_WORKBENCH | BT_KILN
+            BT_WORKBENCH | BT_KILN | BT_WELL
         );
         if needs_construction {
             self.blueprints.insert((x, y), Blueprint::new(block_data));

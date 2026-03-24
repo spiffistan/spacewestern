@@ -5,7 +5,7 @@
 //! and re-exports the table builder for convenience.
 
 
-pub const NUM_MATERIALS: usize = 59;
+pub const NUM_MATERIALS: usize = 60;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]

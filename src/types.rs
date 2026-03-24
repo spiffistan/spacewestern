@@ -297,6 +297,7 @@ impl Blueprint {
             BT_FIREPLACE | BT_CRATE | BT_CANNON => (2.0, 0),
             BT_WORKBENCH => (3.0, 4),  // 4 wood
             BT_KILN => (5.0, 0),       // stone/clay, no wood
+            BT_WELL => (8.0, 4),       // 4 wood for frame
             _ => (1.0, 0),
         };
         Blueprint { block_data, progress: 0.0, build_time, wood_needed, wood_delivered: 0 }

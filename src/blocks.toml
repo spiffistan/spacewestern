@@ -950,3 +950,19 @@ icon = "🏭"
 label = "Kiln"
 click = "simple"
 place_height = 2
+
+[[block]]
+id = 59
+name = "Well"
+color = [0.45, 0.42, 0.38]
+render_style = 44.0
+walkable = false
+is_removable = true
+light_transmission = 1.0
+thermal = { heat_capacity = 3.0, conductivity = 0.01, solar_absorption = 0.5 }
+[block.placement]
+category = "Crafting"
+icon = "🪣"
+label = "Well"
+click = "simple"
+place_height = 1

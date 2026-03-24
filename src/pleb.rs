@@ -40,6 +40,7 @@ pub enum PlebActivity {
     Farming(f32),     // progress 0-1, planting or harvesting a crop
     Building(f32),    // progress 0-1, constructing a blueprint
     Crafting(u16, f32), // (recipe_id, progress 0-1)
+    Drinking(f32),    // progress 0-1, drinking at a well
     Staggering(f32),  // knockback recovery timer (seconds remaining)
     /// Crisis override — pleb acts autonomously, ignoring player input.
     /// Inner activity is what they're doing (Walking to food/bed, Harvesting, Eating, Sleeping).

@@ -69,8 +69,9 @@ const TOXIC_GAS_O2: f32 = 0.5;
 const TOXIC_CONTACT_DAMAGE: f32 = 0.06;
 
 // --- Mood weights ---
-const MOOD_HUNGER_WEIGHT: f32 = 20.0;
-const MOOD_REST_WEIGHT: f32 = 20.0;
+const MOOD_HUNGER_WEIGHT: f32 = 18.0;
+const MOOD_THIRST_WEIGHT: f32 = 18.0;
+const MOOD_REST_WEIGHT: f32 = 18.0;
 const MOOD_WARMTH_WEIGHT: f32 = 15.0;
 const MOOD_OXYGEN_WEIGHT: f32 = 25.0;
 const MOOD_SAFETY_WEIGHT: f32 = 10.0;
@@ -91,6 +92,7 @@ pub enum BreathingState {
 #[derive(Clone, Debug)]
 pub struct PlebNeeds {
     pub hunger: f32,     // 1.0 = full, decays over time
+    pub thirst: f32,     // 1.0 = hydrated, decays over time
     pub rest: f32,       // 1.0 = rested, decays faster when moving
     pub warmth: f32,     // 1.0 = comfortable temp, driven by environment
     pub oxygen: f32,     // 1.0 = fresh air, driven by actual O2/CO2 levels
@@ -112,6 +114,7 @@ impl Default for PlebNeeds {
     fn default() -> Self {
         PlebNeeds {
             hunger: 0.9,
+            thirst: 0.9,
             rest: 1.0,
             warmth: 0.8,
             oxygen: 1.0,
@@ -242,15 +245,22 @@ pub struct AirReadback {
 
 // --- Need decay rates (per real second at 1x speed) ---
 const HUNGER_DECAY: f32 = 0.003;       // ~5.5 min to starve from full
+const THIRST_DECAY: f32 = 0.004;       // ~4 min to dehydrate from full (faster than hunger)
 const REST_DECAY_IDLE: f32 = 0.002;    // ~8 min to exhaust while idle
 const REST_DECAY_MOVING: f32 = 0.005;  // ~3.3 min while moving
 const REST_RECOVER_BED: f32 = 0.02;    // ~50s to fully rest in bed
 const REST_RECOVER_BENCH: f32 = 0.008; // ~2 min to fully rest on bench/ground
 /// How much hunger one berry restores
 pub const BERRY_HUNGER_RESTORE: f32 = 0.20;
+/// How much thirst one drink at a well restores
+pub const WELL_THIRST_RESTORE: f32 = 0.50;
+/// Seconds to drink at a well
+pub const WELL_DRINK_TIME: f32 = 4.0;
 
 // --- Health damage rates (per real second) ---
 const STARVE_DAMAGE: f32 = 0.008;      // ~2 min to die from starvation
+const DEHYDRATE_DAMAGE: f32 = 0.010;  // ~1.7 min to die from dehydration
+const DEHYDRATION_THRESHOLD: f32 = 0.05;
 const FREEZE_DAMAGE: f32 = 0.012;      // ~1.3 min to die from cold
 const FIRE_DAMAGE: f32 = 0.04;         // ~25s to die in fire
 const HEAT_DAMAGE: f32 = 0.05;         // ~20s to die from extreme heat (was 0.015)
@@ -280,6 +290,9 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
 
     // --- Hunger: always decays ---
     needs.hunger = (needs.hunger - HUNGER_DECAY * t).max(0.0);
+
+    // --- Thirst: decays faster than hunger ---
+    needs.thirst = (needs.thirst - THIRST_DECAY * t).max(0.0);
 
     // --- Rest: decays faster when moving, recovers in bed (best) or near furniture ---
     if is_sleeping && env.near_bed {
@@ -433,6 +446,9 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
     if needs.hunger < STARVATION_THRESHOLD {
         damage += STARVE_DAMAGE;
     }
+    if needs.thirst < DEHYDRATION_THRESHOLD {
+        damage += DEHYDRATE_DAMAGE;
+    }
 
     // Suffocation: gasping in bad air
     if needs.breathing_state == BreathingState::Gasping {
@@ -475,6 +491,7 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
 
     // --- Mood: weighted sum of all needs ---
     let weighted = needs.hunger * MOOD_HUNGER_WEIGHT
+        + needs.thirst * MOOD_THIRST_WEIGHT
         + needs.rest * MOOD_REST_WEIGHT
         + needs.warmth * MOOD_WARMTH_WEIGHT
         + needs.oxygen * MOOD_OXYGEN_WEIGHT
@@ -529,6 +546,29 @@ pub fn find_nearest_crate(grid: &[u32], bx: i32, by: i32) -> Option<(i32, i32)> 
             if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
             let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
             if block_type_rs(b) == BT_CRATE {
+                let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
+                if dist < best_dist {
+                    best_dist = dist;
+                    best = Some((sx, sy));
+                }
+            }
+        }
+    }
+    best
+}
+
+/// Find the nearest well by scanning a radius from (bx, by).
+pub fn find_nearest_well(grid: &[u32], bx: i32, by: i32) -> Option<(i32, i32)> {
+    let mut best: Option<(i32, i32)> = None;
+    let mut best_dist = f32::MAX;
+    let scan_r = CRATE_SCAN_RADIUS;
+    for dy in -scan_r..=scan_r {
+        for dx in -scan_r..=scan_r {
+            let sx = bx + dx;
+            let sy = by + dy;
+            if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+            let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
+            if block_type_rs(b) == BT_WELL {
                 let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
                 if dist < best_dist {
                     best_dist = dist;
