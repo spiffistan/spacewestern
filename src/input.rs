@@ -248,8 +248,8 @@ impl App {
             if let Some(gi) = self.ground_items.iter().position(|item| {
                 item.x.floor() as i32 == bx && item.y.floor() as i32 == by
             }) {
-                let item = &self.ground_items[gi];
-                self.world_sel = WorldSelection::single(bx, by, 1, 1, 0); // bt=0 for ground item
+                let _gi_ref = &self.ground_items[gi]; // validates index
+                self.world_sel = WorldSelection::single(bx, by, 1, 1, 0);
                 self.context_menu = None;
                 // If a pleb is selected, open context menu for hauling
                 if self.selected_pleb.is_some() {
@@ -409,11 +409,6 @@ impl App {
                         if let Some(pleb) = self.plebs.get_mut(idx) {
                             pleb.headlight_on = !pleb.headlight_on;
                         }
-                    }
-                }
-                PhysicalKey::Code(KeyCode::KeyI) => {
-                    if self.selected_pleb.is_some() {
-                        self.show_inventory = !self.show_inventory;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyF) => {

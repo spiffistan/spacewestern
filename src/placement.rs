@@ -733,7 +733,6 @@ impl App {
                     if menu.title.is_empty() { menu.title = item.stack.label(); }
                     if item.stack.item_id == item_defs::ITEM_BERRIES {
                         menu.actions.push((format!("Eat 1 berry ({})", pleb_name), ContextAction::Eat(i), true));
-                        has_actions = true;
                     }
                     // Haul any ground item to nearest crate
                     menu.actions.push((format!("Haul {} ({})", item.stack.label(), pleb_name), ContextAction::Haul(bx, by), true));

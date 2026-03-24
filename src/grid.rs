@@ -330,9 +330,7 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
     }
 }
 
-pub fn generate_test_grid() -> Vec<u32> { generate_world(42) }
-
-/// Generate a natural world with trees, bushes, and rocks. No buildings.
+/// Generate a natural world with trees, bushes, and rocks.
 pub fn generate_world(seed: u32) -> Vec<u32> {
     let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
     let w = GRID_W;
@@ -340,7 +338,6 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
     let set = |grid: &mut Vec<u32>, x: u32, y: u32, b: u32| {
         if x < GRID_W && y < GRID_H { grid[(y * w + x) as usize] = b; }
     };
-    let _ = &set; // used by tree placement below
 
     // Trees and bushes — clustered in small forests with outliers
     let noise = |x: f32, y: f32| -> f32 {

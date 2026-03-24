@@ -74,9 +74,6 @@ impl CrateInventory {
         }
     }
 
-    // Legacy accessors for existing code during migration
-    pub fn rocks(&self) -> u32 { self.count_of(ITEM_ROCK) }
-    pub fn berries(&self) -> u32 { self.count_of(ITEM_BERRIES) }
 }
 
 /// What a pleb is currently carrying.
@@ -152,9 +149,6 @@ impl PlebInventory {
         }
     }
 
-    // Legacy accessors for existing code during migration
-    pub fn berries(&self) -> u32 { self.count_of(ITEM_BERRIES) }
-    pub fn rocks(&self) -> u32 { self.count_of(ITEM_ROCK) }
     pub fn wood(&self) -> u32 { self.count_of(ITEM_WOOD) }
 }
 

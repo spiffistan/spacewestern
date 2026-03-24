@@ -131,7 +131,7 @@ impl App {
         queue.write_buffer(&camera_buffer, 0, bytemuck::bytes_of(&self.camera));
 
         // Grid storage buffer
-        self.grid_data = generate_test_grid();
+        self.grid_data = generate_world(42);
         compute_roof_heights(&mut self.grid_data);
         self.pipe_network.rebuild(&self.grid_data);
         let grid_buffer = device.create_buffer(&wgpu::BufferDescriptor {

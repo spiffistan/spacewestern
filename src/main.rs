@@ -183,8 +183,6 @@ struct App {
     build_category: Option<&'static str>, // selected build category, None = collapsed
     debug: DebugReadback,          // shift-hover readback state
     middle_mouse_pressed: bool, // middle mouse button held (fast pan)
-    fluid_mouse_active: bool,  // middle mouse button held (legacy, unused)
-    fluid_mouse_prev: Option<(f32, f32)>, // previous world position for velocity calc
     // Pleb (character)
     plebs: Vec<Pleb>,
     selected_pleb: Option<usize>,  // index into plebs vec
@@ -510,8 +508,6 @@ impl App {
             prev_cam_zoom: 0.0,
             prev_cam_time: 0.0,
             middle_mouse_pressed: false,
-            fluid_mouse_active: false,
-            fluid_mouse_prev: None,
             plebs: {
                 // Start with one colonist at map center
                 let cx = (GRID_W / 2) as f32 + 0.5;
@@ -1180,11 +1176,11 @@ impl App {
         self.fluid_params.dye_h = self.dye_h as f32;
         self.fluid_params.time = self.time_of_day;
         self.fluid_params.dt = (1.0 / 60.0) * self.fluid_speed;
-        self.fluid_params.splat_active = if self.fluid_mouse_active { 1.0 } else { 0.0 };
+        self.fluid_params.splat_active = if false { 1.0 } else { 0.0 };
 
         // Sound→Gas coupling: override splat with sound source velocity if no mouse active
         if self.sound_enabled && self.sound_coupling > 0.001
-            && !self.sound_sources.is_empty() && !self.fluid_mouse_active
+            && !self.sound_sources.is_empty() && !false
         {
             if let Some(src) = self.sound_sources.iter()
                 .max_by(|a, b| a.amplitude.abs().partial_cmp(&b.amplitude.abs()).unwrap())

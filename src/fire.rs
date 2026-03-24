@@ -71,7 +71,6 @@ pub fn tick_fire(
         if idx >= grid_size { continue; }
         let block = grid[idx];
         let bt = block_type_rs(block);
-        let bh = (block >> 8) & 0xFF;
 
         // Scorched dirt (flags bit 0) — already burned, remove
         let bf = block_flags_rs(block);

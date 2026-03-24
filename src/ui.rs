@@ -51,7 +51,7 @@ impl App {
 
     fn draw_main_menu(&mut self, ctx: &egui::Context) {
         // Full-screen dark overlay
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground, egui::Id::new("main_menu_bg"),
         ));
@@ -83,7 +83,7 @@ impl App {
 
     fn draw_map_gen_screen(&mut self, ctx: &egui::Context) {
         // Dark overlay
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground, egui::Id::new("mapgen_bg"),
         ));
@@ -535,7 +535,7 @@ impl App {
 
         // --- Top menu bar ---
         egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 // Time menu
                 let day_frac = time_val / DAY_DURATION;
                 let hours = (day_frac * 24.0) as u32;
@@ -773,7 +773,7 @@ impl App {
                     if ui.button(pleb_label).clicked() {
                         self.placing_pleb = !self.placing_pleb;
                         if self.placing_pleb { self.build_tool = BuildTool::None; }
-                        ui.close_menu();
+                        ui.close();
                     }
                     if self.placing_pleb {
                         ui.label(egui::RichText::new("Click to place").weak().size(10.0));
@@ -820,8 +820,6 @@ impl App {
             if let Some(sel_idx) = self.selected_pleb {
                 if let Some(pleb) = self.plebs.get(sel_idx) {
                     let pleb_name = pleb.name.clone();
-                    let carrying_label = pleb.inventory.carrying_label();
-                    let is_carrying = pleb.inventory.is_carrying();
                     let health = pleb.needs.health;
                     let hunger = pleb.needs.hunger;
                     let thirst = pleb.needs.thirst;
@@ -835,7 +833,7 @@ impl App {
                     let skin = [a.skin_r, a.skin_g, a.skin_b];
                     let hair = [a.hair_r, a.hair_g, a.hair_b];
 
-                    let mut close_inv = false;
+                    // Inventory window content
                     egui::Window::new(format!("{} — Inventory", pleb_name))
                         .collapsible(false)
                         .resizable(false)
@@ -1106,9 +1104,7 @@ impl App {
                                 });
                             });
                         });
-                    if close_inv {
-                        self.show_inventory = false;
-                    }
+                    // Window closed via egui title bar X
                 } else {
                     self.show_inventory = false;
                 }
@@ -1826,124 +1822,6 @@ impl App {
             if !open { self.show_priorities = false; }
         }
 
-        // Map generator is now in GameState::MapGen screen
-        if false { // dead code — kept for reference, remove later
-            let (mut open, mut regenerate) = (true, false);
-            egui::Window::new("Map Generator")
-                .open(&mut open)
-                .default_pos(egui::pos2(200.0, 100.0))
-                .default_width(500.0)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        // ═══ LEFT: Sliders ═══
-                        ui.vertical(|ui| {
-                            ui.set_max_width(180.0);
-                            ui.label(egui::RichText::new("Terrain Weights").strong().size(11.0));
-                            ui.add_space(2.0);
-
-                            let slider = |ui: &mut egui::Ui, label: &str, val: &mut f32, color: egui::Color32| {
-                                ui.horizontal(|ui| {
-                                    let (dot_rect, _) = ui.allocate_exact_size(egui::Vec2::splat(8.0), egui::Sense::hover());
-                                    ui.painter_at(dot_rect).rect_filled(dot_rect, 2.0, color);
-                                    ui.label(egui::RichText::new(label).size(9.0).monospace());
-                                    ui.spacing_mut().slider_width = 60.0;
-                                    ui.add(egui::Slider::new(val, 0.0..=1.0).show_value(false));
-                                });
-                            };
-
-                            slider(ui, "Grass  ", &mut self.terrain_params.grass, egui::Color32::from_rgb(107, 92, 56));
-                            slider(ui, "Loam   ", &mut self.terrain_params.loam, egui::Color32::from_rgb(97, 77, 46));
-                            slider(ui, "Clay   ", &mut self.terrain_params.clay, egui::Color32::from_rgb(128, 97, 64));
-                            slider(ui, "Chalky ", &mut self.terrain_params.chalky, egui::Color32::from_rgb(173, 168, 153));
-                            slider(ui, "Rocky  ", &mut self.terrain_params.rocky, egui::Color32::from_rgb(115, 107, 97));
-                            slider(ui, "Gravel ", &mut self.terrain_params.gravel, egui::Color32::from_rgb(122, 117, 107));
-                            slider(ui, "Peat   ", &mut self.terrain_params.peat, egui::Color32::from_rgb(56, 46, 31));
-                            slider(ui, "Marsh  ", &mut self.terrain_params.marsh, egui::Color32::from_rgb(77, 89, 56));
-
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.label(egui::RichText::new("Features").strong().size(11.0));
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Ponds").size(10.0));
-                                ui.add(egui::Slider::new(&mut self.terrain_params.pond_density, 0.0..=1.0).show_value(false));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Seed").size(10.0));
-                                let mut seed_i = self.terrain_params.seed as i32;
-                                if ui.add(egui::DragValue::new(&mut seed_i).range(0..=9999)).changed() {
-                                    self.terrain_params.seed = seed_i.max(0) as u32;
-                                }
-                                if ui.small_button("Random").clicked() {
-                                    self.terrain_params.seed = (self.frame_count.wrapping_mul(2654435761)) % 10000;
-                                }
-                            });
-
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(format!("Map: {}×{}", GRID_W, GRID_H)).size(10.0).weak());
-                            });
-                            ui.add_space(4.0);
-                            if ui.button(egui::RichText::new("Generate").size(12.0).strong()).clicked() {
-                                regenerate = true;
-                            }
-                        });
-
-                        ui.separator();
-
-                        // ═══ RIGHT: Preview ═══
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("Preview").strong().size(11.0));
-                            let preview_size = 256.0;
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::Vec2::splat(preview_size), egui::Sense::hover());
-                            let painter = ui.painter_at(rect);
-                            painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 20));
-
-                            // Draw minimap of current terrain
-                            let gw = GRID_W as f32;
-                            let gh = GRID_H as f32;
-                            let scale = preview_size / gw;
-                            let colors: [egui::Color32; 8] = [
-                                egui::Color32::from_rgb(107, 92, 56),   // grass
-                                egui::Color32::from_rgb(173, 168, 153), // chalky
-                                egui::Color32::from_rgb(115, 107, 97),  // rocky
-                                egui::Color32::from_rgb(128, 97, 64),   // clay
-                                egui::Color32::from_rgb(122, 117, 107), // gravel
-                                egui::Color32::from_rgb(56, 46, 31),    // peat
-                                egui::Color32::from_rgb(77, 89, 56),    // marsh
-                                egui::Color32::from_rgb(97, 77, 46),    // loam
-                            ];
-                            // Sample every 4th pixel for performance
-                            let step = 4u32;
-                            let px_size = scale * step as f32;
-                            for ty in (0..GRID_H).step_by(step as usize) {
-                                for tx in (0..GRID_W).step_by(step as usize) {
-                                    let idx = (ty * GRID_W + tx) as usize;
-                                    if idx < self.terrain_data.len() {
-                                        let tt = (self.terrain_data[idx] & 0xF) as usize;
-                                        if tt < 8 {
-                                            let px = rect.min.x + tx as f32 * scale;
-                                            let py = rect.min.y + ty as f32 * scale;
-                                            painter.rect_filled(
-                                                egui::Rect::from_min_size(
-                                                    egui::pos2(px, py), egui::vec2(px_size, px_size)),
-                                                0.0, colors[tt]);
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                    });
-                });
-            if !open { /* removed */ }
-            if regenerate {
-                self.terrain_data = grid::generate_terrain_with_params(
-                    &self.elevation_data, &self.water_table, &self.terrain_params);
-                self.terrain_dirty = true;
-            }
-        }
-
     }
 
     fn draw_context_menus(&mut self, ctx: &egui::Context, bp_ppp: f32, _bp_cam: (f32,f32,f32,f32,f32)) {
@@ -2615,7 +2493,7 @@ impl App {
             let bp_painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Background, egui::Id::new("construction_blueprints"),
             ));
-            let screen_rect = ctx.screen_rect();
+            let screen_rect = ctx.content_rect();
             for (&(bx, by), bp) in &self.blueprints {
                 let sx0 = ((bx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
                 let sy0 = ((by as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
@@ -2864,7 +2742,7 @@ impl App {
                 let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
                 egui::pos2(sx, sy)
             };
-            let screen_rect = ctx.screen_rect();
+            let screen_rect = ctx.content_rect();
             for (&idx, cell) in &self.pipe_network.cells {
                 let x = (idx % GRID_W) as f32;
                 let y = (idx / GRID_W) as f32;
@@ -2913,7 +2791,7 @@ impl App {
                 let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
                 egui::pos2(sx, sy)
             };
-            let screen_rect = ctx.screen_rect();
+            let screen_rect = ctx.content_rect();
             for (&idx, cell) in &self.liquid_network.cells {
                 if idx >= GRID_W * GRID_H { continue; }
                 let x = (idx % GRID_W) as f32;
@@ -3016,7 +2894,7 @@ impl App {
                 let max_flow = self.pipe_network.cells.values()
                     .map(|c| (c.flow_x * c.flow_x + c.flow_y * c.flow_y).sqrt())
                     .fold(0.001f32, f32::max);
-                let screen_rect = ctx.screen_rect();
+                let screen_rect = ctx.content_rect();
                 for (&idx, cell) in &self.pipe_network.cells {
                     let mag = (cell.flow_x * cell.flow_x + cell.flow_y * cell.flow_y).sqrt();
                     if mag < 0.001 { continue; }
@@ -3150,7 +3028,7 @@ impl App {
             ));
             let screen_rect = egui::Rect::from_min_max(
                 egui::pos2(0.0, 0.0),
-                egui::pos2(ctx.screen_rect().width(), ctx.screen_rect().height()),
+                egui::pos2(ctx.content_rect().width(), ctx.content_rect().height()),
             );
             flash_painter.rect_filled(
                 screen_rect, 0.0,
@@ -3330,7 +3208,7 @@ impl App {
                 let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
                 egui::pos2(sx, sy)
             };
-            let screen_rect = ctx.screen_rect();
+            let screen_rect = ctx.content_rect();
             for item in &self.ground_items {
                 let center = to_screen(item.x, item.y);
                 // Cull off-screen items
@@ -3892,7 +3770,7 @@ impl App {
                 ));
 
                 // Pleb name + activity labels
-                let screen_rect = ctx.screen_rect();
+                let screen_rect = ctx.content_rect();
                 for pleb in &self.plebs {
                     let pos = to_screen(pleb.x, pleb.y + 0.7);
                     // Cull off-screen plebs
@@ -4077,10 +3955,6 @@ impl App {
         };
 
         // Action buttons: square icons with labels, same style as build bar
-        let tile_size = 48.0;
-        let icon_s = 20.0;
-        let label_s = 9.0;
-
         // Collect available actions as (icon, label, id)
         let mut actions: Vec<(&str, &str, u32)> = Vec::new();
         if all_removable {
@@ -4268,7 +4142,7 @@ impl App {
                     let start = self.notifications.len().saturating_sub(5);
                     for notif in &self.notifications[start..] {
                         let color = notif.category.color();
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 200))
                             .corner_radius(4.0)
                             .inner_margin(6.0)
@@ -4307,7 +4181,7 @@ impl App {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     for cond in &self.conditions {
                         let color = cond.category.color();
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 220))
                             .corner_radius(3.0)
                             .inner_margin(6.0)
@@ -4525,7 +4399,7 @@ impl App {
                         }
                     }
                     // Power
-                    if let Some(gfx) = &self.gfx {
+                    if self.gfx.is_some() {
                         // Voltage info from debug readback
                         if self.debug.voltage > 0.01 {
                             details.push(format!("Voltage: {:.1}V", self.debug.voltage));
