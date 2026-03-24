@@ -373,6 +373,12 @@ impl App {
                         log::info!("Fire mode: {}", if self.burst_mode { "BURST" } else { "SINGLE" });
                     }
                 }
+                PhysicalKey::Code(KeyCode::KeyI) => {
+                    if self.selected_pleb.is_some() {
+                        self.show_inventory = !self.show_inventory;
+                        self.inv_selected_slot = None;
+                    }
+                }
                 PhysicalKey::Code(KeyCode::KeyQ) => {
                     if self.selected_pleb.is_none() {
                         if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19) | BuildTool::Place(44)) {

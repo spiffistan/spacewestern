@@ -4079,7 +4079,7 @@ impl App {
     }
 
     // --- Selection info panel: details about selected block ---
-    fn draw_selection_info(&self, ctx: &egui::Context) {
+    fn draw_selection_info(&mut self, ctx: &egui::Context) {
         if self.world_sel.is_empty() { return; }
         let items = &self.world_sel.items;
         if items.len() != 1 { return; } // only single selection
@@ -4132,15 +4132,17 @@ impl App {
                             bar(ui, "WRM ", pleb.needs.warmth, egui::Color32::from_rgb(200, 100, 40));
                             bar(ui, "O2  ", pleb.needs.oxygen, egui::Color32::from_rgb(100, 200, 220));
 
+                            ui.separator();
                             if pleb.inventory.is_carrying() {
-                                ui.separator();
-                                let mut inv_str = Vec::new();
-                                for stack in &pleb.inventory.stacks {
-                                    if stack.count > 0 {
-                                        inv_str.push(stack.label());
-                                    }
-                                }
+                                let inv_str: Vec<String> = pleb.inventory.stacks.iter()
+                                    .filter(|s| s.count > 0)
+                                    .map(|s| s.label())
+                                    .collect();
                                 ui.label(egui::RichText::new(inv_str.join(" | ")).size(10.0).weak());
+                            }
+                            if ui.small_button("Inventory (I)").clicked() {
+                                self.show_inventory = !self.show_inventory;
+                                self.inv_selected_slot = None;
                             }
                         });
                     });
