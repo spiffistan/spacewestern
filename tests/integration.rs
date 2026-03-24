@@ -145,6 +145,115 @@ fn item_stack_counts() {
     assert_eq!(inv.total(), 0);
 }
 
+// --- Crafting system ---
+
+#[test]
+fn fiber_and_scrap_wood_are_valid_items() {
+    let reg = rayworld::item_defs::ItemRegistry::cached();
+    let fiber = reg.get(ITEM_FIBER);
+    assert!(fiber.is_some(), "ITEM_FIBER (id={}) should exist in registry", ITEM_FIBER);
+    assert_eq!(fiber.unwrap().name, "Fiber");
+
+    let scrap = reg.get(ITEM_SCRAP_WOOD);
+    assert!(scrap.is_some(), "ITEM_SCRAP_WOOD (id={}) should exist in registry", ITEM_SCRAP_WOOD);
+    assert_eq!(scrap.unwrap().name, "Scrap Wood");
+}
+
+#[test]
+fn ground_items_with_new_types() {
+    let fiber_item = GroundItem::new(5.0, 5.0, ITEM_FIBER, 3);
+    assert_eq!(fiber_item.stack.item_id, ITEM_FIBER);
+    assert_eq!(fiber_item.stack.count, 3);
+    assert!(fiber_item.stack.label().contains("Fiber"));
+
+    let scrap_item = GroundItem::new(5.0, 5.0, ITEM_SCRAP_WOOD, 4);
+    assert_eq!(scrap_item.stack.item_id, ITEM_SCRAP_WOOD);
+    assert!(scrap_item.stack.label().contains("Scrap"));
+}
+
+#[test]
+fn crate_stores_any_item_type() {
+    let mut crate_inv = CrateInventory::default();
+    crate_inv.add(ITEM_FIBER, 5);
+    crate_inv.add(ITEM_SCRAP_WOOD, 3);
+    assert_eq!(crate_inv.count_of(ITEM_FIBER), 5);
+    assert_eq!(crate_inv.count_of(ITEM_SCRAP_WOOD), 3);
+    assert_eq!(crate_inv.total(), 8);
+}
+
+#[test]
+fn recipe_can_craft_with_fiber() {
+    let reg = rayworld::recipe_defs::RecipeRegistry::load();
+    let rope = reg.for_station("workbench").into_iter()
+        .find(|r| r.name == "Rope").expect("Rope recipe should exist");
+    // Rope needs 4 fiber
+    assert_eq!(rope.inputs[0].item, ITEM_FIBER);
+    assert_eq!(rope.inputs[0].count, 4);
+
+    // Not enough
+    let inv = vec![ItemStack::new(ITEM_FIBER, 3)];
+    assert!(!rayworld::recipe_defs::RecipeRegistry::can_craft(rope, &inv));
+
+    // Enough
+    let inv = vec![ItemStack::new(ITEM_FIBER, 4)];
+    assert!(rayworld::recipe_defs::RecipeRegistry::can_craft(rope, &inv));
+}
+
+#[test]
+fn recipe_can_craft_with_scrap_wood() {
+    let reg = rayworld::recipe_defs::RecipeRegistry::load();
+    let bucket = reg.for_station("workbench").into_iter()
+        .find(|r| r.name == "Wooden Bucket").expect("Wooden Bucket recipe should exist");
+    // Bucket needs 3 scrap wood
+    assert_eq!(bucket.inputs[0].item, ITEM_SCRAP_WOOD);
+    assert_eq!(bucket.inputs[0].count, 3);
+
+    let inv = vec![ItemStack::new(ITEM_SCRAP_WOOD, 3)];
+    assert!(rayworld::recipe_defs::RecipeRegistry::can_craft(bucket, &inv));
+}
+
+#[test]
+fn pleb_inventory_handles_all_item_types() {
+    let mut inv = rayworld::resources::PlebInventory::default();
+    inv.add(ITEM_FIBER, 5);
+    inv.add(ITEM_SCRAP_WOOD, 3);
+    inv.add(ITEM_BERRIES, 2);
+    assert_eq!(inv.count_of(ITEM_FIBER), 5);
+    assert_eq!(inv.count_of(ITEM_SCRAP_WOOD), 3);
+    assert_eq!(inv.count_of(ITEM_BERRIES), 2);
+    assert!(inv.is_carrying());
+
+    // Remove some
+    inv.remove(ITEM_FIBER, 3);
+    assert_eq!(inv.count_of(ITEM_FIBER), 2);
+}
+
+#[test]
+fn resource_counting_all_sources() {
+    // Simulate counting resources across ground items, crates, and pleb inventories
+    let ground_items = vec![
+        GroundItem::new(1.0, 1.0, ITEM_FIBER, 3),
+        GroundItem::new(2.0, 2.0, ITEM_SCRAP_WOOD, 4),
+        GroundItem::new(3.0, 3.0, ITEM_WOOD, 10),
+    ];
+
+    let mut crate_inv = CrateInventory::default();
+    crate_inv.add(ITEM_FIBER, 2);
+
+    // Total fiber should be 3 (ground) + 2 (crate) = 5
+    let total_fiber: u32 = ground_items.iter()
+        .filter(|gi| gi.stack.item_id == ITEM_FIBER)
+        .map(|gi| gi.stack.count as u32).sum::<u32>()
+        + crate_inv.count_of(ITEM_FIBER);
+    assert_eq!(total_fiber, 5);
+
+    // Total scrap wood: 4 (ground only)
+    let total_scrap: u32 = ground_items.iter()
+        .filter(|gi| gi.stack.item_id == ITEM_SCRAP_WOOD)
+        .map(|gi| gi.stack.count as u32).sum();
+    assert_eq!(total_scrap, 4);
+}
+
 // --- Fluid obstacle field ---
 
 #[test]

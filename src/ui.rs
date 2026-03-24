@@ -3732,32 +3732,31 @@ impl App {
 
     // --- Resource bar: colony-wide totals (top-left, below menu bar) ---
     fn draw_resource_bar(&self, ctx: &egui::Context) {
-        // Count resources: ground items + crate contents + pleb inventories
-        let mut total_wood = 0u32;
-        let mut total_berries = 0u32;
-        let mut total_rocks = 0u32;
+        // Count all resources: ground items + crate contents + pleb inventories
+        let mut totals: std::collections::HashMap<u16, u32> = std::collections::HashMap::new();
         for item in &self.ground_items {
-            match item.stack.item_id {
-                item_defs::ITEM_WOOD => total_wood += item.stack.count as u32,
-                item_defs::ITEM_BERRIES => total_berries += item.stack.count as u32,
-                item_defs::ITEM_ROCK => total_rocks += item.stack.count as u32,
-                _ => {}
-            }
+            *totals.entry(item.stack.item_id).or_default() += item.stack.count as u32;
         }
         for inv in self.crate_contents.values() {
-            total_berries += inv.berries();
-            total_rocks += inv.rocks();
+            for stack in &inv.stacks {
+                *totals.entry(stack.item_id).or_default() += stack.count as u32;
+            }
         }
         for pleb in &self.plebs {
             if !pleb.is_enemy {
-                total_berries += pleb.inventory.berries();
-                total_rocks += pleb.inventory.rocks();
-                total_wood += pleb.inventory.wood();
+                for stack in &pleb.inventory.stacks {
+                    *totals.entry(stack.item_id).or_default() += stack.count as u32;
+                }
             }
         }
-        let pleb_count = self.plebs.iter().filter(|p| !p.is_enemy).count();
+        let pleb_count = self.plebs.iter().filter(|p| !p.is_enemy && !p.is_dead).count();
         let bp_count = self.blueprints.len();
 
+        // Sort by item ID for stable display order
+        let mut sorted: Vec<(u16, u32)> = totals.into_iter().filter(|&(_, c)| c > 0).collect();
+        sorted.sort_by_key(|&(id, _)| id);
+
+        let item_reg = item_defs::ItemRegistry::cached();
         egui::Area::new(egui::Id::new("resource_bar"))
             .anchor(egui::Align2::LEFT_TOP, [10.0, 100.0])
             .interactable(false)
@@ -3765,9 +3764,12 @@ impl App {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     ui.label(egui::RichText::new(format!("\u{1f464} {} colonists", pleb_count)).size(11.0));
-                    ui.label(egui::RichText::new(format!("\u{1fab5} {} wood", total_wood)).size(11.0));
-                    ui.label(egui::RichText::new(format!("\u{1fad0} {} berries", total_berries)).size(11.0));
-                    ui.label(egui::RichText::new(format!("\u{1faa8} {} rocks", total_rocks)).size(11.0));
+                    for (item_id, count) in &sorted {
+                        let def = item_reg.get(*item_id);
+                        let icon = def.map(|d| d.icon.as_str()).unwrap_or("?");
+                        let name = def.map(|d| d.name.as_str()).unwrap_or("Unknown");
+                        ui.label(egui::RichText::new(format!("{} {} {}", icon, count, name)).size(11.0));
+                    }
                     if bp_count > 0 {
                         ui.label(egui::RichText::new(format!("\u{1f3d7} {} pending", bp_count))
                             .size(11.0).weak());
