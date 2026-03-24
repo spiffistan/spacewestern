@@ -36,13 +36,13 @@ pub enum WorkPriority {
 }
 
 /// Work type categories for the priority system.
-pub const WORK_HAUL: usize = 0;
-pub const WORK_FARM: usize = 1;
-pub const WORK_BUILD: usize = 2;
-pub const WORK_CRAFT: usize = 3;
+pub const WORK_FARM: usize = 0;
+pub const WORK_BUILD: usize = 1;
+pub const WORK_CRAFT: usize = 2;
+pub const WORK_HAUL: usize = 3;
 pub const WORK_TYPE_COUNT: usize = 4;
 
-pub const WORK_TYPE_NAMES: [&str; WORK_TYPE_COUNT] = ["Haul", "Farm", "Build", "Craft"];
+pub const WORK_TYPE_NAMES: [&str; WORK_TYPE_COUNT] = ["Farm", "Build", "Craft", "Haul"];
 
 /// Per-pleb work priorities. 0 = disabled, 1-3 = priority (1 = highest).
 /// Default: all enabled at priority 3.

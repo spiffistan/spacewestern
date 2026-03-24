@@ -1067,9 +1067,15 @@ impl App {
                 }).collect();
 
             // Collect ground items that could be hauled (with a nearby crate)
+            // Skip items already in a storage zone — they're considered "stored"
+            let storage_tiles: std::collections::HashSet<(i32, i32)> = self.zones.iter()
+                .filter(|z| z.kind == ZoneKind::Storage)
+                .flat_map(|z| z.tiles.iter().copied())
+                .collect();
             let haul_candidates: Vec<(i32, i32)> = self.ground_items.iter()
                 .map(|item| (item.x.floor() as i32, item.y.floor() as i32))
                 .filter(|&(ix, iy)| !self.active_work.contains(&(ix, iy)))
+                .filter(|&(ix, iy)| !storage_tiles.contains(&(ix, iy)))
                 .filter(|&(ix, iy)| find_nearest_crate(&self.grid_data, ix, iy).is_some())
                 .collect();
 
@@ -1154,7 +1160,10 @@ impl App {
                                             let in_inv = pleb.inventory.count_of(ing.item) as u16;
                                             let in_crates: u16 = self.crate_contents.values()
                                                 .map(|c| c.count_of(ing.item) as u16).sum();
-                                            in_inv + in_crates >= ing.count
+                                            let on_ground: u16 = self.ground_items.iter()
+                                                .filter(|gi| gi.stack.item_id == ing.item)
+                                                .map(|gi| gi.stack.count).sum();
+                                            in_inv + in_crates + on_ground >= ing.count
                                         })
                                     }).unwrap_or(false);
                                     if !craftable { continue; }
@@ -1298,22 +1307,17 @@ impl App {
                                     if let Some(order) = queue.next_order() {
                                         let recipe_reg = recipe_defs::RecipeRegistry::cached();
                                         if let Some(recipe) = recipe_reg.get(order.recipe_id) {
-                                            // Try to gather ingredients from nearby crates
+                                            // Check ingredients from inventory + crates + ground
                                             let mut have_all = true;
                                             for ing in &recipe.inputs {
                                                 let in_inv = pleb.inventory.count_of(ing.item) as u16;
-                                                if in_inv < ing.count {
-                                                    // Check nearby crates
-                                                    let mut remaining = ing.count - in_inv;
-                                                    for (&cidx, cinv) in self.crate_contents.iter() {
-                                                        if remaining == 0 { break; }
-                                                        let available = cinv.count_of(ing.item) as u16;
-                                                        if available > 0 {
-                                                            let _take = available.min(remaining);
-                                                            remaining -= _take.min(remaining);
-                                                        }
-                                                    }
-                                                    if remaining > 0 { have_all = false; break; }
+                                                let in_crates: u16 = self.crate_contents.values()
+                                                    .map(|c| c.count_of(ing.item) as u16).sum();
+                                                let on_ground: u16 = self.ground_items.iter()
+                                                    .filter(|gi| gi.stack.item_id == ing.item)
+                                                    .map(|gi| gi.stack.count).sum();
+                                                if in_inv + in_crates + on_ground < ing.count {
+                                                    have_all = false; break;
                                                 }
                                             }
                                             if have_all {
@@ -1326,7 +1330,7 @@ impl App {
                                 if let Some(recipe_id) = started {
                                     let recipe_reg = recipe_defs::RecipeRegistry::cached();
                                     let recipe = recipe_reg.get(recipe_id).unwrap();
-                                    // Consume ingredients from pleb inventory + crates
+                                    // Consume ingredients from pleb inventory + crates + ground
                                     for ing in &recipe.inputs {
                                         let mut need = ing.count;
                                         let from_inv = pleb.inventory.remove(ing.item, need);
@@ -1336,6 +1340,22 @@ impl App {
                                                 if need == 0 { break; }
                                                 let taken = cinv.remove(ing.item, need);
                                                 need -= taken;
+                                            }
+                                        }
+                                        // Take remaining from ground items
+                                        if need > 0 {
+                                            let mut i = 0;
+                                            while i < self.ground_items.len() && need > 0 {
+                                                if self.ground_items[i].stack.item_id == ing.item {
+                                                    let take = self.ground_items[i].stack.count.min(need);
+                                                    self.ground_items[i].stack.count -= take;
+                                                    need -= take;
+                                                    if self.ground_items[i].stack.count == 0 {
+                                                        self.ground_items.remove(i);
+                                                        continue;
+                                                    }
+                                                }
+                                                i += 1;
                                             }
                                         }
                                     }
