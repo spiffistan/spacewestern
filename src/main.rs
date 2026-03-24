@@ -193,6 +193,7 @@ struct App {
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
     show_pleb_help: bool,      // show controls modal
     show_inventory: bool,      // show pleb inventory window
+    inv_selected_slot: Option<usize>, // selected inventory slot for swap/drop
     show_schedule: bool,       // show shift schedule window
     show_priorities: bool,     // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
@@ -532,6 +533,7 @@ impl App {
             cannon_angles: std::collections::HashMap::new(),
             show_pleb_help: false,
             show_inventory: false,
+            inv_selected_slot: None,
             show_schedule: false,
             show_priorities: false,
             pressed_keys: std::collections::HashSet::new(),

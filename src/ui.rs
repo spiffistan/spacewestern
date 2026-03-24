@@ -718,35 +718,169 @@ impl App {
                             ui.separator();
                             ui.label(egui::RichText::new("Inventory").strong().size(11.0));
 
-                            // Carrying slot
-                            ui.horizontal(|ui| {
-                                let (slot, _) = ui.allocate_exact_size(egui::Vec2::splat(28.0), egui::Sense::hover());
-                                let painter = ui.painter_at(slot);
-                                painter.rect_filled(slot, 3.0, egui::Color32::from_rgb(45, 48, 55));
-                                painter.rect_stroke(slot, 3.0, egui::Stroke::new(1.0, egui::Color32::from_gray(80)), egui::StrokeKind::Outside);
-                                if is_carrying {
-                                    painter.circle_filled(slot.center(), 8.0, egui::Color32::from_rgb(90, 85, 78));
-                                    painter.circle_filled(slot.center() + egui::Vec2::new(-2.0, -2.0), 3.0, egui::Color32::from_rgb(110, 105, 98));
-                                }
-                                ui.vertical(|ui| {
-                                    ui.label(egui::RichText::new("Hands").size(9.0).weak());
-                                    if is_carrying {
-                                        ui.label(egui::RichText::new(&carrying_label).size(10.0));
-                                    } else {
-                                        ui.label(egui::RichText::new("Empty").size(10.0).weak());
+                            // Slot grid: 4 columns x 2 rows = 8 slots
+                            let slot_size = 42.0;
+                            let cols = 4;
+                            let rows = 2;
+                            let total_slots = cols * rows;
+                            let selected = self.inv_selected_slot;
+
+                            // Get stacks snapshot for rendering
+                            let stacks: Vec<Option<item_defs::ItemStack>> = (0..total_slots)
+                                .map(|i| {
+                                    if let Some(sel) = self.selected_pleb {
+                                        self.plebs.get(sel)
+                                            .and_then(|p| p.inventory.stacks.get(i).cloned())
+                                    } else { None }
+                                }).collect();
+
+                            let item_reg = item_defs::ItemRegistry::cached();
+                            let mut clicked_slot: Option<usize> = None;
+
+                            for row in 0..rows {
+                                ui.horizontal(|ui| {
+                                    for col in 0..cols {
+                                        let slot_idx = row * cols + col;
+                                        let is_selected = selected == Some(slot_idx);
+                                        let (rect, response) = ui.allocate_exact_size(
+                                            egui::Vec2::splat(slot_size), egui::Sense::click(),
+                                        );
+                                        let painter = ui.painter_at(rect);
+
+                                        // Slot background
+                                        let bg = if is_selected {
+                                            egui::Color32::from_rgb(60, 80, 110)
+                                        } else if response.hovered() {
+                                            egui::Color32::from_rgb(55, 58, 65)
+                                        } else {
+                                            egui::Color32::from_rgb(38, 40, 46)
+                                        };
+                                        painter.rect_filled(rect, 4.0, bg);
+                                        painter.rect_stroke(rect, 4.0,
+                                            egui::Stroke::new(
+                                                if is_selected { 2.0 } else { 1.0 },
+                                                if is_selected { egui::Color32::from_rgb(120, 160, 220) }
+                                                else { egui::Color32::from_gray(65) }
+                                            ), egui::StrokeKind::Outside);
+
+                                        // Draw item in slot
+                                        if let Some(stack) = &stacks[slot_idx] {
+                                            let def = item_reg.get(stack.item_id);
+                                            let icon = def.map(|d| d.icon.as_str()).unwrap_or("?");
+                                            let cat = def.map(|d| d.category.as_str()).unwrap_or("");
+                                            // Category tint on slot background
+                                            if cat == "tool" {
+                                                painter.rect_filled(
+                                                    egui::Rect::from_min_size(rect.min, egui::Vec2::new(rect.width(), 3.0)),
+                                                    0.0, egui::Color32::from_rgb(80, 130, 80));
+                                            } else if cat == "container" {
+                                                painter.rect_filled(
+                                                    egui::Rect::from_min_size(rect.min, egui::Vec2::new(rect.width(), 3.0)),
+                                                    0.0, egui::Color32::from_rgb(60, 120, 180));
+                                            }
+                                            // Icon
+                                            painter.text(
+                                                rect.center() + egui::Vec2::new(0.0, -4.0),
+                                                egui::Align2::CENTER_CENTER,
+                                                icon, egui::FontId::proportional(18.0),
+                                                egui::Color32::WHITE,
+                                            );
+                                            // Count (bottom-right)
+                                            if stack.count > 1 {
+                                                painter.text(
+                                                    rect.right_bottom() + egui::Vec2::new(-3.0, -2.0),
+                                                    egui::Align2::RIGHT_BOTTOM,
+                                                    format!("{}", stack.count),
+                                                    egui::FontId::proportional(10.0),
+                                                    egui::Color32::from_gray(200),
+                                                );
+                                            }
+                                            // Liquid fill bar for containers
+                                            if let Some((_, amt)) = stack.liquid {
+                                                let cap = stack.liquid_capacity();
+                                                if cap > 0 {
+                                                    let fill = amt as f32 / cap as f32;
+                                                    let bar_h = 3.0;
+                                                    let bar_rect = egui::Rect::from_min_size(
+                                                        egui::pos2(rect.min.x + 2.0, rect.max.y - bar_h - 2.0),
+                                                        egui::vec2((rect.width() - 4.0) * fill, bar_h),
+                                                    );
+                                                    painter.rect_filled(bar_rect, 1.0,
+                                                        egui::Color32::from_rgb(60, 140, 220));
+                                                }
+                                            }
+                                        }
+
+                                        if response.clicked() {
+                                            clicked_slot = Some(slot_idx);
+                                        }
+
+                                        // Tooltip
+                                        if response.hovered() {
+                                            if let Some(stack) = &stacks[slot_idx] {
+                                                response.on_hover_text(stack.label());
+                                            }
+                                        }
                                     }
                                 });
-                            });
-
-                            // Inventory items (generic — shows all stacks)
-                            if !is_carrying {
-                                ui.label(egui::RichText::new("No items").weak().size(10.0));
                             }
 
+                            // Handle slot clicks: select or swap
+                            if let Some(clicked) = clicked_slot {
+                                if let Some(prev) = self.inv_selected_slot {
+                                    if prev == clicked {
+                                        // Deselect
+                                        self.inv_selected_slot = None;
+                                    } else {
+                                        // Swap slots
+                                        if let Some(sel_idx) = self.selected_pleb {
+                                            if let Some(pleb) = self.plebs.get_mut(sel_idx) {
+                                                let len = pleb.inventory.stacks.len();
+                                                // Ensure both slots exist (pad with empty)
+                                                while pleb.inventory.stacks.len() <= prev.max(clicked) {
+                                                    pleb.inventory.stacks.push(item_defs::ItemStack::new(0, 0));
+                                                }
+                                                pleb.inventory.stacks.swap(prev, clicked);
+                                                // Clean up empty padding
+                                                pleb.inventory.stacks.retain(|s| s.count > 0);
+                                            }
+                                        }
+                                        self.inv_selected_slot = None;
+                                    }
+                                } else {
+                                    // Select this slot (only if it has an item)
+                                    if stacks[clicked].is_some() {
+                                        self.inv_selected_slot = Some(clicked);
+                                    }
+                                }
+                            }
+
+                            // Drop button
                             ui.separator();
-                            if ui.small_button("Close").clicked() {
-                                close_inv = true;
-                            }
+                            ui.horizontal(|ui| {
+                                let can_drop = selected.is_some()
+                                    && selected.map(|s| stacks.get(s).and_then(|s| s.as_ref()).is_some()).unwrap_or(false);
+                                if ui.add_enabled(can_drop, egui::Button::new(
+                                    egui::RichText::new("Drop").size(10.0)
+                                )).clicked() {
+                                    if let Some(slot) = selected {
+                                        if let Some(sel_idx) = self.selected_pleb {
+                                            if let Some(pleb) = self.plebs.get_mut(sel_idx) {
+                                                if slot < pleb.inventory.stacks.len() {
+                                                    let stack = pleb.inventory.stacks.remove(slot);
+                                                    self.ground_items.push(resources::GroundItem {
+                                                        x: pleb.x, y: pleb.y, stack,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        self.inv_selected_slot = None;
+                                    }
+                                }
+                                if ui.small_button("Close").clicked() {
+                                    close_inv = true;
+                                }
+                            });
                         });
                     if close_inv {
                         self.show_inventory = false;
