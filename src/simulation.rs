@@ -586,14 +586,26 @@ impl App {
                                 ci < self.grid_data.len() && (self.grid_data[ci] & 0xFF) == 33
                             };
                             if is_blueprint {
-                                // Deliver wood to blueprint
+                                // Deliver materials to blueprint
                                 if let Some(bp) = self.blueprints.get_mut(&(cx, cy)) {
-                                    let have = pleb.inventory.wood() as u32;
-                                    let deliver = have.min(bp.wood_needed - bp.wood_delivered);
-                                    bp.wood_delivered += deliver;
-                                    pleb.inventory.remove(ITEM_WOOD, deliver as u16);
-                                    events.push((EventCategory::Haul, format!("{} delivered {} wood ({}/{})",
-                                        pleb.name, deliver, bp.wood_delivered, bp.wood_needed)));
+                                    if bp.wood_delivered < bp.wood_needed {
+                                        let have = pleb.inventory.wood() as u32;
+                                        let deliver = have.min(bp.wood_needed - bp.wood_delivered);
+                                        bp.wood_delivered += deliver;
+                                        pleb.inventory.remove(ITEM_WOOD, deliver as u16);
+                                        if deliver > 0 {
+                                            events.push((EventCategory::Haul, format!("{} delivered {} wood", pleb.name, deliver)));
+                                        }
+                                    }
+                                    if bp.clay_delivered < bp.clay_needed {
+                                        let have = pleb.inventory.count_of(ITEM_CLAY) as u32;
+                                        let deliver = have.min(bp.clay_needed - bp.clay_delivered);
+                                        bp.clay_delivered += deliver;
+                                        pleb.inventory.remove(ITEM_CLAY, deliver as u16);
+                                        if deliver > 0 {
+                                            events.push((EventCategory::Haul, format!("{} delivered {} clay", pleb.name, deliver)));
+                                        }
+                                    }
                                 }
                                 self.active_work.remove(&(cx, cy));
                                 pleb.haul_target = None;
@@ -1496,27 +1508,62 @@ impl App {
                         }
                     }
                 } else {
-                    // Needs resources — find nearest wood on ground and assign pleb to haul it
-                    let wood_still_needed = bp.wood_needed - bp.wood_delivered;
-                    if wood_still_needed > 0 {
-                        // Find nearest wood ground item
-                        let mut best_wood: Option<(usize, f32)> = None;
+                    // Needs resources — find nearest material on ground and assign pleb to haul it
+                    // Determine which material is needed
+                    let need_item = if bp.wood_delivered < bp.wood_needed {
+                        Some(ITEM_WOOD)
+                    } else if bp.clay_delivered < bp.clay_needed {
+                        Some(ITEM_CLAY)
+                    } else { None };
+
+                    if let Some(needed_id) = need_item {
+                        // Find nearest ground item of needed type
+                        let mut best_item: Option<(usize, f32)> = None;
                         for (i, item) in self.ground_items.iter().enumerate() {
-                            if item.stack.item_id == ITEM_WOOD {
+                            if item.stack.item_id == needed_id {
                                 let d = ((item.x - bx as f32 - 0.5).powi(2) + (item.y - by as f32 - 0.5).powi(2)).sqrt();
-                                if best_wood.is_none() || d < best_wood.unwrap().1 {
-                                    best_wood = Some((i, d));
+                                if best_item.is_none() || d < best_item.unwrap().1 {
+                                    best_item = Some((i, d));
                                 }
                             }
                         }
-                        if let Some((wi, _)) = best_wood {
-                            let wood_pos = (self.ground_items[wi].x.floor() as i32, self.ground_items[wi].y.floor() as i32);
+                        // Also check crates for the material
+                        if best_item.is_none() {
+                            for (&cidx, cinv) in self.crate_contents.iter() {
+                                if cinv.count_of(needed_id) > 0 {
+                                    let cx2 = (cidx % GRID_W) as i32;
+                                    let cy2 = (cidx / GRID_W) as i32;
+                                    let d = ((cx2 as f32 + 0.5 - bx as f32 - 0.5).powi(2) + (cy2 as f32 + 0.5 - by as f32 - 0.5).powi(2)).sqrt();
+                                    if best_item.is_none() || d < best_item.unwrap().1 {
+                                        // Use crate position as pickup
+                                        best_item = Some((usize::MAX, d)); // sentinel
+                                    }
+                                }
+                            }
+                        }
+                        if let Some((wi, _)) = best_item {
+                            let pickup_pos = if wi < self.ground_items.len() {
+                                (self.ground_items[wi].x.floor() as i32, self.ground_items[wi].y.floor() as i32)
+                            } else {
+                                // From crate — find nearest crate with the material
+                                let mut best_crate = (bx, by);
+                                let mut best_d = f32::MAX;
+                                for (&cidx, cinv) in self.crate_contents.iter() {
+                                    if cinv.count_of(needed_id) > 0 {
+                                        let cx2 = (cidx % GRID_W) as i32;
+                                        let cy2 = (cidx / GRID_W) as i32;
+                                        let d = ((cx2 - bx) as f32).powi(2) + ((cy2 - by) as f32).powi(2);
+                                        if d < best_d { best_d = d; best_crate = (cx2, cy2); }
+                                    }
+                                }
+                                best_crate
+                            };
                             // Find nearest idle pleb
                             let mut best_pleb: Option<(usize, f32)> = None;
                             for (i, pleb) in self.plebs.iter().enumerate() {
-                                if pleb.is_enemy || pleb.work_target.is_some() { continue; }
+                                if pleb.is_enemy || pleb.is_dead || pleb.work_target.is_some() { continue; }
                                 if !matches!(pleb.activity, PlebActivity::Idle) { continue; }
-                                let dist = ((pleb.x - wood_pos.0 as f32 - 0.5).powi(2) + (pleb.y - wood_pos.1 as f32 - 0.5).powi(2)).sqrt();
+                                let dist = ((pleb.x - pickup_pos.0 as f32 - 0.5).powi(2) + (pleb.y - pickup_pos.1 as f32 - 0.5).powi(2)).sqrt();
                                 if dist < 50.0 && (best_pleb.is_none() || dist < best_pleb.unwrap().1) {
                                     best_pleb = Some((i, dist));
                                 }
@@ -1524,13 +1571,13 @@ impl App {
                             if let Some((pi, _)) = best_pleb {
                                 let pleb = &mut self.plebs[pi];
                                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, wood_pos);
+                                let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, pickup_pos);
                                 if !path.is_empty() {
                                     pleb.path = path;
                                     pleb.path_idx = 0;
                                     pleb.activity = PlebActivity::Hauling;
-                                    pleb.harvest_target = Some(wood_pos); // pickup location
-                                    pleb.haul_target = Some((bx, by));    // delivery = blueprint
+                                    pleb.harvest_target = Some(pickup_pos);
+                                    pleb.haul_target = Some((bx, by));
                                     self.active_work.insert((bx, by));
                                 }
                             }

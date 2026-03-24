@@ -1066,24 +1066,36 @@ impl App {
                         if bt_dig == BT_DIRT || bt_is!(bt_dig, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
                             self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
                             self.grid_dirty = true;
-                            // Clay terrain yields clay items when first dug
+                            // Clay terrain yields clay items when dug — requires a bucket
                             if idx < self.terrain_data.len() && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY {
-                                self.ground_items.push(resources::GroundItem::new(
-                                    bx as f32 + 0.5, by as f32 + 0.5,
-                                    item_defs::ITEM_CLAY, 2,
-                                ));
+                                let has_bucket = self.selected_pleb
+                                    .and_then(|pi| self.plebs.get(pi))
+                                    .map(|p| p.inventory.count_of(item_defs::ITEM_WOODEN_BUCKET) > 0)
+                                    .unwrap_or(self.sandbox_mode);
+                                if has_bucket {
+                                    self.ground_items.push(resources::GroundItem::new(
+                                        bx as f32 + 0.5, by as f32 + 0.5,
+                                        item_defs::ITEM_CLAY, 2,
+                                    ));
+                                }
                             }
                         } else if bt_dig == BT_DUG_GROUND {
                             let depth = (block >> 8) & 0xFF;
                             if depth < 5 {
                                 self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, (depth + 1) as u8, 0) | roof_h;
                                 self.grid_dirty = true;
-                                // More clay on deeper digs
+                                // More clay on deeper digs — requires bucket
                                 if idx < self.terrain_data.len() && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY {
-                                    self.ground_items.push(resources::GroundItem::new(
-                                        bx as f32 + 0.5, by as f32 + 0.5,
-                                        item_defs::ITEM_CLAY, 1,
-                                    ));
+                                    let has_bucket = self.selected_pleb
+                                        .and_then(|pi| self.plebs.get(pi))
+                                        .map(|p| p.inventory.count_of(item_defs::ITEM_WOODEN_BUCKET) > 0)
+                                        .unwrap_or(self.sandbox_mode);
+                                    if has_bucket {
+                                        self.ground_items.push(resources::GroundItem::new(
+                                            bx as f32 + 0.5, by as f32 + 0.5,
+                                            item_defs::ITEM_CLAY, 1,
+                                        ));
+                                    }
                                 }
                             }
                         }

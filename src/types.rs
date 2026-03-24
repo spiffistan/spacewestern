@@ -281,29 +281,31 @@ pub struct Blueprint {
     pub build_time: f32,      // total seconds to build
     pub wood_needed: u32,     // wood required to start
     pub wood_delivered: u32,  // wood deposited so far
+    pub clay_needed: u32,     // clay required to start
+    pub clay_delivered: u32,  // clay deposited so far
 }
 
 impl Blueprint {
     pub fn new(block_data: u32) -> Self {
         let bt = block_data & 0xFF;
-        let (build_time, wood_needed) = match bt as u32 {
-            BT_WOOD_WALL => (3.0, 3),
-            BT_WOOD_FLOOR => (1.5, 2),
+        let (build_time, wood_needed, clay_needed) = match bt as u32 {
+            BT_WOOD_WALL => (3.0, 3, 0),
+            BT_WOOD_FLOOR => (1.5, 2, 0),
             BT_STONE | BT_WALL | BT_GLASS | BT_INSULATED |
             BT_STEEL_WALL | BT_SANDSTONE | BT_GRANITE |
-            BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL => (3.0, 0),
-            BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0),
-            BT_BENCH | BT_BED => (2.0, 2),
-            BT_FIREPLACE | BT_CRATE | BT_CANNON => (2.0, 0),
-            BT_WORKBENCH => (3.0, 4),  // 4 wood
-            BT_KILN => (5.0, 0),       // stone/clay, no wood
-            BT_WELL => (8.0, 4),       // 4 wood for frame
-            _ => (1.0, 0),
+            BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL => (3.0, 0, 0),
+            BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0, 0),
+            BT_BENCH | BT_BED => (2.0, 2, 0),
+            BT_FIREPLACE | BT_CRATE | BT_CANNON => (2.0, 0, 0),
+            BT_WORKBENCH => (3.0, 4, 0),   // 4 wood
+            BT_KILN => (8.0, 0, 10),       // 10 clay
+            BT_WELL => (8.0, 4, 0),        // 4 wood
+            _ => (1.0, 0, 0),
         };
-        Blueprint { block_data, progress: 0.0, build_time, wood_needed, wood_delivered: 0 }
+        Blueprint { block_data, progress: 0.0, build_time, wood_needed, wood_delivered: 0, clay_needed, clay_delivered: 0 }
     }
 
     pub fn resources_met(&self) -> bool {
-        self.wood_delivered >= self.wood_needed
+        self.wood_delivered >= self.wood_needed && self.clay_delivered >= self.clay_needed
     }
 }

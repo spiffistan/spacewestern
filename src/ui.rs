@@ -3955,6 +3955,9 @@ impl App {
                         if bp.wood_needed > 0 {
                             details.push(format!("Wood: {}/{}", bp.wood_delivered, bp.wood_needed));
                         }
+                        if bp.clay_needed > 0 {
+                            details.push(format!("Clay: {}/{}", bp.clay_delivered, bp.clay_needed));
+                        }
                     }
 
                     if !details.is_empty() {
