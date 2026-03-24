@@ -1214,10 +1214,13 @@ impl App {
                 // Check if pleb is doing Farming
                 if let PlebActivity::Farming(progress) = &pleb.activity {
                     // Speed varies: trees take longer than crops/bushes
+                    // Stone axe: 2x tree chopping speed
+                    let has_axe = pleb.inventory.count_of(ITEM_STONE_AXE) > 0;
                     let speed = if let Some((tx, ty)) = pleb.work_target {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        if tidx < self.grid_data.len() && (self.grid_data[tidx] & 0xFF) as u32 == BT_TREE { 0.30 } // ~3.5s for trees
-                        else { 0.4 } // ~2.5s for crops/bushes
+                        if tidx < self.grid_data.len() && (self.grid_data[tidx] & 0xFF) as u32 == BT_TREE {
+                            if has_axe { 0.60 } else { 0.30 } // axe: ~1.7s, bare hands: ~3.5s
+                        } else { 0.4 } // ~2.5s for crops/bushes
                     } else { 0.4 };
                     let new_progress = progress + dt * self.time_speed * speed;
                     if new_progress >= 1.0 {
@@ -1386,7 +1389,6 @@ impl App {
                                 pleb.activity = PlebActivity::Drinking(0.0);
                             } else if tidx < self.terrain_data.len()
                                 && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY
-                                && pleb.inventory.count_of(ITEM_WOODEN_BUCKET) > 0
                                 && (tbt == BT_DIRT || (tbt == BT_DUG_GROUND && block_height_rs(self.grid_data[tidx]) < 3))
                             {
                                 // Dig clay: deepen or create dug ground, drop clay
@@ -1395,7 +1397,10 @@ impl App {
                                 let new_depth = (cur_depth + 1).min(3);
                                 self.grid_data[tidx] = make_block(BT_DUG_GROUND as u8, new_depth, 0) | roof_h;
                                 self.grid_dirty = true;
-                                let yield_amt = if cur_depth == 0 { 4 } else { 3 }; // first dig yields more
+                                // Shovel bonus: +2 yield
+                                let has_shovel = pleb.inventory.count_of(ITEM_WOODEN_SHOVEL) > 0;
+                                let base_yield: u16 = if cur_depth == 0 { 4 } else { 3 };
+                                let yield_amt = base_yield + if has_shovel { 2 } else { 0 };
                                 self.ground_items.push(resources::GroundItem::new(
                                     tx as f32 + 0.5, ty as f32 + 0.5, ITEM_CLAY, yield_amt,
                                 ));

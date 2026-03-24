@@ -80,7 +80,7 @@ graph TD
 | Wood | Trees | Chop (3.5s) |
 | Scrap Wood | Trees | Chop (byproduct) |
 | Fiber | Trees, Crops | Chop / Harvest |
-| Clay | Clay terrain | Dig (requires bucket) |
+| Clay | Clay terrain | Dig (shovel = +2 yield) |
 | Berries | Berry bushes, Crops | Harvest |
 | Rock | Rock blocks | Pick up |
 | Water | Wells | Drink action (4s) |
@@ -91,6 +91,9 @@ graph TD
 
 | Recipe | Inputs | Output | Time |
 |--------|--------|--------|------|
+| Stone Axe | 2 Rock + 1 Wood | 1 Stone Axe | 6s |
+| Wooden Shovel | 2 Scrap Wood + 1 Wood | 1 Shovel | 5s |
+| Stone Pick | 2 Rock + 1 Scrap Wood | 1 Stone Pick | 6s |
 | Rope | 4 Fiber | 1 Rope | 5s |
 | Wooden Bucket | 3 Scrap Wood | 1 Bucket | 8s |
 | Unfired Jug | 2 Clay | 1 Unfired Jug | 6s |

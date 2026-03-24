@@ -2890,6 +2890,83 @@ impl App {
                             log_h * 0.3, wood_col,
                         );
                     }
+                } else if iid == item_defs::ITEM_STONE_AXE || iid == item_defs::ITEM_STONE_PICK {
+                    // Stone tool: grey head + brown handle
+                    let handle_col = egui::Color32::from_rgb(110, 75, 35);
+                    let head_col = egui::Color32::from_rgb(130, 125, 115);
+                    // Handle: diagonal line
+                    let h_len = r * 1.1;
+                    let h_w = r * 0.25;
+                    item_painter.rect_filled(
+                        egui::Rect::from_center_size(
+                            egui::pos2(center.x - h_len * 0.15, center.y + h_len * 0.15),
+                            egui::vec2(h_len, h_w)),
+                        h_w * 0.3, handle_col);
+                    // Head: wider stone piece at top
+                    let head_w = r * 0.7;
+                    let head_h = r * 0.5;
+                    let head_off = if iid == item_defs::ITEM_STONE_AXE { -0.35 } else { -0.25 };
+                    item_painter.rect_filled(
+                        egui::Rect::from_center_size(
+                            egui::pos2(center.x + r * 0.3, center.y + r * head_off),
+                            egui::vec2(head_w, head_h)),
+                        2.0, head_col);
+                } else if iid == item_defs::ITEM_WOODEN_SHOVEL {
+                    // Shovel: brown handle + darker scoop
+                    let handle_col = egui::Color32::from_rgb(110, 75, 35);
+                    let scoop_col = egui::Color32::from_rgb(85, 65, 40);
+                    // Handle
+                    let h_len = r * 1.2;
+                    let h_w = r * 0.2;
+                    item_painter.rect_filled(
+                        egui::Rect::from_center_size(center, egui::vec2(h_w, h_len)),
+                        h_w * 0.3, handle_col);
+                    // Scoop at bottom
+                    item_painter.circle_filled(
+                        egui::pos2(center.x, center.y + r * 0.5),
+                        r * 0.4, scoop_col);
+                } else if iid == item_defs::ITEM_FIBER {
+                    // Fiber: green wispy strands
+                    let fiber_col = egui::Color32::from_rgb(80, 140, 50);
+                    for i in 0..3u32 {
+                        let angle = (i as f32 - 1.0) * 0.4;
+                        let x1 = center.x + angle.sin() * r * 0.2;
+                        let y1 = center.y + r * 0.4;
+                        let x2 = center.x + angle.sin() * r * 0.5 + (i as f32 - 1.0) * r * 0.2;
+                        let y2 = center.y - r * 0.5;
+                        item_painter.line_segment(
+                            [egui::pos2(x1, y1), egui::pos2(x2, y2)],
+                            egui::Stroke::new(r * 0.15, fiber_col));
+                    }
+                } else if iid == item_defs::ITEM_SCRAP_WOOD {
+                    // Scrap wood: small jagged wood pieces
+                    let scrap_col = egui::Color32::from_rgb(130, 90, 45);
+                    let piece_w = r * 0.5;
+                    let piece_h = r * 0.25;
+                    for i in 0..3u32 {
+                        let ox = (i as f32 - 1.0) * piece_w * 0.6;
+                        let oy = (i as f32 - 1.0) * piece_h * 0.5;
+                        let angle = (i as f32 - 1.0) * 0.3;
+                        item_painter.rect_filled(
+                            egui::Rect::from_center_size(
+                                egui::pos2(center.x + ox, center.y + oy),
+                                egui::vec2(piece_w, piece_h)),
+                            piece_h * 0.2, scrap_col);
+                        let _ = angle; // rotation would need transform, keep simple
+                    }
+                } else if iid == item_defs::ITEM_CLAY {
+                    // Clay: reddish-brown lump
+                    let clay_col = egui::Color32::from_rgb(150, 100, 60);
+                    item_painter.circle_filled(center, r * 0.8, clay_col);
+                    // Darker wet streak
+                    item_painter.circle_filled(
+                        egui::pos2(center.x - r * 0.15, center.y - r * 0.1),
+                        r * 0.35, egui::Color32::from_rgb(120, 75, 45));
+                } else if iid == item_defs::ITEM_ROPE {
+                    // Rope: coiled tan circle
+                    let rope_col = egui::Color32::from_rgb(160, 140, 90);
+                    item_painter.circle_stroke(center, r * 0.6,
+                        egui::Stroke::new(r * 0.25, rope_col));
                 } else {
                     // Generic item: colored circle
                     let col = if item.stack.is_container() {

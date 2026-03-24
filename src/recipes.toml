@@ -31,3 +31,27 @@ station = "kiln"
 time = 30.0
 inputs = [{item = 13, count = 1}]
 output = {item = 12, count = 1}
+
+[[recipe]]
+id = 4
+name = "Stone Axe"
+station = "workbench"
+time = 6.0
+inputs = [{item = 2, count = 2}, {item = 1, count = 1}]
+output = {item = 20, count = 1}
+
+[[recipe]]
+id = 5
+name = "Wooden Shovel"
+station = "workbench"
+time = 5.0
+inputs = [{item = 5, count = 2}, {item = 1, count = 1}]
+output = {item = 21, count = 1}
+
+[[recipe]]
+id = 6
+name = "Stone Pick"
+station = "workbench"
+time = 6.0
+inputs = [{item = 2, count = 2}, {item = 5, count = 1}]
+output = {item = 22, count = 1}

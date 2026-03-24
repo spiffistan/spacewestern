@@ -73,3 +73,24 @@ name = "Unfired Jug"
 icon = "🏺"
 category = "intermediate"
 stack_max = 3
+
+[[item]]
+id = 20
+name = "Stone Axe"
+icon = "🪓"
+category = "tool"
+stack_max = 1
+
+[[item]]
+id = 21
+name = "Wooden Shovel"
+icon = "⛏"
+category = "tool"
+stack_max = 1
+
+[[item]]
+id = 22
+name = "Stone Pick"
+icon = "⛏"
+category = "tool"
+stack_max = 1

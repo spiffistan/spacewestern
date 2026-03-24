@@ -710,17 +710,16 @@ impl App {
         if sel_pleb.is_some() && (bt == BT_DIRT || (bt == BT_DUG_GROUND && ((self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF) < 3)) {
             let tidx = (by as u32 * GRID_W + bx as u32) as usize;
             if tidx < self.terrain_data.len() && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY {
-                // Check if any bucket exists (in pleb inventory, crates, or on ground)
-                let bucket_in_inv = self.plebs.iter().any(|p| !p.is_enemy && p.inventory.count_of(item_defs::ITEM_WOODEN_BUCKET) > 0);
-                let bucket_in_crate = self.crate_contents.values().any(|c| c.count_of(item_defs::ITEM_WOODEN_BUCKET) > 0);
-                let bucket_on_ground = self.ground_items.iter().any(|gi| gi.stack.item_id == item_defs::ITEM_WOODEN_BUCKET);
-                let has_bucket = bucket_in_inv || bucket_in_crate || bucket_on_ground;
                 menu.title = "Clay Deposit".into();
-                if has_bucket {
-                    menu.actions.push((format!("Dig clay ({})", pleb_name), ContextAction::DigClay(bx, by), true));
+                let has_shovel = sel_pleb.and_then(|pi| self.plebs.get(pi))
+                    .map(|p| p.inventory.count_of(item_defs::ITEM_WOODEN_SHOVEL) > 0)
+                    .unwrap_or(false);
+                let label = if has_shovel {
+                    format!("Dig clay + shovel ({})", pleb_name)
                 } else {
-                    menu.actions.push(("Dig clay (no bucket)".into(), ContextAction::DigClay(bx, by), false));
-                }
+                    format!("Dig clay ({})", pleb_name)
+                };
+                menu.actions.push((label, ContextAction::DigClay(bx, by), true));
                 has_actions = true;
             }
         }
@@ -1085,36 +1084,24 @@ impl App {
                         if bt_dig == BT_DIRT || bt_is!(bt_dig, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
                             self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
                             self.grid_dirty = true;
-                            // Clay terrain yields clay items when dug — requires a bucket
+                            // Clay terrain yields clay items when dug
                             if idx < self.terrain_data.len() && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY {
-                                let has_bucket = self.selected_pleb
-                                    .and_then(|pi| self.plebs.get(pi))
-                                    .map(|p| p.inventory.count_of(item_defs::ITEM_WOODEN_BUCKET) > 0)
-                                    .unwrap_or(self.sandbox_mode);
-                                if has_bucket {
-                                    self.ground_items.push(resources::GroundItem::new(
-                                        bx as f32 + 0.5, by as f32 + 0.5,
-                                        item_defs::ITEM_CLAY, 2,
-                                    ));
-                                }
+                                self.ground_items.push(resources::GroundItem::new(
+                                    bx as f32 + 0.5, by as f32 + 0.5,
+                                    item_defs::ITEM_CLAY, 2,
+                                ));
                             }
                         } else if bt_dig == BT_DUG_GROUND {
                             let depth = (block >> 8) & 0xFF;
                             if depth < 5 {
                                 self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, (depth + 1) as u8, 0) | roof_h;
                                 self.grid_dirty = true;
-                                // More clay on deeper digs — requires bucket
+                                // More clay on deeper digs
                                 if idx < self.terrain_data.len() && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY {
-                                    let has_bucket = self.selected_pleb
-                                        .and_then(|pi| self.plebs.get(pi))
-                                        .map(|p| p.inventory.count_of(item_defs::ITEM_WOODEN_BUCKET) > 0)
-                                        .unwrap_or(self.sandbox_mode);
-                                    if has_bucket {
-                                        self.ground_items.push(resources::GroundItem::new(
-                                            bx as f32 + 0.5, by as f32 + 0.5,
-                                            item_defs::ITEM_CLAY, 1,
-                                        ));
-                                    }
+                                    self.ground_items.push(resources::GroundItem::new(
+                                        bx as f32 + 0.5, by as f32 + 0.5,
+                                        item_defs::ITEM_CLAY, 1,
+                                    ));
                                 }
                             }
                         }
