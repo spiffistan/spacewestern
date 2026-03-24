@@ -1228,8 +1228,8 @@ impl App {
             return;
         }
 
-        // Click workbench: show crafting recipe popup
-        if bt == BT_WORKBENCH && self.build_tool != BuildTool::Destroy {
+        // Click crafting station (workbench or kiln): show recipe popup
+        if (bt == BT_WORKBENCH || bt == BT_KILN) && self.build_tool != BuildTool::Destroy {
             let widx = by as u32 * GRID_W + bx as u32;
             self.block_sel.workbench = if self.block_sel.workbench == Some(widx) { None } else { Some(widx) };
             self.block_sel.workbench_world = (bx as f32 + 0.5, by as f32 + 0.5);

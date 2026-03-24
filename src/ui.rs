@@ -3172,29 +3172,32 @@ impl App {
             }
         }
 
-        // --- Workbench recipe popup ---
+        // --- Crafting station recipe popup (workbench or kiln) ---
         if let Some(wb_idx) = self.block_sel.workbench {
             let (wwx, wwy) = self.block_sel.workbench_world;
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let sx = ((wwx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp + 20.0;
             let sy = ((wwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 40.0;
             let mut still_valid = wb_idx < (GRID_W * GRID_H);
-            if still_valid {
+            let station_bt = if still_valid {
                 let didx = wb_idx as usize;
-                if didx < self.grid_data.len() && block_type_rs(self.grid_data[didx]) != BT_WORKBENCH {
-                    still_valid = false;
-                }
-            }
+                if didx < self.grid_data.len() {
+                    let bt = block_type_rs(self.grid_data[didx]);
+                    if bt == BT_WORKBENCH || bt == BT_KILN { bt } else { still_valid = false; 0 }
+                } else { still_valid = false; 0 }
+            } else { 0 };
             if still_valid {
+                let station_name = if station_bt == BT_KILN { "kiln" } else { "workbench" };
+                let station_label = if station_bt == BT_KILN { "Kiln" } else { "Workbench" };
                 let recipe_reg = recipe_defs::RecipeRegistry::cached();
                 let item_reg = item_defs::ItemRegistry::cached();
-                let recipes = recipe_reg.for_station("workbench");
+                let recipes = recipe_reg.for_station(station_name);
                 let queue = self.craft_queues.entry(wb_idx).or_default();
-                egui::Area::new(egui::Id::new("workbench_popup"))
+                egui::Area::new(egui::Id::new("craft_station_popup"))
                     .fixed_pos(egui::pos2(sx, sy))
                     .show(ctx, |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Workbench").strong().size(12.0));
+                            ui.label(egui::RichText::new(station_label).strong().size(12.0));
                             ui.separator();
 
                             // Show queued orders
