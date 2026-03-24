@@ -740,7 +740,8 @@ impl App {
         let mut categories: Vec<(&str, &str)> = vec![
             ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
             ("Opening", "\u{1f6aa}"), ("Gas", "\u{1f4a8}"), ("Liquid", "\u{1f4a7}"),
-            ("Vent", "\u{1f32c}"), ("Power", "\u{26a1}"), ("Zones", "\u{1f33e}"), ("Physics", "\u{1f4e6}"),
+            ("Vent", "\u{1f32c}"), ("Power", "\u{26a1}"), ("Crafting", "\u{1f528}"),
+            ("Zones", "\u{1f33e}"), ("Physics", "\u{1f4e6}"),
         ];
         if self.sandbox_mode {
             categories.push(("Sandbox", "\u{1f9ea}"));
@@ -810,7 +811,7 @@ impl App {
                         let item_count: usize = match cat {
                             "Walls" => 7, "Floor" => 6, "Build" => 8, "Opening" => 2,
                             "Gas" => 8, "Liquid" => 5, "Power" => 14, "Vent" => 1,
-                            "Zones" => 3, "Physics" => 1, _ => 5,
+                            "Zones" => 2, "Crafting" => 2, "Physics" => 1, _ => 5,
                         };
                         let items_per_row = if item_count > 10 { (item_count + 1) / 2 } else { item_count };
                         // Horizontal rows, left-to-right, wrapping to 2nd row if >10
@@ -915,17 +916,10 @@ impl App {
                                 "Zones" => {
                                     icon_btn(ui, BuildTool::GrowingZone, "\u{1f33f}", "Farm");
                                     icon_btn(ui, BuildTool::StorageZone, "\u{1f4e6}", "Storage");
-                                    ui.separator();
-                                    let prio_label = match self.work_priority {
-                                        zones::WorkPriority::PlantFirst => "Plant 1st",
-                                        zones::WorkPriority::HarvestFirst => "Harvest 1st",
-                                    };
-                                    if ui.small_button(prio_label).clicked() {
-                                        self.work_priority = match self.work_priority {
-                                            zones::WorkPriority::PlantFirst => zones::WorkPriority::HarvestFirst,
-                                            zones::WorkPriority::HarvestFirst => zones::WorkPriority::PlantFirst,
-                                        };
-                                    }
+                                }
+                                "Crafting" => {
+                                    icon_btn(ui, BuildTool::Place(57), "\u{1f528}", "Bench");
+                                    icon_btn(ui, BuildTool::Place(58), "\u{1f3ed}", "Kiln");
                                 }
                                 "Physics" => {
                                     icon_btn(ui, BuildTool::WoodBox, "\u{1f4e6}", "Box");
@@ -936,6 +930,20 @@ impl App {
                                 _ => {}
                             }
                         });
+                        // Zone work priority toggle (outside grid)
+                        if self.build_category == Some("Zones") {
+                            ui.separator();
+                            let prio_label = match self.work_priority {
+                                zones::WorkPriority::PlantFirst => "Plant 1st",
+                                zones::WorkPriority::HarvestFirst => "Harvest 1st",
+                            };
+                            if ui.small_button(prio_label).clicked() {
+                                self.work_priority = match self.work_priority {
+                                    zones::WorkPriority::PlantFirst => zones::WorkPriority::HarvestFirst,
+                                    zones::WorkPriority::HarvestFirst => zones::WorkPriority::PlantFirst,
+                                };
+                            }
+                        }
                         // Sandbox tools (outside icon_btn scope)
                         if self.build_category == Some("Sandbox") && self.sandbox_mode {
                             ui.horizontal_wrapped(|ui| {
