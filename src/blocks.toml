@@ -437,8 +437,8 @@ drag = "filled_rect"
 
 [[block]]
 id = 28
-name = "Concrete Floor"
-color = [0.58, 0.57, 0.55]
+name = "Flagstone"
+color = [0.52, 0.50, 0.48]
 light_transmission = 1.0
 walkable = true
 is_removable = true

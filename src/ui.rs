@@ -743,9 +743,9 @@ impl App {
         // --- Build categories (bottom-left, vertical 2-column grid, flows upward) ---
         let cat_s = 14.0;
         let mut categories: Vec<(&str, &str)> = vec![
-            ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f528}"),
-            ("Craft", "\u{2692}"), ("Light", "\u{1f4a1}"), ("Power", "\u{26a1}"),
-            ("Gas", "\u{1f4a8}"), ("Liquid", "\u{1f4a7}"),
+            ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Roof", "\u{1f3e0}"),
+            ("Build", "\u{1f528}"), ("Craft", "\u{2692}"), ("Light", "\u{1f4a1}"),
+            ("Power", "\u{26a1}"), ("Gas", "\u{1f4a8}"), ("Liquid", "\u{1f4a7}"),
             ("Zones", "\u{1f33e}"),
         ];
         if self.sandbox_mode {
@@ -821,9 +821,9 @@ impl App {
 
                         // Count items per category for 1 vs 2 column layout
                         let item_count: usize = match cat {
-                            "Walls" => 7, "Floor" => 6, "Build" => 8,
-                            "Craft" => 2, "Light" => 6, "Power" => 10,
-                            "Gas" => 9, "Liquid" => 5,
+                            "Walls" => 7, "Floor" => 4, "Roof" => 2,
+                            "Build" => 8, "Craft" => 2, "Light" => 6,
+                            "Power" => 10, "Gas" => 9, "Liquid" => 5,
                             "Zones" => 2, _ => 5,
                         };
                         let items_per_row = if item_count > 10 { (item_count + 1) / 2 } else { item_count };
@@ -871,10 +871,12 @@ impl App {
                                 "Floor" => {
                                     icon_btn(ui, BuildTool::Place(26), "\u{1fab5}", "Wood");
                                     icon_btn(ui, BuildTool::Place(27), "\u{2b1b}", "Stone");
-                                    icon_btn(ui, BuildTool::Place(28), "\u{2b1c}", "Concrete");
-                                    icon_btn(ui, BuildTool::Roof, "\u{1f3e0}", "Roof");
-                                    icon_btn(ui, BuildTool::RemoveFloor, "\u{274c}", "Rm Floor");
-                                    icon_btn(ui, BuildTool::RemoveRoof, "\u{274c}", "Rm Roof");
+                                    icon_btn(ui, BuildTool::Place(28), "\u{2b1c}", "Flagstone");
+                                    icon_btn(ui, BuildTool::RemoveFloor, "\u{274c}", "Remove");
+                                }
+                                "Roof" => {
+                                    icon_btn(ui, BuildTool::Roof, "\u{1f3da}", "Thatch");
+                                    icon_btn(ui, BuildTool::RemoveRoof, "\u{274c}", "Remove");
                                 }
                                 "Build" => {
                                     icon_btn(ui, BuildTool::Place(6), "\u{1f525}", "Fireplace");
