@@ -1709,6 +1709,10 @@ impl App {
                             });
 
                             ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format!("Map: {}×{}", GRID_W, GRID_H)).size(10.0).weak());
+                            });
+                            ui.add_space(4.0);
                             if ui.button(egui::RichText::new("Generate").size(12.0).strong()).clicked() {
                                 regenerate = true;
                             }
