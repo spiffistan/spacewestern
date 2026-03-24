@@ -1750,8 +1750,21 @@ impl App {
             }
         }
 
-        // Push all collected events to the game log
+        // Push all collected events to the game log + trigger notifications for important ones
         for (cat, msg) in events {
+            // Important events get toast notifications
+            let notif = match cat {
+                EventCategory::Combat => Some((NotifCategory::Threat, "\u{2694}", "Combat")),
+                EventCategory::Need => Some((NotifCategory::Warning, "\u{26a0}", "Need")),
+                EventCategory::Build if msg.contains("built") || msg.contains("crafted") =>
+                    Some((NotifCategory::Positive, "\u{2705}", "Complete")),
+                EventCategory::Weather if msg.contains("Drought") || msg.contains("Lightning") =>
+                    Some((NotifCategory::Warning, "\u{26a1}", "Weather")),
+                _ => None,
+            };
+            if let Some((ncat, icon, title)) = notif {
+                self.notify(ncat, icon, title, &msg);
+            }
             self.log_event(cat, msg);
         }
 

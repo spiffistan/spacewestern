@@ -4129,8 +4129,14 @@ impl App {
     /// Draw event notification cards (right side, Rimworld-style).
     fn draw_notifications(&mut self, ctx: &egui::Context) {
         if self.notifications.is_empty() { return; }
-        // Remove old dismissed notifications
-        self.notifications.retain(|n| !n.dismissed);
+        // Auto-expire after 10 seconds, remove dismissed
+        let now = self.time_of_day;
+        self.notifications.retain(|n| {
+            !n.dismissed && {
+                let age = (now - n.time_created).abs();
+                age < 10.0 || (now < n.time_created) // handle day wrap
+            }
+        });
 
         let mut dismiss_id = None;
         egui::Area::new(egui::Id::new("notifications"))
