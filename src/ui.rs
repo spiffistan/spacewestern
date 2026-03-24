@@ -743,10 +743,10 @@ impl App {
         // --- Build categories (bottom-left, vertical 2-column grid, flows upward) ---
         let cat_s = 14.0;
         let mut categories: Vec<(&str, &str)> = vec![
-            ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f527}"),
-            ("Opening", "\u{1f6aa}"), ("Gas", "\u{1f4a8}"), ("Liquid", "\u{1f4a7}"),
-            ("Vent", "\u{1f32c}"), ("Power", "\u{26a1}"), ("Crafting", "\u{1f528}"),
-            ("Zones", "\u{1f33e}"), ("Physics", "\u{1f4e6}"),
+            ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Build", "\u{1f528}"),
+            ("Craft", "\u{2692}"), ("Light", "\u{1f4a1}"), ("Power", "\u{26a1}"),
+            ("Gas", "\u{1f4a8}"), ("Liquid", "\u{1f4a7}"),
+            ("Zones", "\u{1f33e}"),
         ];
         if self.sandbox_mode {
             categories.push(("Sandbox", "\u{1f9ea}"));
@@ -756,12 +756,19 @@ impl App {
             .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
             .show(ctx, |ui| {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
-                    // Destroy button at top
-                    if ui.selectable_label(self.build_tool == BuildTool::Destroy,
-                        egui::RichText::new("\u{274c} Destroy").size(cat_s)).clicked() {
-                        self.build_tool = if self.build_tool == BuildTool::Destroy { BuildTool::None } else { BuildTool::Destroy };
-                        self.build_category = None;
-                    }
+                    // Tool buttons at top
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(self.build_tool == BuildTool::Destroy,
+                            egui::RichText::new("\u{274c} Destroy").size(cat_s)).clicked() {
+                            self.build_tool = if self.build_tool == BuildTool::Destroy { BuildTool::None } else { BuildTool::Destroy };
+                            self.build_category = None;
+                        }
+                        if ui.selectable_label(self.build_tool == BuildTool::Dig,
+                            egui::RichText::new("\u{26cf} Dig").size(cat_s)).clicked() {
+                            self.build_tool = if self.build_tool == BuildTool::Dig { BuildTool::None } else { BuildTool::Dig };
+                            self.build_category = None;
+                        }
+                    });
                     ui.separator();
                     // 2-column category grid
                     egui::Grid::new("build_cat_grid").num_columns(2).spacing([4.0, 2.0]).show(ui, |ui| {
@@ -814,9 +821,10 @@ impl App {
 
                         // Count items per category for 1 vs 2 column layout
                         let item_count: usize = match cat {
-                            "Walls" => 7, "Floor" => 6, "Build" => 9, "Opening" => 2,
-                            "Gas" => 8, "Liquid" => 5, "Power" => 14, "Vent" => 1,
-                            "Zones" => 2, "Crafting" => 2, "Physics" => 1, _ => 5,
+                            "Walls" => 7, "Floor" => 6, "Build" => 8,
+                            "Craft" => 2, "Light" => 6, "Power" => 10,
+                            "Gas" => 9, "Liquid" => 5,
+                            "Zones" => 2, _ => 5,
                         };
                         let items_per_row = if item_count > 10 { (item_count + 1) / 2 } else { item_count };
                         // Horizontal rows, left-to-right, wrapping to 2nd row if >10
@@ -869,36 +877,26 @@ impl App {
                                     icon_btn(ui, BuildTool::RemoveRoof, "\u{274c}", "Rm Roof");
                                 }
                                 "Build" => {
-                                    icon_btn(ui, BuildTool::Place(6), "\u{1f525}", "Fire");
+                                    icon_btn(ui, BuildTool::Place(6), "\u{1f525}", "Fireplace");
                                     icon_btn(ui, BuildTool::Place(9), "\u{1fa91}", "Bench");
                                     icon_btn(ui, BuildTool::Place(30), "\u{1f6cf}", "Bed");
                                     icon_btn(ui, BuildTool::Place(33), "\u{1f4e6}", "Crate");
-                                    icon_btn(ui, BuildTool::Place(13), "\u{267b}", "Compost");
-                                    icon_btn(ui, BuildTool::Place(31), "\u{1fad0}", "Berries");
-                                    icon_btn(ui, BuildTool::Place(29), "\u{1f4a5}", "Cannon");
-                                    icon_btn(ui, BuildTool::Place(59), "\u{1fa63}", "Well");
-                                    icon_btn(ui, BuildTool::Dig, "\u{26cf}", "Dig");
-                                }
-                                "Opening" => {
                                     icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Window");
                                     icon_btn(ui, BuildTool::Door, "\u{1f6aa}", "Door");
+                                    icon_btn(ui, BuildTool::Place(29), "\u{1f4a5}", "Cannon");
+                                    icon_btn(ui, BuildTool::Place(59), "\u{1fa63}", "Well");
                                 }
-                                "Gas" => {
-                                    icon_btn(ui, BuildTool::Place(15), "\u{1f4a8}", "Pipe");
-                                    icon_btn(ui, BuildTool::Place(46), "\u{2298}", "Restrictor");
-                                    icon_btn(ui, BuildTool::Place(16), "\u{2699}", "Pump");
-                                    icon_btn(ui, BuildTool::Place(17), "\u{1f6e2}", "Tank");
-                                    icon_btn(ui, BuildTool::Place(18), "\u{1f504}", "Valve");
-                                    icon_btn(ui, BuildTool::Place(19), "\u{27a1}", "Outlet");
-                                    icon_btn(ui, BuildTool::Place(20), "\u{2b05}", "Inlet");
-                                    icon_btn(ui, BuildTool::Place(50), "\u{2a2f}", "Bridge");
+                                "Craft" => {
+                                    icon_btn(ui, BuildTool::Place(57), "\u{1f528}", "Workbench");
+                                    icon_btn(ui, BuildTool::Place(58), "\u{1f3ed}", "Kiln");
                                 }
-                                "Liquid" => {
-                                    icon_btn(ui, BuildTool::Place(49), "\u{1f4a7}", "Pipe");
-                                    icon_btn(ui, BuildTool::Place(52), "\u{1f6b0}", "Intake");
-                                    icon_btn(ui, BuildTool::Place(53), "\u{2699}", "Pump");
-                                    icon_btn(ui, BuildTool::Place(54), "\u{1f4a6}", "Output");
-                                    icon_btn(ui, BuildTool::Place(50), "\u{2a2f}", "Bridge");
+                                "Light" => {
+                                    icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
+                                    icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
+                                    icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table Lamp");
+                                    icon_btn(ui, BuildTool::Place(55), "\u{1f525}", "Wall Torch");
+                                    icon_btn(ui, BuildTool::Place(56), "\u{1f4a1}", "Wall Lamp");
+                                    icon_btn(ui, BuildTool::Place(48), "\u{1f526}", "Floodlight");
                                 }
                                 "Power" => {
                                     icon_btn(ui, BuildTool::Place(36), "\u{26a1}", "Wire");
@@ -910,25 +908,29 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(42), "\u{1f518}", "Switch");
                                     icon_btn(ui, BuildTool::Place(43), "\u{1f39a}", "Dimmer");
                                     icon_btn(ui, BuildTool::Place(45), "\u{1f6d1}", "Breaker");
-                                    icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
-                                    icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
-                                    icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table");
-                                    icon_btn(ui, BuildTool::Place(48), "\u{1f526}", "Flood");
                                     icon_btn(ui, BuildTool::Place(51), "\u{2a2f}", "Bridge");
                                 }
-                                "Vent" => {
-                                    icon_btn(ui, BuildTool::Place(12), "\u{1f4a8}", "Fan");
+                                "Gas" => {
+                                    icon_btn(ui, BuildTool::Place(15), "\u{1f4a8}", "Pipe");
+                                    icon_btn(ui, BuildTool::Place(46), "\u{2298}", "Restrictor");
+                                    icon_btn(ui, BuildTool::Place(16), "\u{2699}", "Pump");
+                                    icon_btn(ui, BuildTool::Place(17), "\u{1f6e2}", "Tank");
+                                    icon_btn(ui, BuildTool::Place(18), "\u{1f504}", "Valve");
+                                    icon_btn(ui, BuildTool::Place(19), "\u{27a1}", "Outlet");
+                                    icon_btn(ui, BuildTool::Place(20), "\u{2b05}", "Inlet");
+                                    icon_btn(ui, BuildTool::Place(12), "\u{1f32c}", "Fan");
+                                    icon_btn(ui, BuildTool::Place(50), "\u{2a2f}", "Bridge");
+                                }
+                                "Liquid" => {
+                                    icon_btn(ui, BuildTool::Place(49), "\u{1f4a7}", "Pipe");
+                                    icon_btn(ui, BuildTool::Place(52), "\u{1f6b0}", "Intake");
+                                    icon_btn(ui, BuildTool::Place(53), "\u{2699}", "Pump");
+                                    icon_btn(ui, BuildTool::Place(54), "\u{1f4a6}", "Output");
+                                    icon_btn(ui, BuildTool::Place(50), "\u{2a2f}", "Bridge");
                                 }
                                 "Zones" => {
                                     icon_btn(ui, BuildTool::GrowingZone, "\u{1f33f}", "Farm");
                                     icon_btn(ui, BuildTool::StorageZone, "\u{1f4e6}", "Storage");
-                                }
-                                "Crafting" => {
-                                    icon_btn(ui, BuildTool::Place(57), "\u{1f528}", "Bench");
-                                    icon_btn(ui, BuildTool::Place(58), "\u{1f3ed}", "Kiln");
-                                }
-                                "Physics" => {
-                                    icon_btn(ui, BuildTool::WoodBox, "\u{1f4e6}", "Box");
                                 }
                                 "Sandbox" if self.sandbox_mode => {
                                     // handled below (outside icon_btn scope)
