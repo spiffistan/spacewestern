@@ -3289,24 +3289,31 @@ impl App {
                     if tile_px > 10.0 {
                         let inner = pleb.activity.inner();
                         // Determine planting vs harvesting from work target
-                        let farm_action = if let Some((tx, ty)) = pleb.work_target {
+                        let work_action = if let Some((tx, ty)) = pleb.work_target {
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                             if tidx < self.grid_data.len() {
                                 let tbt = self.grid_data[tidx] & 0xFF;
-                                if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" } else if tbt == BT_TREE { "Chopping" } else { "Planting" }
-                            } else { "Farming" }
-                        } else { "Farming" };
+                                if tbt as u32 == BT_WORKBENCH || tbt as u32 == BT_KILN { "Crafting" }
+                                else if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" }
+                                else if tbt == BT_TREE { "Chopping" }
+                                else { "Planting" }
+                            } else { "Working" }
+                        } else { "Working" };
                         let (act_text, act_color) = match inner {
                             PlebActivity::Idle => {
                                 if pleb.work_target.is_some() {
-                                    (Some(farm_action), egui::Color32::from_rgb(120, 200, 80))
+                                    (Some(work_action), egui::Color32::from_rgb(120, 200, 80))
                                 } else {
                                     (None, egui::Color32::GRAY)
                                 }
                             }
                             PlebActivity::Walking => {
                                 if pleb.work_target.is_some() {
-                                    let label = if farm_action == "Harvesting" { "Walking to harvest" } else { "Walking to plant" };
+                                    let label = match work_action {
+                                        "Harvesting" | "Chopping" => "Walking to harvest",
+                                        "Crafting" => "Walking to craft",
+                                        _ => "Walking to plant",
+                                    };
                                     (Some(label), egui::Color32::from_rgb(120, 200, 80))
                                 } else if pleb.harvest_target.is_some() {
                                     (Some("Walking to harvest"), egui::Color32::from_rgb(200, 180, 60))
@@ -3320,7 +3327,7 @@ impl App {
                             PlebActivity::Harvesting(_) => (Some("Harvesting"), egui::Color32::from_rgb(200, 180, 60)),
                             PlebActivity::Eating => (Some("Eating"), egui::Color32::from_rgb(200, 160, 80)),
                             PlebActivity::Hauling => (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80)),
-                            PlebActivity::Farming(_) => (Some(farm_action), egui::Color32::from_rgb(80, 200, 80)),
+                            PlebActivity::Farming(_) => (Some(work_action), egui::Color32::from_rgb(80, 200, 80)),
                             PlebActivity::Building(_) => (Some("Building"), egui::Color32::from_rgb(100, 160, 220)),
                             PlebActivity::Crafting(_, _) => (Some("Crafting"), egui::Color32::from_rgb(200, 160, 60)),
                             PlebActivity::Staggering(_) => (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40)),

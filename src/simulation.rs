@@ -1142,9 +1142,22 @@ impl App {
                                 }
                             }
                             zones::WORK_CRAFT => {
-                                // Find nearest workbench/kiln with pending orders
+                                // Find nearest workbench/kiln with pending orders AND available ingredients
+                                let recipe_reg = recipe_defs::RecipeRegistry::cached();
                                 let mut best: Option<((i32, i32, u32), f32)> = None;
                                 for &(sx, sy, gidx) in &craft_stations {
+                                    // Check if the next order's ingredients are available
+                                    let craftable = self.craft_queues.get(&gidx).and_then(|q| q.next_order()).and_then(|order| {
+                                        recipe_reg.get(order.recipe_id)
+                                    }).map(|recipe| {
+                                        recipe.inputs.iter().all(|ing| {
+                                            let in_inv = pleb.inventory.count_of(ing.item) as u16;
+                                            let in_crates: u16 = self.crate_contents.values()
+                                                .map(|c| c.count_of(ing.item) as u16).sum();
+                                            in_inv + in_crates >= ing.count
+                                        })
+                                    }).unwrap_or(false);
+                                    if !craftable { continue; }
                                     let dist = (pleb.x - sx as f32 - 0.5).powi(2) + (pleb.y - sy as f32 - 0.5).powi(2);
                                     if best.is_none() || dist < best.as_ref().unwrap().1 {
                                         best = Some(((sx, sy, gidx), dist));
