@@ -2845,13 +2845,32 @@ impl App {
                     }
                 } else {
                     // Generic item: colored circle
-                    item_painter.circle_filled(center, r, egui::Color32::from_rgb(100, 100, 80));
+                    let col = if item.stack.is_container() {
+                        egui::Color32::from_rgb(100, 80, 60) // brown for containers
+                    } else {
+                        egui::Color32::from_rgb(100, 100, 80)
+                    };
+                    item_painter.circle_filled(center, r, col);
+                    // Liquid fill indicator for containers
+                    if let Some((_, amt)) = item.stack.liquid {
+                        let cap = item.stack.liquid_capacity();
+                        if cap > 0 {
+                            let fill = amt as f32 / cap as f32;
+                            let fill_r = r * fill;
+                            item_painter.circle_filled(center, fill_r, egui::Color32::from_rgb(60, 120, 200));
+                        }
+                    }
                 }
                 if tile_px > 6.0 {
+                    let label = if item.stack.is_container() {
+                        item.stack.label()
+                    } else {
+                        format!("{}x", n)
+                    };
                     Self::world_label(&item_painter,
                         egui::pos2(center.x, center.y + r + 2.0),
                         egui::Align2::CENTER_TOP,
-                        &format!("{}x", n), 9.0, egui::Color32::WHITE);
+                        &label, 9.0, egui::Color32::WHITE);
                 }
             }
         }
@@ -3128,9 +3147,7 @@ impl App {
                             if let Some(inv) = inv {
                                 if !inv.stacks.is_empty() {
                                     for stack in &inv.stacks {
-                                        let reg = item_defs::ItemRegistry::cached();
-                                        let name = reg.name(stack.item_id);
-                                        ui.label(egui::RichText::new(format!("{}: {}", name, stack.count)).size(11.0));
+                                        ui.label(egui::RichText::new(stack.label()).size(11.0));
                                     }
                                 } else {
                                     ui.label(egui::RichText::new("Empty").weak().size(10.0));
@@ -3907,6 +3924,21 @@ impl App {
                         // Voltage info from debug readback
                         if self.debug.voltage > 0.01 {
                             details.push(format!("Voltage: {:.1}V", self.debug.voltage));
+                        }
+                    }
+                    // Ground items at this tile
+                    for gi in &self.ground_items {
+                        if gi.x.floor() as i32 == bx && gi.y.floor() as i32 == by {
+                            details.push(gi.stack.label());
+                            if gi.stack.is_container() {
+                                let cap = gi.stack.liquid_capacity();
+                                if let Some((liq, amt)) = gi.stack.liquid {
+                                    let liq_name = match liq { item_defs::LiquidType::Water => "Water" };
+                                    details.push(format!("{}: {}/{}", liq_name, amt, cap));
+                                } else {
+                                    details.push(format!("Empty (capacity: {})", cap));
+                                }
+                            }
                         }
                     }
                     // Blueprint

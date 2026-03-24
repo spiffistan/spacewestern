@@ -599,14 +599,15 @@ impl App {
                                 pleb.haul_target = None;
                                 pleb.activity = PlebActivity::Idle;
                             } else if is_crate {
-                                // Deposit all carried items in crate
+                                // Deposit all carried items in crate (preserves liquid on containers)
                                 let cidx = cy as u32 * GRID_W + cx as u32;
                                 let inv = self.crate_contents.entry(cidx).or_default();
-                                let carried: Vec<(u16, u16)> = pleb.inventory.stacks.iter()
-                                    .map(|s| (s.item_id, s.count)).collect();
-                                for (item_id, count) in carried {
-                                    let stored = inv.add(item_id, count);
-                                    pleb.inventory.remove(item_id, stored);
+                                let carried: Vec<ItemStack> = pleb.inventory.stacks.drain(..).collect();
+                                for stack in carried {
+                                    if !inv.add_stack(stack.clone()) {
+                                        // Crate full for this item — put back in pleb inventory
+                                        pleb.inventory.add_stack(stack);
+                                    }
                                 }
                                 // Sync crate visual
                                 if let Some(inv) = self.crate_contents.get(&cidx) {
@@ -1784,6 +1785,15 @@ fn tick_pleb_activity(
             if new_progress >= 1.0 {
                 pleb.needs.thirst = (pleb.needs.thirst + WELL_THIRST_RESTORE).min(1.0);
                 log::info!("{} drank from well (thirst: {:.0}%)", pleb.name, pleb.needs.thirst * 100.0);
+                // Also fill any empty containers in inventory
+                for stack in &mut pleb.inventory.stacks {
+                    if stack.is_container() && stack.liquid.is_none() {
+                        let cap = stack.liquid_capacity();
+                        stack.liquid = Some((item_defs::LiquidType::Water, cap));
+                        log::info!("{} filled {} with water", pleb.name, stack.label());
+                        break; // fill one at a time
+                    }
+                }
                 pleb.activity = PlebActivity::Idle;
                 pleb.work_target = None;
             } else {

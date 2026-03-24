@@ -33,12 +33,31 @@ impl CrateInventory {
     pub fn add(&mut self, item_id: u16, count: u16) -> u16 {
         let can_add = (self.space() as u16).min(count);
         if can_add == 0 { return 0; }
-        if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
-            stack.count += can_add;
-        } else {
-            self.stacks.push(ItemStack::new(item_id, can_add));
+        // Don't merge containers (they have unique liquid state)
+        let is_container = ItemRegistry::cached().get(item_id).map(|d| d.liquid_capacity > 0).unwrap_or(false);
+        if !is_container {
+            if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
+                stack.count += can_add;
+                return can_add;
+            }
         }
+        self.stacks.push(ItemStack::new(item_id, can_add));
         can_add
+    }
+
+    /// Store a full ItemStack (preserves liquid contents for containers).
+    /// Returns true if stored successfully.
+    pub fn add_stack(&mut self, stack: ItemStack) -> bool {
+        if self.space() < stack.count as u32 { return false; }
+        let is_container = stack.is_container();
+        if !is_container {
+            if let Some(existing) = self.stacks.iter_mut().find(|s| s.item_id == stack.item_id) {
+                existing.count += stack.count;
+                return true;
+            }
+        }
+        self.stacks.push(stack);
+        true
     }
 
     /// Remove items. Returns how many were actually removed.
@@ -78,11 +97,26 @@ impl PlebInventory {
     /// Add items to inventory (merges into existing stack or creates new).
     pub fn add(&mut self, item_id: u16, count: u16) {
         if count == 0 { return; }
-        if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
-            stack.count += count;
-        } else {
-            self.stacks.push(ItemStack::new(item_id, count));
+        let is_container = ItemRegistry::cached().get(item_id).map(|d| d.liquid_capacity > 0).unwrap_or(false);
+        if !is_container {
+            if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
+                stack.count += count;
+                return;
+            }
         }
+        self.stacks.push(ItemStack::new(item_id, count));
+    }
+
+    /// Add a full ItemStack (preserves liquid for containers).
+    pub fn add_stack(&mut self, stack: ItemStack) {
+        if stack.count == 0 { return; }
+        if !stack.is_container() {
+            if let Some(existing) = self.stacks.iter_mut().find(|s| s.item_id == stack.item_id) {
+                existing.count += stack.count;
+                return;
+            }
+        }
+        self.stacks.push(stack);
     }
 
     /// Remove items from inventory. Returns how many were actually removed.
