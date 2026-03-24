@@ -878,18 +878,18 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
                 TERRAIN_ROCKY
             } else if wt > -0.3 {
                 TERRAIN_MARSH  // near springs / waterlogged
-            } else if aridity > 0.75 {
-                TERRAIN_CHALKY // dry exposed chalky soil
+            } else if aridity > 0.85 && rockiness > 0.35 {
+                TERRAIN_CHALKY // rare: only very dry exposed hilltops
             } else if rockiness > 0.5 {
                 TERRAIN_GRAVEL
-            } else if moisture > 0.6 && elev < 1.0 {
+            } else if moisture > 0.7 && elev < 0.5 {
                 TERRAIN_PEAT   // boggy low-lying wet areas
-            } else if aridity < 0.35 {
-                TERRAIN_LOAM   // fertile lowland
-            } else if aridity < 0.5 {
+            } else if aridity < 0.45 {
+                TERRAIN_LOAM   // fertile lowland (much more common now)
+            } else if aridity < 0.55 {
                 TERRAIN_CLAY
             } else {
-                TERRAIN_GRASS
+                TERRAIN_GRASS  // default: most of the map
             };
 
             // --- Vegetation density ---
