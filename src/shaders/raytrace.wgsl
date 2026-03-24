@@ -4419,6 +4419,28 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let vis = max(t, v_intensity * 0.3);
         color = mix(color * 0.2, sound_color, clamp(vis * 1.5, 0.0, 0.95));
+    } else if camera.fluid_overlay < 15.5 {
+        // Terrain type overlay (15): color per terrain type from terrain_buf
+        let t_idx = u32(by) * u32(camera.grid_w) + u32(bx);
+        let td = terrain_buf[t_idx];
+        let tt = td & 0xFu;
+        // Match colors to legend
+        var tc = vec3(0.42, 0.36, 0.22); // default grass
+        if tt == 0u { tc = vec3(0.42, 0.36, 0.22); }      // Grass
+        else if tt == 1u { tc = vec3(0.72, 0.62, 0.42); }  // Sand
+        else if tt == 2u { tc = vec3(0.45, 0.42, 0.38); }  // Rocky
+        else if tt == 3u { tc = vec3(0.50, 0.38, 0.25); }  // Clay
+        else if tt == 4u { tc = vec3(0.48, 0.46, 0.42); }  // Gravel
+        else if tt == 5u { tc = vec3(0.85, 0.88, 0.92); }  // Snow
+        else if tt == 6u { tc = vec3(0.30, 0.35, 0.22); }  // Marsh
+        else if tt == 7u { tc = vec3(0.38, 0.30, 0.18); }  // Loam
+        // Blend with subtle base color for depth
+        let ground = bheight == 0u && (btype == BT_DIRT || btype == BT_AIR);
+        if ground {
+            color = mix(color * 0.3, tc, 0.75);
+        } else {
+            color *= 0.4; // dim non-ground
+        }
     }
 
     // Velocity arrow overlay (when fractional part of fluid_overlay > 0.1)

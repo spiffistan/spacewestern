@@ -143,6 +143,15 @@ impl App {
                                 }
                             });
                         });
+                        ui.separator();
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Terrain").size(9.0).weak());
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(*ov == FluidOverlay::Terrain, "Type").clicked() {
+                                    *ov = if *ov == FluidOverlay::Terrain { FluidOverlay::None } else { FluidOverlay::Terrain };
+                                }
+                            });
+                        });
                     });
                 });
             });
@@ -270,6 +279,19 @@ impl App {
                                     ]);
                                     ui.add_space(2.0);
                                     ui.label(egui::RichText::new("\u{26a0} > 100 dB at pleb = damage").size(9.0).weak());
+                                }
+                                FluidOverlay::Terrain => {
+                                    ui.label(egui::RichText::new("Terrain Type").size(10.0).strong());
+                                    grad(ui, &[
+                                        (egui::Color32::from_rgb(107, 92, 56), "Grass"),
+                                        (egui::Color32::from_rgb(184, 158, 107), "Sand"),
+                                        (egui::Color32::from_rgb(115, 107, 97), "Rocky"),
+                                        (egui::Color32::from_rgb(128, 97, 64), "Clay"),
+                                        (egui::Color32::from_rgb(122, 117, 107), "Gravel"),
+                                        (egui::Color32::from_rgb(217, 224, 235), "Snow"),
+                                        (egui::Color32::from_rgb(77, 89, 56), "Marsh"),
+                                        (egui::Color32::from_rgb(97, 77, 46), "Loam"),
+                                    ]);
                                 }
                                 _ => {}
                             }

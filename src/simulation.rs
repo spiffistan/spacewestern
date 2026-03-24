@@ -267,6 +267,7 @@ impl App {
             FluidOverlay::Water => 12.0,
             FluidOverlay::WaterTable => 13.0,
             FluidOverlay::Sound => 14.0,
+            FluidOverlay::Terrain => 15.0,
         };
         // Pack velocity arrows flag as +0.25 on the overlay value
         if self.show_velocity_arrows && self.camera.fluid_overlay > 0.5 {

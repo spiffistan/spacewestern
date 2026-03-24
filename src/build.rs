@@ -32,4 +32,5 @@ pub enum FluidOverlay {
     Water,      // show surface water level (blue intensity)
     WaterTable, // show underground water table depth
     Sound,      // show sound pressure field (warm/cool wave visualization)
+    Terrain,    // show terrain type as colored overlay with legend
 }
