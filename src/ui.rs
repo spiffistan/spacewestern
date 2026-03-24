@@ -531,6 +531,9 @@ impl App {
                 if ui.button("Schedule").clicked() {
                     self.show_schedule = !self.show_schedule;
                 }
+                if ui.button("Priorities").clicked() {
+                    self.show_priorities = !self.show_priorities;
+                }
 
                 // Debug menu
                 egui::containers::menu::MenuButton::new("Debug").config(keep_open.clone()).ui(ui, |ui| {
@@ -1380,9 +1383,18 @@ impl App {
                         ui.colored_label(egui::Color32::from_rgb(35, 45, 95), "\u{25a0} Sleep");
                     });
 
-                    // --- Work Priorities ---
-                    ui.add_space(8.0);
-                    ui.label(egui::RichText::new("Work Priorities").strong().size(12.0));
+                });
+            if !open { self.show_schedule = false; }
+        }
+
+        // Work Priorities window
+        if self.show_priorities {
+            let mut open = true;
+            egui::Window::new("Work Priorities")
+                .open(&mut open)
+                .default_pos(egui::pos2(400.0, 200.0))
+                .resizable(false)
+                .show(ctx, |ui| {
                     ui.label(egui::RichText::new("Click to cycle: 1 (high) → 2 → 3 → off → 1").weak().size(9.0));
                     ui.separator();
 
@@ -1395,7 +1407,6 @@ impl App {
                         }
                         ui.end_row();
 
-                        // Per-pleb rows
                         let friendly_indices: Vec<usize> = (0..self.plebs.len())
                             .filter(|&i| !self.plebs[i].is_enemy && !self.plebs[i].is_dead)
                             .collect();
@@ -1413,7 +1424,6 @@ impl App {
                                 if ui.add(egui::Button::new(
                                     egui::RichText::new(label).size(11.0).color(color)
                                 ).min_size(egui::Vec2::new(28.0, 18.0))).clicked() {
-                                    // Cycle: 1→2→3→0→1
                                     self.plebs[pi].work_priorities[wt] = match prio {
                                         1 => 2, 2 => 3, 3 => 0, _ => 1,
                                     };
@@ -1423,7 +1433,7 @@ impl App {
                         }
                     });
                 });
-            if !open { self.show_schedule = false; }
+            if !open { self.show_priorities = false; }
         }
 
     }

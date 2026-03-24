@@ -608,8 +608,7 @@ impl App {
                                     let stored = inv.add(item_id, count);
                                     pleb.inventory.remove(item_id, stored);
                                 }
-                                if !pleb.inventory.is_carrying() { pleb.haul_target = None; pleb.activity = PlebActivity::Idle; }
-                                // Inline crate visual sync (can't call self.sync_crate_visual inside pleb borrow)
+                                // Sync crate visual
                                 if let Some(inv) = self.crate_contents.get(&cidx) {
                                     let count = inv.total().min(CRATE_MAX_ITEMS) as u8;
                                     let ci = cidx as usize;
@@ -618,7 +617,37 @@ impl App {
                                         self.grid_dirty = true;
                                     }
                                 }
-                                events.push((EventCategory::Haul, format!("{} deposited items", pleb.name)));
+                                if !pleb.inventory.is_carrying() {
+                                    // All deposited successfully
+                                    pleb.haul_target = None;
+                                    pleb.activity = PlebActivity::Idle;
+                                    events.push((EventCategory::Haul, format!("{} deposited items", pleb.name)));
+                                } else {
+                                    // Crate full, still carrying — try another crate or drop at storage zone
+                                    let px = pleb.x.floor() as i32;
+                                    let py = pleb.y.floor() as i32;
+                                    let alt_crate = find_nearest_crate(&self.grid_data, px, py)
+                                        .filter(|&(ax, ay)| ax != cx || ay != cy); // skip the full one
+                                    if let Some((ax, ay)) = alt_crate {
+                                        // Redirect to another crate
+                                        pleb.haul_target = Some((ax, ay));
+                                        let start = (px, py);
+                                        let adj = adjacent_walkable(&self.grid_data, ax, ay).unwrap_or((ax, ay));
+                                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
+                                        if !path.is_empty() { pleb.path = path; pleb.path_idx = 0; }
+                                        else { pleb.haul_target = None; pleb.activity = PlebActivity::Idle; }
+                                    } else {
+                                        // No other crate — drop remaining items on ground
+                                        for stack in pleb.inventory.stacks.drain(..) {
+                                            self.ground_items.push(resources::GroundItem {
+                                                x: cx as f32 + 0.5, y: cy as f32 + 0.5, stack,
+                                            });
+                                        }
+                                        pleb.haul_target = None;
+                                        pleb.activity = PlebActivity::Idle;
+                                        events.push((EventCategory::Haul, format!("{} dropped items (crate full)", pleb.name)));
+                                    }
+                                }
                             } else {
                                 // Drop at storage zone tile
                                 for stack in pleb.inventory.stacks.drain(..) {

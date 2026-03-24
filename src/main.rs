@@ -194,6 +194,7 @@ struct App {
     show_pleb_help: bool,      // show controls modal
     show_inventory: bool,      // show pleb inventory window
     show_schedule: bool,       // show shift schedule window
+    show_priorities: bool,     // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
     auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
     physics_bodies: Vec<PhysicsBody>,
@@ -531,6 +532,7 @@ impl App {
             show_pleb_help: false,
             show_inventory: false,
             show_schedule: false,
+            show_priorities: false,
             pressed_keys: std::collections::HashSet::new(),
             auto_doors: Vec::new(),
             physics_bodies: Vec::new(),
