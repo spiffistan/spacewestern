@@ -253,6 +253,8 @@ struct App {
     elevation_data: Vec<f32>, // terrain elevation (0.0–6.0 tiles of height)
     terrain_data: Vec<u32>,   // per-tile terrain type, vegetation, richness etc.
     terrain_dirty: bool,      // true when terrain_data needs re-upload to GPU
+    terrain_params: grid::TerrainParams,
+    show_map_gen: bool,       // show map generator window
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
@@ -580,6 +582,8 @@ impl App {
             elevation_data: Vec::new(), // populated after grid gen in init_gfx_async
             terrain_data: Vec::new(),  // populated after grid gen in init_gfx_async
             terrain_dirty: false,
+            terrain_params: grid::TerrainParams::default(),
+            show_map_gen: false,
             diag_preview: Vec::new(),
             voltage_data: Vec::new(),
             voltage_readback_pending: false,

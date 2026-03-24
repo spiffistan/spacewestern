@@ -810,23 +810,60 @@ pub fn terrain_decay_compaction(t: &mut u32) {
     }
 }
 
-/// Generate terrain data buffer from elevation and water table.
-/// Assigns terrain type, vegetation density, soil richness etc.
-/// based on noise layers that create coherent biome regions.
+/// Parameters controlling terrain generation. Each weight (0.0-1.0) controls
+/// how much of that terrain type appears. Higher = more area coverage.
+#[derive(Clone, Debug)]
+pub struct TerrainParams {
+    pub grass: f32,
+    pub loam: f32,
+    pub clay: f32,
+    pub chalky: f32,
+    pub rocky: f32,
+    pub gravel: f32,
+    pub peat: f32,
+    pub marsh: f32,
+    pub pond_density: f32,  // 0.0 = no ponds, 1.0 = many ponds
+    pub seed: u32,
+}
+
+impl Default for TerrainParams {
+    fn default() -> Self {
+        Self {
+            grass: 0.40,
+            loam: 0.25,
+            clay: 0.10,
+            chalky: 0.02,
+            rocky: 0.05,
+            gravel: 0.05,
+            peat: 0.03,
+            marsh: 0.05,
+            pond_density: 0.5,
+            seed: 42,
+        }
+    }
+}
+
+/// Generate terrain data buffer from elevation, water table, and params.
 pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
+    generate_terrain_with_params(elevation, water_table, &TerrainParams::default())
+}
+
+/// Generate terrain data buffer with explicit parameters.
+pub fn generate_terrain_with_params(elevation: &[f32], water_table: &[f32], params: &TerrainParams) -> Vec<u32> {
     let w = GRID_W;
     let h = GRID_H;
     let grid_size = (w * h) as usize;
     let mut terrain = vec![0u32; grid_size];
+    let s = params.seed;
 
-    let noise = |x: f32, y: f32| -> f32 {
+    let noise_seeded = |x: f32, y: f32, seed_extra: u32| -> f32 {
         let ix = x.floor() as i32;
         let iy = y.floor() as i32;
         let fx = x - x.floor();
         let fy = y - y.floor();
         let hash = |ix: i32, iy: i32| -> f32 {
             let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
-                .wrapping_add(1013904223);
+                .wrapping_add(1013904223).wrapping_add(s).wrapping_add(seed_extra);
             (h & 0xFFFF) as f32 / 65535.0
         };
         let a = hash(ix, iy);
@@ -837,6 +874,7 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
         let sy = fy * fy * (3.0 - 2.0 * fy);
         a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
     };
+    let noise = |x: f32, y: f32| -> f32 { noise_seeded(x, y, 0) };
 
     for y in 0..h {
         for x in 0..w {
@@ -860,36 +898,38 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
             let rock_noise = noise(fx * 0.04 + 3000.0, fy * 0.04 + 3000.0);
             let rockiness = (elev * 0.25 + rock_noise * 0.5).min(1.0);
 
-            // Pond detection: small circular low-spots in the landscape
-            // Multiple ponds from noise peaks
-            let pond_noise = noise(fx * 0.015 + 6000.0, fy * 0.015 + 6000.0);
-            let pond_detail = noise(fx * 0.05 + 7000.0, fy * 0.05 + 7000.0);
+            // Pond detection: concentric rings from noise peaks
+            let pond_noise = noise_seeded(fx * 0.015 + 6000.0, fy * 0.015 + 6000.0, 100);
+            let pond_detail = noise_seeded(fx * 0.05 + 7000.0, fy * 0.05 + 7000.0, 200);
             let pond_factor = (pond_noise * 0.7 + pond_detail * 0.3 + wt * 0.3).max(0.0);
-            // pond_factor > 0.85 = water, 0.7-0.85 = marsh ring, 0.55-0.7 = clay ring
+            let pond_thresh = 1.0 - params.pond_density * 0.3; // higher density = lower threshold
 
-            // --- Terrain type assignment (temperate) ---
-            let terrain_type = if pond_factor > 0.85 {
-                TERRAIN_MARSH  // pond center (very wet)
-            } else if pond_factor > 0.7 {
-                TERRAIN_MARSH  // marsh ring around ponds
-            } else if pond_factor > 0.55 {
-                TERRAIN_CLAY   // clay deposits around ponds
-            } else if elev > 3.0 && rockiness > 0.6 {
-                TERRAIN_ROCKY
-            } else if wt > -0.3 {
-                TERRAIN_MARSH  // near springs / waterlogged
-            } else if aridity > 0.85 && rockiness > 0.35 {
-                TERRAIN_CHALKY // rare: only very dry exposed hilltops
-            } else if rockiness > 0.5 {
-                TERRAIN_GRAVEL
-            } else if moisture > 0.7 && elev < 0.5 {
-                TERRAIN_PEAT   // boggy low-lying wet areas
-            } else if aridity < 0.45 {
-                TERRAIN_LOAM   // fertile lowland (much more common now)
-            } else if aridity < 0.55 {
-                TERRAIN_CLAY
+            // --- Terrain type assignment (weighted scoring) ---
+            // Each type gets a score: natural affinity * param weight + noise variation
+            let terrain_type = if pond_factor > pond_thresh + 0.1 {
+                TERRAIN_MARSH  // pond center
+            } else if pond_factor > pond_thresh {
+                TERRAIN_MARSH  // marsh ring
+            } else if pond_factor > pond_thresh - 0.15 && params.clay > 0.01 {
+                TERRAIN_CLAY   // clay ring around ponds
             } else {
-                TERRAIN_GRASS  // default: most of the map
+                // Score each terrain type based on environmental affinity + weight
+                let scores: [(u32, f32); 8] = [
+                    (TERRAIN_GRASS,  params.grass  * (0.5 + (1.0 - rockiness) * 0.3 + noise_seeded(fx * 0.08, fy * 0.08, 10) * 0.2)),
+                    (TERRAIN_LOAM,   params.loam   * (0.3 + (1.0 - aridity) * 0.5 + noise_seeded(fx * 0.06, fy * 0.06, 20) * 0.2)),
+                    (TERRAIN_CLAY,   params.clay   * (0.2 + (1.0 - aridity) * 0.4 + noise_seeded(fx * 0.07, fy * 0.07, 30) * 0.4)),
+                    (TERRAIN_CHALKY, params.chalky * (0.1 + aridity * 0.5 + rockiness * 0.3 + noise_seeded(fx * 0.05, fy * 0.05, 40) * 0.1)),
+                    (TERRAIN_ROCKY,  params.rocky  * (0.1 + elev * 0.2 + rockiness * 0.6 + noise_seeded(fx * 0.04, fy * 0.04, 50) * 0.1)),
+                    (TERRAIN_GRAVEL, params.gravel * (0.1 + rockiness * 0.4 + aridity * 0.2 + noise_seeded(fx * 0.06, fy * 0.06, 60) * 0.3)),
+                    (TERRAIN_PEAT,   params.peat   * (0.1 + moisture * 0.5 + (1.0 - elev.min(1.0)) * 0.3 + noise_seeded(fx * 0.05, fy * 0.05, 70) * 0.1)),
+                    (TERRAIN_MARSH,  params.marsh  * (0.1 + (wt + 2.0).max(0.0) * 0.3 + noise_seeded(fx * 0.04, fy * 0.04, 80) * 0.2)),
+                ];
+                let mut best_type = TERRAIN_GRASS;
+                let mut best_score = -1.0f32;
+                for &(tt, score) in &scores {
+                    if score > best_score { best_score = score; best_type = tt; }
+                }
+                best_type
             };
 
             // --- Vegetation density ---
