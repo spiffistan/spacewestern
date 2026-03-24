@@ -330,107 +330,19 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
     }
 }
 
-pub fn generate_test_grid() -> Vec<u32> {
-    let mut grid = vec![make_block(0, 0, 0); (GRID_W * GRID_H) as usize];
-    let w = GRID_W;
+pub fn generate_test_grid() -> Vec<u32> { generate_world(42) }
 
-    for y in 0..GRID_H {
-        for x in 0..GRID_W {
-            grid[(y * w + x) as usize] = make_block(2, 0, 0);
-        }
-    }
+/// Generate a natural world with trees, bushes, and rocks. No buildings.
+pub fn generate_world(seed: u32) -> Vec<u32> {
+    let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
+    let w = GRID_W;
 
     let set = |grid: &mut Vec<u32>, x: u32, y: u32, b: u32| {
         if x < GRID_W && y < GRID_H { grid[(y * w + x) as usize] = b; }
     };
-
-    let ox = 90u32;
-    let oy = 84u32;
-    let oset = |grid: &mut Vec<u32>, x: u32, y: u32, b: u32| {
-        if x + ox < GRID_W && y + oy < GRID_H { grid[((y + oy) * w + (x + ox)) as usize] = b; }
-    };
-
-    // === House 1: Stone cottage ===
-    let h1_h = 4u8;
-    let roof_flag = 2u8;
-    for x in 10..30 { oset(&mut grid, x, 10, make_block(1, h1_h, 0)); oset(&mut grid, x, 25, make_block(1, h1_h, 0)); }
-    for y in 10..26 { oset(&mut grid, 10, y, make_block(1, h1_h, 0)); oset(&mut grid, 29, y, make_block(1, h1_h, 0)); }
-    for &wx in &[14u32, 15, 24, 25] { oset(&mut grid, wx, 10, make_block(5, h1_h, 0)); oset(&mut grid, wx, 25, make_block(5, h1_h, 0)); }
-    for &(wx, wy) in &[(10u32, 15u32), (10, 20), (29, 15), (29, 20)] { oset(&mut grid, wx, wy, make_block(5, h1_h, 0)); }
-    oset(&mut grid, 20, 10, make_block(4, 1, 1));
-    for y in 11..25 { for x in 11..29 { oset(&mut grid, x, y, make_block(2, 0, roof_flag)); } }
-    for x in 11..29 { oset(&mut grid, x, 18, make_block(1, h1_h, 0)); }
-    oset(&mut grid, 16, 18, make_block(4, 1, 1));
-    for y in 11..15 { oset(&mut grid, 22, y, make_block(1, h1_h, 0)); }
-    oset(&mut grid, 19, 21, make_block(6, 1, roof_flag));
-    oset(&mut grid, 40, 15, make_block(6, 1, 0));
-    oset(&mut grid, 15, 14, make_block(7, 0, roof_flag));
-    // Default bed for Jeff (horizontal, in upper room)
-    oset(&mut grid, 12, 13, make_block(30, 0, roof_flag));
-    oset(&mut grid, 13, 13, make_block(30, 0, roof_flag));
-    // Storage crate near bed
-    oset(&mut grid, 12, 15, make_block(33, 0, roof_flag));
-
-    // === House 2: Tall building ===
-    let h2_h = 4u8;
-    for x in 35..55 { oset(&mut grid, x, 30, make_block(1, h2_h, 0)); oset(&mut grid, x, 50, make_block(1, h2_h, 0)); }
-    for y in 30..51 { oset(&mut grid, 35, y, make_block(1, h2_h, 0)); oset(&mut grid, 54, y, make_block(1, h2_h, 0)); }
-    for &wx in &[38u32, 41, 44, 47, 50] { oset(&mut grid, wx, 30, make_block(5, h2_h, 0)); oset(&mut grid, wx, 50, make_block(5, h2_h, 0)); }
-    for &wy in &[34u32, 38, 42, 46] { oset(&mut grid, 35, wy, make_block(5, h2_h, 0)); oset(&mut grid, 54, wy, make_block(5, h2_h, 0)); }
-    oset(&mut grid, 45, 30, make_block(4, 1, 1));
-    for x in 36..54 { oset(&mut grid, x, 40, make_block(1, h2_h, 0)); }
-    oset(&mut grid, 44, 40, make_block(4, 1, 1));
-    for y in 31..50 { for x in 36..54 {
-        let existing = grid[((y + oy) * w + (x + ox)) as usize];
-        if block_type_rs(existing) == 0 || block_type_rs(existing) == 2 { oset(&mut grid, x, y, make_block(2, 0, roof_flag)); }
-    }}
-
-    // === Small shed ===
-    let h3_h = 4u8;
-    for x in 45..52 { oset(&mut grid, x, 8, make_block(1, h3_h, 0)); oset(&mut grid, x, 14, make_block(1, h3_h, 0)); }
-    for y in 8..15 { oset(&mut grid, 45, y, make_block(1, h3_h, 0)); oset(&mut grid, 51, y, make_block(1, h3_h, 0)); }
-    for &(wx, wy) in &[(48u32, 8u32), (48, 14), (45, 11), (51, 11)] { oset(&mut grid, wx, wy, make_block(5, h3_h, 0)); }
-    oset(&mut grid, 49, 14, make_block(4, 1, 1));
-    for y in 9..14 { for x in 46..51 { oset(&mut grid, x, y, make_block(2, 0, roof_flag)); } }
-
-    // Water pool: dug ground (depth 1-5, water fills at depth >= 1)
-    for y in 40..48 {
-        for x in 12..22 {
-            let edge = y == 40 || y == 47 || x == 12 || x == 21;
-            let depth: u8 = if edge { 2 } else { 5 }; // shallow edges, deep center
-            oset(&mut grid, x, y, make_block(32, depth, 0));
-        }
-    }
-
-    // Greenhouse
-    for x in 5..9 { oset(&mut grid, x, 55, make_block(5, 2, 0)); oset(&mut grid, x, 60, make_block(5, 2, 0)); }
-    for y in 55..61 { oset(&mut grid, 5, y, make_block(5, 2, 0)); oset(&mut grid, 8, y, make_block(5, 2, 0)); }
-    for y in 56..60 { for x in 6..8 { oset(&mut grid, x, y, make_block(2, 0, roof_flag)); } }
-
-    // === Sealed insulated room (thermal test — no windows, no doors) ===
-    // 8x8 interior, insulated walls (type 14), fire inside
-    let seal_h = 3u8;
-    for x in 0..10 { oset(&mut grid, x, 30, make_block(14, seal_h, 0)); oset(&mut grid, x, 39, make_block(14, seal_h, 0)); }
-    for y in 30..40 { oset(&mut grid, 0, y, make_block(14, seal_h, 0)); oset(&mut grid, 9, y, make_block(14, seal_h, 0)); }
-    for y in 31..39 { for x in 1..9 { oset(&mut grid, x, y, make_block(2, 0, roof_flag)); } }
-    oset(&mut grid, 4, 35, make_block(6, 1, roof_flag)); // fire in center
-    // Door on south wall (can open to release heat)
-    oset(&mut grid, 5, 39, make_block(4, 1, 1)); // closed door
-
-    // === Example pipe network: sealed room → house 2 ===
-    // Inlet on east wall of sealed room at (9, 35) — sucks smoke out
-    oset(&mut grid, 9, 35, make_block(20, seal_h, 1 << 3)); // inlet, dir=east (bits 3-4 = 1)
-    // Pipes running east from inlet
-    for x in 10..20 { oset(&mut grid, x, 35, make_block(15, 1, 0)); } // horizontal pipe run
-    // Pump at midpoint
-    oset(&mut grid, 15, 35, make_block(16, 1, 1 << 3)); // pump, dir=east
-    // Outlet into house 2's west wall at (35, 35) — pushes gas eastward into the building
-    oset(&mut grid, 35, 35, make_block(19, h2_h, 1 << 3)); // outlet, dir=east (bits 3-4 = 1)
-    // Connect pipe to house 2
-    for x in 20..35 { oset(&mut grid, x, 35, make_block(15, 1, 0)); }
+    let _ = &set; // used by tree placement below
 
     // Trees and bushes — clustered in small forests with outliers
-    // Simple 2D noise for clustering
     let noise = |x: f32, y: f32| -> f32 {
         let ix = x.floor() as i32;
         let iy = y.floor() as i32;
@@ -438,7 +350,7 @@ pub fn generate_test_grid() -> Vec<u32> {
         let fy = y - y.floor();
         let hash = |ix: i32, iy: i32| -> f32 {
             let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
-                .wrapping_add(1013904223);
+                .wrapping_add(1013904223).wrapping_add(seed);
             (h & 0xFFFF) as f32 / 65535.0
         };
         let a = hash(ix, iy);
@@ -467,7 +379,7 @@ pub fn generate_test_grid() -> Vec<u32> {
             let density = n1 + n2; // 0.0 - 1.5 range
 
             // Per-tile random hash
-            let h = ((x.wrapping_mul(374761393)) ^ (y.wrapping_mul(668265263))).wrapping_add(1013904223);
+            let h = ((x.wrapping_mul(374761393)) ^ (y.wrapping_mul(668265263))).wrapping_add(1013904223).wrapping_add(seed);
             let r = (h >> 16) & 0xFFF; // 0..4095
 
             // Threshold based on density: dense areas have many trees
@@ -562,18 +474,12 @@ pub fn generate_water_table(grid: &[u32]) -> Vec<f32> {
             // Map to water table depth: -3.0 (deep/dry) to -0.3 (near surface/wet)
             let depth = -3.0 + base * 2.0; // range: -3.0 to -0.2
 
-            // Hotspot near the pond area (world gen offset is 90, 84)
-            let pond_cx = 90.0 + 17.0; // center of the pond
-            let pond_cy = 84.0 + 44.0;
-            let pond_dist = ((x as f32 - pond_cx).powi(2) + (y as f32 - pond_cy).powi(2)).sqrt();
-            let pond_boost = (1.0 - (pond_dist / 20.0).min(1.0)) * 2.5; // raises water table near pond
-
-            // Also boost near dug ground (it was dug because there's water)
+            // Boost near dug ground
             let block = grid[idx];
             let bt = block & 0xFF;
             let dug_boost = if bt == BT_DUG_GROUND { 1.0 } else { 0.0 };
 
-            table[idx] = (depth + pond_boost + dug_boost).min(0.5); // cap at 0.5 (strong spring)
+            table[idx] = (depth + dug_boost).min(0.5);
         }
     }
 

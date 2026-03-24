@@ -513,23 +513,14 @@ impl App {
             fluid_mouse_active: false,
             fluid_mouse_prev: None,
             plebs: {
-                let jeff = Pleb::new(0, "Jeff".to_string(), 102.5, 100.5, 42);
-                let mut enemies = vec![
-                    ("Jaff", 115.0, 95.0, 101u32),
-                    ("Juff", 125.0, 110.0, 202),
-                    ("Jif",  95.0, 120.0, 303),
-                    ("Bob",  135.0, 100.0, 404),
-                ];
-                let mut all = vec![jeff];
-                for (i, (name, x, y, seed)) in enemies.iter().enumerate() {
-                    let mut e = Pleb::new(i + 1, name.to_string(), *x, *y, *seed);
-                    e.is_enemy = true;
-                    e.wander_timer = 3.0 + (i as f32) * 2.0;
-                    all.push(e);
-                }
-                all
+                // Start with one colonist at map center
+                let cx = (GRID_W / 2) as f32 + 0.5;
+                let cy = (GRID_H / 2) as f32 + 0.5;
+                let mut jeff = Pleb::new(0, "Jeff".to_string(), cx, cy, 42);
+                jeff.headlight_on = true;
+                vec![jeff]
             },
-            selected_pleb: None,
+            selected_pleb: Some(0),
             next_pleb_id: 1,
             placing_pleb: false,
             cannon_angles: std::collections::HashMap::new(),
