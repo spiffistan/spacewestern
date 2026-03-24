@@ -1444,6 +1444,13 @@ impl App {
                     };
                     if is_wall_adjacent {
                         ((tx, ty), self.wall_adjacent_direction(tx, ty).is_some())
+                    } else if matches!(self.build_tool, BuildTool::Place(id) if id == BT_WELL) {
+                        // Well: must be on dug ground
+                        let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            block_type_rs(self.grid_data[tidx]) == BT_DUG_GROUND
+                        } else { false };
+                        ((tx, ty), ok)
                     } else {
                         ((tx, ty), self.can_place_on(tx, ty, on_furniture))
                     }

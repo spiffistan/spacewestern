@@ -918,6 +918,20 @@ impl App {
                         return;
                     }
 
+                    // Well: must be placed on dug ground with water table
+                    if id == BT_WELL {
+                        let bt_here = bt as u32;
+                        if bt_here == BT_DUG_GROUND {
+                            let (roof_flag, roof_h) = extract_roof_data(block);
+                            self.place_or_blueprint(bx, by, make_block(id as u8, place_height, roof_flag) | roof_h);
+                            self.grid_dirty = true;
+                            compute_roof_heights(&mut self.grid_data);
+                            log::info!("Placed well at ({}, {})", bx, by);
+                            self.build_tool = BuildTool::None;
+                        }
+                        return;
+                    }
+
                     let bt = bt as u32;
                     let can_place = self.can_place_at(bx, by)
                         || (id == BT_PUMP && bt == BT_PIPE)
