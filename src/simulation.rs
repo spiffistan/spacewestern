@@ -1384,18 +1384,22 @@ impl App {
                             } else if tbt == BT_WELL {
                                 // Start drinking at well
                                 pleb.activity = PlebActivity::Drinking(0.0);
-                            } else if tbt == BT_DIRT && tidx < self.terrain_data.len()
+                            } else if tidx < self.terrain_data.len()
                                 && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY
                                 && pleb.inventory.count_of(ITEM_WOODEN_BUCKET) > 0
+                                && (tbt == BT_DIRT || (tbt == BT_DUG_GROUND && block_height_rs(self.grid_data[tidx]) < 3))
                             {
-                                // Dig clay: convert to dug ground, drop clay
+                                // Dig clay: deepen or create dug ground, drop clay
                                 let roof_h = self.grid_data[tidx] & 0xFF000000;
-                                self.grid_data[tidx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
+                                let cur_depth = if tbt == BT_DUG_GROUND { block_height_rs(self.grid_data[tidx]) } else { 0 };
+                                let new_depth = (cur_depth + 1).min(3);
+                                self.grid_data[tidx] = make_block(BT_DUG_GROUND as u8, new_depth, 0) | roof_h;
                                 self.grid_dirty = true;
+                                let yield_amt = if cur_depth == 0 { 4 } else { 3 }; // first dig yields more
                                 self.ground_items.push(resources::GroundItem::new(
-                                    tx as f32 + 0.5, ty as f32 + 0.5, ITEM_CLAY, 2,
+                                    tx as f32 + 0.5, ty as f32 + 0.5, ITEM_CLAY, yield_amt,
                                 ));
-                                events.push((EventCategory::Farm, format!("{} dug clay", pleb.name)));
+                                events.push((EventCategory::Farm, format!("{} dug {} clay", pleb.name, yield_amt)));
                                 pleb.work_target = None;
                                 pleb.activity = PlebActivity::Idle;
                             } else {

@@ -706,8 +706,8 @@ impl App {
             }
         }
 
-        // Dig clay on clay terrain
-        if sel_pleb.is_some() && bt == BT_DIRT {
+        // Dig clay on clay terrain (fresh dirt or shallow dug ground)
+        if sel_pleb.is_some() && (bt == BT_DIRT || (bt == BT_DUG_GROUND && ((self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF) < 3)) {
             let tidx = (by as u32 * GRID_W + bx as u32) as usize;
             if tidx < self.terrain_data.len() && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY {
                 // Check if any bucket exists (in pleb inventory, crates, or on ground)
