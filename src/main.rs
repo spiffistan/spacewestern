@@ -218,6 +218,7 @@ struct App {
     select_drag_start: Option<(f32, f32)>, // world coords where selection drag started
     // Storage crate inventories: grid_idx → stored items
     crate_contents: std::collections::HashMap<u32, CrateInventory>,
+    craft_queues: std::collections::HashMap<u32, CraftQueue>,
     // Rock context menu
     // Combat
     grenade_charging: bool,
@@ -549,6 +550,7 @@ impl App {
             drought_check_timer: 30.0,
             select_drag_start: None,
             crate_contents: std::collections::HashMap::new(),
+            craft_queues: std::collections::HashMap::new(),
             grenade_charging: false,
             grenade_charge: 0.0,
             grenade_impacts: Vec::new(),

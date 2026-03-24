@@ -1055,6 +1055,17 @@ impl App {
                 }
             }
 
+            // Collect workbenches/kilns with pending craft orders
+            let craft_stations: Vec<(i32, i32, u32)> = self.craft_queues.iter()
+                .filter(|(_, q)| q.pending())
+                .filter_map(|(&gidx, _)| {
+                    let x = (gidx % GRID_W) as i32;
+                    let y = (gidx / GRID_W) as i32;
+                    if !self.active_work.contains(&(x, y)) {
+                        Some((x, y, gidx))
+                    } else { None }
+                }).collect();
+
             // Collect ground items that could be hauled (with a nearby crate)
             let haul_candidates: Vec<(i32, i32)> = self.ground_items.iter()
                 .map(|item| (item.x.floor() as i32, item.y.floor() as i32))
@@ -1130,7 +1141,30 @@ impl App {
                                     }
                                 }
                             }
-                            // Build and Craft are handled in their own sections below
+                            zones::WORK_CRAFT => {
+                                // Find nearest workbench/kiln with pending orders
+                                let mut best: Option<((i32, i32, u32), f32)> = None;
+                                for &(sx, sy, gidx) in &craft_stations {
+                                    let dist = (pleb.x - sx as f32 - 0.5).powi(2) + (pleb.y - sy as f32 - 0.5).powi(2);
+                                    if best.is_none() || dist < best.as_ref().unwrap().1 {
+                                        best = Some(((sx, sy, gidx), dist));
+                                    }
+                                }
+                                if let Some(((sx, sy, _gidx), _)) = best {
+                                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                    let adj = adjacent_walkable(&self.grid_data, sx, sy).unwrap_or((sx, sy));
+                                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
+                                    if !path.is_empty() {
+                                        pleb.path = path;
+                                        pleb.path_idx = 0;
+                                        pleb.activity = PlebActivity::Walking;
+                                        pleb.work_target = Some((sx, sy));
+                                        self.active_work.insert((sx, sy));
+                                        events.push((EventCategory::Build, format!("{} going to craft", pleb.name)));
+                                        assigned = true;
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -1233,7 +1267,7 @@ impl App {
                     }
                 }
 
-                // Arrived at work target: start farming (checks Walking OR Idle with work target)
+                // Arrived at work target: start farming or crafting
                 let has_work = pleb.work_target.is_some();
                 let path_done = pleb.path_idx >= pleb.path.len();
                 let is_walking_or_idle = pleb.activity == PlebActivity::Walking || pleb.activity == PlebActivity::Idle;
@@ -1241,7 +1275,68 @@ impl App {
                     if let Some((tx, ty)) = pleb.work_target {
                         let dist = ((pleb.x - tx as f32 - 0.5).powi(2) + (pleb.y - ty as f32 - 0.5).powi(2)).sqrt();
                         if dist < 1.5 {
-                            pleb.activity = PlebActivity::Farming(0.0);
+                            // Check if target is a craft station
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tbt = if tidx < self.grid_data.len() { block_type_rs(self.grid_data[tidx]) } else { 0 };
+                            if tbt == BT_WORKBENCH || tbt == BT_KILN {
+                                // Try to start crafting from queue
+                                let gidx = ty as u32 * GRID_W + tx as u32;
+                                let started = if let Some(queue) = self.craft_queues.get(&gidx) {
+                                    if let Some(order) = queue.next_order() {
+                                        let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                                        if let Some(recipe) = recipe_reg.get(order.recipe_id) {
+                                            // Try to gather ingredients from nearby crates
+                                            let mut have_all = true;
+                                            for ing in &recipe.inputs {
+                                                let in_inv = pleb.inventory.count_of(ing.item) as u16;
+                                                if in_inv < ing.count {
+                                                    // Check nearby crates
+                                                    let mut remaining = ing.count - in_inv;
+                                                    for (&cidx, cinv) in self.crate_contents.iter() {
+                                                        if remaining == 0 { break; }
+                                                        let available = cinv.count_of(ing.item) as u16;
+                                                        if available > 0 {
+                                                            let _take = available.min(remaining);
+                                                            remaining -= _take.min(remaining);
+                                                        }
+                                                    }
+                                                    if remaining > 0 { have_all = false; break; }
+                                                }
+                                            }
+                                            if have_all {
+                                                Some(order.recipe_id)
+                                            } else { None }
+                                        } else { None }
+                                    } else { None }
+                                } else { None };
+
+                                if let Some(recipe_id) = started {
+                                    let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                                    let recipe = recipe_reg.get(recipe_id).unwrap();
+                                    // Consume ingredients from pleb inventory + crates
+                                    for ing in &recipe.inputs {
+                                        let mut need = ing.count;
+                                        let from_inv = pleb.inventory.remove(ing.item, need);
+                                        need -= from_inv;
+                                        if need > 0 {
+                                            for (_, cinv) in self.crate_contents.iter_mut() {
+                                                if need == 0 { break; }
+                                                let taken = cinv.remove(ing.item, need);
+                                                need -= taken;
+                                            }
+                                        }
+                                    }
+                                    pleb.activity = PlebActivity::Crafting(recipe_id, 0.0);
+                                    events.push((EventCategory::Build, format!("{} crafting {}", pleb.name, recipe.name)));
+                                } else {
+                                    // Can't craft — missing ingredients, release
+                                    self.active_work.remove(&(tx, ty));
+                                    pleb.work_target = None;
+                                    pleb.activity = PlebActivity::Idle;
+                                }
+                            } else {
+                                pleb.activity = PlebActivity::Farming(0.0);
+                            }
                         } else {
                             // Too far — release task and retry
                             self.active_work.remove(&(tx, ty));
@@ -1299,9 +1394,29 @@ impl App {
                 if let Some(recipe) = recipe_reg.get(recipe_id) {
                     let new_progress = progress + dt * self.time_speed / recipe.time;
                     if new_progress >= 1.0 {
-                        // Crafting complete — give output to pleb
-                        pleb.inventory.add(recipe.output.item, recipe.output.count);
+                        // Crafting complete — drop output on ground near pleb
+                        self.ground_items.push(resources::GroundItem::new(
+                            pleb.x, pleb.y, recipe.output.item, recipe.output.count,
+                        ));
                         events.push((EventCategory::Build, format!("{} crafted {}", pleb.name, recipe.name)));
+                        // Increment queue counter
+                        if let Some((tx, ty)) = pleb.work_target {
+                            let gidx = ty as u32 * GRID_W + tx as u32;
+                            if let Some(queue) = self.craft_queues.get_mut(&gidx) {
+                                if let Some(order) = queue.orders.iter_mut().find(|o| o.recipe_id == recipe_id && o.completed < o.count) {
+                                    order.completed += 1;
+                                }
+                                // Clean up completed orders
+                                queue.orders.retain(|o| o.completed < o.count);
+                                // If more orders remain, start next one
+                                if queue.pending() {
+                                    // Re-check ingredients for next order at this station
+                                    // (will be handled by the work assignment loop next frame)
+                                }
+                            }
+                            self.active_work.remove(&(tx, ty));
+                        }
+                        pleb.work_target = None;
                         pleb.activity = PlebActivity::Idle;
                     } else {
                         pleb.activity = PlebActivity::Crafting(recipe_id, new_progress);

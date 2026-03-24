@@ -244,6 +244,33 @@ pub fn amplitude_to_db(amp: f32) -> f32 {
     80.0 + 40.0 * amp.log10()
 }
 
+// --- Craft Queue ---
+
+/// A queued craft order on a workbench/kiln.
+#[derive(Clone, Debug)]
+pub struct CraftOrder {
+    pub recipe_id: u16,
+    pub count: u16,       // total to make
+    pub completed: u16,   // how many finished
+}
+
+/// Per-station craft queue. Stored in App::craft_queues keyed by grid_idx.
+#[derive(Clone, Debug, Default)]
+pub struct CraftQueue {
+    pub orders: Vec<CraftOrder>,
+}
+
+impl CraftQueue {
+    pub fn pending(&self) -> bool {
+        self.orders.iter().any(|o| o.completed < o.count)
+    }
+
+    /// Get the next incomplete order.
+    pub fn next_order(&self) -> Option<&CraftOrder> {
+        self.orders.iter().find(|o| o.completed < o.count)
+    }
+}
+
 // --- Blueprint ---
 
 /// A pending construction — placed as a ghost, built by plebs over time.

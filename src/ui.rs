@@ -3162,40 +3162,60 @@ impl App {
                 let recipe_reg = recipe_defs::RecipeRegistry::cached();
                 let item_reg = item_defs::ItemRegistry::cached();
                 let recipes = recipe_reg.for_station("workbench");
-                // Gather pleb inventory if one is selected
-                let sel_inv: Vec<item_defs::ItemStack> = self.selected_pleb
-                    .and_then(|i| self.plebs.get(i))
-                    .map(|p| p.inventory.stacks.clone())
-                    .unwrap_or_default();
+                let queue = self.craft_queues.entry(wb_idx).or_default();
                 egui::Area::new(egui::Id::new("workbench_popup"))
                     .fixed_pos(egui::pos2(sx, sy))
                     .show(ctx, |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                             ui.label(egui::RichText::new("Workbench").strong().size(12.0));
                             ui.separator();
+
+                            // Show queued orders
+                            let mut remove_idx = None;
+                            if !queue.orders.is_empty() {
+                                ui.label(egui::RichText::new("Queue:").size(10.0).strong());
+                                for (qi, order) in queue.orders.iter().enumerate() {
+                                    let rname = recipe_reg.get(order.recipe_id)
+                                        .map(|r| r.name.as_str()).unwrap_or("?");
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(
+                                            format!("  {} — {}/{}", rname, order.completed, order.count)
+                                        ).size(10.0));
+                                        if ui.small_button("x").clicked() {
+                                            remove_idx = Some(qi);
+                                        }
+                                    });
+                                }
+                                if let Some(ri) = remove_idx {
+                                    queue.orders.remove(ri);
+                                }
+                                ui.separator();
+                            }
+
+                            // Add new orders
                             for recipe in &recipes {
-                                let can_craft = recipe_defs::RecipeRegistry::can_craft(recipe, &sel_inv);
                                 let out_name = item_reg.name(recipe.output.item);
                                 let ingredients = recipe_defs::RecipeRegistry::ingredients_label(recipe);
                                 ui.horizontal(|ui| {
                                     let label = format!("{} ({})", recipe.name, ingredients);
-                                    let text = egui::RichText::new(&label).size(10.0);
-                                    let text = if can_craft { text } else { text.weak() };
-                                    if ui.add_enabled(can_craft && self.selected_pleb.is_some(),
-                                        egui::Button::new(text).small()
-                                    ).clicked() {
-                                        // Start crafting: consume inputs, set activity
-                                        if let Some(pi) = self.selected_pleb {
-                                            if let Some(pleb) = self.plebs.get_mut(pi) {
-                                                for ing in &recipe.inputs {
-                                                    pleb.inventory.remove(ing.item, ing.count);
-                                                }
-                                                pleb.activity = PlebActivity::Crafting(recipe.id, 0.0);
-                                                log::info!("{} started crafting {}", pleb.name, recipe.name);
+                                    ui.label(egui::RichText::new(&label).size(10.0));
+                                    ui.label(egui::RichText::new(format!("→ {}", out_name)).size(10.0));
+                                    for &n in &[1u16, 5, 10] {
+                                        if ui.small_button(format!("+{}", n)).clicked() {
+                                            // Add to queue (merge if same recipe)
+                                            if let Some(existing) = queue.orders.iter_mut()
+                                                .find(|o| o.recipe_id == recipe.id && o.completed < o.count)
+                                            {
+                                                existing.count += n;
+                                            } else {
+                                                queue.orders.push(CraftOrder {
+                                                    recipe_id: recipe.id,
+                                                    count: n,
+                                                    completed: 0,
+                                                });
                                             }
                                         }
                                     }
-                                    ui.label(egui::RichText::new(format!("→ {}", out_name)).size(10.0));
                                 });
                             }
                             ui.separator();
