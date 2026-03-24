@@ -961,7 +961,7 @@ is_removable = true
 light_transmission = 1.0
 thermal = { heat_capacity = 3.0, conductivity = 0.01, solar_absorption = 0.5 }
 [block.placement]
-category = "Crafting"
+category = "Build"
 icon = "🪣"
 label = "Well"
 click = "simple"

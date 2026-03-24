@@ -814,9 +814,9 @@ impl App {
 
                         // Count items per category for 1 vs 2 column layout
                         let item_count: usize = match cat {
-                            "Walls" => 7, "Floor" => 6, "Build" => 8, "Opening" => 2,
+                            "Walls" => 7, "Floor" => 6, "Build" => 9, "Opening" => 2,
                             "Gas" => 8, "Liquid" => 5, "Power" => 14, "Vent" => 1,
-                            "Zones" => 2, "Crafting" => 3, "Physics" => 1, _ => 5,
+                            "Zones" => 2, "Crafting" => 2, "Physics" => 1, _ => 5,
                         };
                         let items_per_row = if item_count > 10 { (item_count + 1) / 2 } else { item_count };
                         // Horizontal rows, left-to-right, wrapping to 2nd row if >10
@@ -876,6 +876,7 @@ impl App {
                                     icon_btn(ui, BuildTool::Place(13), "\u{267b}", "Compost");
                                     icon_btn(ui, BuildTool::Place(31), "\u{1fad0}", "Berries");
                                     icon_btn(ui, BuildTool::Place(29), "\u{1f4a5}", "Cannon");
+                                    icon_btn(ui, BuildTool::Place(59), "\u{1fa63}", "Well");
                                     icon_btn(ui, BuildTool::Dig, "\u{26cf}", "Dig");
                                 }
                                 "Opening" => {
@@ -925,7 +926,6 @@ impl App {
                                 "Crafting" => {
                                     icon_btn(ui, BuildTool::Place(57), "\u{1f528}", "Bench");
                                     icon_btn(ui, BuildTool::Place(58), "\u{1f3ed}", "Kiln");
-                                    icon_btn(ui, BuildTool::Place(59), "\u{1fa63}", "Well");
                                 }
                                 "Physics" => {
                                     icon_btn(ui, BuildTool::WoodBox, "\u{1f4e6}", "Box");
