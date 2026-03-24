@@ -1667,17 +1667,17 @@ impl App {
                     ui.horizontal(|ui| {
                         // ═══ LEFT: Sliders ═══
                         ui.vertical(|ui| {
-                            ui.set_min_width(220.0);
-                            ui.label(egui::RichText::new("Terrain Weights").strong().size(12.0));
-                            ui.add_space(4.0);
+                            ui.set_max_width(180.0);
+                            ui.label(egui::RichText::new("Terrain Weights").strong().size(11.0));
+                            ui.add_space(2.0);
 
                             let slider = |ui: &mut egui::Ui, label: &str, val: &mut f32, color: egui::Color32| {
                                 ui.horizontal(|ui| {
-                                    let (dot_rect, _) = ui.allocate_exact_size(egui::Vec2::splat(10.0), egui::Sense::hover());
+                                    let (dot_rect, _) = ui.allocate_exact_size(egui::Vec2::splat(8.0), egui::Sense::hover());
                                     ui.painter_at(dot_rect).rect_filled(dot_rect, 2.0, color);
-                                    ui.label(egui::RichText::new(label).size(10.0));
+                                    ui.label(egui::RichText::new(label).size(9.0).monospace());
+                                    ui.spacing_mut().slider_width = 60.0;
                                     ui.add(egui::Slider::new(val, 0.0..=1.0).show_value(false));
-                                    ui.label(egui::RichText::new(format!("{:.0}%", *val * 100.0)).size(9.0).weak());
                                 });
                             };
 
