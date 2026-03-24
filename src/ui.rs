@@ -4139,37 +4139,35 @@ impl App {
         });
 
         let mut dismiss_id = None;
-        egui::Area::new(egui::Id::new("notifications"))
-            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 60.0])
-            .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    // Show most recent 5
-                    let start = self.notifications.len().saturating_sub(5);
-                    for notif in &self.notifications[start..] {
-                        let color = notif.category.color();
-                        egui::Frame::NONE
-                            .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 200))
-                            .corner_radius(4.0)
-                            .inner_margin(6.0)
-                            .show(ui, |ui| {
-                                ui.set_max_width(200.0);
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(notif.icon).size(16.0));
-                                    ui.vertical(|ui| {
-                                        ui.label(egui::RichText::new(&notif.title).strong().size(11.0).color(egui::Color32::WHITE));
-                                        ui.label(egui::RichText::new(&notif.description).size(9.0).color(egui::Color32::from_gray(220)));
-                                    });
+        // Stack from top-right, below the layers bar
+        let start = self.notifications.len().saturating_sub(8);
+        let notifs: Vec<(u32, &'static str, String, String, egui::Color32)> = self.notifications[start..]
+            .iter().map(|n| (n.id, n.icon, n.title.clone(), n.description.clone(), n.category.color())).collect();
+        for (i, (id, icon, title, desc, color)) in notifs.iter().enumerate() {
+            let y_offset = 60.0 + i as f32 * 52.0;
+            egui::Area::new(egui::Id::new(("notif_card", *id)))
+                .anchor(egui::Align2::RIGHT_TOP, [-10.0, y_offset])
+                .interactable(true)
+                .show(ctx, |ui| {
+                    let resp = egui::Frame::NONE
+                        .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 210))
+                        .corner_radius(4.0)
+                        .inner_margin(6.0)
+                        .show(ui, |ui| {
+                            ui.set_max_width(220.0);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(*icon).size(14.0));
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new(title).strong().size(10.0).color(egui::Color32::WHITE));
+                                    ui.label(egui::RichText::new(desc).size(9.0).color(egui::Color32::from_gray(215)));
                                 });
                             });
-                        // Right-click to dismiss
-                        let resp = ui.interact(ui.min_rect(), egui::Id::new(("notif", notif.id)), egui::Sense::click());
-                        if resp.secondary_clicked() {
-                            dismiss_id = Some(notif.id);
-                        }
+                        });
+                    if resp.response.secondary_clicked() {
+                        dismiss_id = Some(*id);
                     }
                 });
-            });
+        }
         if let Some(id) = dismiss_id {
             if let Some(n) = self.notifications.iter_mut().find(|n| n.id == id) {
                 n.dismissed = true;
