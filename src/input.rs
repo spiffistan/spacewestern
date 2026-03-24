@@ -244,6 +244,20 @@ impl App {
                 return;
             }
 
+            // Click on ground item: select it
+            if let Some(gi) = self.ground_items.iter().position(|item| {
+                item.x.floor() as i32 == bx && item.y.floor() as i32 == by
+            }) {
+                let item = &self.ground_items[gi];
+                self.world_sel = WorldSelection::single(bx, by, 1, 1, 0); // bt=0 for ground item
+                self.context_menu = None;
+                // If a pleb is selected, open context menu for hauling
+                if self.selected_pleb.is_some() {
+                    self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
+                }
+                return;
+            }
+
             // Click on empty ground: deselect everything
             self.world_sel = WorldSelection::none();
             self.selected_pleb = None;

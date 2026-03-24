@@ -1086,7 +1086,7 @@ impl App {
                     // Speed varies: trees take longer than crops/bushes
                     let speed = if let Some((tx, ty)) = pleb.work_target {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        if tidx < self.grid_data.len() && (self.grid_data[tidx] & 0xFF) as u32 == BT_TREE { 0.15 } // ~7s for trees
+                        if tidx < self.grid_data.len() && (self.grid_data[tidx] & 0xFF) as u32 == BT_TREE { 0.30 } // ~3.5s for trees
                         else { 0.4 } // ~2.5s for crops/bushes
                     } else { 0.4 };
                     let new_progress = progress + dt * self.time_speed * speed;

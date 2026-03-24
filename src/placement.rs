@@ -716,6 +716,9 @@ impl App {
                         menu.actions.push((format!("Eat 1 berry ({})", pleb_name), ContextAction::Eat(i)));
                         has_actions = true;
                     }
+                    // Haul any ground item to nearest crate
+                    menu.actions.push((format!("Haul {} ({})", item.stack.label(), pleb_name), ContextAction::Haul(bx, by)));
+                    has_actions = true;
                 }
             }
         }

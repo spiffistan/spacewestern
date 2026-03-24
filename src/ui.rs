@@ -1425,16 +1425,17 @@ impl App {
                     }
                 }
                 ContextAction::Haul(hx, hy) => {
-                    // Find nearest available pleb and nearest crate
-                    let mut best_pleb: Option<(usize, f32)> = None;
-                    for (i, p) in self.plebs.iter().enumerate() {
-                        if p.activity.is_crisis() || p.inventory.is_carrying() || p.is_enemy { continue; }
-                        let dist = ((p.x - hx as f32 - 0.5).powi(2) + (p.y - hy as f32 - 0.5).powi(2)).sqrt();
-                        if best_pleb.is_none() || dist < best_pleb.unwrap().1 {
-                            best_pleb = Some((i, dist));
+                    // Use selected pleb if available, otherwise find nearest
+                    let mut best_pleb: Option<usize> = self.selected_pleb;
+                    if best_pleb.is_none() {
+                        let mut best_dist = f32::MAX;
+                        for (i, p) in self.plebs.iter().enumerate() {
+                            if p.activity.is_crisis() || p.inventory.is_carrying() || p.is_enemy || p.is_dead { continue; }
+                            let dist = ((p.x - hx as f32 - 0.5).powi(2) + (p.y - hy as f32 - 0.5).powi(2)).sqrt();
+                            if dist < best_dist { best_pleb = Some(i); best_dist = dist; }
                         }
                     }
-                    if let Some((pi, _)) = best_pleb {
+                    if let Some(pi) = best_pleb {
                         let nearest_crate = find_nearest_crate(&self.grid_data, hx, hy);
                         if let Some((cx, cy)) = nearest_crate {
                             let pleb = &mut self.plebs[pi];
