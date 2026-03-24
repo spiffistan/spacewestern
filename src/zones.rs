@@ -28,11 +28,26 @@ pub enum WorkTask {
     Harvest(i32, i32),  // harvest any plant (crop, berry bush, etc.)
 }
 
-/// Work priority ordering.
+/// Work priority ordering (legacy, used for plant/harvest preference).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WorkPriority {
     PlantFirst,
     HarvestFirst,
+}
+
+/// Work type categories for the priority system.
+pub const WORK_HAUL: usize = 0;
+pub const WORK_FARM: usize = 1;
+pub const WORK_BUILD: usize = 2;
+pub const WORK_CRAFT: usize = 3;
+pub const WORK_TYPE_COUNT: usize = 4;
+
+pub const WORK_TYPE_NAMES: [&str; WORK_TYPE_COUNT] = ["Haul", "Farm", "Build", "Craft"];
+
+/// Per-pleb work priorities. 0 = disabled, 1-3 = priority (1 = highest).
+/// Default: all enabled at priority 3.
+pub fn default_work_priorities() -> [u8; WORK_TYPE_COUNT] {
+    [3, 3, 3, 3]
 }
 
 impl WorkTask {

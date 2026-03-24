@@ -1016,63 +1016,94 @@ impl App {
             }
         }
 
-        // --- Work queue: assign idle friendly plebs to tasks ---
+        // --- Work queue: assign idle friendly plebs to tasks by priority ---
         {
-            let mut tasks = generate_work_tasks(&self.zones, &self.grid_data, GRID_W, &self.active_work);
-            // Add manual (player-ordered) tasks
+            let mut farm_tasks = generate_work_tasks(&self.zones, &self.grid_data, GRID_W, &self.active_work);
             for task in self.manual_tasks.drain(..) {
                 let pos = task.position();
                 if !self.active_work.contains(&pos) {
-                    tasks.push(task);
+                    farm_tasks.push(task);
                 }
             }
+
+            // Collect ground items that could be hauled (with a nearby crate)
+            let haul_candidates: Vec<(i32, i32)> = self.ground_items.iter()
+                .map(|item| (item.x.floor() as i32, item.y.floor() as i32))
+                .filter(|&(ix, iy)| !self.active_work.contains(&(ix, iy)))
+                .filter(|&(ix, iy)| find_nearest_crate(&self.grid_data, ix, iy).is_some())
+                .collect();
+
             for pleb in self.plebs.iter_mut() {
-                if pleb.is_enemy { continue; }
+                if pleb.is_enemy || pleb.is_dead { continue; }
                 if pleb.activity != PlebActivity::Idle { continue; }
-                if pleb.work_target.is_some() { continue; }
+                if pleb.work_target.is_some() || pleb.haul_target.is_some() { continue; }
 
-                // Find nearest task respecting priority
-                let is_preferred = |t: &WorkTask| -> bool {
-                    match self.work_priority {
-                        WorkPriority::PlantFirst => matches!(t, WorkTask::Plant(_, _)),
-                        WorkPriority::HarvestFirst => matches!(t, WorkTask::Harvest(_, _)),
-                    }
-                };
-                let mut best_task: Option<(WorkTask, f32)> = None;
-                let mut best_fallback: Option<(WorkTask, f32)> = None;
-                for task in &tasks {
-                    let (tx, ty) = task.position();
-                    let dx = pleb.x - tx as f32 - 0.5;
-                    let dy = pleb.y - ty as f32 - 0.5;
-                    let dist = dx * dx + dy * dy;
-                    if is_preferred(task) {
-                        if best_task.is_none() || dist < best_task.as_ref().unwrap().1 {
-                            best_task = Some((task.clone(), dist));
+                // Try work types in priority order (1 first, then 2, then 3)
+                let mut assigned = false;
+                for priority_level in 1..=3u8 {
+                    if assigned { break; }
+                    // Collect which work types this pleb has at this priority level
+                    for wt in 0..zones::WORK_TYPE_COUNT {
+                        if pleb.work_priorities[wt] != priority_level { continue; }
+                        match wt {
+                            zones::WORK_FARM => {
+                                // Find nearest farm task
+                                let mut best: Option<(WorkTask, f32)> = None;
+                                for task in &farm_tasks {
+                                    let (tx, ty) = task.position();
+                                    let dist = (pleb.x - tx as f32 - 0.5).powi(2) + (pleb.y - ty as f32 - 0.5).powi(2);
+                                    if best.is_none() || dist < best.as_ref().unwrap().1 {
+                                        best = Some((task.clone(), dist));
+                                    }
+                                }
+                                if let Some((task, _)) = best {
+                                    let (tx, ty) = task.position();
+                                    let task_name = match &task {
+                                        WorkTask::Plant(_, _) => "plant",
+                                        WorkTask::Harvest(_, _) => "harvest",
+                                    };
+                                    events.push((EventCategory::Farm, format!("{} going to {} at ({},{})", pleb.name, task_name, tx, ty)));
+                                    self.active_work.insert((tx, ty));
+                                    pleb.work_target = Some((tx, ty));
+                                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (tx, ty));
+                                    if !path.is_empty() {
+                                        pleb.path = path;
+                                        pleb.path_idx = 0;
+                                        pleb.activity = PlebActivity::Walking;
+                                    }
+                                    assigned = true;
+                                }
+                            }
+                            zones::WORK_HAUL => {
+                                // Find nearest ground item to haul
+                                let mut best: Option<((i32, i32), f32)> = None;
+                                for &(ix, iy) in &haul_candidates {
+                                    let dist = (pleb.x - ix as f32 - 0.5).powi(2) + (pleb.y - iy as f32 - 0.5).powi(2);
+                                    if best.is_none() || dist < best.as_ref().unwrap().1 {
+                                        best = Some(((ix, iy), dist));
+                                    }
+                                }
+                                if let Some(((ix, iy), _)) = best {
+                                    if let Some((cx, cy)) = find_nearest_crate(&self.grid_data, ix, iy) {
+                                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (ix, iy));
+                                        if !path.is_empty() {
+                                            pleb.path = path;
+                                            pleb.path_idx = 0;
+                                            pleb.activity = PlebActivity::Hauling;
+                                            pleb.harvest_target = Some((ix, iy));
+                                            pleb.haul_target = Some((cx, cy));
+                                            self.active_work.insert((ix, iy));
+                                            events.push((EventCategory::Haul, format!("{} auto-hauling to crate", pleb.name)));
+                                            assigned = true;
+                                        }
+                                    }
+                                }
+                            }
+                            // Build and Craft are handled in their own sections below
+                            _ => {}
                         }
-                    } else {
-                        if best_fallback.is_none() || dist < best_fallback.as_ref().unwrap().1 {
-                            best_fallback = Some((task.clone(), dist));
-                        }
-                    }
-                }
-                let best_task = best_task.or(best_fallback);
-
-                if let Some((task, _)) = best_task {
-                    let (tx, ty) = task.position();
-                    let task_name = match &task {
-                        WorkTask::Plant(_, _) => "plant",
-                        WorkTask::Harvest(_, _) => "harvest",
-                    };
-                    events.push((EventCategory::Farm, format!("{} going to {} at ({},{})", pleb.name, task_name, tx, ty)));
-                    self.active_work.insert((tx, ty));
-                    pleb.work_target = Some((tx, ty));
-                    // Path to the task
-                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (tx, ty));
-                    if !path.is_empty() {
-                        pleb.path = path;
-                        pleb.path_idx = 0;
-                        pleb.activity = PlebActivity::Walking;
                     }
                 }
             }

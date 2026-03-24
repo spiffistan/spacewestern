@@ -1379,6 +1379,49 @@ impl App {
                         ui.colored_label(egui::Color32::from_rgb(55, 115, 55), "\u{25a0} Work");
                         ui.colored_label(egui::Color32::from_rgb(35, 45, 95), "\u{25a0} Sleep");
                     });
+
+                    // --- Work Priorities ---
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Work Priorities").strong().size(12.0));
+                    ui.label(egui::RichText::new("Click to cycle: 1 (high) → 2 → 3 → off → 1").weak().size(9.0));
+                    ui.separator();
+
+                    egui::Grid::new("work_prio_grid").num_columns(1 + zones::WORK_TYPE_COUNT)
+                        .spacing([2.0, 2.0]).show(ui, |ui| {
+                        // Header row
+                        ui.label(egui::RichText::new("Name").size(10.0).strong());
+                        for name in &zones::WORK_TYPE_NAMES {
+                            ui.label(egui::RichText::new(*name).size(10.0).strong());
+                        }
+                        ui.end_row();
+
+                        // Per-pleb rows
+                        let friendly_indices: Vec<usize> = (0..self.plebs.len())
+                            .filter(|&i| !self.plebs[i].is_enemy && !self.plebs[i].is_dead)
+                            .collect();
+                        for pi in friendly_indices {
+                            let name = self.plebs[pi].name.clone();
+                            ui.label(egui::RichText::new(&name).size(10.0));
+                            for wt in 0..zones::WORK_TYPE_COUNT {
+                                let prio = self.plebs[pi].work_priorities[wt];
+                                let (label, color) = match prio {
+                                    1 => ("1", egui::Color32::from_rgb(80, 200, 80)),
+                                    2 => ("2", egui::Color32::from_rgb(200, 200, 60)),
+                                    3 => ("3", egui::Color32::from_rgb(160, 120, 60)),
+                                    _ => ("-", egui::Color32::from_gray(80)),
+                                };
+                                if ui.add(egui::Button::new(
+                                    egui::RichText::new(label).size(11.0).color(color)
+                                ).min_size(egui::Vec2::new(28.0, 18.0))).clicked() {
+                                    // Cycle: 1→2→3→0→1
+                                    self.plebs[pi].work_priorities[wt] = match prio {
+                                        1 => 2, 2 => 3, 3 => 0, _ => 1,
+                                    };
+                                }
+                            }
+                            ui.end_row();
+                        }
+                    });
                 });
             if !open { self.show_schedule = false; }
         }

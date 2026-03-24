@@ -180,6 +180,7 @@ pub struct Pleb {
     pub knockback_vx: f32, // explosion knockback velocity (decays over time)
     pub knockback_vy: f32,
     pub is_dead: bool,     // corpse: stays in world but doesn't act
+    pub work_priorities: [u8; 4], // [haul, farm, build, craft] — 0=off, 1-3=priority
 }
 
 /// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
@@ -261,6 +262,7 @@ impl Pleb {
             knockback_vx: 0.0,
             knockback_vy: 0.0,
             is_dead: false,
+            work_priorities: crate::zones::default_work_priorities(),
         }
     }
 
