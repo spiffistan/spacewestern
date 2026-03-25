@@ -51,11 +51,14 @@ impl App {
 
     fn draw_main_menu(&mut self, ctx: &egui::Context) {
         // Full-screen dark overlay
-        let screen = ctx.content_rect();
-        let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Foreground, egui::Id::new("main_menu_bg"),
-        ));
-        painter.rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(10, 12, 18, 230));
+        egui::Area::new(egui::Id::new("main_menu_bg"))
+            .anchor(egui::Align2::LEFT_TOP, [0.0, 0.0])
+            .interactable(false)
+            .show(ctx, |ui| {
+                let screen = ctx.content_rect();
+                ui.allocate_exact_size(screen.size(), egui::Sense::hover());
+                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(10, 12, 18, 230));
+            });
 
         egui::Area::new(egui::Id::new("main_menu"))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -83,11 +86,14 @@ impl App {
 
     fn draw_map_gen_screen(&mut self, ctx: &egui::Context) {
         // Dark overlay
-        let screen = ctx.content_rect();
-        let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Foreground, egui::Id::new("mapgen_bg"),
-        ));
-        painter.rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(10, 12, 18, 220));
+        egui::Area::new(egui::Id::new("mapgen_bg"))
+            .anchor(egui::Align2::LEFT_TOP, [0.0, 0.0])
+            .interactable(false)
+            .show(ctx, |ui| {
+                let screen = ctx.content_rect();
+                ui.allocate_exact_size(screen.size(), egui::Sense::hover());
+                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(10, 12, 18, 220));
+            });
 
         let mut start_game = false;
 
