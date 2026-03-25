@@ -819,16 +819,18 @@ pub fn generate_terrain_with_params(elevation: &[f32], water_table: &[f32], para
             } else if pond_factor > pond_thresh - 0.15 && params.clay > 0.01 {
                 TERRAIN_CLAY   // clay ring around ponds
             } else {
-                // Score each terrain type based on environmental affinity + weight
+                // Score = weight * (noise_region + environmental_bias)
+                // Each type uses its own noise field for coherent regions.
+                // Environmental factors provide subtle bias (max ±0.15), noise dominates (0.0-1.0).
                 let scores: [(u32, f32); 8] = [
-                    (TERRAIN_GRASS,  params.grass  * (0.5 + (1.0 - rockiness) * 0.3 + noise_seeded(fx * 0.08, fy * 0.08, 10) * 0.2)),
-                    (TERRAIN_LOAM,   params.loam   * (0.3 + (1.0 - aridity) * 0.5 + noise_seeded(fx * 0.06, fy * 0.06, 20) * 0.2)),
-                    (TERRAIN_CLAY,   params.clay   * (0.2 + (1.0 - aridity) * 0.4 + noise_seeded(fx * 0.07, fy * 0.07, 30) * 0.4)),
-                    (TERRAIN_CHALKY, params.chalky * (0.1 + aridity * 0.5 + rockiness * 0.3 + noise_seeded(fx * 0.05, fy * 0.05, 40) * 0.1)),
-                    (TERRAIN_ROCKY,  params.rocky  * (0.1 + elev * 0.2 + rockiness * 0.6 + noise_seeded(fx * 0.04, fy * 0.04, 50) * 0.1)),
-                    (TERRAIN_GRAVEL, params.gravel * (0.1 + rockiness * 0.4 + aridity * 0.2 + noise_seeded(fx * 0.06, fy * 0.06, 60) * 0.3)),
-                    (TERRAIN_PEAT,   params.peat   * (0.1 + moisture * 0.5 + (1.0 - elev.min(1.0)) * 0.3 + noise_seeded(fx * 0.05, fy * 0.05, 70) * 0.1)),
-                    (TERRAIN_MARSH,  params.marsh  * (0.1 + (wt + 2.0).max(0.0) * 0.3 + noise_seeded(fx * 0.04, fy * 0.04, 80) * 0.2)),
+                    (TERRAIN_GRASS,  params.grass  * (noise_seeded(fx * 0.06, fy * 0.06, 10) + (1.0 - rockiness) * 0.1)),
+                    (TERRAIN_LOAM,   params.loam   * (noise_seeded(fx * 0.06, fy * 0.06, 20) + (1.0 - aridity) * 0.15)),
+                    (TERRAIN_CLAY,   params.clay   * (noise_seeded(fx * 0.06, fy * 0.06, 30) + (1.0 - aridity) * 0.1)),
+                    (TERRAIN_CHALKY, params.chalky * (noise_seeded(fx * 0.06, fy * 0.06, 40) + aridity * 0.1 + rockiness * 0.05)),
+                    (TERRAIN_ROCKY,  params.rocky  * (noise_seeded(fx * 0.06, fy * 0.06, 50) + rockiness * 0.15)),
+                    (TERRAIN_GRAVEL, params.gravel * (noise_seeded(fx * 0.06, fy * 0.06, 60) + rockiness * 0.1)),
+                    (TERRAIN_PEAT,   params.peat   * (noise_seeded(fx * 0.06, fy * 0.06, 70) + moisture * 0.15)),
+                    (TERRAIN_MARSH,  params.marsh  * (noise_seeded(fx * 0.06, fy * 0.06, 80) + (wt + 2.0).max(0.0) * 0.1)),
                 ];
                 let mut best_type = TERRAIN_GRASS;
                 let mut best_score = -1.0f32;
