@@ -974,7 +974,7 @@ impl App {
                 if idx >= self.grid_data.len() { continue; }
                 let block = self.grid_data[idx];
                 let bt = block & 0xFF;
-                let stage = (block >> 8) & 0xFF;
+                let stage = block_height_rs(block) as u32;
                 if bt != BT_CROP || stage >= CROP_MATURE { continue; }
 
                 // --- Multi-factor growth model ---
@@ -1032,7 +1032,7 @@ impl App {
                     *timer = 0.0;
                     let new_stage = (stage + 1).min(CROP_MATURE);
                     let roof_h = block & 0xFF000000;
-                    let flags_bits = (block >> 16) & 0xFF;
+                    let flags_bits = block_flags_rs(block) as u32;
                     self.grid_data[idx] = make_block(BT_CROP as u8, new_stage as u8, flags_bits as u8) | roof_h;
                     self.grid_dirty = true;
                     if new_stage == CROP_MATURE {
@@ -1233,14 +1233,14 @@ impl App {
                                 let tbt = tblock & 0xFF;
                                 if tbt == BT_DIRT {
                                     let roof_h = tblock & 0xFF000000;
-                                    let fflags = (tblock >> 16) & 0xFF;
+                                    let fflags = block_flags_rs(tblock) as u32;
                                     self.grid_data[tidx] = make_block(BT_CROP as u8, CROP_PLANTED as u8, fflags as u8) | roof_h;
                                     self.crop_timers.insert(tidx as u32, 0.0);
                                     self.grid_dirty = true;
                                     events.push(GameEventKind::Planted(pleb.name.clone()));
                                 } else if tbt == BT_CROP {
                                     let roof_h = tblock & 0xFF000000;
-                                    let fflags = (tblock >> 16) & 0xFF;
+                                    let fflags = block_flags_rs(tblock) as u32;
                                     self.grid_data[tidx] = make_block(BT_DIRT as u8, 0, fflags as u8) | roof_h;
                                     self.crop_timers.remove(&(tidx as u32));
                                     self.grid_dirty = true;

@@ -427,7 +427,7 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
 
         let block = grid[(iy as u32 * GRID_W + ix as u32) as usize];
         let bt = block_type_rs(block);
-        let bh = (block >> 8) & 0xFF;
+        let bh = block_height_rs(block) as u32;
         let is_door = (block >> 16) & 1 != 0;
         let is_open = (block >> 16) & 4 != 0;
 

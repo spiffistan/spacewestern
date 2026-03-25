@@ -10,7 +10,7 @@ impl App {
             let idx = cidx as usize;
             if idx < self.grid_data.len() {
                 let block = self.grid_data[idx];
-                if (block & 0xFF) == BT_CRATE {
+                if block_type_rs(block) == BT_CRATE {
                     // Store item count in height byte (bits 8-15)
                     self.grid_data[idx] = (block & 0xFFFF00FF) | ((count as u32) << 8);
                     self.grid_dirty = true;
@@ -152,7 +152,7 @@ impl App {
         let idx = (y as u32 * GRID_W + x as u32) as usize;
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
-        let bh = (block >> 8) & 0xFF;
+        let bh = block_height_rs(block) as u32;
         if on_furniture {
             return bt == BT_BENCH;
         }
@@ -384,7 +384,7 @@ impl App {
                 if Self::can_support_roof(&self.grid_data, tx, ty) {
                     let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                     let block = self.grid_data[idx];
-                    let bh = (block >> 8) & 0xFF;
+                    let bh = block_height_rs(block) as u32;
                     if bh == 0 { // only floor-level tiles
                         self.grid_data[idx] |= 2 << 16; // set roof flag (bit 1)
                         self.grid_dirty = true;
@@ -437,7 +437,7 @@ impl App {
                 let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                 let block = self.grid_data[idx];
                 let bt = block_type_rs(block);
-                let bh = (block >> 8) & 0xFF;
+                let bh = block_height_rs(block) as u32;
                 if (bt == 0 || bt == 2) && bh == 0 {
                     let roof_flag = block_flags_rs(block) & 2;
                     let roof_h = block & 0xFF000000;
@@ -482,7 +482,7 @@ impl App {
                 let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                 let block = self.grid_data[idx];
                 let bt = block_type_rs(block);
-                let bh = (block >> 8) & 0xFF;
+                let bh = block_height_rs(block) as u32;
                 let wire_anywhere = bid == BT_WIRE;
                 let btu = bt as u32;
                 let gas_pipe_compat = bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(btu, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
@@ -530,7 +530,7 @@ impl App {
                     if is_line_type && same_type {
                         if btu == bid {
                             // Same type: just merge new connections into existing mask
-                            let existing_h = ((block >> 8) & 0xFF) as u8;
+                            let existing_h = (block_height_rs(block) as u32) as u8;
                             let merged = existing_h | conn;
                             self.grid_data[idx] = (block & 0xFFFF00FF) | ((merged as u32) << 8);
                         } else {
@@ -1030,8 +1030,8 @@ impl App {
                 }
                 BuildTool::Window => {
                     // Window (glass): replaces wall blocks
-                    if bt_is!(bt, BT_STONE, BT_WALL, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0 {
-                        let height = ((block >> 8) & 0xFF) as u8;
+                    if bt_is!(bt, BT_STONE, BT_WALL, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && block_height_rs(block) as u32 > 0 {
+                        let height = (block_height_rs(block) as u32) as u8;
                         let roof_flag = flags & 2;
                         let roof_h = block & 0xFF000000;
                         self.grid_data[idx] = make_block(5, height, roof_flag) | roof_h;
@@ -1042,7 +1042,7 @@ impl App {
                 }
                 BuildTool::Door => {
                     // Door: replaces wall blocks with door
-                    if bt_is!(bt, BT_STONE, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && (block >> 8) & 0xFF > 0 {
+                    if bt_is!(bt, BT_STONE, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && block_height_rs(block) as u32 > 0 {
                         let roof_h = block & 0xFF000000;
                         // Door: height 1, flag bit0=is_door, starts closed (bit2=0)
                         self.grid_data[idx] = make_block(4, 1, 1) | roof_h;
@@ -1091,7 +1091,7 @@ impl App {
                                 ));
                             }
                         } else if bt_dig == BT_DUG_GROUND {
-                            let depth = (block >> 8) & 0xFF;
+                            let depth = block_height_rs(block) as u32;
                             if depth < 5 {
                                 self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, (depth + 1) as u8, 0) | roof_h;
                                 self.grid_dirty = true;
@@ -1119,7 +1119,7 @@ impl App {
                     return;
                 }
                 BuildTool::StorageZone => {
-                    let bh = (block >> 8) & 0xFF;
+                    let bh = block_height_rs(block) as u32;
                     if bh == 0 { // floor-level tiles only
                         if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Storage) {
                             zone.tiles.insert((bx, by));
