@@ -57,7 +57,7 @@ impl App {
             .show(ctx, |ui| {
                 let screen = ctx.content_rect();
                 ui.allocate_exact_size(screen.size(), egui::Sense::hover());
-                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(10, 12, 18, 230));
+                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_rgb(10, 12, 18));
             });
 
         egui::Area::new(egui::Id::new("main_menu"))
@@ -92,7 +92,7 @@ impl App {
             .show(ctx, |ui| {
                 let screen = ctx.content_rect();
                 ui.allocate_exact_size(screen.size(), egui::Sense::hover());
-                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(10, 12, 18, 220));
+                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_rgb(10, 12, 18));
             });
 
         let mut start_game = false;
@@ -143,6 +143,10 @@ impl App {
                             }
                             if ui.small_button("Random").clicked() {
                                 self.terrain_params.seed = (self.frame_count.wrapping_mul(2654435761)) % 10000;
+                                // Auto-regenerate preview
+                                self.terrain_data = grid::generate_terrain_with_params(
+                                    &self.elevation_data, &self.water_table, &self.terrain_params);
+                                self.terrain_dirty = true;
                             }
                         });
 
