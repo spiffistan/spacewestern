@@ -606,7 +606,7 @@ pub fn critical_need(needs: &PlebNeeds) -> Option<(&'static str, f32)> {
     ];
     pairs.iter()
         .filter(|(_, v)| *v < 0.2)
-        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|&(name, val)| (name, val))
 }
 

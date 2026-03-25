@@ -1183,7 +1183,7 @@ impl App {
             && !self.sound_sources.is_empty() && !false
         {
             if let Some(src) = self.sound_sources.iter()
-                .max_by(|a, b| a.amplitude.abs().partial_cmp(&b.amplitude.abs()).unwrap())
+                .max_by(|a, b| a.amplitude.abs().partial_cmp(&b.amplitude.abs()).unwrap_or(std::cmp::Ordering::Equal))
             {
                 let coupling = self.sound_coupling;
                 let fx = src.x / GRID_W as f32 * fluid_res as f32;

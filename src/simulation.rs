@@ -1107,18 +1107,19 @@ impl App {
                         if pleb.work_priorities[wt] != priority_level { continue; }
                         match wt {
                             zones::WORK_FARM => {
-                                // Find nearest farm task
-                                let mut best: Option<(WorkTask, f32)> = None;
-                                for task in &farm_tasks {
+                                // Find nearest farm task (store index to avoid clone)
+                                let mut best: Option<(usize, f32)> = None;
+                                for (i, task) in farm_tasks.iter().enumerate() {
                                     let (tx, ty) = task.position();
                                     let dist = (pleb.x - tx as f32 - 0.5).powi(2) + (pleb.y - ty as f32 - 0.5).powi(2);
-                                    if best.is_none() || dist < best.as_ref().unwrap().1 {
-                                        best = Some((task.clone(), dist));
+                                    if best.map_or(true, |(_, bd)| dist < bd) {
+                                        best = Some((i, dist));
                                     }
                                 }
-                                if let Some((task, _)) = best {
+                                if let Some((task_idx, _)) = best {
+                                    let task = &farm_tasks[task_idx];
                                     let (tx, ty) = task.position();
-                                    let task_name = match &task {
+                                    let task_name = match task {
                                         WorkTask::Plant(_, _) => "plant",
                                         WorkTask::Harvest(_, _) => "harvest",
                                     };
@@ -1140,7 +1141,7 @@ impl App {
                                 let mut best: Option<((i32, i32), f32)> = None;
                                 for &(ix, iy) in &haul_candidates {
                                     let dist = (pleb.x - ix as f32 - 0.5).powi(2) + (pleb.y - iy as f32 - 0.5).powi(2);
-                                    if best.is_none() || dist < best.as_ref().unwrap().1 {
+                                    if best.map_or(true, |(_, bd)| dist < bd) {
                                         best = Some(((ix, iy), dist));
                                     }
                                 }
@@ -1182,7 +1183,7 @@ impl App {
                                     }).unwrap_or(false);
                                     if !craftable { continue; }
                                     let dist = (pleb.x - sx as f32 - 0.5).powi(2) + (pleb.y - sy as f32 - 0.5).powi(2);
-                                    if best.is_none() || dist < best.as_ref().unwrap().1 {
+                                    if best.map_or(true, |(_, bd)| dist < bd) {
                                         best = Some(((sx, sy, gidx), dist));
                                     }
                                 }
@@ -1514,7 +1515,7 @@ impl App {
                         if pleb.is_enemy || pleb.work_target.is_some() { continue; }
                         if !matches!(pleb.activity, PlebActivity::Idle) { continue; }
                         let dist = ((pleb.x - bx as f32 - 0.5).powi(2) + (pleb.y - by as f32 - 0.5).powi(2)).sqrt();
-                        if dist < 40.0 && (best.is_none() || dist < best.unwrap().1) {
+                        if dist < 40.0 && (best.map_or(true, |(_, bd)| dist < bd)) {
                             best = Some((i, dist));
                         }
                     }
@@ -1588,7 +1589,7 @@ impl App {
                                 if pleb.is_enemy || pleb.is_dead || pleb.work_target.is_some() { continue; }
                                 if !matches!(pleb.activity, PlebActivity::Idle) { continue; }
                                 let dist = ((pleb.x - pickup_pos.0 as f32 - 0.5).powi(2) + (pleb.y - pickup_pos.1 as f32 - 0.5).powi(2)).sqrt();
-                                if dist < 50.0 && (best_pleb.is_none() || dist < best_pleb.unwrap().1) {
+                                if dist < 50.0 && (best_pleb.map_or(true, |(_, bd)| dist < bd)) {
                                     best_pleb = Some((i, dist));
                                 }
                             }
@@ -1679,7 +1680,7 @@ impl App {
                             let d = ((ix - sx).pow(2) + (iy - sy).pow(2)) as f32;
                             (sx, sy, d)
                         })
-                        .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+                        .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
                     let Some((sx, sy, _)) = nearest_slot else { break; };
                     // Find nearest idle pleb not already doing something
                     let mut best_pleb: Option<(usize, f32)> = None;
@@ -1687,7 +1688,7 @@ impl App {
                         if pleb.is_enemy || pleb.work_target.is_some() || pleb.haul_target.is_some() { continue; }
                         if !matches!(pleb.activity, PlebActivity::Idle) { continue; }
                         let dist = ((pleb.x - ix as f32 - 0.5).powi(2) + (pleb.y - iy as f32 - 0.5).powi(2)).sqrt();
-                        if dist < 40.0 && (best_pleb.is_none() || dist < best_pleb.unwrap().1) {
+                        if dist < 40.0 && (best_pleb.map_or(true, |(_, bd)| dist < bd)) {
                             best_pleb = Some((pi, dist));
                         }
                     }

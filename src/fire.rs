@@ -81,7 +81,10 @@ pub fn tick_fire(
             None => { burn_progress.remove(&idx); continue; }
         };
 
-        let progress = burn_progress.get_mut(&idx).unwrap();
+        let progress = match burn_progress.get_mut(&idx) {
+            Some(p) => p,
+            None => continue, // entry removed by another pass
+        };
 
         // Advance burn progress
         let wet = if idx < wetness.len() { wetness[idx] } else { 0.0 };

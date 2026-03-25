@@ -554,9 +554,10 @@ pub fn compute_terrain_ao(elevation: &[f32]) -> Vec<f32> {
 
     // Pass 2: Gaussian blur (7×7 kernel, applied twice for extra softness)
     let kernel: [f32; 7] = [0.03, 0.11, 0.22, 0.28, 0.22, 0.11, 0.03];
+    let mut temp = vec![0.0f32; ao.len()]; // pre-allocate once, reuse across passes
     for _pass in 0..2 {
         // Horizontal
-        let mut temp = ao.clone();
+        temp.copy_from_slice(&ao);
         for y in 0..h {
             for x in 0..w {
                 let mut sum = 0.0f32;

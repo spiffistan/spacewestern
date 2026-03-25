@@ -695,7 +695,7 @@ impl App {
             for (i, p) in self.plebs.iter().enumerate() {
                 if p.activity.is_crisis() || p.inventory.is_carrying() || p.is_enemy { continue; }
                 let dist = ((p.x - bx as f32 - 0.5).powi(2) + (p.y - by as f32 - 0.5).powi(2)).sqrt();
-                if best_pleb.is_none() || dist < best_pleb.unwrap().1 {
+                if best_pleb.map_or(true, |(_, bd)| dist < bd) {
                     best_pleb = Some((i, dist));
                 }
             }
