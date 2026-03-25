@@ -95,10 +95,12 @@ impl App {
                     if ui.add_sized(btn_size, egui::Button::new(
                         egui::RichText::new("Sample Map").size(14.0)
                     )).clicked() {
+                        self.regenerate_world_preview();
                         grid::generate_sample_buildings(&mut self.grid_data);
                         compute_roof_heights(&mut self.grid_data);
                         self.grid_dirty = true;
-                        self.regenerate_world_preview();
+                        // Spawn sample enemies
+                        self.spawn_sample_enemies();
                         self.game_state = GameState::Playing;
                     }
                     ui.add_space(8.0);

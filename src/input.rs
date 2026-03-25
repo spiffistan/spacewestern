@@ -274,6 +274,38 @@ impl App {
 
     /// Handle build tool placement at grid position.
     /// Get the bounding box (origin + size) for a block, accounting for multi-tile items.
+    /// Spawn sample enemies for the demo map.
+    pub(crate) fn spawn_sample_enemies(&mut self) {
+        let cx = (GRID_W / 2) as f32 + 0.5;
+        let cy = (GRID_H / 2) as f32 + 0.5;
+
+        let spawn_enemy = |plebs: &mut Vec<Pleb>, next_id: &mut usize, name: &str, x: f32, y: f32, seed: u32| {
+            let mut e = Pleb::new(*next_id, name.to_string(), x, y, seed);
+            e.is_enemy = true;
+            e.wander_timer = 3.0;
+            // Redskull: distinctive red skin, dark clothes
+            e.appearance.skin_r = 0.8;
+            e.appearance.skin_g = 0.15;
+            e.appearance.skin_b = 0.1;
+            e.appearance.shirt_r = 0.2;
+            e.appearance.shirt_g = 0.1;
+            e.appearance.shirt_b = 0.1;
+            e.appearance.pants_r = 0.15;
+            e.appearance.pants_g = 0.1;
+            e.appearance.pants_b = 0.1;
+            e.appearance.hair_r = 0.1;
+            e.appearance.hair_g = 0.05;
+            e.appearance.hair_b = 0.05;
+            *next_id += 1;
+            plebs.push(e);
+        };
+
+        // Spawn Redskulls around the base perimeter
+        spawn_enemy(&mut self.plebs, &mut self.next_pleb_id, "Redskull", cx + 25.0, cy - 15.0, 666);
+        spawn_enemy(&mut self.plebs, &mut self.next_pleb_id, "Redskull", cx - 20.0, cy + 18.0, 667);
+        spawn_enemy(&mut self.plebs, &mut self.next_pleb_id, "Redskull", cx + 30.0, cy + 10.0, 668);
+    }
+
     pub(crate) fn notify(&mut self, category: NotifCategory, icon: &'static str, title: impl Into<String>, desc: impl Into<String>) {
         self.next_notif_id += 1;
         self.notifications.push(GameNotification {
