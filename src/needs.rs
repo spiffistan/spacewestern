@@ -43,8 +43,10 @@ const TEMP_HOT_RANGE: f32 = 50.0;        // degrees above comfortable before war
 
 // --- Warmth fallback (no fluid sim) ---
 const WARMTH_INDOORS: f32 = 0.7;
-const WARMTH_NIGHT_OUTDOORS: f32 = 0.2;
+const WARMTH_INDOORS_FIRE: f32 = 1.0;   // near fireplace indoors
+const WARMTH_NIGHT_OUTDOORS: f32 = 0.05; // dangerous — below freeze threshold
 const WARMTH_DAY_OUTDOORS: f32 = 0.5;
+const WARMTH_DUSK_OUTDOORS: f32 = 0.25;  // transition period
 
 // --- Night/day boundary ---
 const NIGHT_START_FRAC: f32 = 0.85;
@@ -145,6 +147,7 @@ pub struct EnvSample {
     pub nearest_berry_bush: Option<(i32, i32)>, // coords of nearest berry bush
     pub nearest_crate: Option<(i32, i32)>,     // coords of nearest storage crate
     pub is_night: bool,
+    pub is_dusk: bool,        // transition period (getting cold)
     pub fire_dist: f32,       // distance to nearest fire (for danger)
 }
 
@@ -162,6 +165,7 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
     };
 
     let is_night = day_frac < NIGHT_END_FRAC || day_frac > NIGHT_START_FRAC;
+    let is_dusk = !is_night && (day_frac > 0.75 || day_frac < 0.20); // dusk/dawn transition
 
     let mut near_fire = false;
     let mut near_heater = false;
@@ -230,6 +234,7 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
         nearest_berry_bush,
         nearest_crate,
         is_night,
+        is_dusk,
         fire_dist,
     }
 }
@@ -322,12 +327,20 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
         }
     } else {
         // Fallback: grid-based approximation
-        if env.near_fire || env.near_heater { 1.0 }
-        else if env.is_indoors { WARMTH_INDOORS }
-        else if env.is_night { WARMTH_NIGHT_OUTDOORS }
-        else { WARMTH_DAY_OUTDOORS }
+        if env.near_fire || env.near_heater {
+            if env.is_indoors { WARMTH_INDOORS_FIRE } else { 0.6 } // fire outdoors helps but not as much
+        } else if env.is_indoors {
+            WARMTH_INDOORS
+        } else if env.is_night {
+            WARMTH_NIGHT_OUTDOORS // dangerous cold
+        } else if env.is_dusk {
+            WARMTH_DUSK_OUTDOORS  // getting cold
+        } else {
+            WARMTH_DAY_OUTDOORS
+        }
     };
-    let rate = if target_warmth > needs.warmth { 0.3 } else { 0.5 };
+    // Warming is slow, cooling is fast (hypothermia sets in quickly)
+    let rate = if target_warmth > needs.warmth { 0.2 } else { 0.6 };
     needs.warmth += (target_warmth - needs.warmth) * rate * t;
     needs.warmth = needs.warmth.clamp(0.0, 1.0);
 
@@ -649,6 +662,7 @@ mod tests {
             nearest_berry_bush: None,
             nearest_crate: None,
             is_night: false,
+            is_dusk: false,
             fire_dist: f32::MAX,
         }
     }
@@ -704,7 +718,7 @@ mod tests {
         for _ in 0..10 {
             tick_needs(&mut needs, &env, 0.5, 1.0, false, false, Some(&warm_air));
         }
-        assert!(needs.warmth > 0.8, "warmth should rise in warm air, got {}", needs.warmth);
+        assert!(needs.warmth > 0.6, "warmth should rise in warm air, got {}", needs.warmth);
     }
 
     #[test]

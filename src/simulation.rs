@@ -1934,6 +1934,18 @@ fn tick_pleb_activity(
             pleb.path.clear();
             pleb.path_idx = 0;
         }
+    } else if pleb.needs.warmth < 0.12 && is_idle_or_walk && !pleb.activity.is_crisis() {
+        // CRISIS: Freezing — seek shelter (indoors or near fire)
+        if env.is_indoors || env.near_fire {
+            // Already sheltered, just wait it out
+        } else if let Some((bx, by)) = env.nearest_bed {
+            // Run to nearest bed (likely indoors)
+            send_pleb_to(pleb, grid, terrain, (bx, by),
+                PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Freezing!"));
+        } else {
+            // No shelter — huddle in place
+            pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Idle), "Freezing!");
+        }
     }
 
     // CRISIS: Overheating — overrides ALL activities (even sleeping/harvesting)
