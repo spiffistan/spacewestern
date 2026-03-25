@@ -584,7 +584,7 @@ impl App {
                                 && self.blueprints.contains_key(&(cx, cy));
                             let is_crate = {
                                 let ci = (cy as u32 * GRID_W + cx as u32) as usize;
-                                ci < self.grid_data.len() && (self.grid_data[ci] & 0xFF) == 33
+                                ci < self.grid_data.len() && block_type_rs(self.grid_data[ci]) == BT_CRATE
                             };
                             if is_blueprint {
                                 // Deliver materials to blueprint
