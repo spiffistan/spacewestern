@@ -1033,7 +1033,8 @@ impl App {
                     self.grid_data[idx] = make_block(replacement as u8, 0, 0) | (if replacement == BT_AIR { 0 } else { roof_h });
                 }
                 self.grid_dirty = true;
-                self.log_event(EventCategory::Weather, format!("Fire consumed block at ({}, {})", bx, by));
+                let evt = GameEventKind::FireConsumed(bx, by);
+                self.log_event(evt.category(), evt.message());
             }
             if !destroyed.is_empty() {
                 compute_roof_heights(&mut self.grid_data);

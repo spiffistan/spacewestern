@@ -146,12 +146,123 @@ impl WorldSelection {
     pub fn is_empty(&self) -> bool { self.items.is_empty() }
 }
 
-// --- Event Log ---
+// --- Event Bus ---
+
+/// Typed game event — no string allocations, match-friendly for notifications.
+#[derive(Clone, Debug)]
+pub enum GameEventKind {
+    // Weather
+    WeatherChanged(&'static str),
+    DroughtStarted,
+    DroughtEnded(String),
+    Lightning(i32, i32),
+    FireConsumed(i32, i32),
+
+    // Pleb needs / crisis
+    CrisisStarted { pleb: String, reason: &'static str },
+    MentalBreak { pleb: String, kind: &'static str },
+    MentalBreakRecovered { pleb: String, kind: &'static str },
+    PlebDied(String),
+
+    // Combat
+    PlebHit { pleb: String, hp_pct: f32 },
+    Explosion(f32, f32),
+
+    // Hauling
+    PickedUp { pleb: String, count: u16, item: String },
+    Delivered { pleb: String, material: &'static str, amount: u32 },
+    Deposited(String),
+    Dropped(String),
+    Stored(String),
+    AutoHauling(String),
+
+    // Farming
+    TaskAssigned { pleb: String, task: &'static str, x: i32, y: i32 },
+    Planted(String),
+    Harvested { pleb: String, what: &'static str },
+    DugClay { pleb: String, amount: u16 },
+
+    // Building / crafting
+    GoingToCraft(String),
+    Crafting { pleb: String, recipe: String },
+    Crafted { pleb: String, recipe: String },
+    Built { pleb: String, block: String },
+
+    // Generic (for transitional use)
+    Generic(EventCategory, String),
+}
+
+impl GameEventKind {
+    /// Event category for log coloring.
+    pub fn category(&self) -> EventCategory {
+        match self {
+            Self::WeatherChanged(_) | Self::DroughtStarted | Self::DroughtEnded(_)
+                | Self::Lightning(_, _) | Self::FireConsumed(_, _) => EventCategory::Weather,
+            Self::CrisisStarted { .. } | Self::MentalBreak { .. }
+                | Self::MentalBreakRecovered { .. } | Self::PlebDied(_) => EventCategory::Need,
+            Self::PlebHit { .. } | Self::Explosion(_, _) => EventCategory::Combat,
+            Self::PickedUp { .. } | Self::Delivered { .. } | Self::Deposited(_)
+                | Self::Dropped(_) | Self::Stored(_) | Self::AutoHauling(_) => EventCategory::Haul,
+            Self::TaskAssigned { .. } | Self::Planted(_) | Self::Harvested { .. }
+                | Self::DugClay { .. } => EventCategory::Farm,
+            Self::GoingToCraft(_) | Self::Crafting { .. } | Self::Crafted { .. }
+                | Self::Built { .. } => EventCategory::Build,
+            Self::Generic(cat, _) => *cat,
+        }
+    }
+
+    /// Human-readable message for the event log.
+    pub fn message(&self) -> String {
+        match self {
+            Self::WeatherChanged(label) => label.to_string(),
+            Self::DroughtStarted => "Drought has begun!".to_string(),
+            Self::DroughtEnded(name) => format!("{} has ended", name),
+            Self::Lightning(x, y) => format!("Lightning strike at ({}, {})", x, y),
+            Self::FireConsumed(x, y) => format!("Fire consumed block at ({}, {})", x, y),
+            Self::CrisisStarted { pleb, reason } => format!("{}: {}", pleb, reason),
+            Self::MentalBreak { pleb, kind } => format!("{} is having a mental break: {}!", pleb, kind),
+            Self::MentalBreakRecovered { pleb, kind } => format!("{} recovered from {}", pleb, kind),
+            Self::PlebDied(pleb) => format!("{} has died!", pleb),
+            Self::PlebHit { pleb, hp_pct } => format!("{} hit! ({:.0}% hp)", pleb, hp_pct),
+            Self::Explosion(x, y) => format!("Explosion at ({:.0}, {:.0})", x, y),
+            Self::PickedUp { pleb, count, item } => format!("{} picked up {} {}", pleb, count, item),
+            Self::Delivered { pleb, material, amount } => format!("{} delivered {} {}", pleb, amount, material),
+            Self::Deposited(pleb) => format!("{} deposited items", pleb),
+            Self::Dropped(pleb) => format!("{} dropped items (crate full)", pleb),
+            Self::Stored(pleb) => format!("{} stored items", pleb),
+            Self::AutoHauling(pleb) => format!("{} auto-hauling to crate", pleb),
+            Self::TaskAssigned { pleb, task, x, y } => format!("{} going to {} at ({},{})", pleb, task, x, y),
+            Self::Planted(pleb) => format!("{} planted a crop", pleb),
+            Self::Harvested { pleb, what } => format!("{} harvested {}", pleb, what),
+            Self::DugClay { pleb, amount } => format!("{} dug {} clay", pleb, amount),
+            Self::GoingToCraft(pleb) => format!("{} going to craft", pleb),
+            Self::Crafting { pleb, recipe } => format!("{} crafting {}", pleb, recipe),
+            Self::Crafted { pleb, recipe } => format!("{} crafted {}", pleb, recipe),
+            Self::Built { pleb, block } => format!("{} built {}", pleb, block),
+            Self::Generic(_, msg) => msg.clone(),
+        }
+    }
+
+    /// Should this event trigger a toast notification?
+    pub fn notification(&self) -> Option<(NotifCategory, &'static str, &'static str)> {
+        match self {
+            Self::PlebDied(_) | Self::PlebHit { .. } | Self::Explosion(_, _) =>
+                Some((NotifCategory::Threat, "\u{2694}", "Combat")),
+            Self::CrisisStarted { .. } | Self::MentalBreak { .. } =>
+                Some((NotifCategory::Warning, "\u{26a0}", "Need")),
+            Self::Crafted { .. } | Self::Built { .. } =>
+                Some((NotifCategory::Positive, "\u{2705}", "Complete")),
+            Self::DroughtStarted | Self::Lightning(_, _) =>
+                Some((NotifCategory::Warning, "\u{26a1}", "Weather")),
+            _ => None,
+        }
+    }
+}
 
 /// In-game event log entry.
 #[derive(Clone, Debug)]
 pub struct GameEvent {
-    pub time: f32,           // game time when event occurred
+    pub time: f32,
     pub message: String,
     pub category: EventCategory,
 }

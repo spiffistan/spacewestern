@@ -9,7 +9,7 @@ use crate::zones::*;
 impl App {
     /// Update all simulation state. Returns frame delta time.
     pub(crate) fn update_simulation(&mut self) -> f32 {
-        let mut events: Vec<(EventCategory, String)> = Vec::new();
+        let mut events: Vec<GameEventKind> = Vec::new();
 
         // Advance time + FPS tracking
         let now = Instant::now();
@@ -35,7 +35,7 @@ impl App {
                 }
             }
             for name in &ended {
-                events.push((EventCategory::Weather, format!("{} has ended", name)));
+                events.push(GameEventKind::DroughtEnded(name.to_string()));
                 self.notify(NotifCategory::Positive, "\u{2705}", &format!("{} ended", name), "Conditions returning to normal.");
             }
             self.conditions.retain(|c| c.remaining > 0.0 || c.duration == 0.0);
@@ -50,7 +50,7 @@ impl App {
                     self.add_condition("Drought", "\u{2600}", NotifCategory::Threat, duration);
                     self.notify(NotifCategory::Threat, "\u{2600}", "Drought",
                         format!("A drought has begun! Water drying up. ({:.0}s)", duration));
-                    events.push((EventCategory::Weather, "Drought has begun!".to_string()));
+                    events.push(GameEventKind::DroughtStarted);
                 }
             }
         }
@@ -114,7 +114,7 @@ impl App {
                     WeatherState::LightRain => "Weather: Light rain",
                     WeatherState::HeavyRain => "Weather: Heavy rain",
                 };
-                events.push((EventCategory::Weather, label.to_string()));
+                events.push(GameEventKind::WeatherChanged(label));
                 self.weather = new_weather;
             }
             // --- Lightning during heavy rain ---
@@ -166,7 +166,7 @@ impl App {
                         // Voltage surge injection + breaker tripping happens in render pass
                         // via GPU voltage buffer writes + GPU-side breaker threshold check
 
-                        events.push((EventCategory::Weather, format!("Lightning strike at ({}, {})", sx, sy)));
+                        events.push(GameEventKind::Lightning(sx, sy));
                     }
 
                     // Next strike in 5-15 game seconds
@@ -476,7 +476,7 @@ impl App {
                 // Log new crisis
                 if pleb.activity.is_crisis() && !was_crisis {
                     if let Some(reason) = pleb.activity.crisis_reason() {
-                        events.push((EventCategory::Need, format!("{}: {}", pleb.name, reason)));
+                        events.push(GameEventKind::CrisisStarted { pleb: pleb.name.clone(), reason });
                     }
                 }
 
@@ -544,7 +544,7 @@ impl App {
                                 self.grid_dirty = true;
                                 pleb.inventory.add(ITEM_ROCK, 1);
                                 pleb.harvest_target = None;
-                                events.push((EventCategory::Haul, format!("{} picked up a rock", pleb.name)));
+                                events.push(GameEventKind::PickedUp { pleb: pleb.name.clone(), count: 1, item: "rock".into() });
                             } else if let Some(wi) = self.ground_items.iter().position(|item| {
                                 item.x.floor() as i32 == rx && item.y.floor() as i32 == ry
                             }) {
@@ -557,7 +557,7 @@ impl App {
                                 else { self.ground_items[wi].stack.count -= take; }
                                 pleb.inventory.add(item_id, take);
                                 let name = ItemRegistry::cached().name(item_id);
-                                events.push((EventCategory::Haul, format!("{} picked up {} {}", pleb.name, take, name)));
+                                events.push(GameEventKind::PickedUp { pleb: pleb.name.clone(), count: take, item: name.to_string() });
                                 pleb.harvest_target = None;
                             } else {
                                 // Item gone
@@ -595,7 +595,7 @@ impl App {
                                         bp.wood_delivered += deliver;
                                         pleb.inventory.remove(ITEM_WOOD, deliver as u16);
                                         if deliver > 0 {
-                                            events.push((EventCategory::Haul, format!("{} delivered {} wood", pleb.name, deliver)));
+                                            events.push(GameEventKind::Delivered { pleb: pleb.name.clone(), material: "wood", amount: deliver });
                                         }
                                     }
                                     if bp.clay_delivered < bp.clay_needed {
@@ -604,7 +604,7 @@ impl App {
                                         bp.clay_delivered += deliver;
                                         pleb.inventory.remove(ITEM_CLAY, deliver as u16);
                                         if deliver > 0 {
-                                            events.push((EventCategory::Haul, format!("{} delivered {} clay", pleb.name, deliver)));
+                                            events.push(GameEventKind::Delivered { pleb: pleb.name.clone(), material: "clay", amount: deliver });
                                         }
                                     }
                                 }
@@ -635,7 +635,7 @@ impl App {
                                     // All deposited successfully
                                     pleb.haul_target = None;
                                     pleb.activity = PlebActivity::Idle;
-                                    events.push((EventCategory::Haul, format!("{} deposited items", pleb.name)));
+                                    events.push(GameEventKind::Deposited(pleb.name.clone()));
                                 } else {
                                     // Crate full, still carrying — try another crate or drop at storage zone
                                     let px = pleb.x.floor() as i32;
@@ -659,7 +659,7 @@ impl App {
                                         }
                                         pleb.haul_target = None;
                                         pleb.activity = PlebActivity::Idle;
-                                        events.push((EventCategory::Haul, format!("{} dropped items (crate full)", pleb.name)));
+                                        events.push(GameEventKind::Dropped(pleb.name.clone()));
                                     }
                                 }
                             } else {
@@ -671,7 +671,7 @@ impl App {
                                 }
                                 pleb.haul_target = None;
                                 pleb.activity = PlebActivity::Idle;
-                                events.push((EventCategory::Haul, format!("{} stored items", pleb.name)));
+                                events.push(GameEventKind::Stored(pleb.name.clone()));
                             }
                         }
                     }
@@ -852,7 +852,7 @@ impl App {
                     // Look up damage from the projectile that hit (scan bodies for the source)
                     // For now use a fixed lookup since bullets are the only hitscan type
                     let dmg = projectile_def(PROJ_BULLET).hit_damage;
-                    events.push((EventCategory::Combat, format!("{} hit! ({:.0}% hp)", pleb.name, (pleb.needs.health - dmg).max(0.0) * 100.0)));
+                    events.push(GameEventKind::PlebHit { pleb: pleb.name.clone(), hp_pct: (pleb.needs.health - dmg).max(0.0) * 100.0 });
                     pleb.needs.health -= dmg;
                     self.fluid_params.splat_x = hit.x;
                     self.fluid_params.splat_y = hit.y;
@@ -961,7 +961,7 @@ impl App {
                 self.fluid_params.splat_radius = 4.0;
                 self.fluid_params.splat_active = 1.0;
 
-                events.push((EventCategory::Combat, format!("Explosion at ({:.0}, {:.0})", expl.x, expl.y)));
+                events.push(GameEventKind::Explosion(expl.x, expl.y));
             }
         }
 
@@ -1123,7 +1123,7 @@ impl App {
                                         WorkTask::Plant(_, _) => "plant",
                                         WorkTask::Harvest(_, _) => "harvest",
                                     };
-                                    events.push((EventCategory::Farm, format!("{} going to {} at ({},{})", pleb.name, task_name, tx, ty)));
+                                    events.push(GameEventKind::TaskAssigned { pleb: pleb.name.clone(), task: task_name, x: tx, y: ty });
                                     self.active_work.insert((tx, ty));
                                     pleb.work_target = Some((tx, ty));
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
@@ -1156,7 +1156,7 @@ impl App {
                                             pleb.harvest_target = Some((ix, iy));
                                             pleb.haul_target = Some((cx, cy));
                                             self.active_work.insert((ix, iy));
-                                            events.push((EventCategory::Haul, format!("{} auto-hauling to crate", pleb.name)));
+                                            events.push(GameEventKind::AutoHauling(pleb.name.clone()));
                                             assigned = true;
                                         }
                                     }
@@ -1197,7 +1197,7 @@ impl App {
                                         pleb.activity = PlebActivity::Walking;
                                         pleb.work_target = Some((sx, sy));
                                         self.active_work.insert((sx, sy));
-                                        events.push((EventCategory::Build, format!("{} going to craft", pleb.name)));
+                                        events.push(GameEventKind::GoingToCraft(pleb.name.clone()));
                                         assigned = true;
                                     }
                                 }
@@ -1237,7 +1237,7 @@ impl App {
                                     self.grid_data[tidx] = make_block(BT_CROP as u8, CROP_PLANTED as u8, fflags as u8) | roof_h;
                                     self.crop_timers.insert(tidx as u32, 0.0);
                                     self.grid_dirty = true;
-                                    events.push((EventCategory::Farm, format!("{} planted a crop", pleb.name)));
+                                    events.push(GameEventKind::Planted(pleb.name.clone()));
                                 } else if tbt == BT_CROP {
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = (tblock >> 16) & 0xFF;
@@ -1253,13 +1253,13 @@ impl App {
                                         x: pleb.x + 0.2, y: pleb.y + 0.2,
                                         stack: ItemStack::new(ITEM_FIBER, 2),
                                     });
-                                    events.push((EventCategory::Farm, format!("{} harvested a crop (berries + fiber)", pleb.name)));
+                                    events.push(GameEventKind::Harvested { pleb: pleb.name.clone(), what: "a crop (berries + fiber)" });
                                 } else if tbt == BT_BERRY_BUSH {
                                     self.ground_items.push(resources::GroundItem {
                                         x: pleb.x, y: pleb.y,
                                         stack: ItemStack::new(ITEM_BERRIES, 3),
                                     });
-                                    events.push((EventCategory::Farm, format!("{} harvested berries (3 berries dropped)", pleb.name)));
+                                    events.push(GameEventKind::Harvested { pleb: pleb.name.clone(), what: "berries" });
                                 } else if tbt == BT_TREE {
                                     // Chop down tree → remove all quadrants (2x2), drop 10 wood
                                     // Find the top-left corner from the quadrant flags
@@ -1295,7 +1295,7 @@ impl App {
                                         x: drop_x - 0.3, y: drop_y + 0.2,
                                         stack: ItemStack::new(ITEM_FIBER, 3),
                                     });
-                                    events.push((EventCategory::Farm, format!("{} chopped a tree (wood + scrap + fiber)", pleb.name)));
+                                    events.push(GameEventKind::Harvested { pleb: pleb.name.clone(), what: "a tree (wood + scrap + fiber)" });
                                 }
                             }
                             self.active_work.remove(&(tx, ty));
@@ -1378,7 +1378,7 @@ impl App {
                                         }
                                     }
                                     pleb.activity = PlebActivity::Crafting(recipe_id, 0.0);
-                                    events.push((EventCategory::Build, format!("{} crafting {}", pleb.name, recipe.name)));
+                                    events.push(GameEventKind::Crafting { pleb: pleb.name.clone(), recipe: recipe.name.clone() });
                                 } else {
                                     // Can't craft — missing ingredients, release
                                     self.active_work.remove(&(tx, ty));
@@ -1405,7 +1405,7 @@ impl App {
                                 self.ground_items.push(resources::GroundItem::new(
                                     tx as f32 + 0.5, ty as f32 + 0.5, ITEM_CLAY, yield_amt,
                                 ));
-                                events.push((EventCategory::Farm, format!("{} dug {} clay", pleb.name, yield_amt)));
+                                events.push(GameEventKind::DugClay { pleb: pleb.name.clone(), amount: yield_amt });
                                 pleb.work_target = None;
                                 pleb.activity = PlebActivity::Idle;
                             } else {
@@ -1440,8 +1440,10 @@ impl App {
                             if tidx < self.grid_data.len() {
                                 self.grid_data[tidx] = bp.block_data;
                                 self.grid_dirty = true;
-                                events.push((EventCategory::Build, format!("{} built {}", pleb.name,
-                                    block_defs::BlockRegistry::cached().name(bp.block_data & 0xFF))));
+                                events.push(GameEventKind::Built {
+                                    pleb: pleb.name.clone(),
+                                    block: block_defs::BlockRegistry::cached().name(bp.block_data & 0xFF).to_string(),
+                                });
                             }
                         }
                         self.active_work.remove(&(tx, ty));
@@ -1472,7 +1474,7 @@ impl App {
                         self.ground_items.push(resources::GroundItem::new(
                             pleb.x, pleb.y, recipe.output.item, recipe.output.count,
                         ));
-                        events.push((EventCategory::Build, format!("{} crafted {}", pleb.name, recipe.name)));
+                        events.push(GameEventKind::Crafted { pleb: pleb.name.clone(), recipe: recipe.name.clone() });
                         // Increment queue counter
                         if let Some((tx, ty)) = pleb.work_target {
                             let gidx = ty as u32 * GRID_W + tx as u32;
@@ -1731,8 +1733,7 @@ impl App {
                     pleb.needs.health -= damage;
                     if damage > 0.005 {
                         let db_at_pleb = amplitude_to_db(max_pressure);
-                        events.push((EventCategory::Combat,
-                            format!("{} shockwave! {:.0} dB ({:.0}% hp)", pleb.name, db_at_pleb, pleb.needs.health.max(0.0) * 100.0)));
+                        events.push(GameEventKind::PlebHit { pleb: pleb.name.clone(), hp_pct: pleb.needs.health.max(0.0) * 100.0 });
                     }
                 }
             }
@@ -1754,7 +1755,7 @@ impl App {
                         MentalBreakKind::Tantrum => "tantrum",
                         MentalBreakKind::Collapse => "collapse",
                     };
-                    events.push((EventCategory::Need, format!("{} recovered from {}", pleb.name, kind_name)));
+                    events.push(GameEventKind::MentalBreakRecovered { pleb: pleb.name.clone(), kind: kind_name });
                     pleb.activity = PlebActivity::Idle;
                 } else {
                     pleb.activity = PlebActivity::MentalBreak(kind.clone(), remaining - dt * self.time_speed);
@@ -1799,7 +1800,7 @@ impl App {
                     MentalBreakKind::Tantrum => "tantrum",
                     MentalBreakKind::Collapse => "collapse",
                 };
-                events.push((EventCategory::Need, format!("{} is having a mental break: {}!", pleb.name, kind_name)));
+                events.push(GameEventKind::MentalBreak { pleb: pleb.name.clone(), kind: kind_name });
                 pleb.path.clear();
                 pleb.path_idx = 0;
                 pleb.work_target = None;
@@ -1818,25 +1819,18 @@ impl App {
                 pleb.work_target = None;
                 pleb.haul_target = None;
                 pleb.harvest_target = None;
-                events.push((EventCategory::Combat, format!("{} has died!", pleb.name)));
+                events.push(GameEventKind::PlebDied(pleb.name.clone()));
             }
         }
 
-        // Push all collected events to the game log + trigger notifications for important ones
-        for (cat, msg) in events {
-            // Important events get toast notifications
-            let notif = match cat {
-                EventCategory::Combat => Some((NotifCategory::Threat, "\u{2694}", "Combat")),
-                EventCategory::Need => Some((NotifCategory::Warning, "\u{26a0}", "Need")),
-                EventCategory::Build if msg.contains("built") || msg.contains("crafted") =>
-                    Some((NotifCategory::Positive, "\u{2705}", "Complete")),
-                EventCategory::Weather if msg.contains("Drought") || msg.contains("Lightning") =>
-                    Some((NotifCategory::Warning, "\u{26a1}", "Weather")),
-                _ => None,
-            };
-            if let Some((ncat, icon, title)) = notif {
+        // Push all collected events to the game log + trigger notifications
+        for event in events {
+            if let Some((ncat, icon, title)) = event.notification() {
+                let msg = event.message();
                 self.notify(ncat, icon, title, &msg);
             }
+            let cat = event.category();
+            let msg = event.message();
             self.log_event(cat, msg);
         }
 
