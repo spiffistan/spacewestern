@@ -11,6 +11,7 @@ struct BlockFile {
 }
 
 #[derive(Deserialize, Clone, Debug)]
+#[allow(dead_code)] // Fields loaded from TOML, some used only by GPU/future features
 pub struct BlockDef {
     pub id: u8,
     pub name: String,
@@ -54,6 +55,7 @@ pub struct ThermalDef {
 }
 
 #[derive(Deserialize, Clone, Debug)]
+#[allow(dead_code)] // Fields loaded from TOML, used by build menu
 pub struct PlacementDef {
     pub category: String,
     pub icon: String,
@@ -140,6 +142,7 @@ impl BlockRegistry {
         self.wall_ids.contains(&(id as u8))
     }
 
+    #[allow(dead_code)]
     pub fn tools_in_category<'a>(&'a self, cat: &str) -> Vec<&'a (u8, PlacementDef)> {
         self.placeable.iter().filter(|(_, p)| p.category == cat).collect()
     }

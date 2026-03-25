@@ -30,6 +30,7 @@ impl CrateInventory {
     }
 
     /// Add items, respecting capacity. Returns how many were actually added.
+    #[allow(dead_code)]
     pub fn add(&mut self, item_id: u16, count: u16) -> u16 {
         let can_add = (self.space() as u16).min(count);
         if can_add == 0 { return 0; }
@@ -136,6 +137,7 @@ impl PlebInventory {
     }
 
     /// What item type is the pleb primarily carrying? (first non-empty stack)
+    #[allow(dead_code)]
     pub fn carrying_type(&self) -> Option<u16> {
         self.stacks.first().map(|s| s.item_id)
     }

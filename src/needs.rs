@@ -143,6 +143,7 @@ impl Default for PlebNeeds {
 }
 
 /// Environment snapshot at a pleb's position (sampled from CPU-side grid state).
+#[allow(dead_code)]
 pub struct EnvSample {
     pub is_indoors: bool,
     pub near_fire: bool,      // within 3 blocks of fireplace/campfire
@@ -150,6 +151,7 @@ pub struct EnvSample {
     pub near_bed: bool,       // within 2 blocks of bed (type 30)
     pub near_furniture: bool, // within 3 blocks of bench/table/chair
     pub near_berry_bush: bool, // within 2 blocks of berry bush (type 31)
+    #[allow(dead_code)]
     pub near_crate: bool,      // within 2 blocks of storage crate (type 33)
     pub nearest_bed: Option<(i32, i32)>,       // coords of nearest bed
     pub nearest_berry_bush: Option<(i32, i32)>, // coords of nearest berry bush
@@ -249,6 +251,7 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
 
 /// Air quality data from GPU fluid sim readback (per pleb, per frame).
 #[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct AirReadback {
     pub o2: f32,    // 0.0-1.0, atmospheric is ~1.0
     pub co2: f32,   // 0.0-1.5, normal is ~0.0
@@ -278,21 +281,17 @@ const STRESS_EXHAUSTION: f32 = 2.0;    // per min when rest < 0.2
 const STRESS_GROUND_SLEEP: f32 = 1.0;  // per min when sleeping without bed
 const STRESS_UGLY: f32 = 0.5;          // per min, no furniture/floor/roof
 const STRESS_MONOTONY: f32 = 0.3;      // per min, same task > 5 min
-const STRESS_DAMAGE: f32 = 10.0;       // instant, per hit
-const STRESS_DEATH_WITNESS: f32 = 20.0; // instant, saw someone die
 
-const STRESS_RELIEF_EAT: f32 = 5.0;     // instant, ate food
-const STRESS_RELIEF_DRINK: f32 = 2.0;   // instant, drank
 const STRESS_RELIEF_BED: f32 = 3.0;     // per min, sleeping in bed
 const STRESS_RELIEF_BENCH: f32 = 2.0;   // per min, near furniture
 const STRESS_RELIEF_FIRE: f32 = 1.0;    // per min, near fireplace
-const STRESS_RELIEF_SOCIAL: f32 = 0.5;  // per min, near other pleb
 const STRESS_RELIEF_VARIED: f32 = 0.5;  // per min, changed task recently
 
 pub const STRESS_BREAK_THRESHOLD: f32 = 85.0;
 pub const STRESS_POST_BREAK: f32 = 50.0; // stress after a mental break
 
 /// Stress level label for UI.
+#[allow(dead_code)]
 pub fn stress_label(stress: f32) -> &'static str {
     if stress < 25.0 { "Calm" }
     else if stress < 50.0 { "Normal" }
@@ -302,6 +301,7 @@ pub fn stress_label(stress: f32) -> &'static str {
 }
 
 /// Work speed multiplier from stress level.
+#[allow(dead_code)]
 pub fn stress_work_speed(stress: f32) -> f32 {
     if stress < 25.0 { 1.1 }       // calm: bonus
     else if stress < 50.0 { 1.0 }  // normal
@@ -597,6 +597,7 @@ pub fn mood_label(mood: f32) -> &'static str {
 }
 
 /// Get the most critical need (lowest value) for crisis behavior.
+#[allow(dead_code)]
 pub fn critical_need(needs: &PlebNeeds) -> Option<(&'static str, f32)> {
     let pairs = [
         ("oxygen", needs.oxygen),

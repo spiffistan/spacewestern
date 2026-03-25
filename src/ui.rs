@@ -32,6 +32,7 @@ impl App {
     }
 
     /// Tile size in screen pixels at current zoom.
+    #[allow(dead_code)]
     fn tile_px(&self, bp_cam: (f32,f32,f32,f32,f32)) -> f32 {
         bp_cam.2 / self.render_scale / self.ppp()
     }

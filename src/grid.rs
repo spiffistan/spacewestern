@@ -164,77 +164,6 @@ pub fn is_wire_block(bt: u32) -> bool {
 /// After >> 4: N=1, E=2, S=4, W=8.
 pub const DIR_MASKS: [(i32, i32, u32); 4] = [(0, -1, 0x1), (0, 1, 0x4), (1, 0, 0x2), (-1, 0, 0x8)];
 
-/// Unpacked block data for convenient access.
-pub struct BlockInfo {
-    pub raw: u32,
-    pub block_type: u32,
-    pub height: u32,
-    pub flags: u8,
-    pub roof_height: u32,
-}
-
-impl BlockInfo {
-    pub fn from_raw(b: u32) -> Self {
-        BlockInfo {
-            raw: b,
-            block_type: b & 0xFF,
-            height: (b >> 8) & 0xFF,
-            flags: ((b >> 16) & 0xFF) as u8,
-            roof_height: (b >> 24) & 0xFF,
-        }
-    }
-
-    pub fn is_door(&self) -> bool { self.flags & 1 != 0 }
-    pub fn is_roofed(&self) -> bool { self.flags & 2 != 0 }
-    pub fn is_open(&self) -> bool { self.flags & 4 != 0 }
-}
-
-/// Get unpacked block info at (x, y). Returns air for out-of-bounds.
-pub fn block_at(grid: &[u32], x: i32, y: i32) -> BlockInfo {
-    if x >= 0 && y >= 0 && x < GRID_W as i32 && y < GRID_H as i32 {
-        BlockInfo::from_raw(grid[(y as u32 * GRID_W + x as u32) as usize])
-    } else {
-        BlockInfo::from_raw(0)
-    }
-}
-
-// --- Grid index helpers ---
-
-/// Convert grid (x, y) to flat index. Returns None if out of bounds.
-#[inline]
-pub fn grid_idx(x: i32, y: i32) -> Option<usize> {
-    if x >= 0 && y >= 0 && x < GRID_W as i32 && y < GRID_H as i32 {
-        Some((y as u32 * GRID_W + x as u32) as usize)
-    } else {
-        None
-    }
-}
-
-/// Get block at (x, y). Returns 0 (air) for out-of-bounds.
-#[inline]
-pub fn get_block(grid: &[u32], x: i32, y: i32) -> u32 {
-    grid_idx(x, y).map_or(0, |idx| grid[idx])
-}
-
-/// Set block at (x, y). No-op for out-of-bounds.
-#[inline]
-pub fn set_block(grid: &mut [u32], x: i32, y: i32, block: u32) {
-    if let Some(idx) = grid_idx(x, y) {
-        grid[idx] = block;
-    }
-}
-
-// --- Game constants ---
-
-pub const DAWN_FRAC: f32 = 0.15;   // day cycle fraction where dawn starts
-pub const DUSK_FRAC: f32 = 0.85;   // day cycle fraction where dusk ends
-pub const PLEB_MOVE_SPEED: f32 = 3.0;
-pub const PLEB_RADIUS: f32 = 0.25;
-pub const DOOR_AUTO_RANGE: f32 = 1.2;
-pub const DOOR_AUTO_CLOSE_TIME: f32 = 2.0;
-pub const CANNON_SPEED: f32 = 28.0;
-pub const CANNON_RECOIL: f32 = 30.0;
-
 pub fn is_door_rs(b: u32) -> bool {
     (block_flags_rs(b) & 1) != 0
 }
@@ -999,26 +928,6 @@ mod tests {
         // Outdoor tile should have roof_height = 0
         let outdoor = grid[(5 * w + 5) as usize];
         assert_eq!(roof_height_rs(outdoor), 0, "outdoor should have roof height 0");
-    }
-
-    #[test]
-    fn test_grid_idx_bounds() {
-        assert!(grid_idx(0, 0).is_some());
-        assert!(grid_idx(255, 255).is_some());
-        assert!(grid_idx(256, 0).is_none());
-        assert!(grid_idx(-1, 0).is_none());
-        assert!(grid_idx(0, -1).is_none());
-    }
-
-    #[test]
-    fn test_get_set_block() {
-        let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
-        set_block(&mut grid, 10, 10, make_block(1, 3, 0));
-        assert_eq!(block_type_rs(get_block(&grid, 10, 10)), 1);
-        assert_eq!(block_height_rs(get_block(&grid, 10, 10)), 3);
-        // Out of bounds returns air (0)
-        assert_eq!(get_block(&grid, -1, 0), 0);
-        assert_eq!(get_block(&grid, 256, 0), 0);
     }
 
     #[test]

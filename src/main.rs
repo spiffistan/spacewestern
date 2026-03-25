@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Suppress warnings for data-driven fields and future-use utilities
+
 use bytemuck::Zeroable;
 use std::sync::Arc;
 
@@ -159,6 +161,7 @@ struct App {
     lightmap_interval: u32,       // recompute lightmap every N frames
     lightmap_iterations: u32,     // lightmap propagation iterations (radius)
     shadow_map_scale: u32,        // shadow map texels per grid cell (0 = per-pixel, 1-16 = shadow map)
+    #[allow(dead_code)]
     shadow_map_max_scale: u32,    // allocated texture supports up to this scale
     // Sound propagation
     sound_enabled: bool,
@@ -334,11 +337,11 @@ struct GfxState {
     fluid_params_buffer: wgpu::Buffer,
     fluid_vel: [wgpu::Texture; 2],
     fluid_pres: [wgpu::Texture; 2],
-    fluid_div: wgpu::Texture,
-    fluid_curl: wgpu::Texture,
+    #[allow(dead_code)] fluid_div: wgpu::Texture,
+    #[allow(dead_code)] fluid_curl: wgpu::Texture,
     fluid_dye: [wgpu::Texture; 2],
     fluid_obstacle: wgpu::Texture,
-    fluid_dummy_rg: wgpu::Texture,  // 1x1 Rg32Float dummy for unused bindings
+    #[allow(dead_code)] fluid_dummy_rg: wgpu::Texture,
     fluid_dummy_r: wgpu::Texture,   // 1x1 R32Float dummy (read)
     fluid_dummy_r_w: wgpu::Texture,  // 1x1 R32Float dummy (write, separate to avoid read-write conflict)
     // Fluid pipelines
@@ -1268,7 +1271,7 @@ impl App {
             gfx.queue.write_buffer(&gfx.pleb_buffer, 0, bytemuck::cast_slice(&gpu_plebs));
         }
         // --- egui frame setup (before bp_cam/blueprint computation) ---
-        drop(gfx);
+        // gfx borrow ends here (re-borrowed later for GPU submission)
         let ctx = {
             let egui_state = self.egui_state.as_mut().unwrap();
             let window = self.window.as_ref().unwrap();

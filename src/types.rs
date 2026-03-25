@@ -18,23 +18,24 @@ pub enum SandboxTool {
     None,
     Lightning,
     InjectWater,
+    #[allow(dead_code)]
     TriggerDrought,
     Ignite,
-    SoundPlace(usize),  // index into SANDBOX_SOUNDS
+    SoundPlace(usize), // index into SANDBOX_SOUNDS
 }
 
 /// Sandbox sound presets: (name, dB, frequency, pattern, duration)
 pub const SANDBOX_SOUNDS: &[(&str, f32, f32, u32, f32)] = &[
-    ("Whisper",       20.0,  0.0, 0, 0.3),    // soft impulse
-    ("Conversation",  60.0,  0.0, 0, 0.2),    // talking impulse
-    ("Alarm Bell",    80.0,  8.0, 1, 5.0),    // continuous sine
-    ("Lawnmower",     90.0,  4.0, 1, 4.0),    // low freq continuous
-    ("Gunshot",      100.0,  0.0, 0, 0.05),   // sharp impulse
-    ("Siren",        105.0, 12.0, 1, 6.0),    // high freq continuous
-    ("Cannon",       110.0,  0.0, 0, 0.08),   // heavy impulse
-    ("Thunder",      120.0,  0.0, 0, 0.2),    // rumbling impulse
-    ("Grenade",      130.0,  0.0, 0, 0.15),   // explosion
-    ("Explosion",    170.0,  0.0, 0, 0.25),   // massive blast
+    ("Whisper", 20.0, 0.0, 0, 0.3),      // soft impulse
+    ("Conversation", 60.0, 0.0, 0, 0.2), // talking impulse
+    ("Alarm Bell", 80.0, 8.0, 1, 5.0),   // continuous sine
+    ("Lawnmower", 90.0, 4.0, 1, 4.0),    // low freq continuous
+    ("Gunshot", 100.0, 0.0, 0, 0.05),    // sharp impulse
+    ("Siren", 105.0, 12.0, 1, 6.0),      // high freq continuous
+    ("Cannon", 110.0, 0.0, 0, 0.08),     // heavy impulse
+    ("Thunder", 120.0, 0.0, 0, 0.2),     // rumbling impulse
+    ("Grenade", 130.0, 0.0, 0, 0.15),    // explosion
+    ("Explosion", 170.0, 0.0, 0, 0.25),  // massive blast
 ];
 
 // --- Notifications & Conditions ---
@@ -56,6 +57,7 @@ pub enum NotifCategory {
     Threat,   // red
     Warning,  // yellow
     Positive, // green
+    #[allow(dead_code)]
     Info,     // gray
 }
 
@@ -77,8 +79,8 @@ pub struct ActiveCondition {
     pub name: String,
     pub icon: &'static str,
     pub category: NotifCategory,
-    pub remaining: f32,   // game seconds remaining (0 = permanent until removed)
-    pub duration: f32,    // total duration (for progress bar)
+    pub remaining: f32, // game seconds remaining (0 = permanent until removed)
+    pub duration: f32,  // total duration (for progress bar)
 }
 
 // --- Debug & Selection ---
@@ -99,7 +101,17 @@ pub struct DebugReadback {
 
 impl Default for DebugReadback {
     fn default() -> Self {
-        Self { mode: false, fluid_density: [0.0; 4], block_temp: 15.0, block_temp_pending: false, voltage: 0.0, voltage_pending: false, fluid_pending: false, water_level: 0.0, water_pending: false }
+        Self {
+            mode: false,
+            fluid_density: [0.0; 4],
+            block_temp: 15.0,
+            block_temp_pending: false,
+            voltage: 0.0,
+            voltage_pending: false,
+            fluid_pending: false,
+            water_level: 0.0,
+            water_pending: false,
+        }
     }
 }
 
@@ -115,16 +127,19 @@ pub struct BlockSelection {
     pub cannon: Option<u32>,
     pub crate_idx: Option<u32>,
     pub crate_world: (f32, f32),
-    pub workbench: Option<u32>,    // grid_idx of open workbench popup
+    pub workbench: Option<u32>, // grid_idx of open workbench popup
     pub workbench_world: (f32, f32),
 }
 
 /// A single selected item in the world.
 #[derive(Clone, Debug)]
 pub struct SelectedItem {
-    pub x: i32, pub y: i32, pub w: i32, pub h: i32, // bounding box (grid coords)
-    pub block_type: u32,                  // 0 = pleb (not a block)
-    pub pleb_idx: Option<usize>,          // Some(idx) if this is a pleb
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,                  // bounding box (grid coords)
+    pub block_type: u32,         // 0 = pleb (not a block)
+    pub pleb_idx: Option<usize>, // Some(idx) if this is a pleb
 }
 
 pub const SEL_PLEB: u32 = u32::MAX; // sentinel block_type for pleb selections
@@ -136,14 +151,36 @@ pub struct WorldSelection {
 }
 
 impl WorldSelection {
-    pub fn none() -> Self { WorldSelection { items: Vec::new() } }
+    pub fn none() -> Self {
+        WorldSelection { items: Vec::new() }
+    }
     pub fn single(x: i32, y: i32, w: i32, h: i32, block_type: u32) -> Self {
-        WorldSelection { items: vec![SelectedItem { x, y, w, h, block_type, pleb_idx: None }] }
+        WorldSelection {
+            items: vec![SelectedItem {
+                x,
+                y,
+                w,
+                h,
+                block_type,
+                pleb_idx: None,
+            }],
+        }
     }
     pub fn single_pleb(pleb_idx: usize, x: i32, y: i32) -> Self {
-        WorldSelection { items: vec![SelectedItem { x, y, w: 1, h: 1, block_type: SEL_PLEB, pleb_idx: Some(pleb_idx) }] }
+        WorldSelection {
+            items: vec![SelectedItem {
+                x,
+                y,
+                w: 1,
+                h: 1,
+                block_type: SEL_PLEB,
+                pleb_idx: Some(pleb_idx),
+            }],
+        }
     }
-    pub fn is_empty(&self) -> bool { self.items.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
 }
 
 // --- Event Bus ---
@@ -159,34 +196,74 @@ pub enum GameEventKind {
     FireConsumed(i32, i32),
 
     // Pleb needs / crisis
-    CrisisStarted { pleb: String, reason: &'static str },
-    MentalBreak { pleb: String, kind: &'static str },
-    MentalBreakRecovered { pleb: String, kind: &'static str },
+    CrisisStarted {
+        pleb: String,
+        reason: &'static str,
+    },
+    MentalBreak {
+        pleb: String,
+        kind: &'static str,
+    },
+    MentalBreakRecovered {
+        pleb: String,
+        kind: &'static str,
+    },
     PlebDied(String),
 
     // Combat
-    PlebHit { pleb: String, hp_pct: f32 },
+    PlebHit {
+        pleb: String,
+        hp_pct: f32,
+    },
     Explosion(f32, f32),
 
     // Hauling
-    PickedUp { pleb: String, count: u16, item: String },
-    Delivered { pleb: String, material: &'static str, amount: u32 },
+    PickedUp {
+        pleb: String,
+        count: u16,
+        item: String,
+    },
+    Delivered {
+        pleb: String,
+        material: &'static str,
+        amount: u32,
+    },
     Deposited(String),
     Dropped(String),
     Stored(String),
     AutoHauling(String),
 
     // Farming
-    TaskAssigned { pleb: String, task: &'static str, x: i32, y: i32 },
+    TaskAssigned {
+        pleb: String,
+        task: &'static str,
+        x: i32,
+        y: i32,
+    },
     Planted(String),
-    Harvested { pleb: String, what: &'static str },
-    DugClay { pleb: String, amount: u16 },
+    Harvested {
+        pleb: String,
+        what: &'static str,
+    },
+    DugClay {
+        pleb: String,
+        amount: u16,
+    },
 
     // Building / crafting
     GoingToCraft(String),
-    Crafting { pleb: String, recipe: String },
-    Crafted { pleb: String, recipe: String },
-    Built { pleb: String, block: String },
+    Crafting {
+        pleb: String,
+        recipe: String,
+    },
+    Crafted {
+        pleb: String,
+        recipe: String,
+    },
+    Built {
+        pleb: String,
+        block: String,
+    },
 
     // Generic (for transitional use)
     Generic(EventCategory, String),
@@ -196,17 +273,30 @@ impl GameEventKind {
     /// Event category for log coloring.
     pub fn category(&self) -> EventCategory {
         match self {
-            Self::WeatherChanged(_) | Self::DroughtStarted | Self::DroughtEnded(_)
-                | Self::Lightning(_, _) | Self::FireConsumed(_, _) => EventCategory::Weather,
-            Self::CrisisStarted { .. } | Self::MentalBreak { .. }
-                | Self::MentalBreakRecovered { .. } | Self::PlebDied(_) => EventCategory::Need,
+            Self::WeatherChanged(_)
+            | Self::DroughtStarted
+            | Self::DroughtEnded(_)
+            | Self::Lightning(_, _)
+            | Self::FireConsumed(_, _) => EventCategory::Weather,
+            Self::CrisisStarted { .. }
+            | Self::MentalBreak { .. }
+            | Self::MentalBreakRecovered { .. }
+            | Self::PlebDied(_) => EventCategory::Need,
             Self::PlebHit { .. } | Self::Explosion(_, _) => EventCategory::Combat,
-            Self::PickedUp { .. } | Self::Delivered { .. } | Self::Deposited(_)
-                | Self::Dropped(_) | Self::Stored(_) | Self::AutoHauling(_) => EventCategory::Haul,
-            Self::TaskAssigned { .. } | Self::Planted(_) | Self::Harvested { .. }
-                | Self::DugClay { .. } => EventCategory::Farm,
-            Self::GoingToCraft(_) | Self::Crafting { .. } | Self::Crafted { .. }
-                | Self::Built { .. } => EventCategory::Build,
+            Self::PickedUp { .. }
+            | Self::Delivered { .. }
+            | Self::Deposited(_)
+            | Self::Dropped(_)
+            | Self::Stored(_)
+            | Self::AutoHauling(_) => EventCategory::Haul,
+            Self::TaskAssigned { .. }
+            | Self::Planted(_)
+            | Self::Harvested { .. }
+            | Self::DugClay { .. } => EventCategory::Farm,
+            Self::GoingToCraft(_)
+            | Self::Crafting { .. }
+            | Self::Crafted { .. }
+            | Self::Built { .. } => EventCategory::Build,
             Self::Generic(cat, _) => *cat,
         }
     }
@@ -220,18 +310,30 @@ impl GameEventKind {
             Self::Lightning(x, y) => format!("Lightning strike at ({}, {})", x, y),
             Self::FireConsumed(x, y) => format!("Fire consumed block at ({}, {})", x, y),
             Self::CrisisStarted { pleb, reason } => format!("{}: {}", pleb, reason),
-            Self::MentalBreak { pleb, kind } => format!("{} is having a mental break: {}!", pleb, kind),
-            Self::MentalBreakRecovered { pleb, kind } => format!("{} recovered from {}", pleb, kind),
+            Self::MentalBreak { pleb, kind } => {
+                format!("{} is having a mental break: {}!", pleb, kind)
+            }
+            Self::MentalBreakRecovered { pleb, kind } => {
+                format!("{} recovered from {}", pleb, kind)
+            }
             Self::PlebDied(pleb) => format!("{} has died!", pleb),
             Self::PlebHit { pleb, hp_pct } => format!("{} hit! ({:.0}% hp)", pleb, hp_pct),
             Self::Explosion(x, y) => format!("Explosion at ({:.0}, {:.0})", x, y),
-            Self::PickedUp { pleb, count, item } => format!("{} picked up {} {}", pleb, count, item),
-            Self::Delivered { pleb, material, amount } => format!("{} delivered {} {}", pleb, amount, material),
+            Self::PickedUp { pleb, count, item } => {
+                format!("{} picked up {} {}", pleb, count, item)
+            }
+            Self::Delivered {
+                pleb,
+                material,
+                amount,
+            } => format!("{} delivered {} {}", pleb, amount, material),
             Self::Deposited(pleb) => format!("{} deposited items", pleb),
             Self::Dropped(pleb) => format!("{} dropped items (crate full)", pleb),
             Self::Stored(pleb) => format!("{} stored items", pleb),
             Self::AutoHauling(pleb) => format!("{} auto-hauling to crate", pleb),
-            Self::TaskAssigned { pleb, task, x, y } => format!("{} going to {} at ({},{})", pleb, task, x, y),
+            Self::TaskAssigned { pleb, task, x, y } => {
+                format!("{} going to {} at ({},{})", pleb, task, x, y)
+            }
             Self::Planted(pleb) => format!("{} planted a crop", pleb),
             Self::Harvested { pleb, what } => format!("{} harvested {}", pleb, what),
             Self::DugClay { pleb, amount } => format!("{} dug {} clay", pleb, amount),
@@ -246,14 +348,18 @@ impl GameEventKind {
     /// Should this event trigger a toast notification?
     pub fn notification(&self) -> Option<(NotifCategory, &'static str, &'static str)> {
         match self {
-            Self::PlebDied(_) | Self::PlebHit { .. } | Self::Explosion(_, _) =>
-                Some((NotifCategory::Threat, "\u{2694}", "Combat")),
-            Self::CrisisStarted { .. } | Self::MentalBreak { .. } =>
-                Some((NotifCategory::Warning, "\u{26a0}", "Need")),
-            Self::Crafted { .. } | Self::Built { .. } =>
-                Some((NotifCategory::Positive, "\u{2705}", "Complete")),
-            Self::DroughtStarted | Self::Lightning(_, _) =>
-                Some((NotifCategory::Warning, "\u{26a1}", "Weather")),
+            Self::PlebDied(_) | Self::PlebHit { .. } | Self::Explosion(_, _) => {
+                Some((NotifCategory::Threat, "\u{2694}", "Combat"))
+            }
+            Self::CrisisStarted { .. } | Self::MentalBreak { .. } => {
+                Some((NotifCategory::Warning, "\u{26a0}", "Need"))
+            }
+            Self::Crafted { .. } | Self::Built { .. } => {
+                Some((NotifCategory::Positive, "\u{2705}", "Complete"))
+            }
+            Self::DroughtStarted | Self::Lightning(_, _) => {
+                Some((NotifCategory::Warning, "\u{26a1}", "Weather"))
+            }
             _ => None,
         }
     }
@@ -335,7 +441,12 @@ pub struct ContextMenu {
 
 impl ContextMenu {
     pub fn new(sx: f32, sy: f32, title: impl Into<String>) -> Self {
-        ContextMenu { screen_x: sx, screen_y: sy, title: title.into(), actions: Vec::new() }
+        ContextMenu {
+            screen_x: sx,
+            screen_y: sy,
+            title: title.into(),
+            actions: Vec::new(),
+        }
     }
     pub fn action(mut self, label: impl Into<String>, action: ContextAction) -> Self {
         self.actions.push((label.into(), action, true));
@@ -348,12 +459,13 @@ impl ContextMenu {
 /// An active sound source in the world.
 #[derive(Clone, Debug)]
 pub struct SoundSource {
-    pub x: f32, pub y: f32,
+    pub x: f32,
+    pub y: f32,
     pub amplitude: f32,
-    pub frequency: f32,  // Hz (for sine pattern)
-    pub phase: f32,      // accumulated phase
-    pub pattern: u32,    // 0=impulse, 1=sine, 2=noise
-    pub duration: f32,   // remaining seconds
+    pub frequency: f32, // Hz (for sine pattern)
+    pub phase: f32,     // accumulated phase
+    pub pattern: u32,   // 0=impulse, 1=sine, 2=noise
+    pub duration: f32,  // remaining seconds
 }
 
 /// Convert game decibels to wave equation amplitude.
@@ -365,7 +477,9 @@ pub fn db_to_amplitude(db: f32) -> f32 {
 
 /// Convert wave equation amplitude back to game decibels.
 pub fn amplitude_to_db(amp: f32) -> f32 {
-    if amp <= 0.0 { return 0.0; }
+    if amp <= 0.0 {
+        return 0.0;
+    }
     80.0 + 40.0 * amp.log10()
 }
 
@@ -375,8 +489,8 @@ pub fn amplitude_to_db(amp: f32) -> f32 {
 #[derive(Clone, Debug)]
 pub struct CraftOrder {
     pub recipe_id: u16,
-    pub count: u16,       // total to make
-    pub completed: u16,   // how many finished
+    pub count: u16,     // total to make
+    pub completed: u16, // how many finished
 }
 
 /// Per-station craft queue. Stored in App::craft_queues keyed by grid_idx.
@@ -401,13 +515,13 @@ impl CraftQueue {
 /// A pending construction — placed as a ghost, built by plebs over time.
 #[derive(Clone, Debug)]
 pub struct Blueprint {
-    pub block_data: u32,      // target block (from make_block)
-    pub progress: f32,        // 0.0-1.0 construction progress
-    pub build_time: f32,      // total seconds to build
-    pub wood_needed: u32,     // wood required to start
-    pub wood_delivered: u32,  // wood deposited so far
-    pub clay_needed: u32,     // clay required to start
-    pub clay_delivered: u32,  // clay deposited so far
+    pub block_data: u32,     // target block (from make_block)
+    pub progress: f32,       // 0.0-1.0 construction progress
+    pub build_time: f32,     // total seconds to build
+    pub wood_needed: u32,    // wood required to start
+    pub wood_delivered: u32, // wood deposited so far
+    pub clay_needed: u32,    // clay required to start
+    pub clay_delivered: u32, // clay deposited so far
 }
 
 impl Blueprint {
@@ -416,18 +530,25 @@ impl Blueprint {
         let (build_time, wood_needed, clay_needed) = match bt as u32 {
             BT_WOOD_WALL => (3.0, 3, 0),
             BT_WOOD_FLOOR => (1.5, 2, 0),
-            BT_STONE | BT_WALL | BT_GLASS | BT_INSULATED |
-            BT_STEEL_WALL | BT_SANDSTONE | BT_GRANITE |
-            BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL => (3.0, 0, 0),
+            BT_STONE | BT_WALL | BT_GLASS | BT_INSULATED | BT_STEEL_WALL | BT_SANDSTONE
+            | BT_GRANITE | BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL => (3.0, 0, 0),
             BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0, 0),
             BT_BENCH | BT_BED => (2.0, 2, 0),
             BT_FIREPLACE | BT_CRATE | BT_CANNON => (2.0, 0, 0),
-            BT_WORKBENCH => (3.0, 4, 0),   // 4 wood
-            BT_KILN => (8.0, 0, 10),       // 10 clay
-            BT_WELL => (8.0, 4, 0),        // 4 wood
+            BT_WORKBENCH => (3.0, 4, 0), // 4 wood
+            BT_KILN => (8.0, 0, 10),     // 10 clay
+            BT_WELL => (8.0, 4, 0),      // 4 wood
             _ => (1.0, 0, 0),
         };
-        Blueprint { block_data, progress: 0.0, build_time, wood_needed, wood_delivered: 0, clay_needed, clay_delivered: 0 }
+        Blueprint {
+            block_data,
+            progress: 0.0,
+            build_time,
+            wood_needed,
+            wood_delivered: 0,
+            clay_needed,
+            clay_delivered: 0,
+        }
     }
 
     pub fn resources_met(&self) -> bool {

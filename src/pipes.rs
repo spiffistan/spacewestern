@@ -58,6 +58,7 @@ impl Default for PipeCell {
 /// Which sides of a pipe block are connected to other pipe components.
 /// Used for rendering (straight, corner, T, cross) and flow simulation.
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(dead_code)]
 pub struct PipeConnections {
     pub north: bool,
     pub south: bool,
@@ -92,6 +93,7 @@ pub fn is_pipe_component(bt: u32) -> bool {
 }
 
 /// Compute connections for a pipe block at (x, y) by checking neighbors.
+#[allow(dead_code)]
 pub fn get_connections(grid: &[u32], x: i32, y: i32) -> PipeConnections {
     let check = |nx: i32, ny: i32| -> bool {
         if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {

@@ -37,6 +37,7 @@ pub enum WorkPriority {
 
 /// Work type categories for the priority system.
 pub const WORK_FARM: usize = 0;
+#[allow(dead_code)]
 pub const WORK_BUILD: usize = 1;
 pub const WORK_CRAFT: usize = 2;
 pub const WORK_HAUL: usize = 3;
@@ -60,7 +61,9 @@ impl WorkTask {
 
 /// Crop growth stages (stored in block height byte for type BT_CROP).
 pub const CROP_PLANTED: u32 = 0;
+#[allow(dead_code)]
 pub const CROP_SPROUT: u32 = 1;
+#[allow(dead_code)]
 pub const CROP_GROWING: u32 = 2;
 pub const CROP_MATURE: u32 = 3;
 

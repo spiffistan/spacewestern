@@ -45,6 +45,7 @@ pub struct FuseEmission {
 
 /// One-time explosion event (blast wave, damage, force).
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct ExplosionDef {
     pub radius: f32,      // effective radius (tiles)
     pub force: f32,       // impulse at epicenter (tiles/sec)
@@ -57,6 +58,7 @@ pub struct ExplosionDef {
 
 /// Full definition of a projectile type.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct ProjectileDef {
     pub name: &'static str,
     pub mass: f32,
@@ -163,6 +165,7 @@ pub fn projectile_def(id: ProjectileId) -> &'static ProjectileDef {
 /// A physics body in the world (continuous position, not grid-aligned).
 #[derive(Clone, Debug)]
 pub struct PhysicsBody {
+#[allow(dead_code)]
     pub x: f32,
     pub y: f32,
     pub z: f32,            // height above ground (0 = on ground)
@@ -335,6 +338,7 @@ pub fn body_can_move(grid: &[u32], x: f32, y: f32, size: f32) -> bool {
 
 /// Check if a pleb at (px, py) would collide with any ground-level physics body.
 /// Returns adjusted position (pushed away from bodies).
+#[allow(dead_code)]
 pub fn pleb_body_collision(bodies: &[PhysicsBody], px: f32, py: f32) -> (f32, f32) {
     let pleb_r = 0.25;
     let mut ax = px;

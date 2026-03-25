@@ -1732,7 +1732,7 @@ impl App {
                     let damage = excess_db * 0.002 * dt; // gradual: ~30 dB excess = 0.06/sec
                     pleb.needs.health -= damage;
                     if damage > 0.005 {
-                        let db_at_pleb = amplitude_to_db(max_pressure);
+                        let _db_at_pleb = amplitude_to_db(max_pressure);
                         events.push(GameEventKind::PlebHit { pleb: pleb.name.clone(), hp_pct: pleb.needs.health.max(0.0) * 100.0 });
                     }
                 }
@@ -1763,8 +1763,8 @@ impl App {
                     if matches!(kind, MentalBreakKind::Daze) && pleb.path.is_empty() {
                         let hash = (self.frame_count.wrapping_mul(2654435761).wrapping_add(pleb.id as u32 * 7919)) % 100;
                         if hash < 5 { // occasionally pick a new wander target
-                            let dx = ((hash % 11) as i32 - 5);
-                            let dy = (((hash / 11) % 11) as i32 - 5);
+                            let dx = (hash % 11) as i32 - 5;
+                            let dy = ((hash / 11) % 11) as i32 - 5;
                             let tx = (pleb.x as i32 + dx).clamp(0, GRID_W as i32 - 1);
                             let ty = (pleb.y as i32 + dy).clamp(0, GRID_H as i32 - 1);
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
