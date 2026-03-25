@@ -24,13 +24,14 @@ fn blocks_vision(grid: &[u32], x: i32, y: i32) -> bool {
     let idx = (y as u32 * GRID_W + x as u32) as usize;
     let block = grid[idx];
     let bt = block_type_rs(block);
-    let bh = (block >> 8) & 0xFF;
+    let bh = block_height_rs(block);
 
     if bh == 0 { return false; } // no height = no block
 
     // Doors: open doors don't block
-    let is_door = (block >> 16) & 1 != 0;
-    let is_open = (block >> 16) & 4 != 0;
+    let flags = block_flags_rs(block);
+    let is_door = flags & 1 != 0;
+    let is_open = flags & 4 != 0;
     if is_door && is_open { return false; }
 
     // Glass and trees: don't block (can see through)

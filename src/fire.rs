@@ -12,8 +12,13 @@ const BURN_TEMP_BASE: f32 = 350.0;      // burning blocks maintain at least this
 const BURN_TEMP_BOOST: f32 = 150.0;     // additional temp based on material
 const SPREAD_CHECK_INTERVAL: u32 = 10;  // check fire spread every N frames
 const SPREAD_TEMP_INJECT: f32 = 50.0;   // heat injected into neighbor per spread tick
-const RAIN_COOL_RATE: f32 = 100.0;      // degrees/sec cooling from rain
 const RAIN_PROGRESS_REDUCE: f32 = 0.05; // burn progress reduction per sec in rain
+const RAIN_THRESHOLD: f32 = 0.3;       // rain intensity needed to extinguish
+const WET_DAMPING: f32 = 0.8;          // how much wetness slows burn (0=none, 1=full)
+const WET_MIN_FACTOR: f32 = 0.1;       // minimum burn rate even when very wet
+const WET_BLOCK_THRESHOLD: f32 = 0.8;  // wetness above which blocks won't ignite
+const BASE_IGNITE_CHANCE: f32 = 0.03;  // per-tick chance of neighbor catching fire
+const WET_IGNITE_DAMPING: f32 = 0.7;   // how much wetness reduces ignite chance
 
 /// Burn time in seconds for a block type. Returns None if not flammable.
 fn burn_time(bt: u32) -> Option<f32> {
@@ -88,12 +93,12 @@ pub fn tick_fire(
 
         // Advance burn progress
         let wet = if idx < wetness.len() { wetness[idx] } else { 0.0 };
-        let wet_factor = (1.0 - wet * 0.8).max(0.1);
+        let wet_factor = (1.0 - wet * WET_DAMPING).max(WET_MIN_FACTOR);
         *progress += t / bt_time * wet_factor;
 
         // Rain extinguishing (outdoor blocks only)
         let roof_h = roof_height_rs(block);
-        if rain_intensity > 0.3 && roof_h == 0 {
+        if rain_intensity > RAIN_THRESHOLD && roof_h == 0 {
             *progress -= RAIN_PROGRESS_REDUCE * rain_intensity * t;
         }
 
@@ -153,10 +158,10 @@ pub fn tick_fire(
 
                 // Wetness resistance
                 let wet = if nidx < wetness.len() { wetness[nidx] } else { 0.0 };
-                if wet > 0.8 { continue; } // very wet blocks don't ignite
+                if wet > WET_BLOCK_THRESHOLD { continue; }
 
                 // Inject heat into neighbor (thermal system will propagate)
-                let heat_inject = SPREAD_TEMP_INJECT * wind_bonus * (1.0 - wet * 0.5);
+                let heat_inject = SPREAD_TEMP_INJECT * wind_bonus * (1.0 - wet * 0.5); // wet ground absorbs less heat
                 temp_overrides.push((nidx, heat_inject));
 
                 // Check if neighbor is hot enough to ignite
@@ -168,7 +173,7 @@ pub fn tick_fire(
                 // This is approximate — true ignition happens when the block
                 // actually reaches ignition_temp on GPU. As a shortcut, ignite
                 // neighbors probabilistically based on proximity and wind.
-                let ignite_chance = 0.03 * wind_bonus * (1.0 - wet * 0.7);
+                let ignite_chance = BASE_IGNITE_CHANCE * wind_bonus * (1.0 - wet * WET_IGNITE_DAMPING);
                 let hash = (nidx as u32).wrapping_mul(2654435761).wrapping_add(frame_count * 1013904223);
                 let roll = (hash & 0xFFFF) as f32 / 65535.0;
                 if roll < ignite_chance {

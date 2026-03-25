@@ -2,6 +2,7 @@
 //! Zones are overlays on the grid, not block types.
 
 use std::collections::HashSet;
+use crate::grid::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ZoneKind {
@@ -97,9 +98,9 @@ pub fn crop_status(
     time_of_day: f32, sun_intensity: f32, rain_intensity: f32,
     water_table: f32, surface_water: f32,
 ) -> Option<CropStatus> {
-    let bt = block & 0xFF;
-    if bt != 47 { return None; } // BT_CROP
-    let stage = (block >> 8) & 0xFF;
+    let bt = block_type_rs(block);
+    if bt != BT_CROP { return None; }
+    let stage = block_height_rs(block) as u32;
     let stage_name = match stage {
         0 => "Planted",
         1 => "Sprout",
@@ -116,10 +117,15 @@ pub fn crop_status(
 
     let progress = (timer / CROP_GROW_TIME).clamp(0.0, 1.0);
 
-    let day_frac = time_of_day / 60.0;
-    let sun_t = ((day_frac - 0.15) / 0.7).clamp(0.0, 1.0);
+    const DAY_DURATION: f32 = 60.0;
+    const DAWN_FRAC: f32 = 0.15;
+    const DAY_LENGTH_FRAC: f32 = 0.7;
+    const TEMP_MIN: f32 = 5.0;
+    const TEMP_RANGE: f32 = 20.0;
+    let day_frac = time_of_day / DAY_DURATION;
+    let sun_t = ((day_frac - DAWN_FRAC) / DAY_LENGTH_FRAC).clamp(0.0, 1.0);
     let sun_curve = (sun_t * std::f32::consts::PI).sin();
-    let approx_temp = 5.0 + 20.0 * sun_curve;
+    let approx_temp = TEMP_MIN + TEMP_RANGE * sun_curve;
 
     let temp_factor = if approx_temp < CROP_TEMP_MIN || approx_temp > CROP_TEMP_MAX {
         0.0
@@ -184,13 +190,13 @@ pub fn generate_work_tasks(
 
                     let idx = (y as u32 * grid_w + x as u32) as usize;
                     let block = grid[idx];
-                    let bt = block & 0xFF;
-                    let bh = (block >> 8) & 0xFF;
+                    let bt = block_type_rs(block);
+                    let bh = block_height_rs(block) as u32;
 
-                    if bt == 2 && bh == 0 {
+                    if bt == BT_DIRT && bh == 0 {
                         // Empty dirt in growing zone → needs planting
                         tasks.push(WorkTask::Plant(x, y));
-                    } else if bt == 47 && bh >= CROP_MATURE {
+                    } else if bt == BT_CROP && bh >= CROP_MATURE {
                         // Mature crop → needs harvesting
                         tasks.push(WorkTask::Harvest(x, y));
                     }
