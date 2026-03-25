@@ -358,6 +358,97 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
     grid
 }
 
+/// Add sample buildings to an existing world grid for demo/testing.
+/// Builds a base near map center: house with power, piping, lighting, crafting.
+pub fn generate_sample_buildings(grid: &mut [u32]) {
+    let w = GRID_W;
+    let roof = 2u8;
+
+    let set = |grid: &mut [u32], x: i32, y: i32, b: u32| {
+        if x >= 0 && y >= 0 && x < GRID_W as i32 && y < GRID_H as i32 {
+            grid[(y as u32 * w + x as u32) as usize] = b;
+        }
+    };
+
+    let cx = (GRID_W / 2) as i32;
+    let cy = (GRID_H / 2) as i32;
+
+    // === Main house (stone, 14x10 exterior) ===
+    let h = 4u8;
+    for x in -7..=7 { set(grid, cx+x, cy-5, make_block(BT_STONE as u8, h, 0)); }
+    for x in -7..=7 { set(grid, cx+x, cy+5, make_block(BT_STONE as u8, h, 0)); }
+    for y in -5..=5 { set(grid, cx-7, cy+y, make_block(BT_STONE as u8, h, 0)); }
+    for y in -5..=5 { set(grid, cx+7, cy+y, make_block(BT_STONE as u8, h, 0)); }
+    // Interior: wood floor + roof
+    for y in -4..=4 {
+        for x in -6..=6 {
+            set(grid, cx+x, cy+y, make_block(BT_WOOD_FLOOR as u8, 0, roof));
+        }
+    }
+    // Front door (south)
+    set(grid, cx, cy+5, make_block(BT_WALL as u8, 1, 1));
+    // Windows
+    for &wx in &[-4, -3, 3, 4] { set(grid, cx+wx, cy-5, make_block(BT_GLASS as u8, h, 0)); }
+    for &wx in &[-4, 4] { set(grid, cx+wx, cy+5, make_block(BT_GLASS as u8, h, 0)); }
+    // Dividing wall (two rooms)
+    for y in -4..=1 { set(grid, cx, cy+y, make_block(BT_STONE as u8, h, 0)); }
+    set(grid, cx, cy+2, make_block(BT_WALL as u8, 1, 1)); // interior door
+
+    // Furniture
+    set(grid, cx-4, cy, make_block(BT_FIREPLACE as u8, 5, roof));
+    set(grid, cx-5, cy-3, make_block(BT_BED as u8, 0, roof));
+    set(grid, cx-4, cy-3, make_block(BT_BED as u8, 0, roof | (1 << 3)));
+    set(grid, cx+4, cy-3, make_block(BT_BED as u8, 0, roof));
+    set(grid, cx+5, cy-3, make_block(BT_BED as u8, 0, roof | (1 << 3)));
+    set(grid, cx+3, cy+2, make_block(BT_BENCH as u8, 1, roof));
+    set(grid, cx+4, cy+2, make_block(BT_BENCH as u8, 1, roof | (1 << 3)));
+    set(grid, cx+5, cy+2, make_block(BT_BENCH as u8, 1, roof | (2 << 3)));
+    set(grid, cx-2, cy+3, make_block(BT_CRATE as u8, 0, roof));
+
+    // === Power: solar → wire → battery → wire (through wall) → ceiling light ===
+    for sy in 0..3i32 {
+        for sx in 0..3i32 {
+            let flags = ((sx as u8) << 3) | ((sy as u8) << 5);
+            set(grid, cx+10+sx, cy-2+sy, make_block(BT_SOLAR as u8, 0, flags));
+        }
+    }
+    set(grid, cx+9, cy, make_block(BT_BATTERY_S as u8, 1, 0));
+    // Wire run: solar → battery → through wall → ceiling light
+    for x in [8, 9] { set(grid, cx+x, cy-1, make_block(BT_WIRE as u8, 0xF0, 0)); }
+    for x in [8, 9] { set(grid, cx+x, cy, make_block(BT_WIRE as u8, 0xF0, 0)); }
+    // Wire overlay on wall
+    set(grid, cx+7, cy, make_block(BT_STONE as u8, h, 0x80));
+    // Interior wiring + light
+    for x in 1..=6 { set(grid, cx+x, cy, make_block(BT_WIRE as u8, 0xF0, roof)); }
+    set(grid, cx+3, cy-2, make_block(BT_CEILING_LIGHT as u8, 0, roof));
+    // Wire branch to light
+    set(grid, cx+3, cy-1, make_block(BT_WIRE as u8, 0xF0, roof));
+    set(grid, cx+3, cy, make_block(BT_WIRE as u8, 0xF0, roof));
+
+    // === Pipe system: inlet (fireplace room) → pump → outlet (outside) ===
+    set(grid, cx-7, cy-1, make_block(BT_INLET as u8, h, 3 << 3)); // dir=west
+    for x in -11..-7 { set(grid, cx+x, cy-1, make_block(BT_PIPE as u8, 0xF0, 0)); }
+    set(grid, cx-9, cy-1, make_block(BT_PUMP as u8, 1, 3 << 3)); // dir=west
+    set(grid, cx-12, cy-1, make_block(BT_OUTLET as u8, 1, 3 << 3));
+
+    // === Workshop area (south, outdoors) ===
+    set(grid, cx-3, cy+8, make_block(BT_WORKBENCH as u8, 1, 0));
+    set(grid, cx+3, cy+8, make_block(BT_KILN as u8, 2, 0));
+
+    // === Well (on dug ground) ===
+    set(grid, cx+6, cy+8, make_block(BT_WELL as u8, 1, 0));
+
+    // === Outdoor lighting ===
+    set(grid, cx-3, cy+6, make_block(BT_FLOOR_LAMP as u8, 1, 0));
+    set(grid, cx+3, cy+6, make_block(BT_FLOOR_LAMP as u8, 1, 0));
+    // Wall torches
+    set(grid, cx-2, cy-6, make_block(BT_WALL_TORCH as u8, 0, 0)); // north
+    set(grid, cx+2, cy-6, make_block(BT_WALL_TORCH as u8, 0, 0));
+
+    // === Cannon (defense, east) ===
+    set(grid, cx+10, cy+5, make_block(BT_CANNON as u8, 2, 1 << 3)); // facing east
+}
+
 /// Generate the water table height map (256x256).
 pub fn generate_water_table(grid: &[u32]) -> Vec<f32> {
     generate_water_table_seeded(grid, 0)

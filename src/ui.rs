@@ -91,6 +91,16 @@ impl App {
                     )).clicked() {
                         self.game_state = GameState::MapGen;
                     }
+                    ui.add_space(4.0);
+                    if ui.add_sized(btn_size, egui::Button::new(
+                        egui::RichText::new("Sample Map").size(14.0)
+                    )).clicked() {
+                        grid::generate_sample_buildings(&mut self.grid_data);
+                        compute_roof_heights(&mut self.grid_data);
+                        self.grid_dirty = true;
+                        self.regenerate_world_preview();
+                        self.game_state = GameState::Playing;
+                    }
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new(format!("v{}", include_str!("../VERSION").trim()))
                         .size(10.0).color(egui::Color32::from_gray(80)));
