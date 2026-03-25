@@ -22,7 +22,7 @@ use grid::*;
 use sprites::generate_tree_sprites;
 
 mod pleb;
-use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path_terrain, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity, PlebShift};
+use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path_terrain, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity, PlebShift, MentalBreakKind};
 
 mod needs;
 use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate, find_nearest_well, BERRY_HUNGER_RESTORE, WELL_THIRST_RESTORE, WELL_DRINK_TIME, HEAT_CRISIS_TEMP};

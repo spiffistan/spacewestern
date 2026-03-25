@@ -30,6 +30,14 @@ fn is_type_walkable(bt: u32) -> bool {
 
 /// What the pleb is currently doing.
 #[derive(Clone, Debug, PartialEq)]
+pub enum MentalBreakKind {
+    Daze,      // wanders aimlessly
+    Binge,     // eats all available food
+    Tantrum,   // destroys a nearby item
+    Collapse,  // sits on ground, won't move
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum PlebActivity {
     Idle,
     Walking,          // following a path (player-ordered or auto)
@@ -42,6 +50,7 @@ pub enum PlebActivity {
     Crafting(u16, f32), // (recipe_id, progress 0-1)
     Drinking(f32),    // progress 0-1, drinking at a well
     Staggering(f32),  // knockback recovery timer (seconds remaining)
+    MentalBreak(MentalBreakKind, f32), // (kind, seconds remaining)
     /// Crisis override — pleb acts autonomously, ignoring player input.
     /// Inner activity is what they're doing (Walking to food/bed, Harvesting, Eating, Sleeping).
     Crisis(Box<PlebActivity>, &'static str), // (inner_activity, reason_label)

@@ -102,6 +102,11 @@ pub struct PlebNeeds {
     pub comfort: f32,    // 1.0 = comfy, indoors + furniture
     pub health: f32,     // 1.0 = full health, damaged by unmet needs
     pub mood: f32,       // -100 to +100, aggregate of all needs
+    pub stress: f32,     // 0-100, cumulative stress level
+
+    // Stress tracking
+    pub last_task_type: u8,   // for monotony detection (zones::WORK_*)
+    pub task_duration: f32,   // seconds on current task type
 
     // Breathing system
     pub breath_remaining: f32,   // seconds of breath left (0..BREATH_HOLD_MAX)
@@ -124,6 +129,9 @@ impl Default for PlebNeeds {
             comfort: 0.5,
             health: 1.0,
             mood: 50.0,
+            stress: 10.0,
+            last_task_type: 255,
+            task_duration: 0.0,
             breath_remaining: BREATH_HOLD_MAX,
             breathing_state: BreathingState::Normal,
             air_o2: 1.0,
@@ -261,6 +269,46 @@ pub const BERRY_HUNGER_RESTORE: f32 = 0.20;
 pub const WELL_THIRST_RESTORE: f32 = 0.50;
 /// Seconds to drink at a well
 pub const WELL_DRINK_TIME: f32 = 4.0;
+
+// --- Stress rates (per real second at 1x speed) ---
+const STRESS_HUNGER: f32 = 2.0;        // per min when hunger < 0.3
+const STRESS_THIRST: f32 = 3.0;        // per min when thirst < 0.3
+const STRESS_FREEZING: f32 = 4.0;      // per min when warmth < 0.15
+const STRESS_EXHAUSTION: f32 = 2.0;    // per min when rest < 0.2
+const STRESS_GROUND_SLEEP: f32 = 1.0;  // per min when sleeping without bed
+const STRESS_UGLY: f32 = 0.5;          // per min, no furniture/floor/roof
+const STRESS_MONOTONY: f32 = 0.3;      // per min, same task > 5 min
+const STRESS_DAMAGE: f32 = 10.0;       // instant, per hit
+const STRESS_DEATH_WITNESS: f32 = 20.0; // instant, saw someone die
+
+const STRESS_RELIEF_EAT: f32 = 5.0;     // instant, ate food
+const STRESS_RELIEF_DRINK: f32 = 2.0;   // instant, drank
+const STRESS_RELIEF_BED: f32 = 3.0;     // per min, sleeping in bed
+const STRESS_RELIEF_BENCH: f32 = 2.0;   // per min, near furniture
+const STRESS_RELIEF_FIRE: f32 = 1.0;    // per min, near fireplace
+const STRESS_RELIEF_SOCIAL: f32 = 0.5;  // per min, near other pleb
+const STRESS_RELIEF_VARIED: f32 = 0.5;  // per min, changed task recently
+
+pub const STRESS_BREAK_THRESHOLD: f32 = 85.0;
+pub const STRESS_POST_BREAK: f32 = 50.0; // stress after a mental break
+
+/// Stress level label for UI.
+pub fn stress_label(stress: f32) -> &'static str {
+    if stress < 25.0 { "Calm" }
+    else if stress < 50.0 { "Normal" }
+    else if stress < 70.0 { "Stressed" }
+    else if stress < 85.0 { "Distressed" }
+    else { "Breaking" }
+}
+
+/// Work speed multiplier from stress level.
+pub fn stress_work_speed(stress: f32) -> f32 {
+    if stress < 25.0 { 1.1 }       // calm: bonus
+    else if stress < 50.0 { 1.0 }  // normal
+    else if stress < 70.0 { 0.85 } // stressed: penalty
+    else if stress < 85.0 { 0.7 }  // distressed: major penalty
+    else { 0.5 }                    // breaking: barely functioning
+}
 
 // --- Health damage rates (per real second) ---
 const STARVE_DAMAGE: f32 = 0.008;      // ~2 min to die from starvation
@@ -513,6 +561,30 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
     let target_mood = weighted * 2.0 - 100.0;
     needs.mood += (target_mood - needs.mood) * 0.1 * t;
     needs.mood = needs.mood.clamp(-100.0, 100.0);
+
+    // --- Stress: cumulative, rises from bad conditions, falls from good ones ---
+    let t_min = t / 60.0; // convert to per-minute rate
+    let mut stress_delta: f32 = 0.0;
+
+    // Stress sources
+    if needs.hunger < 0.3 { stress_delta += STRESS_HUNGER * t_min; }
+    if needs.thirst < 0.3 { stress_delta += STRESS_THIRST * t_min; }
+    if needs.warmth < FREEZE_THRESHOLD { stress_delta += STRESS_FREEZING * t_min; }
+    if needs.rest < 0.2 { stress_delta += STRESS_EXHAUSTION * t_min; }
+    if is_sleeping && !env.near_bed { stress_delta += STRESS_GROUND_SLEEP * t_min; }
+    if !env.is_indoors && !env.near_furniture { stress_delta += STRESS_UGLY * t_min; }
+    if needs.task_duration > 300.0 { stress_delta += STRESS_MONOTONY * t_min; } // 5+ min same task
+
+    // Stress relief
+    if is_sleeping && env.near_bed { stress_delta -= STRESS_RELIEF_BED * t_min; }
+    if env.near_furniture { stress_delta -= STRESS_RELIEF_BENCH * t_min; }
+    if env.near_fire { stress_delta -= STRESS_RELIEF_FIRE * t_min; }
+    if needs.task_duration < 60.0 && needs.last_task_type != 255 { stress_delta -= STRESS_RELIEF_VARIED * t_min; }
+
+    // Natural baseline decay (always trends toward 20 slowly)
+    stress_delta += (20.0 - needs.stress) * 0.01 * t_min;
+
+    needs.stress = (needs.stress + stress_delta).clamp(0.0, 100.0);
 }
 
 /// Get a descriptive mood label from mood value.

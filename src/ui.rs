@@ -959,6 +959,12 @@ impl App {
                                     bar(ui, "RST", rest, egui::Color32::from_rgb(80, 120, 200));
                                     bar(ui, "WRM", warmth, egui::Color32::from_rgb(200, 100, 40));
                                     bar(ui, "O2 ", oxygen, egui::Color32::from_rgb(100, 200, 220));
+                                    // Stress bar (inverted: high stress = bad)
+                                    let stress_norm = (self.plebs.get(sel_idx).map(|p| p.needs.stress).unwrap_or(0.0) / 100.0).clamp(0.0, 1.0);
+                                    let stress_col = if stress_norm < 0.5 { egui::Color32::from_rgb(80, 180, 80) }
+                                        else if stress_norm < 0.7 { egui::Color32::from_rgb(200, 180, 60) }
+                                        else { egui::Color32::from_rgb(200, 60, 60) };
+                                    bar(ui, "STR", stress_norm, stress_col);
                                 });
 
                                 ui.separator();
@@ -1580,6 +1586,15 @@ impl App {
                                 format!("Crafting {} {:.0}%", rname, pr * 100.0)
                             }
                             PlebActivity::Drinking(pr) => format!("Drinking {:.0}%", pr * 100.0),
+                            PlebActivity::MentalBreak(k, _) => {
+                                let kind = match k {
+                                    MentalBreakKind::Daze => "Daze",
+                                    MentalBreakKind::Binge => "Binge eating",
+                                    MentalBreakKind::Tantrum => "Tantrum",
+                                    MentalBreakKind::Collapse => "Collapsed",
+                                };
+                                format!("Mental break: {}", kind)
+                            }
                             PlebActivity::Staggering(_) => "Staggering!".to_string(),
                             PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                         };
@@ -3853,6 +3868,7 @@ impl App {
                             PlebActivity::Building(_) => (Some("Building"), egui::Color32::from_rgb(100, 160, 220)),
                             PlebActivity::Crafting(_, _) => (Some("Crafting"), egui::Color32::from_rgb(200, 160, 60)),
                             PlebActivity::Drinking(_) => (Some("Drinking"), egui::Color32::from_rgb(80, 160, 220)),
+                            PlebActivity::MentalBreak(_, _) => (Some("Mental break!"), egui::Color32::from_rgb(200, 60, 200)),
                             PlebActivity::Staggering(_) => (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40)),
                             PlebActivity::Crisis(_, _) => (None, egui::Color32::GRAY),
                         };
@@ -4343,6 +4359,7 @@ impl App {
                                 PlebActivity::Building(_) => "Building",
                                 PlebActivity::Crafting(_, _) => "Crafting",
                                 PlebActivity::Drinking(_) => "Drinking",
+                                PlebActivity::MentalBreak(_, _) => "Mental break",
                                 PlebActivity::Staggering(_) => "Staggering",
                                 PlebActivity::Crisis(_, _) => "Crisis",
                             };

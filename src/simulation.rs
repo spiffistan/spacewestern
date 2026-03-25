@@ -1737,6 +1737,77 @@ impl App {
             }
         }
 
+        // --- Mental breaks: trigger at high stress ---
+        for pleb in self.plebs.iter_mut() {
+            if pleb.is_dead || pleb.is_enemy { continue; }
+
+            // Tick existing mental break
+            let break_state = if let PlebActivity::MentalBreak(ref k, r) = pleb.activity { Some((k.clone(), r)) } else { None };
+            if let Some((kind, remaining)) = break_state {
+                if remaining <= dt * self.time_speed {
+                    // Break over — stress drops, return to idle
+                    pleb.needs.stress = needs::STRESS_POST_BREAK;
+                    let kind_name = match kind {
+                        MentalBreakKind::Daze => "daze",
+                        MentalBreakKind::Binge => "binge",
+                        MentalBreakKind::Tantrum => "tantrum",
+                        MentalBreakKind::Collapse => "collapse",
+                    };
+                    events.push((EventCategory::Need, format!("{} recovered from {}", pleb.name, kind_name)));
+                    pleb.activity = PlebActivity::Idle;
+                } else {
+                    pleb.activity = PlebActivity::MentalBreak(kind.clone(), remaining - dt * self.time_speed);
+                    // Daze: random wandering
+                    if matches!(kind, MentalBreakKind::Daze) && pleb.path.is_empty() {
+                        let hash = (self.frame_count.wrapping_mul(2654435761).wrapping_add(pleb.id as u32 * 7919)) % 100;
+                        if hash < 5 { // occasionally pick a new wander target
+                            let dx = ((hash % 11) as i32 - 5);
+                            let dy = (((hash / 11) % 11) as i32 - 5);
+                            let tx = (pleb.x as i32 + dx).clamp(0, GRID_W as i32 - 1);
+                            let ty = (pleb.y as i32 + dy).clamp(0, GRID_H as i32 - 1);
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (tx, ty));
+                            if !path.is_empty() { pleb.path = path; pleb.path_idx = 0; }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Trigger new mental break
+            if pleb.needs.stress >= needs::STRESS_BREAK_THRESHOLD
+                && !matches!(pleb.activity, PlebActivity::MentalBreak(_, _))
+                && !pleb.activity.is_crisis()
+            {
+                let hash = self.frame_count.wrapping_mul(2654435761).wrapping_add(pleb.id as u32 * 1013904223);
+                let kind = match hash % 4 {
+                    0 => MentalBreakKind::Daze,
+                    1 => MentalBreakKind::Binge,
+                    2 => MentalBreakKind::Tantrum,
+                    _ => MentalBreakKind::Collapse,
+                };
+                let duration = match &kind {
+                    MentalBreakKind::Daze => 30.0,
+                    MentalBreakKind::Binge => 15.0,
+                    MentalBreakKind::Tantrum => 10.0,
+                    MentalBreakKind::Collapse => 20.0,
+                };
+                let kind_name = match &kind {
+                    MentalBreakKind::Daze => "daze",
+                    MentalBreakKind::Binge => "binge eating",
+                    MentalBreakKind::Tantrum => "tantrum",
+                    MentalBreakKind::Collapse => "collapse",
+                };
+                events.push((EventCategory::Need, format!("{} is having a mental break: {}!", pleb.name, kind_name)));
+                pleb.path.clear();
+                pleb.path_idx = 0;
+                pleb.work_target = None;
+                pleb.haul_target = None;
+                pleb.harvest_target = None;
+                pleb.activity = PlebActivity::MentalBreak(kind, duration);
+            }
+        }
+
         // --- Mark dead plebs as corpses ---
         for pleb in &mut self.plebs {
             if pleb.needs.health <= 0.0 && !pleb.is_dead {
