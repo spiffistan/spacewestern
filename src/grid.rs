@@ -430,14 +430,15 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
 }
 
 /// Generate the water table height map (256x256).
-/// Values represent depth below ground: negative = below surface, positive = above (springs).
-/// Uses multi-octave noise with hotspots near the pond area.
 pub fn generate_water_table(grid: &[u32]) -> Vec<f32> {
+    generate_water_table_seeded(grid, 0)
+}
+
+pub fn generate_water_table_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
     let w = GRID_W;
     let h = GRID_H;
     let mut table = vec![-2.0f32; (w * h) as usize];
 
-    // Same noise function as tree generation
     let noise = |x: f32, y: f32| -> f32 {
         let ix = x.floor() as i32;
         let iy = y.floor() as i32;
@@ -445,7 +446,7 @@ pub fn generate_water_table(grid: &[u32]) -> Vec<f32> {
         let fy = y - y.floor();
         let hash = |ix: i32, iy: i32| -> f32 {
             let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
-                .wrapping_add(1013904223);
+                .wrapping_add(1013904223).wrapping_add(seed.wrapping_mul(7919));
             (h & 0xFFFF) as f32 / 65535.0
         };
         let a = hash(ix, iy);
@@ -601,9 +602,11 @@ pub fn adjust_water_table_for_elevation(water_table: &mut [f32], elevation: &[f3
 }
 
 /// Generate terrain elevation map using multi-octave noise.
-/// Returns 256×256 f32 values in range 0.0–6.0 representing tiles of height.
-/// Features: gentle rolling hills, flat areas in the center, low near water.
 pub fn generate_elevation(grid: &[u32]) -> Vec<f32> {
+    generate_elevation_seeded(grid, 0)
+}
+
+pub fn generate_elevation_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
     let w = GRID_W;
     let h = GRID_H;
     let mut elev = vec![0.0f32; (w * h) as usize];
@@ -615,7 +618,7 @@ pub fn generate_elevation(grid: &[u32]) -> Vec<f32> {
         let fy = y - y.floor();
         let hash = |ix: i32, iy: i32| -> f32 {
             let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
-                .wrapping_add(1013904223);
+                .wrapping_add(1013904223).wrapping_add(seed.wrapping_mul(6271));
             (h & 0xFFFF) as f32 / 65535.0
         };
         let a = hash(ix, iy);

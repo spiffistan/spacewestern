@@ -4,6 +4,19 @@
 use crate::*;
 
 impl App {
+    /// Regenerate elevation, water table, and terrain from current params.
+    fn regenerate_world_preview(&mut self) {
+        let seed = self.terrain_params.seed;
+        self.grid_data = grid::generate_world(seed);
+        self.elevation_data = grid::generate_elevation_seeded(&self.grid_data, seed);
+        self.water_table = grid::generate_water_table_seeded(&self.grid_data, seed);
+        grid::adjust_water_table_for_elevation(&mut self.water_table, &self.elevation_data);
+        self.terrain_data = grid::generate_terrain_with_params(
+            &self.elevation_data, &self.water_table, &self.terrain_params);
+        self.terrain_dirty = true;
+        self.grid_dirty = true;
+    }
+
     /// Pixels-per-point scale factor for the current window.
     fn ppp(&self) -> f32 {
         self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0)
@@ -143,10 +156,7 @@ impl App {
                             }
                             if ui.small_button("Random").clicked() {
                                 self.terrain_params.seed = (self.frame_count.wrapping_mul(2654435761)) % 10000;
-                                // Auto-regenerate preview
-                                self.terrain_data = grid::generate_terrain_with_params(
-                                    &self.elevation_data, &self.water_table, &self.terrain_params);
-                                self.terrain_dirty = true;
+                                self.regenerate_world_preview();
                             }
                         });
 
@@ -154,9 +164,7 @@ impl App {
                         ui.label(egui::RichText::new(format!("Map: {}×{}", GRID_W, GRID_H)).size(9.0).weak());
                         ui.add_space(4.0);
                         if ui.button("Preview").clicked() {
-                            self.terrain_data = grid::generate_terrain_with_params(
-                                &self.elevation_data, &self.water_table, &self.terrain_params);
-                            self.terrain_dirty = true;
+                            self.regenerate_world_preview();
                         }
                     });
 
@@ -217,10 +225,9 @@ impl App {
             });
 
         if start_game {
-            // Regenerate world with final params
-            self.terrain_data = grid::generate_terrain_with_params(
-                &self.elevation_data, &self.water_table, &self.terrain_params);
-            self.terrain_dirty = true;
+            self.regenerate_world_preview();
+            // Re-upload grid and recompute derived data
+            compute_roof_heights(&mut self.grid_data);
             self.game_state = GameState::Playing;
         }
     }
