@@ -1,5 +1,14 @@
 # Rayworld
 
+## Rust Coding Standards
+Follow the Rust best practices in `.claude/skills/rust-skills/CLAUDE.md` (179 rules).
+Key priorities for this project:
+- **Ownership**: prefer `&T` over `.clone()`, accept `&[T]` not `&Vec<T>`
+- **Error handling**: use `Result` over `panic`, `?` for propagation
+- **Performance**: use iterators over indexing, `with_capacity()` for known sizes
+- **No unwrap in production**: use `unwrap_or`, `if let`, or `?` instead
+- **Naming**: `snake_case` functions, `SCREAMING_SNAKE` constants, `CamelCase` types
+
 ## Version & Push Policy
 The current version number is in the `VERSION` file (integer). The version label in `src/main.rs` reads it via `include_str!("../VERSION")`.
 - **Do NOT push** — only commit. The user will say "push it" explicitly when ready.
