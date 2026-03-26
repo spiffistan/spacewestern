@@ -148,6 +148,29 @@ fn wd_pixel_is_wall(fx: f32, fy: f32, wd: u32) -> bool {
     return false;
 }
 
+// Wall material color table (indexed by wd_material_s)
+fn wall_material_color(mat_idx: u32) -> vec3<f32> {
+    switch mat_idx {
+        case 0u: { return vec3<f32>(0.52, 0.50, 0.48); }  // stone
+        case 1u: { return vec3<f32>(0.58, 0.56, 0.52); }  // generic wall
+        case 2u: { return vec3<f32>(0.65, 0.78, 0.88); }  // glass
+        case 3u: { return vec3<f32>(0.70, 0.68, 0.65); }  // insulated
+        case 4u: { return vec3<f32>(0.50, 0.38, 0.22); }  // wood
+        case 5u: { return vec3<f32>(0.55, 0.57, 0.60); }  // steel
+        case 6u: { return vec3<f32>(0.62, 0.58, 0.50); }  // sandstone
+        case 7u: { return vec3<f32>(0.50, 0.48, 0.46); }  // granite
+        case 8u: { return vec3<f32>(0.65, 0.63, 0.58); }  // limestone
+        case 9u: { return vec3<f32>(0.52, 0.40, 0.25); }  // mud
+        default: { return vec3<f32>(0.55, 0.53, 0.50); }  // fallback
+    }
+}
+
+// Wall material height (for shadow casting)
+fn wall_material_height(mat_idx: u32) -> f32 {
+    if mat_idx == 2u { return 3.0; } // glass
+    return 3.0; // all walls default to height 3
+}
+
 // --- Fog of war helper (bilinear-sampled for smooth edges) ---
 fn sample_fog(wx: f32, wy: f32) -> f32 {
     // Map world coords to UV (center of each tile = center of texel)
@@ -2402,6 +2425,28 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     var bflags = block_flags(block);
     var fheight = f32(bheight);
 
+    // --- Wall data layer (DN-008): check if this tile has walls from wall_buf ---
+    let wd_idx = u32(by) * u32(camera.grid_w) + u32(bx);
+    let wd = read_wall_data(wd_idx);
+    let wd_is_wall_pixel = wd_pixel_is_wall(fx, fy, wd);
+
+    // If the wall_data says this pixel is wall, override effective height for shadows
+    // and set a flag for the renderer to use wall material color instead of block color.
+    var is_wd_wall = false;
+    var wd_wall_height = 0.0;
+    if wd_is_wall_pixel {
+        is_wd_wall = true;
+        let wmat = wd_material_s(wd);
+        wd_wall_height = wall_material_height(wmat);
+        // Override block height so shadows/oblique work correctly
+        if bheight == 0u || !matches_wall_type(btype) {
+            // The underlying block has no height (floor/furniture) — use wall height
+            bheight = u32(wd_wall_height);
+            bheight_raw = bheight;
+            fheight = wd_wall_height;
+        }
+    }
+
     // --- Oblique projection: show south face within the wall's own tile ---
     // The camera looks slightly from the south. If this block is tall and the
     // block to the south is shorter, the bottom strip of THIS tile shows the
@@ -2485,7 +2530,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Wall face rendering (south face, oblique projection) ---
     if is_wall_face {
-        var face_color = block_base_color(btype, bflags);
+        // Use wall_data material color if available, otherwise block color
+        var face_color = select(block_base_color(btype, bflags), wall_material_color(wd_material_s(wd)), is_wd_wall);
 
         // Darken toward bottom of face (ambient occlusion at ground junction)
         face_color *= (0.60 + 0.40 * (1.0 - wall_face_t));
@@ -3745,9 +3791,16 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         color = crop_color;
     } else {
-        // Thin wall: pixels in the open area show floor, pixels on wall show wall color
-        if is_thin_wall(bflags) && bheight > 0u && matches_wall_type(btype) && !pixel_is_wall(fx, fy, bheight_raw, bflags) {
-            // Open portion of thin wall — show dirt/floor beneath
+        // Wall rendering: check wall_data layer first (DN-008), fall back to legacy block
+        if is_wd_wall {
+            // Wall pixel from wall_data layer — use wall material color
+            let wmat = wd_material_s(wd);
+            color = wall_material_color(wmat);
+        } else if wd != 0u && !wd_is_wall_pixel {
+            // Open portion of a tile with walls — show the underlying block
+            color = block_base_color(btype, bflags);
+        } else if is_thin_wall(bflags) && bheight > 0u && matches_wall_type(btype) && !pixel_is_wall(fx, fy, bheight_raw, bflags) {
+            // Legacy: open portion of thin wall from block grid
             color = block_base_color(2u, 0u);
         } else {
             color = block_base_color(btype, bflags);
