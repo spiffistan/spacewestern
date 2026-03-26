@@ -17,7 +17,9 @@ const FOG_EXPLORED: u8 = 76; // ~0.3 — dimmed, desaturated
 const FOG_VISIBLE: u8 = 255; // 1.0 — full rendering
 
 /// Returns true if the tile at (x, y) blocks line of sight.
-fn blocks_vision(grid: &[u32], x: i32, y: i32) -> bool {
+/// For thin walls, only blocks if the sightline crosses a walled edge.
+/// `from_x, from_y` is the tile the sightline is coming from (toward viewer).
+fn blocks_vision(grid: &[u32], x: i32, y: i32, from_x: i32, from_y: i32) -> bool {
     if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 {
         return true; // out of bounds blocks
     }
@@ -41,6 +43,12 @@ fn blocks_vision(grid: &[u32], x: i32, y: i32) -> bool {
     // Glass and trees: don't block (can see through)
     if bt_is!(bt, BT_GLASS, BT_TREE, BT_BERRY_BUSH, BT_CROP) {
         return false;
+    }
+
+    // Thin walls: only block if the sightline crosses a walled edge
+    if is_wall_block(bt) && thin_wall_is_walkable(block) {
+        // Check if edge between from→here is walled
+        return edge_blocked(grid, from_x, from_y, x, y);
     }
 
     // Everything else with height blocks
@@ -101,9 +109,13 @@ fn cast_light(
                 }
             }
 
+            // "From" cell: one step closer to origin along the row direction
+            let from_x = cx + dx * xx + (dy + 1) * xy;
+            let from_y = cy + dx * yx + (dy + 1) * yy;
+
             if blocked {
                 // Previous cell was a wall
-                if blocks_vision(grid, mx, my) {
+                if blocks_vision(grid, mx, my, from_x, from_y) {
                     // Still a wall — adjust start slope
                     new_start = r_slope;
                 } else {
@@ -111,7 +123,7 @@ fn cast_light(
                     blocked = false;
                     start = new_start;
                 }
-            } else if blocks_vision(grid, mx, my) && j < radius {
+            } else if blocks_vision(grid, mx, my, from_x, from_y) && j < radius {
                 // Hit a wall — recurse with narrowed range, then mark blocked
                 blocked = true;
                 cast_light(
@@ -327,6 +339,53 @@ mod tests {
             vis[(128 * GRID_W + 132) as usize],
             255,
             "within radius should be visible"
+        );
+    }
+
+    #[test]
+    fn test_thin_wall_blocks_directionally() {
+        let mut grid = empty_grid();
+        // Place a thin wall at (130, 128) with wall on WEST edge (blocks vision from west)
+        // Viewer at (128, 128) looks east toward (130, 128)
+        let flags = make_thin_wall_flags(0, 3, 1); // edge=W, thickness=1
+        let wall_idx = (128 * GRID_W + 130) as usize;
+        grid[wall_idx] = make_block(BT_WALL as u8, 3, flags);
+
+        let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
+        compute_fov(&grid, &mut vis, 128, 128, 10);
+
+        // Tile behind the thin wall's walled edge (131, 128) should NOT be visible
+        assert_eq!(
+            vis[(128 * GRID_W + 131) as usize],
+            0,
+            "tile behind thin wall's walled edge should be hidden"
+        );
+        // Tile before the wall (129, 128) should be visible
+        assert_eq!(
+            vis[(128 * GRID_W + 129) as usize],
+            255,
+            "tile before thin wall should be visible"
+        );
+    }
+
+    #[test]
+    fn test_thin_wall_transparent_from_open_side() {
+        let mut grid = empty_grid();
+        // Place a thin wall at (130, 128) with wall on NORTH edge only
+        // Viewer at (128, 128) looks east — should see through the open part
+        let flags = make_thin_wall_flags(0, 0, 1); // edge=N, thickness=1
+        let wall_idx = (128 * GRID_W + 130) as usize;
+        grid[wall_idx] = make_block(BT_WALL as u8, 3, flags);
+
+        let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
+        compute_fov(&grid, &mut vis, 128, 128, 10);
+
+        // Tile behind the wall (131, 128): visible because E-W sightline
+        // doesn't cross the north edge wall
+        assert_eq!(
+            vis[(128 * GRID_W + 131) as usize],
+            255,
+            "should see through thin wall's open side"
         );
     }
 }
