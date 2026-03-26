@@ -59,7 +59,13 @@ fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 61u)]; }
 
 // --- Block unpacking ---
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
-fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
+fn block_height(b: u32) -> u32 {
+    let h = (b >> 8u) & 0xFFu;
+    let bt = b & 0xFFu;
+    // Wall blocks: bits 4-7 of height = edge bitmask, not visual height
+    if bt == 1u || bt == 4u || bt == 5u || bt == 14u || (bt >= 21u && bt <= 25u) || bt == 35u || bt == 44u { return h & 0xFu; }
+    return h;
+}
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 
@@ -77,14 +83,12 @@ fn is_thin_wall_block(b: u32) -> bool {
     if bh == 0u { return false; }
     return wall_thickness_raw((b >> 16u) & 0xFFu) != 0u;
 }
-fn has_wall_on_edge(flags: u32, edge: u32) -> bool {
+fn has_wall_on_edge(height: u32, flags: u32, edge: u32) -> bool {
     let thick_raw = (flags >> 5u) & 3u;
     if thick_raw == 0u { return true; } // full wall
-    let primary = (flags >> 3u) & 3u;
-    if primary == edge { return true; }
-    let is_corner = (flags & 4u) != 0u;
-    if is_corner && (primary + 1u) % 4u == edge { return true; }
-    return false;
+    let mask = (height >> 4u) & 0xFu;
+    if mask == 0u { return true; } // no edges = full wall (backward compat)
+    return (mask & (1u << edge)) != 0u;
 }
 
 // Edge-blocked: is the crossing from (ax,ay) to (bx,by) blocked by a thin wall?
@@ -105,7 +109,7 @@ fn edge_blocked_lm(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
     let a_mat = get_material(a_bt);
     if a_bh > 0u && a_mat.is_solid > 0.5 && a_mat.light_transmission < 0.01 {
         if !((a_flags & 1u) != 0u && (a_flags & 4u) != 0u) { // not open door
-            if has_wall_on_edge(a_flags, dir_a) { return true; }
+            if has_wall_on_edge(a_bh, a_flags, dir_a) { return true; }
         }
     }
 
@@ -116,7 +120,7 @@ fn edge_blocked_lm(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
     let b_mat = get_material(b_bt);
     if b_bh > 0u && b_mat.is_solid > 0.5 && b_mat.light_transmission < 0.01 {
         if !((b_flags & 1u) != 0u && (b_flags & 4u) != 0u) {
-            if has_wall_on_edge(b_flags, dir_b) { return true; }
+            if has_wall_on_edge(b_bh, b_flags, dir_b) { return true; }
         }
     }
 

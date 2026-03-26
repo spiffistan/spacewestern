@@ -43,7 +43,13 @@ const EVAP_BASE: f32 = 0.00005;
 const SEEP_FACTOR: f32 = 0.002;
 
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
-fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
+fn block_height(b: u32) -> u32 {
+    let h = (b >> 8u) & 0xFFu;
+    let bt = b & 0xFFu;
+    // Wall blocks: bits 4-7 of height = edge bitmask, not visual height
+    if bt == 1u || bt == 4u || bt == 5u || bt == 14u || (bt >= 21u && bt <= 25u) || bt == 35u || bt == 44u { return h & 0xFu; }
+    return h;
+}
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 
 // Get ground elevation for a tile. Surface = 0, dug ground = negative.

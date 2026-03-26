@@ -445,12 +445,20 @@ impl App {
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyR) => {
-                    if self.camera.show_roofs < 0.5 {
-                        self.camera.show_roofs = 1.0;
-                    } else {
-                        self.camera.show_roofs = 0.0;
+                    let shift = self.pressed_keys.contains(&KeyCode::ShiftLeft)
+                        || self.pressed_keys.contains(&KeyCode::ShiftRight);
+                    if shift {
+                        // Shift+R: toggle roof visibility
+                        if self.camera.show_roofs < 0.5 {
+                            self.camera.show_roofs = 1.0;
+                        } else {
+                            self.camera.show_roofs = 0.0;
+                        }
+                        self.window.as_ref().unwrap().request_redraw();
+                    } else if self.selected_pleb.is_none() && self.wall_thickness > 1 {
+                        // R: decrease wall thickness
+                        self.wall_thickness -= 1;
                     }
-                    self.window.as_ref().unwrap().request_redraw();
                 }
                 PhysicalKey::Code(KeyCode::Space) => {
                     if self.selected_pleb.is_some() && self.burst_queue == 0 {
@@ -531,14 +539,24 @@ impl App {
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyG) => {
+                    let shift = self.pressed_keys.contains(&KeyCode::ShiftLeft)
+                        || self.pressed_keys.contains(&KeyCode::ShiftRight);
                     if let Some(idx) = self.selected_pleb {
+                        // Pleb selected: toggle headlight
                         if let Some(pleb) = self.plebs.get_mut(idx) {
                             pleb.headlight_on = !pleb.headlight_on;
                         }
+                    } else if shift {
+                        // Shift+G: toggle sub-grid overlay
+                        self.show_subgrid = !self.show_subgrid;
+                    } else {
+                        // G: toggle tile grid overlay
+                        self.show_grid = !self.show_grid;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyF) => {
                     if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                        // Pleb selected: throw nearest physics body
                         let px = pleb.x;
                         let py = pleb.y;
                         let angle = pleb.angle;
@@ -547,6 +565,9 @@ impl App {
                             let dy = angle.sin();
                             self.physics_bodies[idx].throw(dx, dy, 18.0);
                         }
+                    } else if self.wall_thickness < 4 {
+                        // F: increase wall thickness
+                        self.wall_thickness += 1;
                     }
                 }
                 _ => {}

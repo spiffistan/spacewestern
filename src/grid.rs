@@ -155,7 +155,16 @@ pub fn block_flags_rs(b: u32) -> u8 {
     ((b >> 16) & 0xFF) as u8
 }
 
+/// Get the visual/effective block height. For wall blocks, masks out the edge
+/// bitmask in bits 4-7 to return only the wall height (bits 0-3).
 pub fn block_height_rs(b: u32) -> u8 {
+    let h = ((b >> 8) & 0xFF) as u8;
+    let bt = block_type_rs(b);
+    if is_wall_block(bt) { h & 0x0F } else { h }
+}
+
+/// Get the raw height byte (including edge bitmask for walls, connection mask for pipes).
+pub fn block_height_raw(b: u32) -> u8 {
     ((b >> 8) & 0xFF) as u8
 }
 
@@ -171,38 +180,74 @@ pub fn extract_roof_data(block: u32) -> (u8, u32) {
     (roof_flag, roof_h)
 }
 
-/// Thin wall flags encoding (bits 2-6 of flags byte, wall blocks only):
-/// - bit 2: corner flag (wall also on next clockwise edge)
-/// - bits 3-4: primary edge (0=N, 1=E, 2=S, 3=W)
-/// - bits 5-6: thickness (0=full/4, 1=3, 2=2, 3=1 sub-cell)
-/// Thickness 0 (full) = backward-compatible current walls.
-/// Corner: primary N + corner = N+E, primary E + corner = E+S, etc.
-pub fn make_thin_wall_flags(roof_flag: u8, edge: u8, thickness: u8) -> u8 {
-    let thick_bits = if thickness >= 4 { 0 } else { 4 - thickness };
-    roof_flag | ((edge & 3) << 3) | ((thick_bits & 3) << 5)
+/// Thin wall encoding (wall blocks only):
+///
+/// Height byte: bits 0-3 = wall height (0-15), bits 4-7 = edge bitmask
+///   bit 4 = N edge, bit 5 = E edge, bit 6 = S edge, bit 7 = W edge
+///   Edge bitmask 0 = full wall (all edges, backward compatible)
+///
+/// Flags byte: bits 5-6 = thickness (0=full/4, 1→3, 2→2, 3→1 sub-cell)
+///   Thickness 0 (full) = entire tile is wall (backward compatible)
+///
+/// This encoding supports any combination of edges (T-junctions, crosses,
+/// single edges, corners, opposite pairs) using 4 independent bits.
+
+/// Edge bitmask constants for wall height byte
+pub const WALL_EDGE_N: u8 = 0x10; // bit 4
+pub const WALL_EDGE_E: u8 = 0x20; // bit 5
+pub const WALL_EDGE_S: u8 = 0x40; // bit 6
+pub const WALL_EDGE_W: u8 = 0x80; // bit 7
+
+/// Convert edge index (0=N, 1=E, 2=S, 3=W) to bitmask
+pub fn edge_to_mask(edge: u8) -> u8 {
+    WALL_EDGE_N << (edge & 3)
 }
 
-pub fn make_thin_wall_corner_flags(roof_flag: u8, edge: u8, thickness: u8) -> u8 {
-    make_thin_wall_flags(roof_flag, edge, thickness) | 4 // set bit 2 = corner
+/// Create wall block height byte: base height + edge bitmask
+pub fn make_wall_height(base_height: u8, edge_mask: u8) -> u8 {
+    (base_height & 0x0F) | (edge_mask & 0xF0)
 }
 
-/// Does a thin wall on this block have a wall on the given edge?
+/// Extract actual wall height (lower 4 bits of height byte)
+pub fn wall_height(height_byte: u8) -> u8 {
+    height_byte & 0x0F
+}
+
+/// Extract edge bitmask (upper 4 bits of height byte)
+pub fn wall_edge_mask(height_byte: u8) -> u8 {
+    height_byte & 0xF0
+}
+
+/// Create thin wall flags (flags byte): thickness + roof/door flags
+pub fn make_thin_wall_flags(roof_flag: u8, edge: u8, thickness: u8) -> (u8, u8) {
+    let thick_bits = if thickness >= 4 { 0u8 } else { 4 - thickness };
+    let flags = roof_flag | ((thick_bits & 3) << 5);
+    let edge_mask = edge_to_mask(edge);
+    (flags, edge_mask)
+}
+
+/// Create thin wall corner flags: two adjacent edges
+pub fn make_thin_wall_corner_flags(roof_flag: u8, edge: u8, thickness: u8) -> (u8, u8) {
+    let thick_bits = if thickness >= 4 { 0u8 } else { 4 - thickness };
+    let flags = roof_flag | ((thick_bits & 3) << 5);
+    let edge_mask = edge_to_mask(edge) | edge_to_mask((edge + 1) & 3);
+    (flags, edge_mask)
+}
+
+/// Does a wall block have a wall on the given edge?
 /// edge: 0=N, 1=E, 2=S, 3=W
-fn has_wall_on_edge(flags: u8, edge: u8) -> bool {
+/// height_byte: the full height byte of the block
+/// flags: the flags byte (for thickness check)
+pub fn has_wall_on_edge(height_byte: u8, flags: u8, edge: u8) -> bool {
     let thick_raw = (flags >> 5) & 3;
     if thick_raw == 0 {
         return true; // full wall, blocks all edges
     }
-    let primary = (flags >> 3) & 3;
-    if primary == edge {
-        return true;
+    let edge_mask = wall_edge_mask(height_byte);
+    if edge_mask == 0 {
+        return true; // no edges set = full wall (backward compat)
     }
-    // Corner: also covers next clockwise edge
-    let is_corner = (flags & 4) != 0;
-    if is_corner && (primary + 1) % 4 == edge {
-        return true;
-    }
-    false
+    (edge_mask & edge_to_mask(edge)) != 0
 }
 
 /// Is movement between adjacent tiles blocked by a thin wall edge?
@@ -232,12 +277,13 @@ pub fn edge_blocked(grid: &[u32], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
         let a_block = grid[(ay as u32 * GRID_W + ax as u32) as usize];
         let a_bt = block_type_rs(a_block);
         let a_flags = block_flags_rs(a_block);
+        let a_height_raw = block_height_raw(a_block);
         let a_height = block_height_rs(a_block);
         if a_height > 0 && is_wall_block(a_bt) {
             // Open door: not blocked
             let a_is_door = (a_flags & 1) != 0;
             let a_is_open = (a_flags & 4) != 0;
-            if !(a_is_door && a_is_open) && has_wall_on_edge(a_flags, dir_from_a) {
+            if !(a_is_door && a_is_open) && has_wall_on_edge(a_height_raw, a_flags, dir_from_a) {
                 return true;
             }
         }
@@ -248,11 +294,12 @@ pub fn edge_blocked(grid: &[u32], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
         let b_block = grid[(by as u32 * GRID_W + bx as u32) as usize];
         let b_bt = block_type_rs(b_block);
         let b_flags = block_flags_rs(b_block);
+        let b_height_raw = block_height_raw(b_block);
         let b_height = block_height_rs(b_block);
         if b_height > 0 && is_wall_block(b_bt) {
             let b_is_door = (b_flags & 1) != 0;
             let b_is_open = (b_flags & 4) != 0;
-            if !(b_is_door && b_is_open) && has_wall_on_edge(b_flags, dir_from_b) {
+            if !(b_is_door && b_is_open) && has_wall_on_edge(b_height_raw, b_flags, dir_from_b) {
                 return true;
             }
         }
@@ -265,8 +312,11 @@ pub fn edge_blocked(grid: &[u32], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
 pub fn thin_wall_is_walkable(block: u32) -> bool {
     let flags = block_flags_rs(block);
     let thick_raw = (flags >> 5) & 3;
-    // Full wall (thick_raw=0) is not walkable. Thin wall has open space.
-    thick_raw != 0
+    let height_raw = block_height_raw(block);
+    let edge_mask = wall_edge_mask(height_raw);
+    // Full wall (thick_raw=0 or edge_mask=0) is not walkable.
+    // Thin wall with edges has open space for walking.
+    thick_raw != 0 && edge_mask != 0
 }
 
 /// Is this block type part of the electrical power network?
@@ -1310,7 +1360,7 @@ mod tests {
 
     #[test]
     fn test_make_block_roundtrip() {
-        // Pack and unpack should be lossless
+        // Pack and unpack should be lossless (using raw height for full byte)
         for bt in [0u8, 1, 5, 8, 13, 29, 255] {
             for h in [0u8, 1, 3, 5, 128, 255] {
                 for f in [0u8, 1, 2, 4, 7, 63] {
@@ -1321,7 +1371,7 @@ mod tests {
                         "type mismatch for ({bt},{h},{f})"
                     );
                     assert_eq!(
-                        block_height_rs(block),
+                        block_height_raw(block),
                         h,
                         "height mismatch for ({bt},{h},{f})"
                     );
@@ -1750,5 +1800,160 @@ mod tests {
             crate::materials::NUM_MATERIALS,
             highest
         );
+    }
+
+    // --- Thin wall edge bitmask tests ---
+
+    #[test]
+    fn test_thin_wall_preserves_thickness() {
+        // A 2-wide wall on north edge should stay 2-wide after creation
+        //
+        // Layout (4x4 sub-grid, thickness=2, N edge):
+        // [2][2][2][2]   ← wall strip (2 sub-cells thick)
+        // [2][2][2][2]
+        // [ ][ ][ ][ ]   ← open space
+        // [ ][ ][ ][ ]
+        let (flags, edge_mask) = make_thin_wall_flags(0, 0, 2); // edge=N, thickness=2
+        let block = make_block(BT_WALL as u8, make_wall_height(3, edge_mask), flags);
+
+        assert_eq!(block_height_rs(block), 3, "visual height should be 3");
+        assert_eq!(
+            wall_edge_mask(block_height_raw(block)),
+            WALL_EDGE_N as u8,
+            "should have N edge only"
+        );
+        let thick_raw = (block_flags_rs(block) >> 5) & 3;
+        let thickness = if thick_raw == 0 { 4 } else { 4 - thick_raw };
+        assert_eq!(thickness, 2, "thickness should be 2");
+    }
+
+    #[test]
+    fn test_thin_wall_corner_merge() {
+        // Dragging a 2-wide N wall, then a 2-wide E wall onto the same tile
+        // should create a corner (N+E) with thickness 2, NOT full-width.
+        //
+        // Layout (4x4 sub-grid, thickness=2, N+E corner):
+        // [2][2][2][2]   ← N edge wall
+        // [2][2][2][2]
+        // [ ][ ][2][2]   ← E edge wall
+        // [ ][ ][2][2]
+        let (flags_n, mask_n) = make_thin_wall_flags(0, 0, 2); // N edge, thickness 2
+        let (flags_e, mask_e) = make_thin_wall_flags(0, 1, 2); // E edge, thickness 2
+
+        // Simulate merge: OR the masks
+        let merged_mask = mask_n | mask_e;
+        let height = make_wall_height(3, merged_mask);
+        let block = make_block(BT_WALL as u8, height, flags_n); // use same thickness
+
+        assert_eq!(block_height_rs(block), 3, "visual height should be 3");
+        let raw = block_height_raw(block);
+        assert!(has_wall_on_edge(raw, flags_n, 0), "should block N");
+        assert!(has_wall_on_edge(raw, flags_n, 1), "should block E");
+        assert!(!has_wall_on_edge(raw, flags_n, 2), "should NOT block S");
+        assert!(!has_wall_on_edge(raw, flags_n, 3), "should NOT block W");
+
+        let thick_raw = (flags_n >> 5) & 3;
+        let thickness = if thick_raw == 0 { 4 } else { 4 - thick_raw };
+        assert_eq!(thickness, 2, "thickness should remain 2 after merge");
+    }
+
+    #[test]
+    fn test_thin_wall_t_junction() {
+        // T-junction: N+E+S edges, all thickness 1
+        //
+        // Layout (4x4 sub-grid, thickness=1, N+E+S):
+        // [1][1][1][1]   ← N edge
+        // [ ][ ][ ][1]   ← E edge
+        // [ ][ ][ ][1]
+        // [1][1][1][1]   ← S edge
+        let mask = WALL_EDGE_N | WALL_EDGE_E | WALL_EDGE_S;
+        let thick_bits: u8 = 4 - 1; // thickness=1 → thick_bits=3
+        let flags = (thick_bits & 3) << 5;
+        let height = make_wall_height(3, mask);
+        let block = make_block(BT_WALL as u8, height, flags);
+
+        let raw = block_height_raw(block);
+        assert!(has_wall_on_edge(raw, flags, 0), "T-junction should block N");
+        assert!(has_wall_on_edge(raw, flags, 1), "T-junction should block E");
+        assert!(has_wall_on_edge(raw, flags, 2), "T-junction should block S");
+        assert!(
+            !has_wall_on_edge(raw, flags, 3),
+            "T-junction should NOT block W"
+        );
+        assert_eq!(block_height_rs(block), 3, "visual height should be 3");
+        assert!(
+            thin_wall_is_walkable(block),
+            "T-junction with thickness 1 should be walkable"
+        );
+    }
+
+    #[test]
+    fn test_thin_wall_cross_junction() {
+        // Cross: all 4 edges, thickness 1
+        //
+        // Layout (4x4 sub-grid, thickness=1, N+E+S+W):
+        // [1][1][1][1]   ← N edge
+        // [1][ ][ ][1]   ← W and E edges
+        // [1][ ][ ][1]
+        // [1][1][1][1]   ← S edge
+        let mask = WALL_EDGE_N | WALL_EDGE_E | WALL_EDGE_S | WALL_EDGE_W;
+        let thick_bits: u8 = 4 - 1;
+        let flags = (thick_bits & 3) << 5;
+        let height = make_wall_height(3, mask);
+        let block = make_block(BT_WALL as u8, height, flags);
+
+        let raw = block_height_raw(block);
+        assert!(has_wall_on_edge(raw, flags, 0), "cross should block N");
+        assert!(has_wall_on_edge(raw, flags, 1), "cross should block E");
+        assert!(has_wall_on_edge(raw, flags, 2), "cross should block S");
+        assert!(has_wall_on_edge(raw, flags, 3), "cross should block W");
+        assert!(
+            thin_wall_is_walkable(block),
+            "cross with thickness 1 still has center open"
+        );
+    }
+
+    #[test]
+    fn test_edge_blocked_thin_wall_direction() {
+        // 2-wide wall on N edge at (5,5). Moving north should be blocked,
+        // moving east/south/west should NOT be blocked.
+        //
+        // Layout at (5,5):
+        // [2][2][2][2]   ← N edge blocks northward movement
+        // [2][2][2][2]
+        // [ ][ ][ ][ ]   ← open: east/south/west pass through
+        // [ ][ ][ ][ ]
+        let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+        let (flags, mask) = make_thin_wall_flags(0, 0, 2); // N edge, thickness 2
+        grid[(5 * GRID_W + 5) as usize] =
+            make_block(BT_WALL as u8, make_wall_height(3, mask), flags);
+
+        assert!(edge_blocked(&grid, 5, 5, 5, 4), "N: should be blocked");
+        assert!(!edge_blocked(&grid, 5, 5, 6, 5), "E: should NOT be blocked");
+        assert!(!edge_blocked(&grid, 5, 5, 5, 6), "S: should NOT be blocked");
+        assert!(!edge_blocked(&grid, 5, 5, 4, 5), "W: should NOT be blocked");
+    }
+
+    #[test]
+    fn test_edge_blocked_t_junction() {
+        // 1-wide T-junction (N+E+S) at (5,5).
+        // North, east, south blocked. West open.
+        //
+        // Layout at (5,5):
+        // [1][1][1][1]   ← N
+        // [ ][ ][ ][1]   ← E
+        // [ ][ ][ ][1]
+        // [1][1][1][1]   ← S
+        let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+        let mask = WALL_EDGE_N | WALL_EDGE_E | WALL_EDGE_S;
+        let thick_bits: u8 = 4 - 1;
+        let flags = (thick_bits & 3) << 5;
+        grid[(5 * GRID_W + 5) as usize] =
+            make_block(BT_WALL as u8, make_wall_height(3, mask), flags);
+
+        assert!(edge_blocked(&grid, 5, 5, 5, 4), "N: blocked by T-junction");
+        assert!(edge_blocked(&grid, 5, 5, 6, 5), "E: blocked by T-junction");
+        assert!(edge_blocked(&grid, 5, 5, 5, 6), "S: blocked by T-junction");
+        assert!(!edge_blocked(&grid, 5, 5, 4, 5), "W: open in T-junction");
     }
 }

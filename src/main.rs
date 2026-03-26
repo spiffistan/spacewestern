@@ -186,6 +186,8 @@ struct App {
     sandbox_mode: bool,                   // enables sandbox build category + debug tools
     sandbox_tool: SandboxTool,            // current sandbox action
     show_pipe_overlay: bool,              // draw gas pipe contents as egui overlay (ventilation)
+    show_grid: bool,                      // tile grid lines overlay
+    show_subgrid: bool,                   // 4x4 sub-grid around cursor
     show_liquid_overlay: bool,            // draw liquid pipe contents as egui overlay
     show_flow_overlay: bool, // draw flow arrows on pipes (pressure) and wires (current)
     show_velocity_arrows: bool, // draw fluid velocity vector field on overlays
@@ -534,6 +536,8 @@ impl App {
             sandbox_tool: SandboxTool::None,
             drag_start: None,
             show_pipe_overlay: false,
+            show_grid: false,
+            show_subgrid: false,
             show_liquid_overlay: false,
             show_flow_overlay: false,
             show_velocity_arrows: false,
@@ -1815,7 +1819,7 @@ impl App {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Pre-compute blueprint preview data (before egui borrows self)
-        let blueprint_tiles: Vec<((i32, i32), bool)> = if self.build_tool != BuildTool::None {
+        let blueprint_tiles: Vec<((i32, i32), u8)> = if self.build_tool != BuildTool::None {
             let (hwx, hwy) = self.hover_world;
             let hbx = hwx.floor() as i32;
             let hby = hwy.floor() as i32;
@@ -1908,7 +1912,7 @@ impl App {
                 .map(|&(tx, ty)| {
                     if is_physics {
                         // Physics bodies can be placed anywhere
-                        ((tx, ty), true)
+                        ((tx, ty), 1u8)
                     } else if on_wall {
                         let valid =
                             if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
@@ -1982,21 +1986,39 @@ impl App {
                                 BuildTool::Place(19) | BuildTool::Place(20) | BuildTool::Place(12)
                             )
                         {
-                            ((tx, ty), self.can_place_on(tx, ty, false))
+                            (
+                                (tx, ty),
+                                if self.can_place_on(tx, ty, false) {
+                                    1u8
+                                } else {
+                                    0u8
+                                },
+                            )
                         } else {
-                            ((tx, ty), valid)
+                            ((tx, ty), if valid { 1u8 } else { 0u8 })
                         }
                     } else if self.build_tool == BuildTool::Place(36) {
                         // Wire can go anywhere
                         (
                             (tx, ty),
-                            tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32,
+                            if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                                1u8
+                            } else {
+                                0u8
+                            },
                         )
                     } else if self.build_tool == BuildTool::Place(52) {
                         // Liquid Intake: whole-unit validation — one ground + one water/dug
                         let intake_tiles = self.bed_tiles(hbx, hby, self.build_rotation);
                         let (gi, wi) = self.intake_tile_assignment(&intake_tiles);
-                        ((tx, ty), gi.is_some() && wi.is_some())
+                        (
+                            (tx, ty),
+                            if gi.is_some() && wi.is_some() {
+                                1u8
+                            } else {
+                                0u8
+                            },
+                        )
                     } else if matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(46))
                     {
                         // Gas Pipe/Restrictor: on empty ground OR existing gas pipe/restrictor
@@ -2008,7 +2030,7 @@ impl App {
                         } else {
                             false
                         };
-                        ((tx, ty), ok)
+                        ((tx, ty), if ok { 1u8 } else { 0u8 })
                     } else if self.build_tool == BuildTool::Place(49) {
                         // Liquid Pipe: on empty ground, existing liquid pipe, or bridge
                         let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
@@ -2019,7 +2041,7 @@ impl App {
                         } else {
                             false
                         };
-                        ((tx, ty), ok)
+                        ((tx, ty), if ok { 1u8 } else { 0u8 })
                     } else if matches!(self.build_tool, BuildTool::Place(50) | BuildTool::Place(51))
                     {
                         // Bridges: on empty ground or existing pipes/wires
@@ -2034,7 +2056,7 @@ impl App {
                         } else {
                             false
                         };
-                        ((tx, ty), ok)
+                        ((tx, ty), if ok { 1u8 } else { 0u8 })
                     } else if matches!(self.build_tool, BuildTool::Place(53) | BuildTool::Place(54))
                     {
                         // Liquid pump/output: on empty ground or on liquid pipe
@@ -2045,7 +2067,7 @@ impl App {
                         } else {
                             false
                         };
-                        ((tx, ty), ok)
+                        ((tx, ty), if ok { 1u8 } else { 0u8 })
                     } else if matches!(
                         self.build_tool,
                         BuildTool::Place(42) | BuildTool::Place(43) | BuildTool::Place(45)
@@ -2058,7 +2080,7 @@ impl App {
                         } else {
                             false
                         };
-                        ((tx, ty), ok)
+                        ((tx, ty), if ok { 1u8 } else { 0u8 })
                     } else {
                         // Wall-adjacent items: valid only if adjacent to a wall
                         let is_wall_adjacent = match self.build_tool {
@@ -2072,7 +2094,14 @@ impl App {
                             _ => false,
                         };
                         if is_wall_adjacent {
-                            ((tx, ty), self.wall_adjacent_direction(tx, ty).is_some())
+                            (
+                                (tx, ty),
+                                if self.wall_adjacent_direction(tx, ty).is_some() {
+                                    1u8
+                                } else {
+                                    0u8
+                                },
+                            )
                         } else if matches!(self.build_tool, BuildTool::Place(id) if id == BT_WELL) {
                             // Well: must be on dug ground
                             let ok =
@@ -2082,9 +2111,56 @@ impl App {
                                 } else {
                                     false
                                 };
-                            ((tx, ty), ok)
+                            ((tx, ty), if ok { 1u8 } else { 0u8 })
                         } else {
-                            ((tx, ty), self.can_place_on(tx, ty, on_furniture))
+                            let base_ok = self.can_place_on(tx, ty, on_furniture);
+                            // Thin wall: also allow placement on existing walls (for corner merge)
+                            // and reject double walls (adjacent tile already has mirrored edge)
+                            // Returns: 0=invalid, 1=valid/new, 2=upgrade/modify existing
+                            let wall_state: u8 = if let BuildTool::Place(id) = self.build_tool {
+                                if is_wall_block(id) && self.wall_thickness < 4 {
+                                    let (min_x, max_x, min_y, max_y) =
+                                        if let Some((sx2, sy2)) = self.drag_start {
+                                            (sx2.min(hbx), sx2.max(hbx), sy2.min(hby), sy2.max(hby))
+                                        } else {
+                                            (tx, tx, ty, ty)
+                                        };
+                                    let (edge, _) = Self::thin_wall_edge_for_rect(
+                                        tx,
+                                        ty,
+                                        min_x,
+                                        max_x,
+                                        min_y,
+                                        max_y,
+                                        self.build_rotation,
+                                    );
+                                    if self.is_double_wall(tx, ty, edge) {
+                                        0 // invalid: double wall
+                                    } else if !base_ok {
+                                        // Check if existing wall tile can be upgraded (corner merge)
+                                        let is_upgrade = if tx >= 0
+                                            && ty >= 0
+                                            && tx < GRID_W as i32
+                                            && ty < GRID_H as i32
+                                        {
+                                            let i = (ty as u32 * GRID_W + tx as u32) as usize;
+                                            let eb = self.grid_data[i];
+                                            is_wall_block(block_type_rs(eb))
+                                                && block_height_rs(eb) > 0
+                                        } else {
+                                            false
+                                        };
+                                        if is_upgrade { 2 } else { 0 } // orange for upgrade, red for invalid
+                                    } else {
+                                        1 // blue: new placement on empty ground
+                                    }
+                                } else {
+                                    if base_ok { 1 } else { 0 }
+                                }
+                            } else {
+                                if base_ok { 1 } else { 0 }
+                            };
+                            ((tx, ty), wall_state)
                         }
                     }
                 })

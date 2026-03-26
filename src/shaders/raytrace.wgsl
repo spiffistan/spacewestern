@@ -216,7 +216,17 @@ fn sample_shadow_map(wx: f32, wy: f32) -> vec4<f32> {
 // flags: bit0=is_door/scorched, bit1=has_roof, bit2=is_open/switch_state
 // Wall-specific: bits3-4=wall_edge (0=N,1=E,2=S,3=W), bits5-6=wall_thickness (0=full,1=3,2=2,3=1 sub-cell)
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
-fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
+fn block_height_raw(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
+// Wall blocks store edge bitmask in height bits 4-7. Mask to lower 4 for visual height.
+fn is_wall_type_h(bt: u32) -> bool {
+    return bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
+        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL;
+}
+fn block_height(b: u32) -> u32 {
+    let h = (b >> 8u) & 0xFFu;
+    if is_wall_type_h(b & 0xFFu) { return h & 0xFu; }
+    return h;
+}
 fn block_flags(b: u32) -> u32 { return (b >> 16u) & 0xFFu; }
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
@@ -224,17 +234,14 @@ fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 fn is_glass(b: u32) -> bool { return block_type(b) == 5u; }
 
 // --- Thin wall helpers ---
-// Wall edge direction: 0=N (wall on north edge), 1=E, 2=S, 3=W
-fn wall_edge(flags: u32) -> u32 { return (flags >> 3u) & 3u; }
-// Corner flag: bit 2. When set, wall also covers the next clockwise edge.
-fn wall_is_corner(flags: u32) -> bool { return (flags & 4u) != 0u; }
-// Wall thickness in sub-cells: 0 means full (4), otherwise 4 - value
+// Edge bitmask in height byte: bit4=N, bit5=E, bit6=S, bit7=W
+// Thickness in flags byte: bits 5-6 (0=full, 1→3, 2→2, 3→1 sub-cell)
+fn wall_edge_mask(height: u32) -> u32 { return (height >> 4u) & 0xFu; }
 fn wall_thickness_raw(flags: u32) -> u32 { return (flags >> 5u) & 3u; }
 fn wall_thickness(flags: u32) -> u32 {
     let raw = wall_thickness_raw(flags);
     return select(4u - raw, 4u, raw == 0u);
 }
-// Is this a thin wall? (thickness < 4 sub-cells)
 fn is_thin_wall(flags: u32) -> bool { return wall_thickness_raw(flags) != 0u; }
 
 // Check if a single edge covers this pixel
@@ -246,18 +253,18 @@ fn edge_covers_pixel(fx: f32, fy: f32, edge: u32, wall_frac: f32) -> bool {
 }
 
 // Check if pixel position (fx, fy) falls within the wall portion of a thin wall.
-// Handles both single-edge and corner (L-shaped) walls.
-fn pixel_is_wall(fx: f32, fy: f32, flags: u32) -> bool {
+// Uses edge bitmask (any combination of N/E/S/W including T-junctions and crosses).
+fn pixel_is_wall(fx: f32, fy: f32, height: u32, flags: u32) -> bool {
     let thick = wall_thickness(flags);
     if thick >= 4u { return true; } // full wall, entire tile is wall
-    let edge = wall_edge(flags);
+    let mask = wall_edge_mask(height);
+    if mask == 0u { return true; } // no edges = full wall (backward compat)
     let wall_frac = f32(thick) * 0.25;
-    if edge_covers_pixel(fx, fy, edge, wall_frac) { return true; }
-    // Corner: also check next clockwise edge (N→E, E→S, S→W, W→N)
-    if wall_is_corner(flags) {
-        let next_edge = (edge + 1u) % 4u;
-        if edge_covers_pixel(fx, fy, next_edge, wall_frac) { return true; }
-    }
+    // Check each edge in the bitmask
+    if (mask & 1u) != 0u && edge_covers_pixel(fx, fy, 0u, wall_frac) { return true; } // N
+    if (mask & 2u) != 0u && edge_covers_pixel(fx, fy, 1u, wall_frac) { return true; } // E
+    if (mask & 4u) != 0u && edge_covers_pixel(fx, fy, 2u, wall_frac) { return true; } // S
+    if (mask & 8u) != 0u && edge_covers_pixel(fx, fy, 3u, wall_frac) { return true; } // W
     return false;
 }
 // Structural wall types that form the building envelope (not equipment/furniture)
@@ -2334,6 +2341,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     var block = get_block(bx, by);
     var btype = block_type(block);
     var bheight = block_height(block);
+    var bheight_raw = block_height_raw(block); // includes edge mask for pixel_is_wall
     var bflags = block_flags(block);
     var fheight = f32(bheight);
 
@@ -2360,7 +2368,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // where the pixel is within the wall portion of the tile.
             var show_face = true;
             if is_thin_wall(bflags) {
-                show_face = pixel_is_wall(fx, fy, bflags);
+                show_face = pixel_is_wall(fx, fy, bheight_raw, bflags);
             }
             if show_face {
                 is_wall_face = true;
@@ -3681,7 +3689,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = crop_color;
     } else {
         // Thin wall: pixels in the open area show floor, pixels on wall show wall color
-        if is_thin_wall(bflags) && bheight > 0u && matches_wall_type(btype) && !pixel_is_wall(fx, fy, bflags) {
+        if is_thin_wall(bflags) && bheight > 0u && matches_wall_type(btype) && !pixel_is_wall(fx, fy, bheight_raw, bflags) {
             // Open portion of thin wall — show dirt/floor beneath
             color = block_base_color(2u, 0u);
         } else {
@@ -3799,7 +3807,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_breaker = btype == BT_BREAKER; // breaker height = threshold, not visual
     let is_plant = btype == BT_CROP; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
     let is_diag_open = btype == BT_DIAGONAL && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
-    let is_thin_open = is_thin_wall(bflags) && bheight > 0u && matches_wall_type(btype) && !pixel_is_wall(fx, fy, bflags);
+    let is_thin_open = is_thin_wall(bflags) && bheight > 0u && matches_wall_type(btype) && !pixel_is_wall(fx, fy, bheight_raw, bflags);
     let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_plant || is_diag_open || is_thin_open);
     let effective_fheight = f32(effective_height);
 

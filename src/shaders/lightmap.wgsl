@@ -58,7 +58,13 @@ fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 61u)]; }
 
 // --- Block unpacking ---
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
-fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
+fn block_height(b: u32) -> u32 {
+    let h = (b >> 8u) & 0xFFu;
+    let bt = b & 0xFFu;
+    // Wall blocks: bits 4-7 of height = edge bitmask, not visual height
+    if bt == 1u || bt == 4u || bt == 5u || bt == 14u || (bt >= 21u && bt <= 25u) || bt == 35u || bt == 44u { return h & 0xFu; }
+    return h;
+}
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }

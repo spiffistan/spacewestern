@@ -37,7 +37,13 @@ struct GpuMaterial {
 @group(0) @binding(4) var dye_tex: texture_2d<f32>;
 
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
-fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
+fn block_height(b: u32) -> u32 {
+    let h = (b >> 8u) & 0xFFu;
+    let bt = b & 0xFFu;
+    // Wall blocks: bits 4-7 of height = edge bitmask, not visual height
+    if bt == 1u || bt == 4u || bt == 5u || bt == 14u || (bt >= 21u && bt <= 25u) || bt == 35u || bt == 44u { return h & 0xFu; }
+    return h;
+}
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
@@ -45,14 +51,12 @@ fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 61u)]; }
 
 // --- Thin wall edge helpers ---
-fn has_wall_on_edge_t(flags: u32, edge: u32) -> bool {
+fn has_wall_on_edge_t(height: u32, flags: u32, edge: u32) -> bool {
     let thick_raw = (flags >> 5u) & 3u;
     if thick_raw == 0u { return true; }
-    let primary = (flags >> 3u) & 3u;
-    if primary == edge { return true; }
-    let is_corner = (flags & 4u) != 0u;
-    if is_corner && (primary + 1u) % 4u == edge { return true; }
-    return false;
+    let mask = (height >> 4u) & 0xFu;
+    if mask == 0u { return true; }
+    return (mask & (1u << edge)) != 0u;
 }
 
 // Returns a conduction factor for the edge between (ax,ay) and (bx,by).
@@ -76,7 +80,7 @@ fn edge_conduction(ax: i32, ay: i32, bx: i32, by: i32) -> f32 {
             if is_door(ab) && is_open(ab) { /* open door: full conduction */ }
             else {
                 let af = (ab >> 16u) & 0xFFu;
-                if has_wall_on_edge_t(af, dir_a) { return 0.05; }
+                if has_wall_on_edge_t(abh, af, dir_a) { return 0.05; }
             }
         }
     }
@@ -87,7 +91,7 @@ fn edge_conduction(ax: i32, ay: i32, bx: i32, by: i32) -> f32 {
             if is_door(bb) && is_open(bb) { /* open door: full conduction */ }
             else {
                 let bf = (bb >> 16u) & 0xFFu;
-                if has_wall_on_edge_t(bf, dir_b) { return 0.05; }
+                if has_wall_on_edge_t(bbh, bf, dir_b) { return 0.05; }
             }
         }
     }

@@ -478,8 +478,9 @@ fn obstacle_field_complete_room_sealed() {
 fn thin_wall_north_edge_blocks_northward() {
     let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
     // Place a thin wall on tile (5, 5) with north edge, thickness 1
-    let flags = make_thin_wall_flags(0, 0, 1); // edge=N, thickness=1
-    grid[(5 * GRID_W + 5) as usize] = make_block(BT_STONE as u8, 3, flags);
+    let (flags, edge_mask) = make_thin_wall_flags(0, 0, 1); // edge=N, thickness=1
+    grid[(5 * GRID_W + 5) as usize] =
+        make_block(BT_STONE as u8, make_wall_height(3, edge_mask), flags);
 
     // Moving north from (5,5) to (5,4): blocked (wall on north edge)
     assert!(edge_blocked(&grid, 5, 5, 5, 4));
@@ -492,9 +493,10 @@ fn thin_wall_north_edge_blocks_northward() {
 #[test]
 fn thin_wall_corner_blocks_two_edges() {
     let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
-    // Place NE corner (primary N + corner flag → N+E)
-    let flags = make_thin_wall_corner_flags(0, 0, 2); // edge=N, thickness=2, corner
-    grid[(5 * GRID_W + 5) as usize] = make_block(BT_STONE as u8, 3, flags);
+    // Place NE corner (N+E edges, thickness=2)
+    let (flags, edge_mask) = make_thin_wall_corner_flags(0, 0, 2); // edge=N, thickness=2, corner
+    grid[(5 * GRID_W + 5) as usize] =
+        make_block(BT_STONE as u8, make_wall_height(3, edge_mask), flags);
 
     // North: blocked
     assert!(edge_blocked(&grid, 5, 5, 5, 4));
@@ -525,6 +527,7 @@ fn thin_wall_is_walkable_check() {
     assert!(!thin_wall_is_walkable(full));
 
     // Thin wall: walkable (has open sub-cells)
-    let thin = make_block(BT_STONE as u8, 3, make_thin_wall_flags(0, 0, 1));
+    let (tw_flags, tw_mask) = make_thin_wall_flags(0, 0, 1);
+    let thin = make_block(BT_STONE as u8, make_wall_height(3, tw_mask), tw_flags);
     assert!(thin_wall_is_walkable(thin));
 }

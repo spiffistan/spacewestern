@@ -33,7 +33,13 @@ struct Camera {
 @group(0) @binding(4) var<storage, read> sources: array<f32>;
 
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
-fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
+fn block_height(b: u32) -> u32 {
+    let h = (b >> 8u) & 0xFFu;
+    let bt = b & 0xFFu;
+    // Wall blocks: bits 4-7 of height = edge bitmask, not visual height
+    if bt == 1u || bt == 4u || bt == 5u || bt == 14u || (bt >= 21u && bt <= 25u) || bt == 35u || bt == 44u { return h & 0xFu; }
+    return h;
+}
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 
@@ -44,14 +50,12 @@ fn is_thin_wall_s(b: u32) -> bool {
     if bh == 0u { return false; }
     return wall_thickness_raw_s((b >> 16u) & 0xFFu) != 0u;
 }
-fn has_wall_on_edge_s(flags: u32, edge: u32) -> bool {
+fn has_wall_on_edge_s(height: u32, flags: u32, edge: u32) -> bool {
     let thick_raw = (flags >> 5u) & 3u;
     if thick_raw == 0u { return true; }
-    let primary = (flags >> 3u) & 3u;
-    if primary == edge { return true; }
-    let is_corner = (flags & 4u) != 0u;
-    if is_corner && (primary + 1u) % 4u == edge { return true; }
-    return false;
+    let mask = (height >> 4u) & 0xFu;
+    if mask == 0u { return true; }
+    return (mask & (1u << edge)) != 0u;
 }
 
 fn is_wall(x: i32, y: i32) -> bool {
@@ -91,7 +95,7 @@ fn sound_edge_blocked(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
         let abh = block_height(ab);
         if abh > 0u && !(is_door(ab) && is_open(ab)) {
             let af = (ab >> 16u) & 0xFFu;
-            if has_wall_on_edge_s(af, dir_a) { return true; }
+            if has_wall_on_edge_s(abh, af, dir_a) { return true; }
         }
     }
     if bx >= 0 && by >= 0 && bx < gw && by < gh {
@@ -99,7 +103,7 @@ fn sound_edge_blocked(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
         let bbh = block_height(bb);
         if bbh > 0u && !(is_door(bb) && is_open(bb)) {
             let bf = (bb >> 16u) & 0xFFu;
-            if has_wall_on_edge_s(bf, dir_b) { return true; }
+            if has_wall_on_edge_s(bbh, bf, dir_b) { return true; }
         }
     }
     return false;

@@ -272,6 +272,77 @@ impl App {
         }
     }
 
+    /// Check if placing a thin wall with the given edge would create a double wall
+    /// (the adjacent tile already has a wall on the mirrored edge).
+    pub(crate) fn is_double_wall(&self, tx: i32, ty: i32, edge: u8) -> bool {
+        let (nx, ny) = match edge {
+            0 => (tx, ty - 1), // N edge → check tile to the north's S edge
+            1 => (tx + 1, ty), // E edge → check tile to the east's W edge
+            2 => (tx, ty + 1), // S edge → check tile to the south's N edge
+            _ => (tx - 1, ty), // W edge → check tile to the west's E edge
+        };
+        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+            return false;
+        }
+        let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+        let nb = self.grid_data[nidx];
+        let nbt = block_type_rs(nb);
+        let nflags = block_flags_rs(nb);
+        let nh = block_height_rs(nb);
+        let nh_raw = block_height_raw(nb);
+        if nh == 0 || !is_wall_block(nbt) {
+            return false;
+        }
+        let mirror_edge = (edge + 2) % 4;
+        has_wall_on_edge(nh_raw, nflags, mirror_edge)
+    }
+
+    /// When placing a thin wall on a tile that already has a wall,
+    /// merge the new edge into the existing edge bitmask.
+    /// Returns Some((flags, merged_edge_mask)) if merge happened, None if no merge needed.
+    pub(crate) fn merge_thin_wall_edges(
+        &self,
+        tx: i32,
+        ty: i32,
+        new_edge: u8,
+        thickness: u8,
+    ) -> Option<(u8, u8)> {
+        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+            return None;
+        }
+        let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+        let block = self.grid_data[idx];
+        let bt = block_type_rs(block);
+        let flags = block_flags_rs(block);
+        let h = block_height_rs(block);
+        let h_raw = block_height_raw(block);
+
+        // No existing wall → no merge needed
+        if h == 0 || !is_wall_block(bt) {
+            return None;
+        }
+        // Full wall (thickness 0) → already covers everything
+        let thick_raw = (flags >> 5) & 3;
+        if thick_raw == 0 {
+            return None;
+        }
+        let existing_mask = wall_edge_mask(h_raw);
+        if existing_mask == 0 {
+            return None; // full wall (backward compat)
+        }
+        let new_mask = edge_to_mask(new_edge);
+        // Already has this edge → no merge needed
+        if (existing_mask & new_mask) != 0 {
+            return None;
+        }
+        // Merge: OR the new edge into existing mask
+        let merged_mask = existing_mask | new_mask;
+        let roof_flag = flags & 2;
+        let thick_bits = if thickness >= 4 { 0u8 } else { 4 - thickness };
+        let new_flags = roof_flag | ((thick_bits & 3) << 5);
+        Some((new_flags, merged_mask))
+    }
+
     /// Compute thin wall flags for a tile in a hollow rect drag.
     /// Returns (edge, is_corner) where edge is 0=N,1=E,2=S,3=W.
     pub(crate) fn thin_wall_edge_for_rect(
@@ -291,17 +362,10 @@ impl App {
             return (rotation as u8, false);
         }
 
-        // Lines: all tiles get the same edge based on line orientation
-        // Rotation selects which side: 0=default, changes with Q/E
-        if is_line_h {
-            // Horizontal line: wall on N or S edge
-            let edge = if rotation % 2 == 0 { 0u8 } else { 2 }; // N or S
-            return (edge, false);
-        }
-        if is_line_v {
-            // Vertical line: wall on E or W edge
-            let edge = if rotation % 2 == 0 { 1u8 } else { 3 }; // E or W
-            return (edge, false);
+        // Lines: keep the same edge as the single-tile preview (rotation).
+        // This ensures the wall doesn't flip when you start dragging.
+        if is_line_h || is_line_v {
+            return (rotation as u8 & 3, false);
         }
 
         // Rectangle: detect which edge of the rect this tile sits on
@@ -641,9 +705,14 @@ impl App {
                     bid == BT_LIQUID_PIPE && bt_is!(btu, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
                 let pipe_compat = gas_pipe_compat || liquid_pipe_compat;
                 let same_type = btu == bid || pipe_compat; // allow pipe↔restrictor
+                // Thin wall merge: allow placing on existing wall tiles for corner upgrades
+                let thin_wall_merge =
+                    is_wall_block(bid) && self.wall_thickness < 4 && is_wall_block(btu) && bh > 0;
+
                 if ((btu == BT_AIR || btu == BT_DIRT) && bh == 0)
                     || (wire_anywhere && btu != BT_WIRE)
                     || (is_line_type && same_type)
+                    || thin_wall_merge
                 {
                     // Compute connection mask from neighbors in the line
                     let mut conn: u8 = 0;
@@ -741,7 +810,7 @@ impl App {
 
                         // Thin wall: compute wall edge from rect position or rotation
                         let is_wall_type = is_wall_block(block_type_id);
-                        let flags = if is_wall_type && self.wall_thickness < 4 {
+                        if is_wall_type && self.wall_thickness < 4 {
                             let (min_x, max_x) = (sx.min(ex), sx.max(ex));
                             let (min_y, max_y) = (sy.min(ey), sy.max(ey));
                             let (edge, is_corner) = Self::thin_wall_edge_for_rect(
@@ -753,20 +822,45 @@ impl App {
                                 max_y,
                                 self.build_rotation,
                             );
-                            if is_corner {
+
+                            // Rule 1: skip if adjacent tile already has wall on mirrored edge
+                            if self.is_double_wall(tx, ty, edge) {
+                                continue;
+                            }
+
+                            // Rule 2: auto-merge edges if tile already has a wall
+                            if let Some((merged_flags, merged_mask)) =
+                                self.merge_thin_wall_edges(tx, ty, edge, self.wall_thickness)
+                            {
+                                let merged_h = make_wall_height(wall_height(height), merged_mask);
+                                self.place_or_blueprint(
+                                    tx,
+                                    ty,
+                                    make_block(block_type_id as u8, merged_h, merged_flags)
+                                        | roof_h,
+                                );
+                                continue;
+                            }
+                            // New thin wall placement
+                            let (tw_flags, tw_edge_mask) = if is_corner {
                                 make_thin_wall_corner_flags(roof_flag, edge, self.wall_thickness)
                             } else {
                                 make_thin_wall_flags(roof_flag, edge, self.wall_thickness)
-                            }
+                            };
+                            let tw_height = make_wall_height(height, tw_edge_mask);
+                            self.place_or_blueprint(
+                                tx,
+                                ty,
+                                make_block(block_type_id as u8, tw_height, tw_flags) | roof_h,
+                            );
+                            continue;
                         } else {
-                            roof_flag
-                        };
-
-                        self.place_or_blueprint(
-                            tx,
-                            ty,
-                            make_block(block_type_id as u8, height, flags) | roof_h,
-                        );
+                            self.place_or_blueprint(
+                                tx,
+                                ty,
+                                make_block(block_type_id as u8, height, roof_flag) | roof_h,
+                            );
+                        }
                     }
 
                     // Update adjacent existing pipes/wires with reciprocal connection

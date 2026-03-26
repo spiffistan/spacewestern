@@ -347,9 +347,9 @@ mod tests {
         let mut grid = empty_grid();
         // Place a thin wall at (130, 128) with wall on WEST edge (blocks vision from west)
         // Viewer at (128, 128) looks east toward (130, 128)
-        let flags = make_thin_wall_flags(0, 3, 1); // edge=W, thickness=1
+        let (flags, edge_mask) = make_thin_wall_flags(0, 3, 1); // edge=W, thickness=1
         let wall_idx = (128 * GRID_W + 130) as usize;
-        grid[wall_idx] = make_block(BT_WALL as u8, 3, flags);
+        grid[wall_idx] = make_block(BT_WALL as u8, make_wall_height(3, edge_mask), flags);
 
         let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
         compute_fov(&grid, &mut vis, 128, 128, 10);
@@ -373,9 +373,9 @@ mod tests {
         let mut grid = empty_grid();
         // Place a thin wall at (130, 128) with wall on NORTH edge only
         // Viewer at (128, 128) looks east — should see through the open part
-        let flags = make_thin_wall_flags(0, 0, 1); // edge=N, thickness=1
+        let (flags, edge_mask) = make_thin_wall_flags(0, 0, 1); // edge=N, thickness=1
         let wall_idx = (128 * GRID_W + 130) as usize;
-        grid[wall_idx] = make_block(BT_WALL as u8, 3, flags);
+        grid[wall_idx] = make_block(BT_WALL as u8, make_wall_height(3, edge_mask), flags);
 
         let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
         compute_fov(&grid, &mut vis, 128, 128, 10);

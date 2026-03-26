@@ -52,7 +52,7 @@ impl App {
         &mut self,
         ctx: &egui::Context,
         bp_cam: (f32, f32, f32, f32, f32),
-        blueprint_tiles: Vec<((i32, i32), bool)>,
+        blueprint_tiles: Vec<((i32, i32), u8)>,
         dt: f32,
     ) {
         match self.game_state {
@@ -3263,7 +3263,7 @@ impl App {
                                 let idx = (by as u32 * GRID_W + bx as u32) as usize;
                                 let block = self.grid_data[idx];
                                 let bt = block & 0xFF;
-                                let bh = (block >> 8) & 0xFF;
+                                let bh = block_height_rs(block) as u32;
                                 let flags = (block >> 16) & 0xFF;
                                 let reg = block_defs::BlockRegistry::cached();
                                 let type_name = reg.name(bt);
@@ -3291,7 +3291,7 @@ impl App {
                         let idx = (by as u32 * GRID_W + bx as u32) as usize;
                         let block = self.grid_data[idx];
                         let bt = block & 0xFF;
-                        let bh = (block >> 8) & 0xFF;
+                        let bh = block_height_rs(block) as u32;
 
                         // --- Elevation + Terrain ---
                         let elev = if idx < self.elevation_data.len() {
@@ -3713,7 +3713,7 @@ impl App {
                                 let tidx = (*ty as u32 * GRID_W + *tx as u32) as usize;
                                 let tb = self.grid_data[tidx];
                                 let tbt = tb & 0xFF;
-                                let tbh = (tb >> 8) & 0xFF;
+                                let tbh = block_height_rs(tb) as u32;
                                 // Allow placement on empty ground OR on existing same-type block
                                 ((tbt == 0 || tbt == 2) && tbh == 0) || (is_pipe_tool && tbt == 15) // pipe on pipe = merge connections
                             };
@@ -3861,9 +3861,85 @@ impl App {
         &mut self,
         ctx: &egui::Context,
         bp_cam: (f32, f32, f32, f32, f32),
-        blueprint_tiles: &[((i32, i32), bool)],
+        blueprint_tiles: &[((i32, i32), u8)],
     ) {
         let bp_ppp = self.ppp();
+        let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+        let tile_px = cam_zoom / self.render_scale / bp_ppp;
+
+        // --- Grid overlay (G key) ---
+        if self.show_grid && tile_px > 3.0 {
+            let grid_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::new("grid_lines"),
+            ));
+            let screen_rect = ctx.screen_rect();
+            // Dark lines during day (contrast against bright ground), light at night
+            let sun = self.camera.sun_intensity;
+            let brightness = (200.0 * (1.0 - sun * 0.9)) as u8;
+            let alpha = (15.0 + sun * 40.0) as u8;
+            let grid_color =
+                egui::Color32::from_rgba_unmultiplied(brightness, brightness, brightness, alpha);
+            let grid_width = 1.0;
+            // Compute visible tile range
+            let min_x = ((cam_cx - cam_sw * 0.5 / cam_zoom).floor() as i32).max(0);
+            let max_x = ((cam_cx + cam_sw * 0.5 / cam_zoom).ceil() as i32).min(GRID_W as i32);
+            let min_y = ((cam_cy - cam_sh * 0.5 / cam_zoom).floor() as i32).max(0);
+            let max_y = ((cam_cy + cam_sh * 0.5 / cam_zoom).ceil() as i32).min(GRID_H as i32);
+            // Vertical lines
+            for x in min_x..=max_x {
+                let p0 = self.world_to_screen_ui(x as f32, min_y as f32, bp_cam);
+                let p1 = self.world_to_screen_ui(x as f32, max_y as f32, bp_cam);
+                grid_painter.line_segment([p0, p1], egui::Stroke::new(grid_width, grid_color));
+            }
+            // Horizontal lines
+            for y in min_y..=max_y {
+                let p0 = self.world_to_screen_ui(min_x as f32, y as f32, bp_cam);
+                let p1 = self.world_to_screen_ui(max_x as f32, y as f32, bp_cam);
+                grid_painter.line_segment([p0, p1], egui::Stroke::new(grid_width, grid_color));
+            }
+        }
+
+        // --- Sub-grid overlay (Shift+G key) — 4x4 sub-grid around cursor ---
+        if self.show_subgrid && tile_px > 8.0 {
+            let subgrid_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::new("subgrid_lines"),
+            ));
+            let (hwx, hwy) = self.hover_world;
+            let cx = hwx.floor() as i32;
+            let cy = hwy.floor() as i32;
+            let radius = 3i32;
+            let sun = self.camera.sun_intensity;
+            let sb = (200.0 * (1.0 - sun * 0.6)) as u8;
+            let sub_color = egui::Color32::from_rgba_unmultiplied(
+                sb,
+                sb,
+                (sb as f32 * 1.2).min(255.0) as u8,
+                (20.0 + sun * 15.0) as u8,
+            );
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    let tx = cx + dx;
+                    let ty = cy + dy;
+                    if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                        continue;
+                    }
+                    // 4 sub-grid lines per tile (at 0.25, 0.5, 0.75)
+                    for s in 1..4 {
+                        let f = s as f32 * 0.25;
+                        // Vertical sub-line
+                        let p0 = self.world_to_screen_ui(tx as f32 + f, ty as f32, bp_cam);
+                        let p1 = self.world_to_screen_ui(tx as f32 + f, ty as f32 + 1.0, bp_cam);
+                        subgrid_painter.line_segment([p0, p1], egui::Stroke::new(1.0, sub_color));
+                        // Horizontal sub-line
+                        let p0 = self.world_to_screen_ui(tx as f32, ty as f32 + f, bp_cam);
+                        let p1 = self.world_to_screen_ui(tx as f32 + 1.0, ty as f32 + f, bp_cam);
+                        subgrid_painter.line_segment([p0, p1], egui::Stroke::new(1.0, sub_color));
+                    }
+                }
+            }
+        }
 
         // Selection drag rectangle (while dragging to multi-select)
         if let Some((sx, sy)) = self.select_drag_start {
@@ -4181,11 +4257,12 @@ impl App {
                 egui::Id::new("blueprint"),
             ));
 
-            for &((tx, ty), valid) in blueprint_tiles {
-                let color = if valid {
-                    egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80)
-                } else {
-                    egui::Color32::from_rgba_unmultiplied(255, 60, 60, 80)
+            for &((tx, ty), state) in blueprint_tiles {
+                // 0=invalid (red), 1=valid/new (blue), 2=upgrade/modify (orange)
+                let color = match state {
+                    1 => egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80), // blue: new placement
+                    2 => egui::Color32::from_rgba_unmultiplied(255, 180, 40, 90), // orange: upgrade
+                    _ => egui::Color32::from_rgba_unmultiplied(255, 60, 60, 80),  // red: invalid
                 };
 
                 let wx0 = tx as f32;
@@ -6692,7 +6769,7 @@ impl App {
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
         let block = self.grid_data[idx];
         let bt = block & 0xFF;
-        let bh = (block >> 8) & 0xFF;
+        let bh = block_height_rs(block) as u32;
         let flags = (block >> 16) & 0xFF;
         let reg = block_defs::BlockRegistry::cached();
         let type_name = reg.name(bt);
@@ -6814,7 +6891,7 @@ impl App {
                         let idx = (ty * GRID_W + tx) as usize;
                         let block = self.grid_data[idx];
                         let bt = block & 0xFF;
-                        let bh = (block >> 8) & 0xFF;
+                        let bh = block_height_rs(block) as u32;
                         let elev = if idx < self.elevation_data.len() {
                             self.elevation_data[idx]
                         } else {

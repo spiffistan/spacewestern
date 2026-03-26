@@ -73,7 +73,13 @@ struct Camera {
 @group(0) @binding(3) var<storage, read> elevation: array<f32>;
 
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
-fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
+fn block_height(b: u32) -> u32 {
+    let h = (b >> 8u) & 0xFFu;
+    let bt = b & 0xFFu;
+    if bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
+        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL { return h & 0xFu; }
+    return h;
+}
 fn block_flags(b: u32) -> u32 { return (b >> 16u) & 0xFFu; }
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }

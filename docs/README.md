@@ -23,6 +23,8 @@ Numbered technical documents for specific architectural decisions. Format: `DN-N
 | `DN-004-thin-walls.md` | Proposed | Variable-thickness walls with sub-grid furniture placement |
 | `DN-005-windows-doors-as-wall-features.md` | Proposed | Windows and doors as wall attributes, not separate block types |
 | `DN-006-subgrid-system-implications.md` | Proposed | Full audit of every system affected by the sub-grid architecture |
+| `DN-007-building-patterns.md` | Analysis | Allowed building patterns with thin walls — corners, T-junctions, double walls |
+| `DN-008-three-layer-world-model.md` | Proposed | Three-layer architecture: wall edges, blocks, surface items |
 
 ## Ideas (`ideas/`)
 
