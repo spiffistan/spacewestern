@@ -39,8 +39,60 @@ struct GpuMaterial {
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
+fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
+fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 
 fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 61u)]; }
+
+// --- Thin wall edge helpers ---
+fn has_wall_on_edge_t(flags: u32, edge: u32) -> bool {
+    let thick_raw = (flags >> 5u) & 3u;
+    if thick_raw == 0u { return true; }
+    let primary = (flags >> 3u) & 3u;
+    if primary == edge { return true; }
+    let is_corner = (flags & 4u) != 0u;
+    if is_corner && (primary + 1u) % 4u == edge { return true; }
+    return false;
+}
+
+// Returns a conduction factor for the edge between (ax,ay) and (bx,by).
+// 1.0 = fully open, 0.05 = walled edge (small leak), 0.0 = impossible.
+fn edge_conduction(ax: i32, ay: i32, bx: i32, by: i32) -> f32 {
+    let ddx = bx - ax;
+    let ddy = by - ay;
+    var dir_a = 0u;
+    if ddy < 0 { dir_a = 0u; }
+    else if ddx > 0 { dir_a = 1u; }
+    else if ddy > 0 { dir_a = 2u; }
+    else { dir_a = 3u; }
+    let dir_b = (dir_a + 2u) % 4u;
+    let gw = i32(camera.grid_w);
+    let gh = i32(camera.grid_h);
+
+    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
+        let ab = grid[u32(ay) * u32(gw) + u32(ax)];
+        let abh = block_height(ab);
+        if abh > 0u {
+            if is_door(ab) && is_open(ab) { /* open door: full conduction */ }
+            else {
+                let af = (ab >> 16u) & 0xFFu;
+                if has_wall_on_edge_t(af, dir_a) { return 0.05; }
+            }
+        }
+    }
+    if bx >= 0 && by >= 0 && bx < gw && by < gh {
+        let bb = grid[u32(by) * u32(gw) + u32(bx)];
+        let bbh = block_height(bb);
+        if bbh > 0u {
+            if is_door(bb) && is_open(bb) { /* open door: full conduction */ }
+            else {
+                let bf = (bb >> 16u) & 0xFFu;
+                if has_wall_on_edge_t(bf, dir_b) { return 0.05; }
+            }
+        }
+    }
+    return 1.0;
+}
 
 @compute @workgroup_size(8, 8)
 fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -95,6 +147,7 @@ fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
     block_temp += temp_diff * transfer_rate * 0.3;
 
     // --- Heat conduction between adjacent blocks ---
+    // Edge-aware: thin wall edges reduce conduction (insulation)
     let bx = i32(gid.x);
     let by = i32(gid.y);
     var neighbor_heat = 0.0;
@@ -109,8 +162,18 @@ fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
             let nb = grid[nidx];
             let nmat = get_material(block_type(nb));
             if nmat.heat_capacity > 0.01 {
-                neighbor_heat += block_temps[nidx];
-                neighbor_count += 1.0;
+                // For cardinal neighbors, check edge conduction
+                // Diagonal neighbors use minimum of both cardinal edges
+                var cond = 1.0;
+                if dx == 0 || dy == 0 {
+                    cond = edge_conduction(bx, by, nx, ny);
+                } else {
+                    let c1 = edge_conduction(bx, by, bx + dx, by);
+                    let c2 = edge_conduction(bx, by, bx, by + dy);
+                    cond = min(c1, c2);
+                }
+                neighbor_heat += block_temps[nidx] * cond;
+                neighbor_count += cond;
             }
         }
     }

@@ -557,9 +557,10 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
             BT_BERRY_BUSH,
             BT_CROP
         );
-        if bh > 0 && !passable && !(is_door && is_open) {
+        // Thin walls: passable through open sub-cells
+        let is_thin = is_wall_block(bt) && bh > 0 && thin_wall_is_walkable(block);
+        if bh > 0 && !passable && !is_thin && !(is_door && is_open) {
             let t = t_max_x.min(t_max_y).max(0.0);
-            // Determine which face was hit: the last axis we stepped along
             let hit_x = t_max_x <= t_max_y;
             return Some(BulletTraceHit {
                 x: x0 + dir_x * t,
@@ -568,7 +569,9 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
             });
         }
 
-        // Step to next cell
+        // Step to next cell — check edge blocking at the transition
+        let prev_ix = ix;
+        let prev_iy = iy;
         if t_max_x < t_max_y {
             if t_max_x > dist {
                 break;
@@ -581,6 +584,16 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
             }
             iy += step_y;
             t_max_y += t_delta_y;
+        }
+        // Thin wall edge blocks bullet at tile transition
+        if edge_blocked(grid, prev_ix, prev_iy, ix, iy) {
+            let t = t_max_x.min(t_max_y).max(0.0);
+            let hit_x = ix != prev_ix;
+            return Some(BulletTraceHit {
+                x: x0 + dir_x * t,
+                y: y0 + dir_y * t,
+                hit_x_face: hit_x,
+            });
         }
     }
 

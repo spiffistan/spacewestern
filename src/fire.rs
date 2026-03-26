@@ -161,6 +161,11 @@ pub fn tick_fire(
                     continue;
                 }
 
+                // Thin wall edge blocks fire spread (firewall)
+                if edge_blocked(grid, bx, by, nx, ny) {
+                    continue;
+                }
+
                 let nb = grid[nidx];
                 let nbt = block_type_rs(nb);
                 let ndef = match reg.get(nbt) {

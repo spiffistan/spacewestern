@@ -73,7 +73,9 @@ pub fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
                 BT_WIRE_BRIDGE,
                 BT_RESTRICTOR
             ) || (bt >= BT_PIPE && bt <= BT_VALVE);
-            if bh > 0 && !passable && !(is_door && is_open) {
+            // Thin walls: open space is passable for fluid
+            let is_thin = bh > 0 && is_wall_block(bt) && thin_wall_is_walkable(b);
+            if bh > 0 && !passable && !is_thin && !(is_door && is_open) {
                 255
             } else {
                 0
