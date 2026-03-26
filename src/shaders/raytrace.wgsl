@@ -133,6 +133,8 @@ fn wd_has_edge_s(wd: u32, edge: u32) -> bool {
 // Check if pixel is in the wall area using wall_data
 fn wd_pixel_is_wall(fx: f32, fy: f32, wd: u32) -> bool {
     if wd == 0u { return false; }
+    // Open doors are not walls
+    if wd_has_door(wd) && wd_door_open(wd) { return false; }
     let thick = wd_thickness_s(wd);
     if thick >= 4u {
         let edges = wd_edges_s(wd);
@@ -3905,7 +3907,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Open door: treat as floor-level opening (overrides wall type)
-    let door_is_open = is_door(block) && is_open(block);
+    // Check both grid_data doors and wall_data doors (DN-008)
+    let door_is_open = (is_door(block) && is_open(block)) || (wd_has_door(wd) && wd_door_open(wd));
     // Trees: transparent sprite pixels are ground-level; canopy keeps height for shadows
     let is_tree_ground = (btype == BT_TREE || btype == BT_BERRY_BUSH) && !is_tree_pixel;
     let is_pipe = (btype >= BT_PIPE && btype <= BT_INLET) || btype == BT_RESTRICTOR || btype == BT_LIQUID_PIPE || btype == BT_PIPE_BRIDGE || btype == BT_LIQUID_INTAKE || btype == BT_LIQUID_PUMP || btype == BT_LIQUID_OUTPUT;
