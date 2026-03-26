@@ -336,11 +336,7 @@ impl App {
         has_wall_on_edge(nh_raw, nflags, mirror_edge)
     }
 
-    /// When placing a thin wall on a tile that already has a wall,
-    /// merge the new edge into the existing edge bitmask.
-    /// Returns Some((flags, merged_edge_mask)) if merge happened, None if no merge needed.
-    /// Check if tile already has wall edges (in wall_data or block grid) that can be merged.
-    /// Returns true if the tile has walls that the new edge would merge with.
+    /// Check if tile has wall edges (in wall_data or block grid).
     pub(crate) fn tile_has_walls(&self, tx: i32, ty: i32) -> bool {
         if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
             return false;
@@ -353,71 +349,6 @@ impl App {
         // Check block grid (legacy)
         let block = self.grid_data[idx];
         is_wall_block(block_type_rs(block)) && block_height_rs(block) > 0
-    }
-
-    pub(crate) fn merge_thin_wall_edges(
-        &self,
-        tx: i32,
-        ty: i32,
-        new_edge: u8,
-        thickness: u8,
-    ) -> Option<(u8, u8)> {
-        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
-            return None;
-        }
-        let idx = (ty as u32 * GRID_W + tx as u32) as usize;
-
-        // Check wall_data first (DN-008 — preferred source)
-        if idx < self.wall_data.len() {
-            let wd = self.wall_data[idx];
-            let existing_edges = wd_edges(wd);
-            if existing_edges != 0 {
-                let new_bit = 1u16 << new_edge;
-                if (existing_edges & new_bit) != 0 {
-                    return None;
-                } // already has this edge
-                let merged = existing_edges | new_bit;
-                let thick_bits = if thickness >= 4 {
-                    0u16
-                } else {
-                    4 - thickness as u16
-                };
-                let _mat = wd_material(wd);
-                let roof_flag = block_flags_rs(self.grid_data[idx]) & 2;
-                let flags = roof_flag | ((thick_bits as u8 & 3) << 5);
-                let edge_mask = (merged as u8) << 4; // convert WD edge bits to height-byte edge mask
-                return Some((flags, edge_mask));
-            }
-        }
-
-        // Fall back to block grid (legacy)
-        let block = self.grid_data[idx];
-        let bt = block_type_rs(block);
-        let flags = block_flags_rs(block);
-        let h = block_height_rs(block);
-        let h_raw = block_height_raw(block);
-
-        if h == 0 || !is_wall_block(bt) {
-            return None;
-        }
-        let thick_raw = (flags >> 5) & 3;
-        if thick_raw == 0 {
-            return None;
-        }
-        let existing_mask = wall_edge_mask(h_raw);
-        if existing_mask == 0 {
-            return None;
-        }
-        let new_mask = edge_to_mask(new_edge);
-        if (existing_mask & new_mask) != 0 {
-            return None;
-        }
-        // Merge: OR the new edge into existing mask
-        let merged_mask = existing_mask | new_mask;
-        let roof_flag = flags & 2;
-        let thick_bits = if thickness >= 4 { 0u8 } else { 4 - thickness };
-        let new_flags = roof_flag | ((thick_bits & 3) << 5);
-        Some((new_flags, merged_mask))
     }
 
     /// Compute thin wall flags for a tile in a hollow rect drag.
