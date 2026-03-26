@@ -213,7 +213,8 @@ fn sample_shadow_map(wx: f32, wy: f32) -> vec4<f32> {
 // --- Block unpacking ---
 // type: 0=air, 1=stone, 2=dirt, 3=water, 4=wall, 5=glass, 6=fireplace, 7=electric_light, 8=tree, 9=bench, 10=standing_lamp, 11=table_lamp, 12=fan
 // height: 0-255
-// flags: bit0=is_door, bit1=has_roof
+// flags: bit0=is_door/scorched, bit1=has_roof, bit2=is_open/switch_state
+// Wall-specific: bits3-4=wall_edge (0=N,1=E,2=S,3=W), bits5-6=wall_thickness (0=full,1=3,2=2,3=1 sub-cell)
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
 fn block_flags(b: u32) -> u32 { return (b >> 16u) & 0xFFu; }
@@ -221,6 +222,44 @@ fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 fn is_glass(b: u32) -> bool { return block_type(b) == 5u; }
+
+// --- Thin wall helpers ---
+// Wall edge direction: 0=N (wall on north edge), 1=E, 2=S, 3=W
+fn wall_edge(flags: u32) -> u32 { return (flags >> 3u) & 3u; }
+// Corner flag: bit 2. When set, wall also covers the next clockwise edge.
+fn wall_is_corner(flags: u32) -> bool { return (flags & 4u) != 0u; }
+// Wall thickness in sub-cells: 0 means full (4), otherwise 4 - value
+fn wall_thickness_raw(flags: u32) -> u32 { return (flags >> 5u) & 3u; }
+fn wall_thickness(flags: u32) -> u32 {
+    let raw = wall_thickness_raw(flags);
+    return select(4u - raw, 4u, raw == 0u);
+}
+// Is this a thin wall? (thickness < 4 sub-cells)
+fn is_thin_wall(flags: u32) -> bool { return wall_thickness_raw(flags) != 0u; }
+
+// Check if a single edge covers this pixel
+fn edge_covers_pixel(fx: f32, fy: f32, edge: u32, wall_frac: f32) -> bool {
+    if edge == 0u { return fy < wall_frac; }           // N: wall at top
+    if edge == 1u { return fx > (1.0 - wall_frac); }   // E: wall at right
+    if edge == 2u { return fy > (1.0 - wall_frac); }   // S: wall at bottom
+    return fx < wall_frac;                               // W: wall at left
+}
+
+// Check if pixel position (fx, fy) falls within the wall portion of a thin wall.
+// Handles both single-edge and corner (L-shaped) walls.
+fn pixel_is_wall(fx: f32, fy: f32, flags: u32) -> bool {
+    let thick = wall_thickness(flags);
+    if thick >= 4u { return true; } // full wall, entire tile is wall
+    let edge = wall_edge(flags);
+    let wall_frac = f32(thick) * 0.25;
+    if edge_covers_pixel(fx, fy, edge, wall_frac) { return true; }
+    // Corner: also check next clockwise edge (N→E, E→S, S→W, W→N)
+    if wall_is_corner(flags) {
+        let next_edge = (edge + 1u) % 4u;
+        if edge_covers_pixel(fx, fy, next_edge, wall_frac) { return true; }
+    }
+    return false;
+}
 // Structural wall types that form the building envelope (not equipment/furniture)
 fn matches_wall_type(bt: u32) -> bool {
     return bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
@@ -2316,8 +2355,15 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let face_height = min(height_diff * camera.oblique_strength, 0.35);
         let face_start = 1.0 - face_height; // face occupies bottom strip of tile
         if fy > face_start {
-            is_wall_face = true;
-            wall_face_t = (fy - face_start) / face_height; // 0=top of face, 1=bottom
+            // Thin wall: only show face where wall sub-cells exist
+            var show_face = true;
+            if is_thin_wall(bflags) {
+                show_face = pixel_is_wall(fx, face_start - 0.01, bflags);
+            }
+            if show_face {
+                is_wall_face = true;
+                wall_face_t = (fy - face_start) / face_height;
+            }
         }
     }
 
@@ -3632,7 +3678,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         color = crop_color;
     } else {
-        color = block_base_color(btype, bflags);
+        // Thin wall: pixels in the open area show floor, pixels on wall show wall color
+        if is_thin_wall(bflags) && bheight > 0u && matches_wall_type(btype) && !pixel_is_wall(fx, fy, bflags) {
+            // Open portion of thin wall — show dirt/floor beneath
+            color = block_base_color(2u, 0u);
+        } else {
+            color = block_base_color(btype, bflags);
+        }
     }
 
     // --- Level indicator bar for adjustable blocks ---
@@ -3745,7 +3797,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_breaker = btype == BT_BREAKER; // breaker height = threshold, not visual
     let is_plant = btype == BT_CROP; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
     let is_diag_open = btype == BT_DIAGONAL && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
-    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_plant || is_diag_open);
+    let is_thin_open = is_thin_wall(bflags) && bheight > 0u && matches_wall_type(btype) && !pixel_is_wall(fx, fy, bflags);
+    let effective_height = select(bheight, 0u, door_is_open || is_tree_ground || is_pipe || is_dug || is_rock || is_crate || is_wire || is_dimmer || is_breaker || is_plant || is_diag_open || is_thin_open);
     let effective_fheight = f32(effective_height);
 
     // Height-based brightness (skip for trees — they have their own shading)

@@ -3932,7 +3932,64 @@ impl App {
                 } else {
                     egui::Color32::from_rgba_unmultiplied(60, 100, 200, 50)
                 };
-                bp_painter.rect_filled(rect, 0.0, tint);
+                // Thin wall blueprint: show wall sub-cells only
+                let bp_flags = (bp.block_data >> 16) & 0xFF;
+                let bp_thick_raw = (bp_flags >> 5) & 3;
+                let bp_bt = bp.block_data & 0xFF;
+                let is_thin_bp = bp_thick_raw != 0 && is_wall_block(bp_bt);
+                if is_thin_bp {
+                    let thick = 4 - bp_thick_raw;
+                    let wall_frac = thick as f32 * 0.25;
+                    let edge = (bp_flags >> 3) & 3;
+                    let is_corner = (bp_flags & 4) != 0;
+                    let tw = sx1 - sx0;
+                    let th = sy1 - sy0;
+                    // Draw primary edge
+                    let wall_rect = match edge {
+                        0 => egui::Rect::from_min_size(
+                            egui::pos2(sx0, sy0),
+                            egui::vec2(tw, th * wall_frac),
+                        ),
+                        1 => egui::Rect::from_min_size(
+                            egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
+                            egui::vec2(tw * wall_frac, th),
+                        ),
+                        2 => egui::Rect::from_min_size(
+                            egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
+                            egui::vec2(tw, th * wall_frac),
+                        ),
+                        _ => egui::Rect::from_min_size(
+                            egui::pos2(sx0, sy0),
+                            egui::vec2(tw * wall_frac, th),
+                        ),
+                    };
+                    bp_painter.rect_filled(wall_rect, 0.0, tint);
+                    // Draw corner (next clockwise edge)
+                    if is_corner {
+                        let next_edge = (edge + 1) % 4;
+                        let corner_rect = match next_edge {
+                            0 => egui::Rect::from_min_size(
+                                egui::pos2(sx0, sy0),
+                                egui::vec2(tw, th * wall_frac),
+                            ),
+                            1 => egui::Rect::from_min_size(
+                                egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
+                                egui::vec2(tw * wall_frac, th),
+                            ),
+                            2 => egui::Rect::from_min_size(
+                                egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
+                                egui::vec2(tw, th * wall_frac),
+                            ),
+                            _ => egui::Rect::from_min_size(
+                                egui::pos2(sx0, sy0),
+                                egui::vec2(tw * wall_frac, th),
+                            ),
+                        };
+                        bp_painter.rect_filled(corner_rect, 0.0, tint);
+                    }
+                } else {
+                    bp_painter.rect_filled(rect, 0.0, tint);
+                }
                 // Progress bar at bottom (construction progress)
                 if bp.progress > 0.01 {
                     let bar_h = (tile_px * 0.08).max(2.0);

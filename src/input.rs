@@ -489,14 +489,16 @@ impl App {
                 }
                 PhysicalKey::Code(KeyCode::KeyQ) => {
                     if self.selected_pleb.is_none() {
-                        if matches!(
+                        let four_way = matches!(
                             self.build_tool,
                             BuildTool::Place(12)
                                 | BuildTool::Place(16)
                                 | BuildTool::Place(20)
                                 | BuildTool::Place(19)
                                 | BuildTool::Place(44)
-                        ) {
+                        ) || (self.wall_thickness < 4
+                            && matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id)));
+                        if four_way {
                             self.build_rotation = (self.build_rotation + 3) % 4;
                         } else {
                             self.build_rotation = (self.build_rotation + 1) % 2;
@@ -505,18 +507,32 @@ impl App {
                 }
                 PhysicalKey::Code(KeyCode::KeyE) => {
                     if self.selected_pleb.is_none() {
-                        if matches!(
+                        let four_way = matches!(
                             self.build_tool,
                             BuildTool::Place(12)
                                 | BuildTool::Place(16)
                                 | BuildTool::Place(20)
                                 | BuildTool::Place(19)
                                 | BuildTool::Place(44)
-                        ) {
+                        ) || (self.wall_thickness < 4
+                            && matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id)));
+                        if four_way {
                             self.build_rotation = (self.build_rotation + 1) % 4;
                         } else {
                             self.build_rotation = (self.build_rotation + 1) % 2;
                         }
+                    }
+                }
+                PhysicalKey::Code(KeyCode::BracketLeft) => {
+                    // Decrease wall thickness (thinner walls)
+                    if self.wall_thickness > 1 {
+                        self.wall_thickness -= 1;
+                    }
+                }
+                PhysicalKey::Code(KeyCode::BracketRight) => {
+                    // Increase wall thickness (thicker walls)
+                    if self.wall_thickness < 4 {
+                        self.wall_thickness += 1;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyT) => {

@@ -145,6 +145,7 @@ struct App {
     // Build mode
     build_tool: BuildTool,
     build_rotation: u32,     // 0=horizontal (E-W), 1=vertical (N-S)
+    wall_thickness: u8,      // 1-4 sub-cells (4=full, default)
     hover_world: (f32, f32), // world coords under mouse cursor
     // Fluid simulation
     fluid_params: FluidParams,
@@ -479,6 +480,7 @@ impl App {
             lightmap_frame: 0,
             build_tool: BuildTool::None,
             build_rotation: 0,
+            wall_thickness: 4,
             hover_world: (0.0, 0.0),
             fluid_params: FluidParams {
                 sim_w: FLUID_SIM_W as f32,

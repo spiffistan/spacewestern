@@ -171,6 +171,21 @@ pub fn extract_roof_data(block: u32) -> (u8, u32) {
     (roof_flag, roof_h)
 }
 
+/// Thin wall flags encoding (bits 2-6 of flags byte, wall blocks only):
+/// - bit 2: corner flag (wall also on next clockwise edge)
+/// - bits 3-4: primary edge (0=N, 1=E, 2=S, 3=W)
+/// - bits 5-6: thickness (0=full/4, 1=3, 2=2, 3=1 sub-cell)
+/// Thickness 0 (full) = backward-compatible current walls.
+/// Corner: primary N + corner = N+E, primary E + corner = E+S, etc.
+pub fn make_thin_wall_flags(roof_flag: u8, edge: u8, thickness: u8) -> u8 {
+    let thick_bits = if thickness >= 4 { 0 } else { 4 - thickness };
+    roof_flag | ((edge & 3) << 3) | ((thick_bits & 3) << 5)
+}
+
+pub fn make_thin_wall_corner_flags(roof_flag: u8, edge: u8, thickness: u8) -> u8 {
+    make_thin_wall_flags(roof_flag, edge, thickness) | 4 // set bit 2 = corner
+}
+
 /// Is this block type part of the electrical power network?
 /// Checks block type and wire overlay flag. Matches the GPU-side is_conductor() in power.wgsl.
 pub fn is_conductor_rs(bt: u32, flags: u8) -> bool {
