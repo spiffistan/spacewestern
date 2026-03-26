@@ -1560,6 +1560,10 @@ impl App {
                     depth_or_array_layers: 1,
                 },
             );
+            // Re-extract wall data from grid and upload
+            self.wall_data = extract_wall_data_from_grid(&self.grid_data);
+            gfx.queue
+                .write_buffer(&gfx.wall_buffer, 0, bytemuck::cast_slice(&self.wall_data));
             self.grid_dirty = false;
             self.pipe_network.rebuild(&self.grid_data);
             self.liquid_network
