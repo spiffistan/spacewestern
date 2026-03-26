@@ -180,6 +180,192 @@ pub fn extract_roof_data(block: u32) -> (u8, u32) {
     (roof_flag, roof_h)
 }
 
+// =============================================================
+// Wall data layer (u16 per tile) — independent of block grid.
+// See DN-008 for full architecture.
+// =============================================================
+// bits 0-3:   edge bitmask (bit0=N, bit1=E, bit2=S, bit3=W)
+// bits 4-5:   thickness (0=full/4, 1→3, 2→2, 3→1 sub-cell)
+// bits 6-9:   wall material index (0-15)
+// bit 10:     has_door
+// bit 11:     door_is_open
+// bit 12:     has_window
+// bits 13-15: reserved
+
+pub const WD_EDGE_N: u16 = 0x0001;
+pub const WD_EDGE_E: u16 = 0x0002;
+pub const WD_EDGE_S: u16 = 0x0004;
+pub const WD_EDGE_W: u16 = 0x0008;
+pub const WD_EDGE_MASK: u16 = 0x000F;
+pub const WD_THICK_SHIFT: u32 = 4;
+pub const WD_MAT_SHIFT: u32 = 6;
+pub const WD_HAS_DOOR: u16 = 0x0400;
+pub const WD_DOOR_OPEN: u16 = 0x0800;
+pub const WD_HAS_WINDOW: u16 = 0x1000;
+
+/// Wall material indices
+pub const WMAT_STONE: u16 = 0;
+pub const WMAT_GENERIC: u16 = 1;
+pub const WMAT_GLASS: u16 = 2;
+pub const WMAT_INSULATED: u16 = 3;
+pub const WMAT_WOOD: u16 = 4;
+pub const WMAT_STEEL: u16 = 5;
+pub const WMAT_SANDSTONE: u16 = 6;
+pub const WMAT_GRANITE: u16 = 7;
+pub const WMAT_LIMESTONE: u16 = 8;
+pub const WMAT_MUD: u16 = 9;
+
+/// Map wall block type to wall material index
+pub fn wall_block_to_material(bt: u32) -> u16 {
+    match bt {
+        BT_STONE => WMAT_STONE,
+        BT_WALL => WMAT_GENERIC,
+        BT_GLASS => WMAT_GLASS,
+        BT_INSULATED => WMAT_INSULATED,
+        BT_WOOD_WALL => WMAT_WOOD,
+        BT_STEEL_WALL => WMAT_STEEL,
+        BT_SANDSTONE => WMAT_SANDSTONE,
+        BT_GRANITE => WMAT_GRANITE,
+        BT_LIMESTONE => WMAT_LIMESTONE,
+        BT_MUD_WALL => WMAT_MUD,
+        _ => WMAT_GENERIC,
+    }
+}
+
+/// Pack wall data into u16
+pub fn pack_wall_data(edges: u16, thickness: u16, material: u16) -> u16 {
+    (edges & WD_EDGE_MASK)
+        | (((if thickness >= 4 { 0u16 } else { 4 - thickness }) & 3) << WD_THICK_SHIFT)
+        | ((material & 0xF) << WD_MAT_SHIFT)
+}
+
+/// Read edge bitmask from wall_data
+pub fn wd_edges(wd: u16) -> u16 {
+    wd & WD_EDGE_MASK
+}
+/// Read thickness raw (0=full, 1→3, 2→2, 3→1)
+pub fn wd_thickness_raw(wd: u16) -> u16 {
+    (wd >> WD_THICK_SHIFT) & 3
+}
+/// Read thickness as sub-cell count (1-4)
+pub fn wd_thickness(wd: u16) -> u16 {
+    let raw = wd_thickness_raw(wd);
+    if raw == 0 { 4 } else { 4 - raw }
+}
+/// Read material index
+pub fn wd_material(wd: u16) -> u16 {
+    (wd >> WD_MAT_SHIFT) & 0xF
+}
+
+/// Check if wall_data has a wall on the given edge (0=N, 1=E, 2=S, 3=W)
+pub fn wd_has_edge(wd: u16, edge: u8) -> bool {
+    if wd == 0 {
+        return false;
+    }
+    let edges = wd_edges(wd);
+    if edges == 0 && wd_thickness_raw(wd) == 0 {
+        return true;
+    } // full wall compat
+    (edges & (1 << edge)) != 0
+}
+
+/// Check if crossing from (ax,ay) to (bx,by) is blocked by wall_data.
+pub fn wd_edge_blocked(wall_data: &[u16], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    let dx = bx - ax;
+    let dy = by - ay;
+    let dir_a = if dy < 0 {
+        0u8
+    } else if dx > 0 {
+        1
+    } else if dy > 0 {
+        2
+    } else {
+        3
+    };
+    let dir_b = (dir_a + 2) % 4;
+    let gw = GRID_W as i32;
+    let gh = GRID_H as i32;
+
+    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
+        let wd = wall_data[(ay as u32 * GRID_W + ax as u32) as usize];
+        if wd != 0 {
+            let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
+            if !is_open_door && wd_has_edge(wd, dir_a) {
+                return true;
+            }
+        }
+    }
+    if bx >= 0 && by >= 0 && bx < gw && by < gh {
+        let wd = wall_data[(by as u32 * GRID_W + bx as u32) as usize];
+        if wd != 0 {
+            let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
+            if !is_open_door && wd_has_edge(wd, dir_b) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Extract wall_data from the block grid (migration from legacy encoding).
+/// Scans for wall block types and converts their edge/thickness/material into wall_data.
+pub fn extract_wall_data_from_grid(grid: &[u32]) -> Vec<u16> {
+    let size = (GRID_W * GRID_H) as usize;
+    let mut wd = vec![0u16; size];
+    for i in 0..size.min(grid.len()) {
+        let block = grid[i];
+        let bt = block_type_rs(block);
+        if !is_wall_block(bt) {
+            continue;
+        }
+        let h_raw = block_height_raw(block);
+        let flags = block_flags_rs(block);
+        let visual_h = block_height_rs(block);
+        if visual_h == 0 {
+            continue;
+        } // no wall
+        // Read edge mask from height byte upper bits
+        let edge_mask = wall_edge_mask(h_raw);
+        let edges = if edge_mask == 0 {
+            // Full wall (legacy): all edges
+            WD_EDGE_N | WD_EDGE_E | WD_EDGE_S | WD_EDGE_W
+        } else {
+            // Convert height-byte edge mask (bits 4-7) to wall_data edge mask (bits 0-3)
+            ((edge_mask >> 4) as u16) & WD_EDGE_MASK
+        };
+        // Read thickness from flags byte
+        let thick_raw = (flags >> 5) & 3;
+        let thickness: u16 = if thick_raw == 0 {
+            4
+        } else {
+            (4 - thick_raw) as u16
+        };
+        // Material from block type
+        let material = wall_block_to_material(bt);
+        // Door flags
+        let is_door = (flags & 1) != 0;
+        let is_open = (flags & 4) != 0;
+
+        let mut w = pack_wall_data(edges, thickness, material);
+        if is_door {
+            w |= WD_HAS_DOOR;
+        }
+        if is_open {
+            w |= WD_DOOR_OPEN;
+        }
+        if bt == BT_GLASS {
+            w |= WD_HAS_WINDOW;
+        }
+        wd[i] = w;
+    }
+    wd
+}
+
+// =============================================================
+// Legacy thin wall encoding (in block height byte, still used
+// during migration). Will be removed once wall_data is primary.
+// =============================================================
+
 /// Thin wall encoding (wall blocks only):
 ///
 /// Height byte: bits 0-3 = wall height (0-15), bits 4-7 = edge bitmask

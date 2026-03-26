@@ -188,6 +188,7 @@ struct App {
     show_pipe_overlay: bool,              // draw gas pipe contents as egui overlay (ventilation)
     show_grid: bool,                      // tile grid lines overlay
     show_subgrid: bool,                   // 4x4 sub-grid around cursor
+    wall_data: Vec<u16>,                  // wall edge layer (u16 per tile, see DN-008)
     show_liquid_overlay: bool,            // draw liquid pipe contents as egui overlay
     show_flow_overlay: bool, // draw flow arrows on pipes (pressure) and wires (current)
     show_velocity_arrows: bool, // draw fluid velocity vector field on overlays
@@ -537,6 +538,7 @@ impl App {
             drag_start: None,
             show_pipe_overlay: false,
             show_grid: false,
+            wall_data: Vec::new(),
             show_subgrid: false,
             show_liquid_overlay: false,
             show_flow_overlay: false,

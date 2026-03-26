@@ -132,6 +132,8 @@ impl App {
                         grid::generate_sample_buildings(&mut self.grid_data);
                         compute_roof_heights(&mut self.grid_data);
                         self.grid_dirty = true;
+                        // Extract wall data from legacy block grid
+                        self.wall_data = extract_wall_data_from_grid(&self.grid_data);
                         // Spawn sample enemies
                         self.spawn_sample_enemies();
                         self.game_state = GameState::Playing;
@@ -347,6 +349,8 @@ impl App {
             self.regenerate_world_preview();
             // Re-upload grid and recompute derived data
             compute_roof_heights(&mut self.grid_data);
+            // Extract wall data from legacy block grid
+            self.wall_data = extract_wall_data_from_grid(&self.grid_data);
             self.game_state = GameState::Playing;
         }
     }
