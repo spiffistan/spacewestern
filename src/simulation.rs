@@ -928,13 +928,23 @@ impl App {
                     {
                         let didx = (door_y as u32 * GRID_W + door_x as u32) as usize;
                         let db = self.grid_data[didx];
-                        if is_door_rs(db) && (block_flags_rs(db) & 4) == 0 {
+                        // Check for doors in grid_data OR wall_data
+                        let wd_door = didx < self.wall_data.len()
+                            && (self.wall_data[didx] & WD_HAS_DOOR) != 0
+                            && (self.wall_data[didx] & WD_DOOR_OPEN) == 0;
+                        let grid_door = is_door_rs(db) && (block_flags_rs(db) & 4) == 0;
+                        if grid_door || wd_door {
                             let dist = ((door_x as f32 + 0.5 - pleb.x).powi(2)
                                 + (door_y as f32 + 0.5 - pleb.y).powi(2))
                             .sqrt();
                             if dist < 1.2 {
-                                self.grid_data[didx] =
-                                    (db & 0xFF00FFFF) | (((block_flags_rs(db) ^ 4) as u32) << 16);
+                                if grid_door {
+                                    self.grid_data[didx] = (db & 0xFF00FFFF)
+                                        | (((block_flags_rs(db) ^ 4) as u32) << 16);
+                                }
+                                if wd_door {
+                                    self.wall_data[didx] |= WD_DOOR_OPEN;
+                                }
                                 self.grid_dirty = true;
                                 self.auto_doors.push((door_x, door_y, self.time_of_day));
                                 // Door open sound (~50 dB)
@@ -1004,8 +1014,18 @@ impl App {
             for (dx, dy) in doors_to_close {
                 let didx = (dy as u32 * GRID_W + dx as u32) as usize;
                 let db = self.grid_data[didx];
-                if is_door_rs(db) && (block_flags_rs(db) & 4) != 0 {
-                    self.grid_data[didx] = (db & 0xFF00FFFF) | ((((db >> 16) & 0xFF) ^ 4) << 16);
+                let grid_door_open = is_door_rs(db) && (block_flags_rs(db) & 4) != 0;
+                let wd_door_open = didx < self.wall_data.len()
+                    && (self.wall_data[didx] & WD_HAS_DOOR) != 0
+                    && (self.wall_data[didx] & WD_DOOR_OPEN) != 0;
+                if grid_door_open || wd_door_open {
+                    if grid_door_open {
+                        self.grid_data[didx] =
+                            (db & 0xFF00FFFF) | ((((db >> 16) & 0xFF) ^ 4) << 16);
+                    }
+                    if wd_door_open {
+                        self.wall_data[didx] &= !WD_DOOR_OPEN;
+                    }
                     self.grid_dirty = true;
                     // Door close sound (~50 dB)
                     if self.sound_enabled {
