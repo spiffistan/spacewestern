@@ -3551,6 +3551,66 @@ impl App {
                 });
         }
 
+        // Single-tile hover preview (before drag starts, shows what will be placed)
+        if self.drag_start.is_none()
+            && matches!(self.build_tool, BuildTool::Place(_) | BuildTool::Destroy)
+        {
+            let (hwx, hwy) = self.hover_world;
+            let hx = hwx.floor() as i32;
+            let hy = hwy.floor() as i32;
+            if hx >= 0 && hy >= 0 && hx < GRID_W as i32 && hy < GRID_H as i32 {
+                let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+                let sx0 =
+                    ((hx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy0 =
+                    ((hy as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let sx1 = ((hx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                    / self.render_scale
+                    / bp_ppp;
+                let sy1 = ((hy as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                    / self.render_scale
+                    / bp_ppp;
+                let color = egui::Color32::from_rgba_unmultiplied(80, 180, 255, 60);
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Background,
+                    egui::Id::new("hover_preview"),
+                ));
+                let is_wall_hover =
+                    matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id));
+                if is_wall_hover && self.wall_thickness < 4 {
+                    let tw = sx1 - sx0;
+                    let th = sy1 - sy0;
+                    let wall_frac = self.wall_thickness as f32 * 0.25;
+                    let edge = self.build_rotation as u8 % 4;
+                    let wall_rect = match edge {
+                        0 => egui::Rect::from_min_size(
+                            egui::pos2(sx0, sy0),
+                            egui::vec2(tw, th * wall_frac),
+                        ),
+                        1 => egui::Rect::from_min_size(
+                            egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
+                            egui::vec2(tw * wall_frac, th),
+                        ),
+                        2 => egui::Rect::from_min_size(
+                            egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
+                            egui::vec2(tw, th * wall_frac),
+                        ),
+                        _ => egui::Rect::from_min_size(
+                            egui::pos2(sx0, sy0),
+                            egui::vec2(tw * wall_frac, th),
+                        ),
+                    };
+                    painter.rect_filled(wall_rect, 0.0, color);
+                } else {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
+                        0.0,
+                        color,
+                    );
+                }
+            }
+        }
+
         // Drag shape preview (walls=hollow rect, pipes=line, destroy=filled rect)
         if let Some((sx, sy)) = self.drag_start {
             if self.mouse_dragged {
