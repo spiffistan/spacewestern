@@ -37,34 +37,79 @@ fn block_height(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 
+// --- Thin wall helpers ---
+fn wall_thickness_raw_s(flags: u32) -> u32 { return (flags >> 5u) & 3u; }
+fn is_thin_wall_s(b: u32) -> bool {
+    let bh = block_height(b);
+    if bh == 0u { return false; }
+    return wall_thickness_raw_s((b >> 16u) & 0xFFu) != 0u;
+}
+fn has_wall_on_edge_s(flags: u32, edge: u32) -> bool {
+    let thick_raw = (flags >> 5u) & 3u;
+    if thick_raw == 0u { return true; }
+    let primary = (flags >> 3u) & 3u;
+    if primary == edge { return true; }
+    let is_corner = (flags & 4u) != 0u;
+    if is_corner && (primary + 1u) % 4u == edge { return true; }
+    return false;
+}
+
 fn is_wall(x: i32, y: i32) -> bool {
     if x < 0 || y < 0 || x >= i32(camera.grid_w) || y >= i32(camera.grid_h) { return true; }
     let b = grid[u32(y) * u32(camera.grid_w) + u32(x)];
     let bt = block_type(b);
     let bh = block_height(b);
     if bh == 0u { return false; }
-    // Open doors transmit sound
     if is_door(b) && is_open(b) { return false; }
-    // Glass transmits some sound (partial attenuation handled elsewhere)
+    // Thin walls: not fully blocking (edge check handles them)
+    if is_thin_wall_s(b) { return false; }
     if bt == BT_GLASS { return false; }
-    // Pipes, restrictors, bridges, liquid pipes/equipment: height = connection mask, not wall
     if (bt >= BT_PIPE && bt <= BT_INLET) || bt == BT_RESTRICTOR || bt == BT_LIQUID_PIPE || bt == BT_PIPE_BRIDGE || bt == BT_LIQUID_INTAKE || bt == BT_LIQUID_PUMP || bt == BT_LIQUID_OUTPUT { return false; }
-    // Wires, wire bridges: height = connection mask
     if bt == BT_WIRE || bt == BT_WIRE_BRIDGE { return false; }
-    // Dimmer/varistor, breaker: height = level/threshold
     if bt == BT_DIMMER || bt == BT_BREAKER { return false; }
-    // Fireplace: height = intensity
     if bt == BT_FIREPLACE { return false; }
-    // Crates, rocks, dug ground: not real walls
     if bt == BT_DUG_GROUND || bt == BT_CRATE || bt == BT_ROCK { return false; }
-    // Furniture (bench, bed, lamps): sound passes over
     if bt == BT_BENCH || bt == BT_FLOOR_LAMP || bt == BT_TABLE_LAMP || bt == BT_BED { return false; }
     return true;
 }
 
-fn read_pressure(x: i32, y: i32) -> f32 {
+// Edge-blocked for sound: check thin wall edge between two adjacent tiles
+fn sound_edge_blocked(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    let ddx = bx - ax;
+    let ddy = by - ay;
+    var dir_a = 0u;
+    if ddy < 0 { dir_a = 0u; }
+    else if ddx > 0 { dir_a = 1u; }
+    else if ddy > 0 { dir_a = 2u; }
+    else { dir_a = 3u; }
+    let dir_b = (dir_a + 2u) % 4u;
+    let gw = i32(camera.grid_w);
+    let gh = i32(camera.grid_h);
+
+    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
+        let ab = grid[u32(ay) * u32(gw) + u32(ax)];
+        let abh = block_height(ab);
+        if abh > 0u && !(is_door(ab) && is_open(ab)) {
+            let af = (ab >> 16u) & 0xFFu;
+            if has_wall_on_edge_s(af, dir_a) { return true; }
+        }
+    }
+    if bx >= 0 && by >= 0 && bx < gw && by < gh {
+        let bb = grid[u32(by) * u32(gw) + u32(bx)];
+        let bbh = block_height(bb);
+        if bbh > 0u && !(is_door(bb) && is_open(bb)) {
+            let bf = (bb >> 16u) & 0xFFu;
+            if has_wall_on_edge_s(bf, dir_b) { return true; }
+        }
+    }
+    return false;
+}
+
+fn read_pressure(from_x: i32, from_y: i32, x: i32, y: i32) -> f32 {
     if x < 0 || y < 0 || x >= i32(camera.grid_w) || y >= i32(camera.grid_h) { return 0.0; }
     if is_wall(x, y) { return 0.0; }
+    // Edge blocking for thin walls
+    if sound_edge_blocked(from_x, from_y, x, y) { return 0.0; }
     return textureLoad(sound_in, vec2(x, y), 0).r;
 }
 
@@ -90,11 +135,11 @@ fn main_sound(@builtin(global_invocation_id) gid: vec3<u32>) {
     let p = curr.r;  // pressure
     let v = curr.g;  // velocity (dp/dt)
 
-    // 5-point Laplacian of pressure
-    let p_left  = read_pressure(x - 1, y);
-    let p_right = read_pressure(x + 1, y);
-    let p_up    = read_pressure(x, y - 1);
-    let p_down  = read_pressure(x, y + 1);
+    // 5-point Laplacian of pressure (from_x/y = current cell for edge blocking)
+    let p_left  = read_pressure(x, y, x - 1, y);
+    let p_right = read_pressure(x, y, x + 1, y);
+    let p_up    = read_pressure(x, y, x, y - 1);
+    let p_down  = read_pressure(x, y, x, y + 1);
     let laplacian = p_left + p_right + p_up + p_down - 4.0 * p;
 
     // Wave equation: velocity formulation

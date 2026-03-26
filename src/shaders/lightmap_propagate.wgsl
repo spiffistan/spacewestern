@@ -70,15 +70,67 @@ fn get_block(x: i32, y: i32) -> u32 {
     return grid[u32(y) * u32(camera.grid_w) + u32(x)];
 }
 
+// --- Thin wall helpers ---
+fn wall_thickness_raw(flags: u32) -> u32 { return (flags >> 5u) & 3u; }
+fn is_thin_wall_block(b: u32) -> bool {
+    let bh = block_height(b);
+    if bh == 0u { return false; }
+    return wall_thickness_raw((b >> 16u) & 0xFFu) != 0u;
+}
+fn has_wall_on_edge(flags: u32, edge: u32) -> bool {
+    let thick_raw = (flags >> 5u) & 3u;
+    if thick_raw == 0u { return true; } // full wall
+    let primary = (flags >> 3u) & 3u;
+    if primary == edge { return true; }
+    let is_corner = (flags & 4u) != 0u;
+    if is_corner && (primary + 1u) % 4u == edge { return true; }
+    return false;
+}
+
+// Edge-blocked: is the crossing from (ax,ay) to (bx,by) blocked by a thin wall?
+fn edge_blocked_lm(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    let dx = bx - ax;
+    let dy = by - ay;
+    var dir_a = 0u;
+    if dy < 0 { dir_a = 0u; }
+    else if dx > 0 { dir_a = 1u; }
+    else if dy > 0 { dir_a = 2u; }
+    else { dir_a = 3u; }
+    let dir_b = (dir_a + 2u) % 4u;
+
+    let a_block = get_block(ax, ay);
+    let a_bt = block_type(a_block);
+    let a_flags = (a_block >> 16u) & 0xFFu;
+    let a_bh = block_height(a_block);
+    let a_mat = get_material(a_bt);
+    if a_bh > 0u && a_mat.is_solid > 0.5 && a_mat.light_transmission < 0.01 {
+        if !((a_flags & 1u) != 0u && (a_flags & 4u) != 0u) { // not open door
+            if has_wall_on_edge(a_flags, dir_a) { return true; }
+        }
+    }
+
+    let b_block = get_block(bx, by);
+    let b_bt = block_type(b_block);
+    let b_flags = (b_block >> 16u) & 0xFFu;
+    let b_bh = block_height(b_block);
+    let b_mat = get_material(b_bt);
+    if b_bh > 0u && b_mat.is_solid > 0.5 && b_mat.light_transmission < 0.01 {
+        if !((b_flags & 1u) != 0u && (b_flags & 4u) != 0u) {
+            if has_wall_on_edge(b_flags, dir_b) { return true; }
+        }
+    }
+
+    return false;
+}
+
 // Is this block a solid wall that blocks light propagation?
-// Uses material properties: solid blocks with no light transmission are walls.
-// Open doors always transmit.
 fn is_wall(b: u32) -> bool {
     let bh = block_height(b);
     if bh == 0u { return false; }
     if is_door(b) && is_open(b) { return false; }
+    // Thin walls: not fully blocking (handled by edge_blocked)
+    if is_thin_wall_block(b) { return false; }
     let mat = get_material(block_type(b));
-    // Blocks with any light transmission are not walls (glass, trees)
     if mat.light_transmission > 0.01 { return false; }
     return mat.is_solid > 0.5;
 }
@@ -86,8 +138,9 @@ fn is_wall(b: u32) -> bool {
 const BASE_FALLOFF: f32 = 0.08;
 
 // Try to take light from a neighbor at lightmap texel (ntx, nty).
+// cur_bx, cur_by = current tile's block coords (for edge blocking check).
 // Returns the attenuated value, or zero if blocked.
-fn sample_neighbor(ntx: i32, nty: i32, falloff: f32, lm_w: i32, lm_h: i32) -> vec4<f32> {
+fn sample_neighbor(ntx: i32, nty: i32, cur_bx: i32, cur_by: i32, falloff: f32, lm_w: i32, lm_h: i32) -> vec4<f32> {
     if ntx < 0 || nty < 0 || ntx >= lm_w || nty >= lm_h {
         return vec4<f32>(0.0);
     }
@@ -98,6 +151,12 @@ fn sample_neighbor(ntx: i32, nty: i32, falloff: f32, lm_w: i32, lm_h: i32) -> ve
     // Can't receive light from a solid wall
     if is_wall(nb) {
         return vec4<f32>(0.0);
+    }
+    // Edge blocking: thin wall between current tile and neighbor
+    if nbx != cur_bx || nby != cur_by {
+        if edge_blocked_lm(cur_bx, cur_by, nbx, nby) {
+            return vec4<f32>(0.0);
+        }
     }
     let nval = textureLoad(lightmap_in, vec2<i32>(ntx, nty), 0);
     var intensity = nval.w - falloff;
@@ -161,10 +220,10 @@ fn main_lightmap_propagate(@builtin(global_invocation_id) gid: vec3<u32>) {
     var best = textureLoad(lightmap_in, vec2<i32>(tx, ty), 0);
 
     // Cardinal neighbors
-    let n0 = sample_neighbor(tx + 1, ty, prop_falloff, lm_w, lm_h);
-    let n1 = sample_neighbor(tx - 1, ty, prop_falloff, lm_w, lm_h);
-    let n2 = sample_neighbor(tx, ty + 1, prop_falloff, lm_w, lm_h);
-    let n3 = sample_neighbor(tx, ty - 1, prop_falloff, lm_w, lm_h);
+    let n0 = sample_neighbor(tx + 1, ty, bx, by, prop_falloff, lm_w, lm_h);
+    let n1 = sample_neighbor(tx - 1, ty, bx, by, prop_falloff, lm_w, lm_h);
+    let n2 = sample_neighbor(tx, ty + 1, bx, by, prop_falloff, lm_w, lm_h);
+    let n3 = sample_neighbor(tx, ty - 1, bx, by, prop_falloff, lm_w, lm_h);
 
     if n0.w > best.w { best = n0; }
     if n1.w > best.w { best = n1; }
@@ -172,10 +231,10 @@ fn main_lightmap_propagate(@builtin(global_invocation_id) gid: vec3<u32>) {
     if n3.w > best.w { best = n3; }
 
     // Diagonal neighbors (sqrt(2) falloff for circular spread)
-    let d0 = sample_neighbor(tx + 1, ty + 1, diag_falloff, lm_w, lm_h);
-    let d1 = sample_neighbor(tx - 1, ty + 1, diag_falloff, lm_w, lm_h);
-    let d2 = sample_neighbor(tx + 1, ty - 1, diag_falloff, lm_w, lm_h);
-    let d3 = sample_neighbor(tx - 1, ty - 1, diag_falloff, lm_w, lm_h);
+    let d0 = sample_neighbor(tx + 1, ty + 1, bx, by, diag_falloff, lm_w, lm_h);
+    let d1 = sample_neighbor(tx - 1, ty + 1, bx, by, diag_falloff, lm_w, lm_h);
+    let d2 = sample_neighbor(tx + 1, ty - 1, bx, by, diag_falloff, lm_w, lm_h);
+    let d3 = sample_neighbor(tx - 1, ty - 1, bx, by, diag_falloff, lm_w, lm_h);
 
     if d0.w > best.w { best = d0; }
     if d1.w > best.w { best = d1; }
