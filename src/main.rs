@@ -1486,6 +1486,7 @@ impl App {
         let fire_temp_overrides = if !self.burn_progress.is_empty() {
             let (temps, destroyed) = fire::tick_fire(
                 &self.grid_data,
+                &self.wall_data,
                 &mut self.burn_progress,
                 dt,
                 self.time_speed,
@@ -1784,6 +1785,7 @@ impl App {
         if self.fog_enabled {
             let changed = fog::update_fog(
                 &self.grid_data,
+                &self.wall_data,
                 &self.plebs,
                 self.camera.sun_intensity,
                 self.fog_vision_radius,

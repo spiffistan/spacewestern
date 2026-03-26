@@ -484,7 +484,14 @@ struct BulletTraceHit {
     hit_x_face: bool, // true if hit a vertical face (reflect vx), false = horizontal face (reflect vy)
 }
 
-fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<BulletTraceHit> {
+fn dda_bullet_trace(
+    grid: &[u32],
+    wall_data: &[u16],
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+) -> Option<BulletTraceHit> {
     let dx = x1 - x0;
     let dy = y1 - y0;
     let dist = (dx * dx + dy * dy).sqrt();
@@ -586,7 +593,7 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
             t_max_y += t_delta_y;
         }
         // Thin wall edge blocks bullet at tile transition
-        if edge_blocked(grid, prev_ix, prev_iy, ix, iy) {
+        if edge_blocked_wd(grid, wall_data, prev_ix, prev_iy, ix, iy) {
             let t = t_max_x.min(t_max_y).max(0.0);
             let hit_x = ix != prev_ix;
             return Some(BulletTraceHit {
@@ -605,6 +612,7 @@ pub fn tick_bodies(
     bodies: &mut Vec<PhysicsBody>,
     dt: f32,
     grid: &[u32],
+    wall_data: &[u16],
     wind_x: f32,
     wind_y: f32,
     pleb: Option<(f32, f32, f32, f32, f32)>, // (pleb_x, pleb_y, pleb_vx, pleb_vy, pleb_angle)
@@ -631,7 +639,7 @@ pub fn tick_bodies(
             let x1 = body.x + body.vx * dt;
             let y1 = body.y + body.vy * dt;
 
-            if let Some(hit) = dda_bullet_trace(grid, x0, y0, x1, y1) {
+            if let Some(hit) = dda_bullet_trace(grid, wall_data, x0, y0, x1, y1) {
                 if ricochets_enabled && def.impact.ricochet {
                     let keep = 1.0 - def.impact.ricochet_loss;
                     body.x = hit.x;

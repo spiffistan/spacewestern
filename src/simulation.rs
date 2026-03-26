@@ -1044,6 +1044,7 @@ impl App {
                 &mut self.physics_bodies,
                 dt,
                 &self.grid_data,
+                &self.wall_data,
                 self.fluid_params.wind_x,
                 self.fluid_params.wind_y,
                 pleb_data,

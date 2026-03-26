@@ -440,7 +440,30 @@ pub fn has_wall_on_edge(height_byte: u8, flags: u8, edge: u8) -> bool {
 /// Checks both tiles: if either has a wall on the shared edge, crossing is blocked.
 /// Open doors on the shared edge make it passable.
 /// Direction: 0=N (from→north neighbor), 1=E, 2=S, 3=W.
+/// Check edge blocking using both block grid (legacy) and wall_data layer.
+/// Prefers wall_data when available, falls back to block grid.
+pub fn edge_blocked_wd(
+    grid: &[u32],
+    wall_data: &[u16],
+    ax: i32,
+    ay: i32,
+    bx: i32,
+    by: i32,
+) -> bool {
+    // Check wall_data layer first (DN-008)
+    if !wall_data.is_empty() && wd_edge_blocked(wall_data, ax, ay, bx, by) {
+        return true;
+    }
+    // Fall back to block grid for blocks not in wall_data (legacy, diagonal walls, etc.)
+    edge_blocked_grid(grid, ax, ay, bx, by)
+}
+
+/// Legacy: check edge blocking from block grid only.
 pub fn edge_blocked(grid: &[u32], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    edge_blocked_grid(grid, ax, ay, bx, by)
+}
+
+fn edge_blocked_grid(grid: &[u32], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
     let dx = bx - ax;
     let dy = by - ay;
     // Determine crossing direction from A's perspective

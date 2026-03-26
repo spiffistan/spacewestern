@@ -19,7 +19,14 @@ const FOG_VISIBLE: u8 = 255; // 1.0 — full rendering
 /// Returns true if the tile at (x, y) blocks line of sight.
 /// For thin walls, only blocks if the sightline crosses a walled edge.
 /// `from_x, from_y` is the tile the sightline is coming from (toward viewer).
-fn blocks_vision(grid: &[u32], x: i32, y: i32, from_x: i32, from_y: i32) -> bool {
+fn blocks_vision(
+    grid: &[u32],
+    wall_data: &[u16],
+    x: i32,
+    y: i32,
+    from_x: i32,
+    from_y: i32,
+) -> bool {
     if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 {
         return true; // out of bounds blocks
     }
@@ -48,7 +55,7 @@ fn blocks_vision(grid: &[u32], x: i32, y: i32, from_x: i32, from_y: i32) -> bool
     // Thin walls: only block if the sightline crosses a walled edge
     if is_wall_block(bt) && thin_wall_is_walkable(block) {
         // Check if edge between from→here is walled
-        return edge_blocked(grid, from_x, from_y, x, y);
+        return edge_blocked_wd(grid, wall_data, from_x, from_y, x, y);
     }
 
     // Everything else with height blocks
@@ -59,6 +66,7 @@ fn blocks_vision(grid: &[u32], x: i32, y: i32, from_x: i32, from_y: i32) -> bool
 /// Uses the "Restrictive Precise Angle Shadowcasting" variant.
 fn cast_light(
     grid: &[u32],
+    wall_data: &[u16],
     visibility: &mut [u8],
     cx: i32,
     cy: i32,
@@ -115,7 +123,7 @@ fn cast_light(
 
             if blocked {
                 // Previous cell was a wall
-                if blocks_vision(grid, mx, my, from_x, from_y) {
+                if blocks_vision(grid, wall_data, mx, my, from_x, from_y) {
                     // Still a wall — adjust start slope
                     new_start = r_slope;
                 } else {
@@ -123,11 +131,12 @@ fn cast_light(
                     blocked = false;
                     start = new_start;
                 }
-            } else if blocks_vision(grid, mx, my, from_x, from_y) && j < radius {
+            } else if blocks_vision(grid, wall_data, mx, my, from_x, from_y) && j < radius {
                 // Hit a wall — recurse with narrowed range, then mark blocked
                 blocked = true;
                 cast_light(
                     grid,
+                    wall_data,
                     visibility,
                     cx,
                     cy,
@@ -153,7 +162,14 @@ fn cast_light(
 }
 
 /// Compute full 360° shadowcasting visibility from a single point.
-fn compute_fov(grid: &[u32], visibility: &mut [u8], cx: i32, cy: i32, radius: i32) {
+fn compute_fov(
+    grid: &[u32],
+    wall_data: &[u16],
+    visibility: &mut [u8],
+    cx: i32,
+    cy: i32,
+    radius: i32,
+) {
     // Mark origin visible
     if cx >= 0 && cy >= 0 && cx < GRID_W as i32 && cy < GRID_H as i32 {
         visibility[(cy as u32 * GRID_W + cx as u32) as usize] = 255;
@@ -174,7 +190,7 @@ fn compute_fov(grid: &[u32], visibility: &mut [u8], cx: i32, cy: i32, radius: i3
 
     for m in &MULTIPLIERS {
         cast_light(
-            grid, visibility, cx, cy, radius, 1, 1.0, 0.0, m[0], m[1], m[2], m[3],
+            grid, wall_data, visibility, cx, cy, radius, 1, 1.0, 0.0, m[0], m[1], m[2], m[3],
         );
     }
 }
@@ -185,6 +201,7 @@ fn compute_fov(grid: &[u32], visibility: &mut [u8], cx: i32, cy: i32, radius: i3
 /// vision is limited to torch/headlight range.
 pub fn update_fog(
     grid: &[u32],
+    wall_data: &[u16],
     plebs: &[Pleb],
     sun_intensity: f32,
     vision_radius: i32,
@@ -229,7 +246,7 @@ pub fn update_fog(
             vision_radius
         };
 
-        compute_fov(grid, fog_visibility, px, py, radius);
+        compute_fov(grid, wall_data, fog_visibility, px, py, radius);
     }
 
     // Update explored (union: once explored, always explored)
@@ -266,7 +283,7 @@ mod tests {
     fn test_origin_is_visible() {
         let grid = empty_grid();
         let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
-        compute_fov(&grid, &mut vis, 128, 128, 10);
+        compute_fov(&grid, &[], &mut vis, 128, 128, 10);
         assert_eq!(vis[(128 * GRID_W + 128) as usize], 255);
     }
 
@@ -274,7 +291,7 @@ mod tests {
     fn test_open_area_visible() {
         let grid = empty_grid();
         let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
-        compute_fov(&grid, &mut vis, 128, 128, 5);
+        compute_fov(&grid, &[], &mut vis, 128, 128, 5);
         // Adjacent tiles should be visible
         assert_eq!(vis[(128 * GRID_W + 129) as usize], 255);
         assert_eq!(vis[(129 * GRID_W + 128) as usize], 255);
@@ -289,7 +306,7 @@ mod tests {
         grid[wall_idx] = make_block(BT_WALL as u8, 3, 0);
 
         let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
-        compute_fov(&grid, &mut vis, 128, 128, 10);
+        compute_fov(&grid, &[], &mut vis, 128, 128, 10);
 
         // Tile behind wall (131, 128) should NOT be visible
         assert_eq!(
@@ -312,7 +329,7 @@ mod tests {
         grid[glass_idx] = make_block(BT_GLASS as u8, 3, 0);
 
         let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
-        compute_fov(&grid, &mut vis, 128, 128, 10);
+        compute_fov(&grid, &[], &mut vis, 128, 128, 10);
 
         // Tile behind glass should be visible
         assert_eq!(
@@ -326,7 +343,7 @@ mod tests {
     fn test_radius_limit() {
         let grid = empty_grid();
         let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
-        compute_fov(&grid, &mut vis, 128, 128, 5);
+        compute_fov(&grid, &[], &mut vis, 128, 128, 5);
 
         // Tile at distance 6 should NOT be visible
         assert_eq!(
@@ -352,7 +369,7 @@ mod tests {
         grid[wall_idx] = make_block(BT_WALL as u8, make_wall_height(3, edge_mask), flags);
 
         let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
-        compute_fov(&grid, &mut vis, 128, 128, 10);
+        compute_fov(&grid, &[], &mut vis, 128, 128, 10);
 
         // Tile behind the thin wall's walled edge (131, 128) should NOT be visible
         assert_eq!(
@@ -378,7 +395,7 @@ mod tests {
         grid[wall_idx] = make_block(BT_WALL as u8, make_wall_height(3, edge_mask), flags);
 
         let mut vis = vec![0u8; (GRID_W * GRID_H) as usize];
-        compute_fov(&grid, &mut vis, 128, 128, 10);
+        compute_fov(&grid, &[], &mut vis, 128, 128, 10);
 
         // Tile behind the wall (131, 128): visible because E-W sightline
         // doesn't cross the north edge wall

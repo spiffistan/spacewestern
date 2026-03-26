@@ -56,6 +56,7 @@ fn burn_replacement(bt: u32) -> u32 {
 /// blocks that should be destroyed this frame.
 pub fn tick_fire(
     grid: &[u32],
+    wall_data: &[u16],
     burn_progress: &mut HashMap<usize, f32>,
     dt: f32,
     time_speed: f32,
@@ -162,7 +163,7 @@ pub fn tick_fire(
                 }
 
                 // Thin wall edge blocks fire spread (firewall)
-                if edge_blocked(grid, bx, by, nx, ny) {
+                if edge_blocked_wd(grid, wall_data, bx, by, nx, ny) {
                     continue;
                 }
 

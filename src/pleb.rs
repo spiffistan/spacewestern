@@ -471,6 +471,18 @@ pub fn astar_path_full(
     start: (i32, i32),
     goal: (i32, i32),
 ) -> Vec<(i32, i32)> {
+    astar_path_wd(grid, &[], elevation, terrain, start, goal)
+}
+
+/// A* pathfinding with wall_data layer support.
+pub fn astar_path_wd(
+    grid: &[u32],
+    wall_data: &[u16],
+    elevation: &[f32],
+    terrain: &[u32],
+    start: (i32, i32),
+    goal: (i32, i32),
+) -> Vec<(i32, i32)> {
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
 
@@ -559,7 +571,7 @@ pub fn astar_path_full(
             // Edge blocking: thin walls block crossing their walled edge
             if ndx == 0 || ndy == 0 {
                 // Cardinal move: check direct edge
-                if edge_blocked(grid, current.0, current.1, next.0, next.1) {
+                if edge_blocked_wd(grid, wall_data, current.0, current.1, next.0, next.1) {
                     continue;
                 }
             }
@@ -573,10 +585,10 @@ pub fn astar_path_full(
                     continue;
                 }
                 // Check edges along both cardinal steps of the diagonal
-                if edge_blocked(grid, current.0, current.1, cx.0, cx.1)
-                    || edge_blocked(grid, cx.0, cx.1, next.0, next.1)
-                    || edge_blocked(grid, current.0, current.1, cy.0, cy.1)
-                    || edge_blocked(grid, cy.0, cy.1, next.0, next.1)
+                if edge_blocked_wd(grid, wall_data, current.0, current.1, cx.0, cx.1)
+                    || edge_blocked_wd(grid, wall_data, cx.0, cx.1, next.0, next.1)
+                    || edge_blocked_wd(grid, wall_data, current.0, current.1, cy.0, cy.1)
+                    || edge_blocked_wd(grid, wall_data, cy.0, cy.1, next.0, next.1)
                 {
                     continue;
                 }
