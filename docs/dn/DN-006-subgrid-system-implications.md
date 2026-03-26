@@ -1,6 +1,6 @@
 # DN-006: Sub-Grid System — Full Implications Audit
 
-## Status: Proposed
+## Status: Implemented
 
 ## Context
 

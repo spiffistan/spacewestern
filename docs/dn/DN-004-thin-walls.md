@@ -1,6 +1,6 @@
 # DN-004: Thin Walls and Sub-Grid Furniture
 
-## Status: Proposed
+## Status: Implemented
 
 ## Problem
 
