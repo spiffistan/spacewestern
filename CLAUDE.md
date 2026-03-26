@@ -43,7 +43,7 @@ All modules use `impl App` blocks in separate files (same pattern as ui.rs, simu
 - **Single source of truth**: `BT_*` constants in `grid.rs` (u32)
 - **Rust**: use `BT_*` constants directly; `bt_is!()` macro for multi-value checks
 - **WGSL**: `wgsl_block_constants()` generates `const BT_*: u32 = N;` lines, prepended to shader source at load time via `shader_with_constants()` in gpu_init.rs
-- **Adding a new block type**: add `BT_*` const in grid.rs + entry in `wgsl_block_constants()` array + block def in blocks.toml
+- **Adding a new block type**: add `BT_*` const in grid.rs + entry in `wgsl_block_constants()` array + block def in blocks.toml + bump `NUM_MATERIALS` in materials.rs + update shader clamps in all 4 WGSL files (`get_material` min bound). See `docs/dn/DN-002-block-vs-surface-items.md` for when to use a block type vs a surface item.
 - `block_type_rs()` returns `u32` (not u8) — no casting needed when comparing to BT_*
 - `BuildTool::Place` holds `u32` — matches BT_* constants directly
 - `BlockRegistry::get/name` accept `u32`
@@ -57,3 +57,9 @@ All modules use `impl App` blocks in separate files (same pattern as ui.rs, simu
 - Use named constants for gameplay tuning values — no magic numbers
 - Pipe component functions (`is_gas_pipe_component` etc.) take `u32`
 - `is_conductor_rs()` takes `u32` for block type
+
+## Documentation
+- **Keep `docs/README.md` updated** when adding/removing/renaming docs
+- `docs/dn/` — numbered design notes for architectural decisions (DN-NNN format)
+- `docs/ideas/` — early-stage creative exploration, no commitment
+- Root docs (`SPEC.md`, `PLAN.md`, etc.) — living documents for current game state
