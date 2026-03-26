@@ -759,6 +759,20 @@ impl App {
                                             });
                                         }
                                     }
+                                    if bp.plank_delivered < bp.plank_needed {
+                                        let have = pleb.inventory.count_of(ITEM_PLANK) as u32;
+                                        let deliver =
+                                            have.min(bp.plank_needed - bp.plank_delivered);
+                                        bp.plank_delivered += deliver;
+                                        pleb.inventory.remove(ITEM_PLANK, deliver as u16);
+                                        if deliver > 0 {
+                                            events.push(GameEventKind::Delivered {
+                                                pleb: pleb.name.clone(),
+                                                material: "planks",
+                                                amount: deliver,
+                                            });
+                                        }
+                                    }
                                 }
                                 self.active_work.remove(&(cx, cy));
                                 pleb.haul_target = None;
@@ -1650,7 +1664,7 @@ impl App {
                             } else {
                                 0
                             };
-                            if tbt == BT_WORKBENCH || tbt == BT_KILN {
+                            if tbt == BT_WORKBENCH || tbt == BT_KILN || tbt == BT_SAW_HORSE {
                                 // Try to start crafting from queue
                                 let gidx = ty as u32 * GRID_W + tx as u32;
                                 let started = if let Some(queue) = self.craft_queues.get(&gidx) {
@@ -1933,6 +1947,8 @@ impl App {
                         Some(ITEM_WOOD)
                     } else if bp.clay_delivered < bp.clay_needed {
                         Some(ITEM_CLAY)
+                    } else if bp.plank_delivered < bp.plank_needed {
+                        Some(ITEM_PLANK)
                     } else {
                         None
                     };

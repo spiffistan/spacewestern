@@ -3948,16 +3948,26 @@ impl App {
                     let reg = block_defs::BlockRegistry::cached();
                     let name = reg.name(bt);
                     // Resource indicator
-                    let res_text = if bp.wood_needed > 0 {
+                    let res_text = if bp.wood_needed > 0
+                        || bp.clay_needed > 0
+                        || bp.plank_needed > 0
+                    {
                         let color = if bp.resources_met() {
-                            egui::Color32::from_rgb(80, 220, 80) // green = ready
+                            egui::Color32::from_rgb(80, 220, 80)
                         } else {
-                            egui::Color32::from_rgb(255, 160, 60) // orange = needs resources
+                            egui::Color32::from_rgb(255, 160, 60)
                         };
-                        Some((
-                            format!("{}/{} wood", bp.wood_delivered, bp.wood_needed),
-                            color,
-                        ))
+                        let mut parts = Vec::new();
+                        if bp.wood_needed > 0 {
+                            parts.push(format!("{}/{} wood", bp.wood_delivered, bp.wood_needed));
+                        }
+                        if bp.plank_needed > 0 {
+                            parts.push(format!("{}/{} plank", bp.plank_delivered, bp.plank_needed));
+                        }
+                        if bp.clay_needed > 0 {
+                            parts.push(format!("{}/{} clay", bp.clay_delivered, bp.clay_needed));
+                        }
+                        Some((parts.join(" "), color))
                     } else {
                         None
                     };
@@ -5413,15 +5423,15 @@ impl App {
                 0
             };
             if still_valid {
-                let station_name = if station_bt == BT_KILN {
-                    "kiln"
-                } else {
-                    "workbench"
+                let station_name = match station_bt {
+                    BT_KILN => "kiln",
+                    BT_SAW_HORSE => "saw_horse",
+                    _ => "workbench",
                 };
-                let station_label = if station_bt == BT_KILN {
-                    "Kiln"
-                } else {
-                    "Workbench"
+                let station_label = match station_bt {
+                    BT_KILN => "Kiln",
+                    BT_SAW_HORSE => "Saw Horse",
+                    _ => "Workbench",
                 };
                 let recipe_reg = recipe_defs::RecipeRegistry::cached();
                 let item_reg = item_defs::ItemRegistry::cached();
@@ -6073,7 +6083,19 @@ impl App {
                         "Ready to build".to_string()
                     }
                 } else {
-                    format!("Needs: {}/{} wood", bp.wood_delivered, bp.wood_needed)
+                    {
+                        let mut parts = Vec::new();
+                        if bp.wood_needed > 0 {
+                            parts.push(format!("{}/{} wood", bp.wood_delivered, bp.wood_needed));
+                        }
+                        if bp.plank_needed > 0 {
+                            parts.push(format!("{}/{} plank", bp.plank_delivered, bp.plank_needed));
+                        }
+                        if bp.clay_needed > 0 {
+                            parts.push(format!("{}/{} clay", bp.clay_delivered, bp.clay_needed));
+                        }
+                        format!("Needs: {}", parts.join(", "))
+                    }
                 };
                 ui.label(egui::RichText::new(format!("Blueprint: {}", status)).size(9.0));
             }
@@ -6556,6 +6578,10 @@ impl App {
                         details.push(format!("Build: {:.0}%", bp.progress * 100.0));
                         if bp.wood_needed > 0 {
                             details.push(format!("Wood: {}/{}", bp.wood_delivered, bp.wood_needed));
+                        }
+                        if bp.plank_needed > 0 {
+                            details
+                                .push(format!("Plank: {}/{}", bp.plank_delivered, bp.plank_needed));
                         }
                         if bp.clay_needed > 0 {
                             details.push(format!("Clay: {}/{}", bp.clay_delivered, bp.clay_needed));

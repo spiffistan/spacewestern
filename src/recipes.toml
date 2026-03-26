@@ -55,3 +55,11 @@ station = "workbench"
 time = 6.0
 inputs = [{item = 2, count = 2}, {item = 5, count = 1}]
 output = {item = 22, count = 1}
+
+[[recipe]]
+id = 7
+name = "Planks"
+station = "saw_horse"
+time = 4.0
+inputs = [{item = 1, count = 1}]
+output = {item = 23, count = 3}

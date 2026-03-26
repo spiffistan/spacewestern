@@ -515,30 +515,36 @@ impl CraftQueue {
 /// A pending construction — placed as a ghost, built by plebs over time.
 #[derive(Clone, Debug)]
 pub struct Blueprint {
-    pub block_data: u32,     // target block (from make_block)
-    pub progress: f32,       // 0.0-1.0 construction progress
-    pub build_time: f32,     // total seconds to build
-    pub wood_needed: u32,    // wood required to start
-    pub wood_delivered: u32, // wood deposited so far
-    pub clay_needed: u32,    // clay required to start
-    pub clay_delivered: u32, // clay deposited so far
+    pub block_data: u32,      // target block (from make_block)
+    pub progress: f32,        // 0.0-1.0 construction progress
+    pub build_time: f32,      // total seconds to build
+    pub wood_needed: u32,     // raw wood (logs) required
+    pub wood_delivered: u32,  // raw wood deposited so far
+    pub clay_needed: u32,     // clay required
+    pub clay_delivered: u32,  // clay deposited so far
+    pub plank_needed: u32,    // planks required (processed wood)
+    pub plank_delivered: u32, // planks deposited so far
 }
 
 impl Blueprint {
     pub fn new(block_data: u32) -> Self {
         let bt = block_data & 0xFF;
-        let (build_time, wood_needed, clay_needed) = match bt as u32 {
-            BT_WOOD_WALL => (3.0, 3, 0),
-            BT_WOOD_FLOOR => (1.5, 2, 0),
+        // (build_time, wood, clay, planks)
+        let (build_time, wood_needed, clay_needed, plank_needed) = match bt as u32 {
+            BT_ROUGH_FLOOR => (0.8, 1, 0, 0),    // raw logs, no processing
+            BT_SAW_HORSE => (2.0, 2, 0, 0),      // raw logs for the frame
+            BT_WOOD_FLOOR => (1.5, 0, 0, 2),     // planks (processed)
+            BT_WOOD_WALL => (3.0, 0, 0, 3),      // planks
+            BT_BENCH | BT_BED => (2.0, 0, 0, 2), // planks
+            BT_CRATE => (2.0, 0, 0, 2),          // planks
+            BT_WORKBENCH => (3.0, 0, 0, 4),      // planks
+            BT_WELL => (8.0, 4, 0, 0),           // raw logs
             BT_STONE | BT_WALL | BT_GLASS | BT_INSULATED | BT_STEEL_WALL | BT_SANDSTONE
-            | BT_GRANITE | BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL => (3.0, 0, 0),
-            BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0, 0),
-            BT_BENCH | BT_BED => (2.0, 2, 0),
-            BT_FIREPLACE | BT_CRATE | BT_CANNON => (2.0, 0, 0),
-            BT_WORKBENCH => (3.0, 4, 0), // 4 wood
-            BT_KILN => (8.0, 0, 10),     // 10 clay
-            BT_WELL => (8.0, 4, 0),      // 4 wood
-            _ => (1.0, 0, 0),
+            | BT_GRANITE | BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL => (3.0, 0, 0, 0),
+            BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0, 0, 0),
+            BT_FIREPLACE | BT_CANNON => (2.0, 0, 0, 0),
+            BT_KILN => (8.0, 0, 10, 0),
+            _ => (1.0, 0, 0, 0),
         };
         Blueprint {
             block_data,
@@ -548,10 +554,14 @@ impl Blueprint {
             wood_delivered: 0,
             clay_needed,
             clay_delivered: 0,
+            plank_needed,
+            plank_delivered: 0,
         }
     }
 
     pub fn resources_met(&self) -> bool {
-        self.wood_delivered >= self.wood_needed && self.clay_delivered >= self.clay_needed
+        self.wood_delivered >= self.wood_needed
+            && self.clay_delivered >= self.clay_needed
+            && self.plank_delivered >= self.plank_needed
     }
 }

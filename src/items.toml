@@ -94,3 +94,10 @@ name = "Stone Pick"
 icon = "⛏"
 category = "tool"
 stack_max = 1
+
+[[item]]
+id = 23
+name = "Plank"
+icon = "📏"
+category = "intermediate"
+stack_max = 20

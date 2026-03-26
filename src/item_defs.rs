@@ -16,6 +16,7 @@ pub const ITEM_UNFIRED_JUG: u16 = 13;
 pub const ITEM_STONE_AXE: u16 = 20;
 pub const ITEM_WOODEN_SHOVEL: u16 = 21;
 pub const ITEM_STONE_PICK: u16 = 22;
+pub const ITEM_PLANK: u16 = 23;
 
 #[derive(Deserialize)]
 struct ItemFile {
