@@ -3570,7 +3570,7 @@ impl App {
                 let sy1 = ((hy as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
                     / self.render_scale
                     / bp_ppp;
-                let color = egui::Color32::from_rgba_unmultiplied(80, 180, 255, 60);
+                let color = egui::Color32::from_rgba_unmultiplied(60, 140, 255, 120);
                 let painter = ctx.layer_painter(egui::LayerId::new(
                     egui::Order::Background,
                     egui::Id::new("hover_preview"),
@@ -3718,7 +3718,7 @@ impl App {
                                 ((tbt == 0 || tbt == 2) && tbh == 0) || (is_pipe_tool && tbt == 15) // pipe on pipe = merge connections
                             };
                             if valid {
-                                egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80)
+                                egui::Color32::from_rgba_unmultiplied(60, 140, 255, 120)
                             } else {
                                 egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
                             }
@@ -4050,9 +4050,9 @@ impl App {
                 let rect = egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1));
                 // Tint: blue if waiting for resources, green-blue if ready to build
                 let tint = if bp.resources_met() {
-                    egui::Color32::from_rgba_unmultiplied(60, 160, 120, 60)
+                    egui::Color32::from_rgba_unmultiplied(60, 160, 120, 90)
                 } else {
-                    egui::Color32::from_rgba_unmultiplied(60, 100, 200, 50)
+                    egui::Color32::from_rgba_unmultiplied(60, 120, 220, 90)
                 };
                 // Thin wall blueprint: show wall sub-cells only
                 let bp_flags = (bp.block_data >> 16) & 0xFF;

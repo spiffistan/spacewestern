@@ -523,14 +523,14 @@ impl App {
                         }
                     }
                 }
-                PhysicalKey::Code(KeyCode::Minus) => {
+                PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => {
                     // Decrease wall thickness (thinner walls)
                     if self.wall_thickness > 1 {
                         self.wall_thickness -= 1;
                     }
                 }
-                PhysicalKey::Code(KeyCode::Equal) => {
-                    // Increase wall thickness (thicker walls) — Equal is +/= key
+                PhysicalKey::Code(KeyCode::Equal | KeyCode::NumpadAdd) => {
+                    // Increase wall thickness (thicker walls)
                     if self.wall_thickness < 4 {
                         self.wall_thickness += 1;
                     }
