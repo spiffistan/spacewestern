@@ -611,6 +611,11 @@ pub fn is_door_rs(b: u32) -> bool {
 /// For every tile that's part of a roofed building, find the max wall height
 /// in a large radius. This runs once at grid generation.
 pub fn compute_roof_heights(grid: &mut Vec<u32>) {
+    compute_roof_heights_wd(grid, &[]);
+}
+
+/// Compute roof heights using both grid and wall_data.
+pub fn compute_roof_heights_wd(grid: &mut Vec<u32>, wall_data: &[u16]) {
     let w = GRID_W as i32;
     let h = GRID_H as i32;
 
@@ -621,12 +626,13 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
             let idx = (y * w + x) as usize;
             let block = grid[idx];
             let flags = block_flags_rs(block);
+            let has_wd = idx < wall_data.len() && wd_edges(wall_data[idx]) != 0;
 
             if (flags & 2) != 0 {
                 // Has roof flag
                 is_building[idx] = true;
-            } else if (block >> 8) & 0xFF > 0 || (flags & 1) != 0 {
-                // Has height or is a door — check if adjacent to a roofed tile
+            } else if (block >> 8) & 0xFF > 0 || (flags & 1) != 0 || has_wd {
+                // Has height, is a door, or has wall_data — check if adjacent to a roofed tile
                 'outer: for dy in -1i32..=1 {
                     for dx in -1i32..=1 {
                         let nx = x + dx;
@@ -689,6 +695,13 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
                         BT_LIQUID_PUMP,
                         BT_LIQUID_OUTPUT
                     );
+                    // Check wall_data layer: wall edges count as walls
+                    let n_has_wd = nidx < wall_data.len() && wd_edges(wall_data[nidx]) != 0;
+                    if n_has_wd && (nb_flags & 2) == 0 {
+                        // Wall from wall_data: use material height (typically 3)
+                        max_h = max_h.max(3);
+                        break;
+                    }
                     if nbh > 0 && (nb_flags & 2) == 0 && !skip {
                         max_h = max_h.max(nbh);
                         break; // found nearest wall in this direction
@@ -847,6 +860,12 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
 /// Add sample buildings to an existing world grid for demo/testing.
 /// Builds a base near map center: house with power, piping, lighting, crafting.
 pub fn generate_sample_buildings(grid: &mut [u32]) {
+    let mut wd = vec![0u16; (GRID_W * GRID_H) as usize];
+    generate_sample_buildings_wd(grid, &mut wd);
+}
+
+/// Generate sample buildings, writing walls to wall_data instead of grid_data.
+pub fn generate_sample_buildings_wd(grid: &mut [u32], wall_data: &mut [u16]) {
     let w = GRID_W;
     let roof = 2u8;
 
@@ -856,26 +875,46 @@ pub fn generate_sample_buildings(grid: &mut [u32]) {
         }
     };
 
+    // Helper: place a wall edge in wall_data
+    let set_wall = |wd: &mut [u16], x: i32, y: i32, edges: u16, thickness: u16, material: u16| {
+        if x >= 0 && y >= 0 && x < GRID_W as i32 && y < GRID_H as i32 {
+            let idx = (y as u32 * w + x as u32) as usize;
+            let existing = wd[idx];
+            let existing_edges = wd_edges(existing);
+            let merged = existing_edges | edges;
+            wd[idx] = pack_wall_data(merged, thickness, material);
+            // Preserve door/window from existing
+            wd[idx] |= existing & (WD_HAS_DOOR | WD_DOOR_OPEN | WD_HAS_WINDOW);
+        }
+    };
+
+    // Helper: place a wall with door
+    let set_wall_door =
+        |wd: &mut [u16], x: i32, y: i32, edges: u16, thickness: u16, material: u16, open: bool| {
+            if x >= 0 && y >= 0 && x < GRID_W as i32 && y < GRID_H as i32 {
+                let idx = (y as u32 * w + x as u32) as usize;
+                wd[idx] = pack_wall_data(edges, thickness, material) | WD_HAS_DOOR;
+                if open {
+                    wd[idx] |= WD_DOOR_OPEN;
+                }
+            }
+        };
+
+    // Helper: place a glass wall (window)
+    let set_window = |wd: &mut [u16], x: i32, y: i32, edges: u16, thickness: u16| {
+        if x >= 0 && y >= 0 && x < GRID_W as i32 && y < GRID_H as i32 {
+            let idx = (y as u32 * w + x as u32) as usize;
+            wd[idx] = pack_wall_data(edges, thickness, WMAT_GLASS) | WD_HAS_WINDOW;
+        }
+    };
+
     let cx = (GRID_W / 2) as i32;
     let cy = (GRID_H / 2) as i32;
 
     // === Main house (stone, 14x10 exterior) ===
-    let h = 4u8;
-    for x in -7..=7 {
-        set(grid, cx + x, cy - 5, make_block(BT_STONE as u8, h, 0));
-    }
-    for x in -7..=7 {
-        set(grid, cx + x, cy + 5, make_block(BT_STONE as u8, h, 0));
-    }
+    // Interior: wood floor + roof (covers entire footprint including wall tiles)
     for y in -5..=5 {
-        set(grid, cx - 7, cy + y, make_block(BT_STONE as u8, h, 0));
-    }
-    for y in -5..=5 {
-        set(grid, cx + 7, cy + y, make_block(BT_STONE as u8, h, 0));
-    }
-    // Interior: wood floor + roof
-    for y in -4..=4 {
-        for x in -6..=6 {
+        for x in -7..=7 {
             set(
                 grid,
                 cx + x,
@@ -884,20 +923,70 @@ pub fn generate_sample_buildings(grid: &mut [u32]) {
             );
         }
     }
+    // Walls in wall_data: north, south, east, west edges of the perimeter
+    for x in -7..=7 {
+        set_wall(wall_data, cx + x, cy - 5, WD_EDGE_N, 4, WMAT_STONE); // north wall
+        set_wall(wall_data, cx + x, cy + 5, WD_EDGE_S, 4, WMAT_STONE); // south wall
+    }
+    for y in -5..=5 {
+        set_wall(wall_data, cx - 7, cy + y, WD_EDGE_W, 4, WMAT_STONE); // west wall
+        set_wall(wall_data, cx + 7, cy + y, WD_EDGE_E, 4, WMAT_STONE); // east wall
+    }
+    // Corners get both edges
+    set_wall(
+        wall_data,
+        cx - 7,
+        cy - 5,
+        WD_EDGE_N | WD_EDGE_W,
+        4,
+        WMAT_STONE,
+    );
+    set_wall(
+        wall_data,
+        cx + 7,
+        cy - 5,
+        WD_EDGE_N | WD_EDGE_E,
+        4,
+        WMAT_STONE,
+    );
+    set_wall(
+        wall_data,
+        cx - 7,
+        cy + 5,
+        WD_EDGE_S | WD_EDGE_W,
+        4,
+        WMAT_STONE,
+    );
+    set_wall(
+        wall_data,
+        cx + 7,
+        cy + 5,
+        WD_EDGE_S | WD_EDGE_E,
+        4,
+        WMAT_STONE,
+    );
     // Front door (south)
-    set(grid, cx, cy + 5, make_block(BT_WALL as u8, 1, 1));
-    // Windows
+    set_wall_door(wall_data, cx, cy + 5, WD_EDGE_S, 4, WMAT_GENERIC, false);
+    // Windows (glass)
     for &wx in &[-4, -3, 3, 4] {
-        set(grid, cx + wx, cy - 5, make_block(BT_GLASS as u8, h, 0));
+        set_window(wall_data, cx + wx, cy - 5, WD_EDGE_N, 4);
     }
     for &wx in &[-4, 4] {
-        set(grid, cx + wx, cy + 5, make_block(BT_GLASS as u8, h, 0));
+        set_window(wall_data, cx + wx, cy + 5, WD_EDGE_S, 4);
     }
-    // Dividing wall (two rooms)
+    // Dividing wall (two rooms) — N/S edges on interior tiles
     for y in -4..=1 {
-        set(grid, cx, cy + y, make_block(BT_STONE as u8, h, 0));
+        set_wall(wall_data, cx, cy + y, WD_EDGE_E | WD_EDGE_W, 4, WMAT_STONE);
     }
-    set(grid, cx, cy + 2, make_block(BT_WALL as u8, 1, 1)); // interior door
+    set_wall_door(
+        wall_data,
+        cx,
+        cy + 2,
+        WD_EDGE_E | WD_EDGE_W,
+        4,
+        WMAT_GENERIC,
+        false,
+    ); // interior door
 
     // Furniture
     set(grid, cx - 4, cy, make_block(BT_FIREPLACE as u8, 5, roof));
@@ -950,8 +1039,8 @@ pub fn generate_sample_buildings(grid: &mut [u32]) {
     for x in [8, 9] {
         set(grid, cx + x, cy, make_block(BT_WIRE as u8, 0xF0, 0));
     }
-    // Wire overlay on wall
-    set(grid, cx + 7, cy, make_block(BT_STONE as u8, h, 0x80));
+    // Wire through wall (wall is in wall_data, wire in grid_data)
+    set(grid, cx + 7, cy, make_block(BT_WIRE as u8, 0xF0, roof));
     // Interior wiring + light
     for x in 1..=6 {
         set(grid, cx + x, cy, make_block(BT_WIRE as u8, 0xF0, roof));
@@ -967,7 +1056,7 @@ pub fn generate_sample_buildings(grid: &mut [u32]) {
     set(grid, cx + 3, cy, make_block(BT_WIRE as u8, 0xF0, roof));
 
     // === Pipe system: inlet (fireplace room) → pump → outlet (outside) ===
-    set(grid, cx - 7, cy - 1, make_block(BT_INLET as u8, h, 3 << 3)); // dir=west
+    set(grid, cx - 7, cy - 1, make_block(BT_INLET as u8, 1, 3 << 3)); // dir=west
     for x in -11..-7 {
         set(grid, cx + x, cy - 1, make_block(BT_PIPE as u8, 0xF0, 0));
     }

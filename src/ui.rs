@@ -129,11 +129,20 @@ impl App {
                         .clicked()
                     {
                         self.regenerate_world_preview();
-                        grid::generate_sample_buildings(&mut self.grid_data);
-                        compute_roof_heights(&mut self.grid_data);
+                        self.wall_data = vec![0u16; (GRID_W * GRID_H) as usize];
+                        grid::generate_sample_buildings_wd(
+                            &mut self.grid_data,
+                            &mut self.wall_data,
+                        );
+                        // Also pick up any legacy walls from grid
+                        let extracted = extract_wall_data_from_grid(&self.grid_data);
+                        for i in 0..self.wall_data.len().min(extracted.len()) {
+                            if wd_edges(self.wall_data[i]) == 0 && wd_edges(extracted[i]) != 0 {
+                                self.wall_data[i] = extracted[i];
+                            }
+                        }
+                        compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
                         self.grid_dirty = true;
-                        // Extract wall data from legacy block grid
-                        self.wall_data = extract_wall_data_from_grid(&self.grid_data);
                         // Spawn sample enemies
                         self.spawn_sample_enemies();
                         self.game_state = GameState::Playing;
@@ -348,7 +357,7 @@ impl App {
         if start_game {
             self.regenerate_world_preview();
             // Re-upload grid and recompute derived data
-            compute_roof_heights(&mut self.grid_data);
+            compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
             // Extract wall data from legacy block grid
             self.wall_data = extract_wall_data_from_grid(&self.grid_data);
             self.game_state = GameState::Playing;

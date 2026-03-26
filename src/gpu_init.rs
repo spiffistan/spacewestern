@@ -140,7 +140,7 @@ impl App {
 
         // Grid storage buffer
         self.grid_data = generate_world(42);
-        compute_roof_heights(&mut self.grid_data);
+        compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
         self.pipe_network.rebuild(&self.grid_data);
         let grid_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grid-buffer"),

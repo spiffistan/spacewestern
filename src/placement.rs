@@ -175,7 +175,15 @@ impl App {
         if on_furniture {
             return bt == BT_BENCH;
         }
-        if !((bt == 0 || bt == 2) && bh == 0) {
+        // Allow placement on ground tiles (air/dirt with no height)
+        // Also allow on tiles that only have wall_data edges (thin walls don't block furniture)
+        let is_ground = (bt == 0 || bt == 2) && bh == 0;
+        let is_thin_wall_only = is_wall_block(bt) && thin_wall_is_walkable(block);
+        let has_wd_only = idx < self.wall_data.len()
+            && wd_edges(self.wall_data[idx]) != 0
+            && (bt == 0 || bt == 2)
+            && bh == 0;
+        if !(is_ground || is_thin_wall_only || has_wd_only) {
             return false;
         }
         // Check terrain slope: too steep = can't build
@@ -267,17 +275,28 @@ impl App {
         if let Some((x, y)) = self.dragging_light.take() {
             log::info!("Placed light at ({}, {})", x, y);
             // Recompute roof heights since light moved
-            compute_roof_heights(&mut self.grid_data);
+            compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
             self.grid_dirty = true;
         }
     }
 
     /// Place a wall directly into wall_data (DN-008 Phase 2).
     /// Does NOT write to grid_data — the tile keeps its current block type.
-    pub(crate) fn place_wall_edge(&mut self, tx: i32, ty: i32, edges: u16, thickness: u16, material: u16) {
-        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { return; }
+    pub(crate) fn place_wall_edge(
+        &mut self,
+        tx: i32,
+        ty: i32,
+        edges: u16,
+        thickness: u16,
+        material: u16,
+    ) {
+        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+            return;
+        }
         let idx = (ty as u32 * GRID_W + tx as u32) as usize;
-        if idx >= self.wall_data.len() { return; }
+        if idx >= self.wall_data.len() {
+            return;
+        }
         let existing = self.wall_data[idx];
         let existing_edges = wd_edges(existing);
         let merged_edges = existing_edges | edges;
@@ -323,7 +342,9 @@ impl App {
     /// Check if tile already has wall edges (in wall_data or block grid) that can be merged.
     /// Returns true if the tile has walls that the new edge would merge with.
     pub(crate) fn tile_has_walls(&self, tx: i32, ty: i32) -> bool {
-        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { return false; }
+        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+            return false;
+        }
         let idx = (ty as u32 * GRID_W + tx as u32) as usize;
         // Check wall_data layer
         if idx < self.wall_data.len() && wd_edges(self.wall_data[idx]) != 0 {
@@ -352,9 +373,15 @@ impl App {
             let existing_edges = wd_edges(wd);
             if existing_edges != 0 {
                 let new_bit = 1u16 << new_edge;
-                if (existing_edges & new_bit) != 0 { return None; } // already has this edge
+                if (existing_edges & new_bit) != 0 {
+                    return None;
+                } // already has this edge
                 let merged = existing_edges | new_bit;
-                let thick_bits = if thickness >= 4 { 0u16 } else { 4 - thickness as u16 };
+                let thick_bits = if thickness >= 4 {
+                    0u16
+                } else {
+                    4 - thickness as u16
+                };
                 let _mat = wd_material(wd);
                 let roof_flag = block_flags_rs(self.grid_data[idx]) & 2;
                 let flags = roof_flag | ((thick_bits as u8 & 3) << 5);
@@ -632,7 +659,7 @@ impl App {
                     }
                 }
             }
-            compute_roof_heights(&mut self.grid_data);
+            compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
             return;
         }
 
@@ -676,7 +703,7 @@ impl App {
                     self.grid_dirty = true;
                 }
             }
-            compute_roof_heights(&mut self.grid_data);
+            compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
             return;
         }
 
@@ -700,7 +727,7 @@ impl App {
                 }
             }
             if self.grid_dirty {
-                compute_roof_heights(&mut self.grid_data);
+                compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
             }
             return;
         }
@@ -757,8 +784,8 @@ impl App {
                 let same_type = btu == bid || pipe_compat; // allow pipe↔restrictor
                 // Thin wall merge: allow placing on existing wall tiles for corner upgrades
                 let has_wd_walls = idx < self.wall_data.len() && wd_edges(self.wall_data[idx]) != 0;
-                let thin_wall_merge =
-                    is_wall_block(bid) && self.wall_thickness < 4
+                let thin_wall_merge = is_wall_block(bid)
+                    && self.wall_thickness < 4
                     && (has_wd_walls || (is_wall_block(btu) && bh > 0));
 
                 if ((btu == BT_AIR || btu == BT_DIRT) && bh == 0)
@@ -885,48 +912,41 @@ impl App {
                             let wd_thick = self.wall_thickness as u16;
 
                             // Rule 2: auto-merge edges if tile already has a wall
-                            if let Some((merged_flags, merged_mask)) =
-                                self.merge_thin_wall_edges(tx, ty, edge, self.wall_thickness)
-                            {
-                                let merged_h = make_wall_height(wall_height(height), merged_mask);
-                                self.place_or_blueprint(
-                                    tx,
-                                    ty,
-                                    make_block(block_type_id as u8, merged_h, merged_flags)
-                                        | roof_h,
-                                );
-                                // Also write merged edges to wall_data
-                                let wd_edges = ((merged_mask >> 4) & 0xF) as u16;
-                                self.place_wall_edge(tx, ty, wd_edges, wd_thick, wd_mat);
+                            if self.tile_has_walls(tx, ty) {
+                                // Merge: add new edge to existing wall_data
+                                let new_edge_bit = 1u16 << edge;
+                                self.place_wall_edge(tx, ty, new_edge_bit, wd_thick, wd_mat);
+                                if is_corner {
+                                    let corner_edge_bit = 1u16 << ((edge + 1) & 3);
+                                    self.place_wall_edge(tx, ty, corner_edge_bit, wd_thick, wd_mat);
+                                }
                                 continue;
                             }
-                            // New thin wall placement
-                            let (tw_flags, tw_edge_mask) = if is_corner {
-                                make_thin_wall_corner_flags(roof_flag, edge, self.wall_thickness)
+                            // New thin wall: write only to wall_data (DN-008)
+                            let new_edge_bit = 1u16 << edge;
+                            if is_corner {
+                                let corner_edge_bit = 1u16 << ((edge + 1) & 3);
+                                self.place_wall_edge(
+                                    tx,
+                                    ty,
+                                    new_edge_bit | corner_edge_bit,
+                                    wd_thick,
+                                    wd_mat,
+                                );
                             } else {
-                                make_thin_wall_flags(roof_flag, edge, self.wall_thickness)
-                            };
-                            let tw_height = make_wall_height(height, tw_edge_mask);
-                            self.place_or_blueprint(
-                                tx,
-                                ty,
-                                make_block(block_type_id as u8, tw_height, tw_flags) | roof_h,
-                            );
-                            // Also write to wall_data
-                            let wd_edges = ((tw_edge_mask >> 4) & 0xF) as u16;
-                            self.place_wall_edge(tx, ty, wd_edges, wd_thick, wd_mat);
+                                self.place_wall_edge(tx, ty, new_edge_bit, wd_thick, wd_mat);
+                            }
                             continue;
+                        } else if is_wall_block(block_type_id) {
+                            // Full-thickness walls: write only to wall_data (DN-008)
+                            let wd_mat = wall_block_to_material(block_type_id);
+                            self.place_wall_edge(tx, ty, WD_EDGE_MASK, 4, wd_mat);
                         } else {
                             self.place_or_blueprint(
                                 tx,
                                 ty,
                                 make_block(block_type_id as u8, height, roof_flag) | roof_h,
                             );
-                            // Full-thickness walls: also write to wall_data (all 4 edges)
-                            if is_wall_block(block_type_id) {
-                                let wd_mat = wall_block_to_material(block_type_id);
-                                self.place_wall_edge(tx, ty, WD_EDGE_MASK, 4, wd_mat);
-                            }
                         }
                     }
 
@@ -976,7 +996,7 @@ impl App {
         }
         // Recompute roof heights after placing walls (needed for shadows)
         if self.grid_dirty {
-            compute_roof_heights(&mut self.grid_data);
+            compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
         }
     }
 
@@ -1028,7 +1048,7 @@ impl App {
         }
         self.grid_dirty = true;
         // Recompute roof heights since we may have removed a wall or roof tile
-        compute_roof_heights(&mut self.grid_data);
+        compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
     }
 
     /// Build and open a context menu for the given screen and world position.
@@ -1279,7 +1299,7 @@ impl App {
                     if self.place_multi_tiles(&tiles, 37, 0, |i, rf| {
                         rf | (((i % 3) as u8) << 3) | (((i / 3) as u8) << 5)
                     }) {
-                        compute_roof_heights(&mut self.grid_data);
+                        compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
                         log::info!("Placed solar panel at ({}, {})", bx, by);
                     }
                 }
@@ -1294,7 +1314,7 @@ impl App {
                     if self.place_multi_tiles(&tiles, 41, 2, |i, rf| {
                         rf | (((i % 2) as u8) << 3) | (((i / 2) as u8) << 5) | rot_bit
                     }) {
-                        compute_roof_heights(&mut self.grid_data);
+                        compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
                     }
                 }
                 BuildTool::Place(39) => {
@@ -1448,7 +1468,7 @@ impl App {
                                 make_block(id as u8, place_height, dir_flags) | roof_h,
                             );
                             self.grid_dirty = true;
-                            compute_roof_heights(&mut self.grid_data);
+                            compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
                             log::info!(
                                 "Placed wall attachment {} at ({}, {}) facing dir={}",
                                 id,
@@ -1472,7 +1492,7 @@ impl App {
                                 make_block(id as u8, place_height, roof_flag) | roof_h,
                             );
                             self.grid_dirty = true;
-                            compute_roof_heights(&mut self.grid_data);
+                            compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
                             log::info!("Placed well at ({}, {})", bx, by);
                             self.build_tool = BuildTool::None;
                         }
@@ -1577,7 +1597,7 @@ impl App {
                             );
                         }
                         self.grid_dirty = true;
-                        compute_roof_heights(&mut self.grid_data);
+                        compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
                         // Initialize cannon angle from build rotation
                         if id == BT_CANNON {
                             let angle = match self.build_rotation {
@@ -1660,7 +1680,7 @@ impl App {
                     if (block >> 16) & 2 != 0 {
                         self.grid_data[idx] &= !(2u32 << 16);
                         self.grid_dirty = true;
-                        compute_roof_heights(&mut self.grid_data);
+                        compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
                     }
                 }
                 BuildTool::WoodBox => {

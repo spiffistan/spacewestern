@@ -1518,7 +1518,7 @@ impl App {
                 self.log_event(evt.category(), evt.message());
             }
             if !destroyed.is_empty() {
-                compute_roof_heights(&mut self.grid_data);
+                compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
             }
             temps
         } else {
@@ -1561,8 +1561,18 @@ impl App {
                     depth_or_array_layers: 1,
                 },
             );
-            // Re-extract wall data from grid and upload
-            self.wall_data = extract_wall_data_from_grid(&self.grid_data);
+            // Merge wall data: extract from grid (legacy walls) + keep existing wall_data edges
+            let extracted = extract_wall_data_from_grid(&self.grid_data);
+            for i in 0..self.wall_data.len().min(extracted.len()) {
+                // OR the edges from both sources; keep thickness/material from whichever has edges
+                let ext_edges = wd_edges(extracted[i]);
+                let cur_edges = wd_edges(self.wall_data[i]);
+                if ext_edges != 0 && cur_edges == 0 {
+                    self.wall_data[i] = extracted[i]; // legacy wall, use extracted
+                }
+                // If cur_edges != 0, keep existing wall_data (placed via place_wall_edge)
+                // If both have edges, keep wall_data (it's the authority)
+            }
             gfx.queue
                 .write_buffer(&gfx.wall_buffer, 0, bytemuck::cast_slice(&self.wall_data));
             self.grid_dirty = false;
