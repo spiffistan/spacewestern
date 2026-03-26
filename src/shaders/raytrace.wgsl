@@ -2527,13 +2527,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     if is_roofed && camera.show_roofs > 0.5 {
         let roof_col = roof_color(world_x, world_y);
 
-        // Shadow on roof surface
-        var roof_shadow: vec4<f32>;
-        if camera.use_shadow_map > 0.5 {
-            roof_shadow = sample_shadow_map(world_x, world_y);
-        } else {
-            roof_shadow = trace_shadow_ray(world_x, world_y, roof_h, sun_dir, sun_elev);
-        }
+        // Shadow on roof surface (per-pixel ray trace)
+        let roof_shadow = trace_shadow_ray(world_x, world_y, roof_h, sun_dir, sun_elev);
         let roof_light = roof_shadow.w;
         let roof_tint = roof_shadow.xyz;
 
@@ -4057,22 +4052,16 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Wall under a roof: no sun, no shadow ray. Just ambient + interior indirect.
         light_factor = INTERIOR_INDIRECT;
     } else {
-        // Outdoor pixel: shadow map (fast) or per-pixel ray trace (quality)
-        var shadow_result: vec4<f32>;
-        if camera.use_shadow_map > 0.5 {
-            shadow_result = sample_shadow_map(world_x, world_y);
-        } else {
-            // Per-pixel shadow with IGN dithering for temporal AA
-            let frame_offset = fract(camera.time * 5.3) * 5.0;
-            let ign_x = f32(px) + frame_offset;
-            let ign_y = f32(py) + frame_offset * 0.7;
-            let ign1 = fract(52.9829189 * fract(0.06711056 * ign_x + 0.00583715 * ign_y));
-            let ign2 = fract(52.9829189 * fract(0.00583715 * ign_x + 0.06711056 * ign_y));
-            shadow_result = trace_shadow_ray(
-                world_x + (ign1 - 0.5) * 0.18,
-                world_y + (ign2 - 0.5) * 0.18,
-                effective_fheight, sun_dir, sun_elev);
-        }
+        // Per-pixel shadow ray trace with IGN dithering for temporal AA
+        let frame_offset = fract(camera.time * 5.3) * 5.0;
+        let ign_x = f32(px) + frame_offset;
+        let ign_y = f32(py) + frame_offset * 0.7;
+        let ign1 = fract(52.9829189 * fract(0.06711056 * ign_x + 0.00583715 * ign_y));
+        let ign2 = fract(52.9829189 * fract(0.00583715 * ign_x + 0.06711056 * ign_y));
+        let shadow_result = trace_shadow_ray(
+            world_x + (ign1 - 0.5) * 0.18,
+            world_y + (ign2 - 0.5) * 0.18,
+            effective_fheight, sun_dir, sun_elev);
         shadow_tint = shadow_result.xyz;
         light_factor = shadow_result.w;
 

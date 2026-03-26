@@ -169,9 +169,6 @@ struct App {
     fluid_pressure_iters: u32,   // Jacobi pressure solver iterations (quality vs perf)
     lightmap_interval: u32,      // recompute lightmap every N frames
     lightmap_iterations: u32,    // lightmap propagation iterations (radius)
-    shadow_map_scale: u32, // shadow map texels per grid cell (0 = per-pixel, 1-16 = shadow map)
-    #[allow(dead_code)]
-    shadow_map_max_scale: u32, // allocated texture supports up to this scale
     // Sound propagation
     sound_enabled: bool,
     sound_phase: usize, // 0 or 1 ping-pong
@@ -324,10 +321,7 @@ struct GfxState {
     block_temp_buffer: wgpu::Buffer,
     thermal_pipeline: wgpu::ComputePipeline,
     thermal_bind_group: wgpu::BindGroup,
-    // Shadow map pre-pass
-    shadow_map_texture: wgpu::Texture,
-    shadow_map_pipeline: wgpu::ComputePipeline,
-    shadow_map_bind_group: wgpu::BindGroup,
+    shadow_map_dummy: wgpu::Texture, // 1x1 dummy for binding 18 (shadow map removed)
     // Sound wave propagation
     sound_textures: [wgpu::Texture; 2], // Rg32Float ping-pong (R=pressure, G=velocity)
     sound_pipeline: wgpu::ComputePipeline,
@@ -452,8 +446,8 @@ impl App {
                 cloud_cover: 0.0,
                 wind_magnitude: 0.0,
                 wind_angle: 0.0,
-                use_shadow_map: 1.0,
-                shadow_map_scale: 8.0,
+                use_shadow_map: 0.0,
+                shadow_map_scale: 0.0,
                 sound_speed: 0.0,
                 sound_damping: 0.0,
                 sound_coupling: 0.0,
@@ -522,8 +516,6 @@ impl App {
             fluid_pressure_iters: FLUID_PRESSURE_ITERS,
             lightmap_interval: LIGHTMAP_UPDATE_INTERVAL,
             lightmap_iterations: LIGHTMAP_PROP_ITERATIONS,
-            shadow_map_scale: 0,
-            shadow_map_max_scale: 8,
             sound_enabled: true,
             sound_phase: 0,
             sound_sources: Vec::new(),
@@ -812,7 +804,7 @@ impl App {
         let fv_pres_b_view = gfx.fluid_pres[1].create_view(&wgpu::TextureViewDescriptor::default());
         let water_view = gfx.water_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
         let shadow_map_view = gfx
-            .shadow_map_texture
+            .shadow_map_dummy
             .create_view(&wgpu::TextureViewDescriptor::default());
         let sound_view = gfx.sound_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
         gfx.compute_bind_groups = [
@@ -1783,8 +1775,7 @@ impl App {
         self.camera.lm_vp_max_x = (self.camera.center_x + half_w + lm_margin).min(GRID_W as f32);
         self.camera.lm_vp_max_y = (self.camera.center_y + half_h + lm_margin).min(GRID_H as f32);
 
-        // Shadow map mode
-        self.camera.use_shadow_map = if self.shadow_map_scale > 0 { 1.0 } else { 0.0 };
+        self.camera.use_shadow_map = 0.0; // shadow map removed, per-pixel ray trace only
         self.camera.enable_terrain_detail = if self.enable_terrain_detail { 1.0 } else { 0.0 };
         self.camera.terrain_ao_strength = self.terrain_ao_strength;
         self.camera.fog_enabled = if self.fog_enabled { 1.0 } else { 0.0 };
@@ -1808,8 +1799,6 @@ impl App {
                 self.fog_dirty = true;
             }
         }
-
-        self.camera.shadow_map_scale = self.shadow_map_scale.max(1) as f32;
 
         // Update camera uniform
         gfx.queue
@@ -2584,20 +2573,6 @@ impl App {
 
         // Reset splat
         self.fluid_params.splat_active = 0.0;
-
-        // Shadow map pre-pass (only when shadow map mode is enabled)
-        if self.shadow_map_scale > 0 {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("shadow-map-pass"),
-                timestamp_writes: None,
-            });
-            cpass.set_pipeline(&gfx.shadow_map_pipeline);
-            cpass.set_bind_group(0, &gfx.shadow_map_bind_group, &[]);
-            let sm_scale = self.shadow_map_scale;
-            let sm_wg_x = (GRID_W * sm_scale + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-            let sm_wg_y = (GRID_H * sm_scale + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-            cpass.dispatch_workgroups(sm_wg_x, sm_wg_y, 1);
-        }
 
         // Sound wave propagation (multiple iterations per frame)
         if self.sound_enabled {

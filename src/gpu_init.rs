@@ -1874,20 +1874,19 @@ impl App {
             ..Default::default()
         });
 
-        // Shadow map texture (8× grid resolution max for sub-tile shadow detail)
-        const SHADOW_MAP_MAX_SCALE: u32 = 8;
+        // Dummy 1x1 texture for shadow map binding (shadow map system removed)
         let shadow_map_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("shadow-map"),
+            label: Some("shadow-map-dummy"),
             size: wgpu::Extent3d {
-                width: GRID_W * SHADOW_MAP_MAX_SCALE,
-                height: GRID_H * SHADOW_MAP_MAX_SCALE,
+                width: 1,
+                height: 1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let shadow_map_sample_view =
@@ -2605,112 +2604,6 @@ impl App {
                 cache: None,
             });
 
-        // --- Shadow map pre-pass pipeline ---
-        let shadow_map_write_view =
-            shadow_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("shadow-map-compute"),
-            source: wgpu::ShaderSource::Wgsl(
-                shader_with_constants(include_str!("shaders/shadow_map.wgsl")).into(),
-            ),
-        });
-        let shadow_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("shadow-map-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let shadow_map_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("shadow-map-bg"),
-            layout: &shadow_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&shadow_map_write_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: grid_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: elevation_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wall_buffer.as_entire_binding(),
-                },
-            ],
-        });
-        let shadow_map_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("shadow-map-pipeline"),
-                layout: Some(
-                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("shadow-map-pl"),
-                        bind_group_layouts: &[&shadow_bgl],
-                        push_constant_ranges: &[],
-                    }),
-                ),
-                module: &shadow_shader,
-                entry_point: Some("main_shadow"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-
         // --- Power grid pipeline ---
         let power_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("power-compute"),
@@ -3148,9 +3041,7 @@ impl App {
             block_temp_buffer,
             thermal_pipeline: thermal_pipeline_val,
             thermal_bind_group: thermal_bind_group_val,
-            shadow_map_texture,
-            shadow_map_pipeline,
-            shadow_map_bind_group,
+            shadow_map_dummy: shadow_map_texture,
             sound_textures: [sound_tex_a_early, sound_tex_b_early],
             sound_pipeline,
             sound_bind_groups: [sound_bg_0, sound_bg_1],

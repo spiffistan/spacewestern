@@ -1171,23 +1171,6 @@ impl App {
 
                         ui.separator();
 
-                        // --- Shadows ---
-                        ui.label(egui::RichText::new("Shadows").strong().size(11.0));
-                        let mut use_sm = self.shadow_map_scale > 0;
-                        ui.checkbox(&mut use_sm, "Shadow Map");
-                        if use_sm {
-                            if self.shadow_map_scale == 0 {
-                                self.shadow_map_scale = 8;
-                            }
-                            let mut sm = self.shadow_map_scale as i32;
-                            ui.add(egui::Slider::new(&mut sm, 1..=8).text("Scale"));
-                            self.shadow_map_scale = sm as u32;
-                        } else {
-                            self.shadow_map_scale = 0;
-                        }
-
-                        ui.separator();
-
                         // --- Raytrace ---
                         ui.label(egui::RichText::new("Raytrace").strong().size(11.0));
                         if ui
