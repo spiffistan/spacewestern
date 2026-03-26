@@ -317,7 +317,7 @@ fn obstacle_field_walls_are_solid() {
         grid[(y * GRID_W + 13) as usize] = make_block(1, 3, 0);
     } // right
 
-    let obs = build_obstacle_field(&grid);
+    let obs = build_obstacle_field(&grid, &[]);
     // Walls should be solid (255)
     assert_eq!(
         obs[(10 * GRID_W + 10) as usize],
@@ -356,7 +356,7 @@ fn obstacle_field_doors_open_are_passable() {
     // Stone wall with door flag (bit 0) + open flag (bit 2) = flags 5
     grid[(10 * GRID_W + 10) as usize] = make_block(1, 3, 5); // open door
     grid[(10 * GRID_W + 11) as usize] = make_block(1, 3, 1); // closed door
-    let obs = build_obstacle_field(&grid);
+    let obs = build_obstacle_field(&grid, &[]);
     assert_eq!(
         obs[(10 * GRID_W + 10) as usize],
         0,
@@ -376,7 +376,7 @@ fn obstacle_field_plants_are_passable() {
     grid[(10 * GRID_W + 10) as usize] = make_block(BT_TREE as u8, 3, 0);
     grid[(10 * GRID_W + 11) as usize] = make_block(BT_BERRY_BUSH as u8, 1, 0);
     grid[(10 * GRID_W + 12) as usize] = make_block(BT_CROP as u8, 2, 0);
-    let obs = build_obstacle_field(&grid);
+    let obs = build_obstacle_field(&grid, &[]);
     assert_eq!(
         obs[(10 * GRID_W + 10) as usize],
         0,
@@ -401,7 +401,7 @@ fn obstacle_field_pipes_wires_passable() {
     grid[(10 * GRID_W + 10) as usize] = make_block(BT_PIPE as u8, 1, 0);
     grid[(10 * GRID_W + 11) as usize] = make_block(BT_WIRE as u8, 0xA0, 0); // wire with conn mask
     grid[(10 * GRID_W + 12) as usize] = make_block(BT_LIQUID_PIPE as u8, 1, 0);
-    let obs = build_obstacle_field(&grid);
+    let obs = build_obstacle_field(&grid, &[]);
     assert_eq!(
         obs[(10 * GRID_W + 10) as usize],
         0,
@@ -433,7 +433,7 @@ fn obstacle_field_complete_room_sealed() {
         grid[(y * GRID_W + 20) as usize] = make_block(1, 3, 0);
         grid[(y * GRID_W + 25) as usize] = make_block(1, 3, 0);
     }
-    let obs = build_obstacle_field(&grid);
+    let obs = build_obstacle_field(&grid, &[]);
     // Check every wall tile is solid
     for x in 20..26 {
         assert_eq!(

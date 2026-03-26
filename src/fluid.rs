@@ -42,15 +42,28 @@ pub struct FluidParams {
 
 /// Build the obstacle field (256x256 u8) from the block grid.
 /// 255 = solid obstacle, 0 = open.
-pub fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
+pub fn build_obstacle_field(grid: &[u32], wall_data: &[u16]) -> Vec<u8> {
     grid.iter()
-        .map(|&b| {
+        .enumerate()
+        .map(|(i, &b)| {
+            // Wall_data walls are full obstacles (unless open door)
+            if i < wall_data.len() && wall_data[i] != 0 {
+                let wd = wall_data[i];
+                let edges = wd & 0xF;
+                let is_wd_door_open = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
+                // Full-thickness wall (all 4 edges) blocks gas completely
+                if edges == 0xF && !is_wd_door_open {
+                    return 255;
+                }
+                // Thin walls with edges: partial obstacle (treat as blocking for now)
+                if edges != 0 && !is_wd_door_open {
+                    return 255;
+                }
+            }
             let bt = b & 0xFF;
             let bh = (b >> 8) & 0xFF;
             let is_door = (b >> 16) & 1 != 0;
             let is_open = (b >> 16) & 4 != 0;
-            // Inlets (20) and outlets (19) block gas like walls (they suck/push through the pipe system)
-            // Other pipe components (15-18) are passable
             let passable = bt_is!(
                 bt,
                 BT_TREE,
@@ -73,7 +86,6 @@ pub fn build_obstacle_field(grid: &[u32]) -> Vec<u8> {
                 BT_WIRE_BRIDGE,
                 BT_RESTRICTOR
             ) || (bt >= BT_PIPE && bt <= BT_VALVE);
-            // Thin walls: open space is passable for fluid
             let is_thin = bh > 0 && is_wall_block(bt) && thin_wall_is_walkable(b);
             if bh > 0 && !passable && !is_thin && !(is_door && is_open) {
                 255
@@ -134,43 +146,61 @@ mod tests {
     #[test]
     fn test_obstacle_walls_block() {
         let grid = vec![make_block(1, 3, 0)]; // stone wall height 3
-        let obs = build_obstacle_field(&grid);
+        let obs = build_obstacle_field(&grid, &[]);
         assert_eq!(obs[0], 255, "stone wall should be obstacle");
     }
 
     #[test]
     fn test_obstacle_open_ground() {
         let grid = vec![make_block(2, 0, 0)]; // dirt floor
-        let obs = build_obstacle_field(&grid);
+        let obs = build_obstacle_field(&grid, &[]);
         assert_eq!(obs[0], 0, "dirt floor should not be obstacle");
     }
 
     #[test]
     fn test_obstacle_open_door() {
         let grid = vec![make_block(4, 1, 1 | 4)]; // door + open flags
-        let obs = build_obstacle_field(&grid);
+        let obs = build_obstacle_field(&grid, &[]);
         assert_eq!(obs[0], 0, "open door should not be obstacle");
     }
 
     #[test]
     fn test_obstacle_closed_door() {
         let grid = vec![make_block(4, 1, 1)]; // door flag only (closed)
-        let obs = build_obstacle_field(&grid);
+        let obs = build_obstacle_field(&grid, &[]);
         assert_eq!(obs[0], 255, "closed door should be obstacle");
     }
 
     #[test]
     fn test_obstacle_tree_not_blocking() {
         let grid = vec![make_block(8, 3, 0)]; // tree
-        let obs = build_obstacle_field(&grid);
+        let obs = build_obstacle_field(&grid, &[]);
         assert_eq!(obs[0], 0, "tree should not block fluid");
     }
 
     #[test]
     fn test_obstacle_fire_not_blocking() {
         let grid = vec![make_block(6, 1, 0)]; // fireplace
-        let obs = build_obstacle_field(&grid);
+        let obs = build_obstacle_field(&grid, &[]);
         assert_eq!(obs[0], 0, "fireplace should not block fluid");
+    }
+
+    #[test]
+    fn test_obstacle_wall_data_blocks() {
+        use crate::grid::pack_wall_data;
+        let grid = vec![make_block(2, 0, 0)]; // dirt floor
+        let wd = vec![pack_wall_data(0xF, 4, 0)]; // full wall in wall_data
+        let obs = build_obstacle_field(&grid, &wd);
+        assert_eq!(obs[0], 255, "wall_data wall should be obstacle");
+    }
+
+    #[test]
+    fn test_obstacle_wall_data_open_door() {
+        use crate::grid::{WD_DOOR_OPEN, WD_HAS_DOOR, pack_wall_data};
+        let grid = vec![make_block(2, 0, 0)];
+        let wd = vec![pack_wall_data(0xF, 4, 0) | WD_HAS_DOOR | WD_DOOR_OPEN];
+        let obs = build_obstacle_field(&grid, &wd);
+        assert_eq!(obs[0], 0, "open wall_data door should not block fluid");
     }
 
     #[test]

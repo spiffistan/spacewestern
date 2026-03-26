@@ -691,7 +691,7 @@ impl App {
         let fv_dummy_r_w = fluid_dummy_r_w.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Upload initial obstacle field
-        let obstacle_data = build_obstacle_field(&self.grid_data);
+        let obstacle_data = build_obstacle_field(&self.grid_data, &self.wall_data);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &fluid_obstacle_tex,

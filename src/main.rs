@@ -1533,7 +1533,7 @@ impl App {
             gfx.queue
                 .write_buffer(&gfx.grid_buffer, 0, bytemuck::cast_slice(&self.grid_data));
             // Rebuild fluid obstacle field
-            let obs_data = build_obstacle_field(&self.grid_data);
+            let obs_data = build_obstacle_field(&self.grid_data, &self.wall_data);
             gfx.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &gfx.fluid_obstacle,
