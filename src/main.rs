@@ -335,6 +335,7 @@ struct GfxState {
     sound_source_buffer: wgpu::Buffer,
     elevation_buffer: wgpu::Buffer,
     terrain_buffer: wgpu::Buffer,
+    wall_buffer: wgpu::Buffer, // u16 per tile: wall edges, thickness, material (DN-008)
     // Power grid
     voltage_buffer: wgpu::Buffer,
     power_pipeline: wgpu::ComputePipeline,
@@ -899,6 +900,10 @@ impl App {
                         resource: gfx.terrain_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
+                        binding: 24,
+                        resource: gfx.wall_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(&fv_dye_a),
                     },
@@ -1002,6 +1007,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 23,
                         resource: gfx.terrain_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 24,
+                        resource: gfx.wall_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 6,
@@ -1109,6 +1118,10 @@ impl App {
                         resource: gfx.terrain_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
+                        binding: 24,
+                        resource: gfx.wall_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(&fv_dye_b),
                     },
@@ -1212,6 +1225,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 23,
                         resource: gfx.terrain_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 24,
+                        resource: gfx.wall_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 6,

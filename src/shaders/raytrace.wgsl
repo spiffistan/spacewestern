@@ -90,6 +90,63 @@ struct Camera {
 @group(0) @binding(21) var fog_tex: texture_2d<f32>;
 @group(0) @binding(22) var fog_sampler: sampler;
 @group(0) @binding(23) var<storage, read> terrain_buf: array<u32>;
+@group(0) @binding(24) var<storage, read> wall_buf: array<u32>; // u16 packed as u32 pairs
+
+// --- Wall data helpers (DN-008 wall edge layer) ---
+// wall_buf stores u16 per tile packed as u32 (two tiles per u32 entry).
+// Read a single u16 wall_data value for tile at grid index idx.
+fn read_wall_data(idx: u32) -> u32 {
+    let word = wall_buf[idx / 2u];
+    if (idx & 1u) == 0u {
+        return word & 0xFFFFu;
+    } else {
+        return (word >> 16u) & 0xFFFFu;
+    }
+}
+
+// Wall data bit layout:
+// bits 0-3: edge mask (bit0=N, bit1=E, bit2=S, bit3=W)
+// bits 4-5: thickness raw (0=full, 1→3, 2→2, 3→1)
+// bits 6-9: material index
+// bit 10: has_door
+// bit 11: door_open
+// bit 12: has_window
+fn wd_edges_s(wd: u32) -> u32 { return wd & 0xFu; }
+fn wd_thickness_raw_s(wd: u32) -> u32 { return (wd >> 4u) & 3u; }
+fn wd_thickness_s(wd: u32) -> u32 {
+    let raw = wd_thickness_raw_s(wd);
+    return select(4u - raw, 4u, raw == 0u);
+}
+fn wd_material_s(wd: u32) -> u32 { return (wd >> 6u) & 0xFu; }
+fn wd_has_door(wd: u32) -> bool { return (wd & 0x400u) != 0u; }
+fn wd_door_open(wd: u32) -> bool { return (wd & 0x800u) != 0u; }
+fn wd_has_window(wd: u32) -> bool { return (wd & 0x1000u) != 0u; }
+
+// Check if wall_data has a wall on given edge
+fn wd_has_edge_s(wd: u32, edge: u32) -> bool {
+    if wd == 0u { return false; }
+    let edges = wd_edges_s(wd);
+    if edges == 0u && wd_thickness_raw_s(wd) == 0u { return true; } // full wall compat
+    return (edges & (1u << edge)) != 0u;
+}
+
+// Check if pixel is in the wall area using wall_data
+fn wd_pixel_is_wall(fx: f32, fy: f32, wd: u32) -> bool {
+    if wd == 0u { return false; }
+    let thick = wd_thickness_s(wd);
+    if thick >= 4u {
+        let edges = wd_edges_s(wd);
+        if edges == 0u { return true; } // full wall compat
+    }
+    let wall_frac = f32(thick) * 0.25;
+    let edges = wd_edges_s(wd);
+    if edges == 0u && wd_thickness_raw_s(wd) == 0u { return true; }
+    if (edges & 1u) != 0u && edge_covers_pixel(fx, fy, 0u, wall_frac) { return true; }
+    if (edges & 2u) != 0u && edge_covers_pixel(fx, fy, 1u, wall_frac) { return true; }
+    if (edges & 4u) != 0u && edge_covers_pixel(fx, fy, 2u, wall_frac) { return true; }
+    if (edges & 8u) != 0u && edge_covers_pixel(fx, fy, 3u, wall_frac) { return true; }
+    return false;
+}
 
 // --- Fog of war helper (bilinear-sampled for smooth edges) ---
 fn sample_fog(wx: f32, wy: f32) -> f32 {

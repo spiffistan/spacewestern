@@ -64,7 +64,7 @@ impl App {
                 required_limits: {
                     let mut limits =
                         wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
-                    limits.max_storage_buffers_per_shader_stage = 10;
+                    limits.max_storage_buffers_per_shader_stage = 12;
                     limits
                 },
                 memory_hints: wgpu::MemoryHints::default(),
@@ -1643,6 +1643,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Wall data buffer (u16 per tile: edges, thickness, material)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 24,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1815,6 +1826,18 @@ impl App {
         });
         queue.write_buffer(&terrain_buffer, 0, bytemuck::cast_slice(&self.terrain_data));
 
+        // Wall data buffer (u16 per tile: edges, thickness, material — DN-008)
+        if self.wall_data.is_empty() {
+            self.wall_data = vec![0u16; (GRID_W * GRID_H) as usize];
+        }
+        let wall_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wall-data"),
+            size: (GRID_W * GRID_H * 2) as u64, // u16 per tile
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&wall_buffer, 0, bytemuck::cast_slice(&self.wall_data));
+
         let water_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("water-readback"),
             size: 256,
@@ -1942,6 +1965,10 @@ impl App {
                     resource: terrain_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: wall_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(&fv_dye_a),
                 },
@@ -2042,6 +2069,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 23,
                     resource: terrain_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: wall_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -2146,6 +2177,10 @@ impl App {
                     resource: terrain_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: wall_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(&fv_dye_b),
                 },
@@ -2246,6 +2281,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 23,
                     resource: terrain_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: wall_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -3067,6 +3106,7 @@ impl App {
             sound_source_buffer,
             elevation_buffer,
             terrain_buffer,
+            wall_buffer,
             voltage_buffer,
             pipe_flow_buffer,
             power_pipeline: power_pipeline_val,
