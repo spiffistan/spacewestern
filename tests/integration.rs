@@ -471,3 +471,60 @@ fn obstacle_field_complete_room_sealed() {
         }
     }
 }
+
+// --- Thin wall edge blocking ---
+
+#[test]
+fn thin_wall_north_edge_blocks_northward() {
+    let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+    // Place a thin wall on tile (5, 5) with north edge, thickness 1
+    let flags = make_thin_wall_flags(0, 0, 1); // edge=N, thickness=1
+    grid[(5 * GRID_W + 5) as usize] = make_block(BT_STONE as u8, 3, flags);
+
+    // Moving north from (5,5) to (5,4): blocked (wall on north edge)
+    assert!(edge_blocked(&grid, 5, 5, 5, 4));
+    // Moving south from (5,5) to (5,6): not blocked (no wall on south edge)
+    assert!(!edge_blocked(&grid, 5, 5, 5, 6));
+    // Moving east from (5,5): not blocked
+    assert!(!edge_blocked(&grid, 5, 5, 6, 5));
+}
+
+#[test]
+fn thin_wall_corner_blocks_two_edges() {
+    let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+    // Place NE corner (primary N + corner flag → N+E)
+    let flags = make_thin_wall_corner_flags(0, 0, 2); // edge=N, thickness=2, corner
+    grid[(5 * GRID_W + 5) as usize] = make_block(BT_STONE as u8, 3, flags);
+
+    // North: blocked
+    assert!(edge_blocked(&grid, 5, 5, 5, 4));
+    // East: blocked (corner covers next clockwise = E)
+    assert!(edge_blocked(&grid, 5, 5, 6, 5));
+    // South: not blocked
+    assert!(!edge_blocked(&grid, 5, 5, 5, 6));
+    // West: not blocked
+    assert!(!edge_blocked(&grid, 5, 5, 4, 5));
+}
+
+#[test]
+fn full_wall_blocks_all_edges() {
+    let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+    // Full wall (thickness 4, flags bits 5-6 = 0 = full)
+    grid[(5 * GRID_W + 5) as usize] = make_block(BT_STONE as u8, 3, 0);
+
+    assert!(edge_blocked(&grid, 5, 5, 5, 4));
+    assert!(edge_blocked(&grid, 5, 5, 6, 5));
+    assert!(edge_blocked(&grid, 5, 5, 5, 6));
+    assert!(edge_blocked(&grid, 5, 5, 4, 5));
+}
+
+#[test]
+fn thin_wall_is_walkable_check() {
+    // Full wall: not walkable
+    let full = make_block(BT_STONE as u8, 3, 0);
+    assert!(!thin_wall_is_walkable(full));
+
+    // Thin wall: walkable (has open sub-cells)
+    let thin = make_block(BT_STONE as u8, 3, make_thin_wall_flags(0, 0, 1));
+    assert!(thin_wall_is_walkable(thin));
+}

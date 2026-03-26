@@ -186,6 +186,89 @@ pub fn make_thin_wall_corner_flags(roof_flag: u8, edge: u8, thickness: u8) -> u8
     make_thin_wall_flags(roof_flag, edge, thickness) | 4 // set bit 2 = corner
 }
 
+/// Does a thin wall on this block have a wall on the given edge?
+/// edge: 0=N, 1=E, 2=S, 3=W
+fn has_wall_on_edge(flags: u8, edge: u8) -> bool {
+    let thick_raw = (flags >> 5) & 3;
+    if thick_raw == 0 {
+        return true; // full wall, blocks all edges
+    }
+    let primary = (flags >> 3) & 3;
+    if primary == edge {
+        return true;
+    }
+    // Corner: also covers next clockwise edge
+    let is_corner = (flags & 4) != 0;
+    if is_corner && (primary + 1) % 4 == edge {
+        return true;
+    }
+    false
+}
+
+/// Is movement between adjacent tiles blocked by a thin wall edge?
+/// Checks both tiles: if either has a wall on the shared edge, crossing is blocked.
+/// Open doors on the shared edge make it passable.
+/// Direction: 0=N (from→north neighbor), 1=E, 2=S, 3=W.
+pub fn edge_blocked(grid: &[u32], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    let dx = bx - ax;
+    let dy = by - ay;
+    // Determine crossing direction from A's perspective
+    let dir_from_a = if dy < 0 {
+        0u8 // moving north
+    } else if dx > 0 {
+        1 // moving east
+    } else if dy > 0 {
+        2 // moving south
+    } else {
+        3 // moving west
+    };
+    let dir_from_b = (dir_from_a + 2) % 4; // opposite direction
+
+    let gw = GRID_W as i32;
+    let gh = GRID_H as i32;
+
+    // Check tile A: does it have a wall on the exit edge?
+    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
+        let a_block = grid[(ay as u32 * GRID_W + ax as u32) as usize];
+        let a_bt = block_type_rs(a_block);
+        let a_flags = block_flags_rs(a_block);
+        let a_height = block_height_rs(a_block);
+        if a_height > 0 && is_wall_block(a_bt) {
+            // Open door: not blocked
+            let a_is_door = (a_flags & 1) != 0;
+            let a_is_open = (a_flags & 4) != 0;
+            if !(a_is_door && a_is_open) && has_wall_on_edge(a_flags, dir_from_a) {
+                return true;
+            }
+        }
+    }
+
+    // Check tile B: does it have a wall on the entry edge?
+    if bx >= 0 && by >= 0 && bx < gw && by < gh {
+        let b_block = grid[(by as u32 * GRID_W + bx as u32) as usize];
+        let b_bt = block_type_rs(b_block);
+        let b_flags = block_flags_rs(b_block);
+        let b_height = block_height_rs(b_block);
+        if b_height > 0 && is_wall_block(b_bt) {
+            let b_is_door = (b_flags & 1) != 0;
+            let b_is_open = (b_flags & 4) != 0;
+            if !(b_is_door && b_is_open) && has_wall_on_edge(b_flags, dir_from_b) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Is a thin wall tile walkable? (has open sub-cells that can be traversed)
+pub fn thin_wall_is_walkable(block: u32) -> bool {
+    let flags = block_flags_rs(block);
+    let thick_raw = (flags >> 5) & 3;
+    // Full wall (thick_raw=0) is not walkable. Thin wall has open space.
+    thick_raw != 0
+}
+
 /// Is this block type part of the electrical power network?
 /// Checks block type and wire overlay flag. Matches the GPU-side is_conductor() in power.wgsl.
 pub fn is_conductor_rs(bt: u32, flags: u8) -> bool {

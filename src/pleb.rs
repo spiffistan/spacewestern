@@ -412,7 +412,14 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
             }
             continue; // open half is walkable
         }
-        if !is_door && !is_dug_shallow && !is_pipe && !is_wire && (bh > 0 || !is_type_walkable(bt))
+        // Thin walls: walkable in open sub-cells
+        let is_thin = is_wall_block(bt32) && bh > 0 && thin_wall_is_walkable(b);
+        if !is_door
+            && !is_thin
+            && !is_dug_shallow
+            && !is_pipe
+            && !is_wire
+            && (bh > 0 || !is_type_walkable(bt))
         {
             return false;
         }
@@ -488,7 +495,10 @@ pub fn astar_path_full(
             || bt32 == BT_LIQUID_PUMP
             || bt32 == BT_LIQUID_OUTPUT;
         let is_wire = is_wire_block(bt32);
+        // Thin walls: tile is walkable (has open sub-cells)
+        let is_thin = is_wall_block(bt32) && bh > 0 && thin_wall_is_walkable(b);
         is_door
+            || is_thin
             || (bh == 0 && is_type_walkable(bt))
             || (bt == BT_DUG_GROUND && bh <= 1)
             || (is_any_pipe && bh <= 1)
@@ -546,9 +556,28 @@ pub fn astar_path_full(
                 continue;
             }
 
+            // Edge blocking: thin walls block crossing their walled edge
+            if ndx == 0 || ndy == 0 {
+                // Cardinal move: check direct edge
+                if edge_blocked(grid, current.0, current.1, next.0, next.1) {
+                    continue;
+                }
+            }
+
             // Diagonal: require both adjacent cardinal tiles to be walkable (no corner-cutting)
+            // AND no edge blocking on either cardinal step of the diagonal
             if ndx != 0 && ndy != 0 {
-                if !is_walk(current.0 + ndx, current.1) || !is_walk(current.0, current.1 + ndy) {
+                let cx = (current.0 + ndx, current.1);
+                let cy = (current.0, current.1 + ndy);
+                if !is_walk(cx.0, cx.1) || !is_walk(cy.0, cy.1) {
+                    continue;
+                }
+                // Check edges along both cardinal steps of the diagonal
+                if edge_blocked(grid, current.0, current.1, cx.0, cx.1)
+                    || edge_blocked(grid, cx.0, cx.1, next.0, next.1)
+                    || edge_blocked(grid, current.0, current.1, cy.0, cy.1)
+                    || edge_blocked(grid, cy.0, cy.1, next.0, next.1)
+                {
                     continue;
                 }
             }
