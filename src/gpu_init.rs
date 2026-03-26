@@ -170,6 +170,18 @@ impl App {
         });
         queue.write_buffer(&material_buffer, 0, bytemuck::cast_slice(&material_data));
 
+        // Wall data buffer (u16 per tile: edges, thickness, material — DN-008)
+        if self.wall_data.is_empty() {
+            self.wall_data = vec![0u16; (GRID_W * GRID_H) as usize];
+        }
+        let wall_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wall-data"),
+            size: (GRID_W * GRID_H * 2) as u64, // u16 per tile
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&wall_buffer, 0, bytemuck::cast_slice(&self.wall_data));
+
         // Pleb storage buffer (up to MAX_PLEBS, updated each frame)
         let pleb_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pleb-buffer"),
@@ -448,6 +460,17 @@ impl App {
                     },
                     count: None,
                 },
+                // binding 5: wall data buffer (DN-008)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -476,6 +499,10 @@ impl App {
                     binding: 4,
                     resource: material_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wall_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -503,6 +530,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: material_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wall_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -1826,18 +1857,6 @@ impl App {
         });
         queue.write_buffer(&terrain_buffer, 0, bytemuck::cast_slice(&self.terrain_data));
 
-        // Wall data buffer (u16 per tile: edges, thickness, material — DN-008)
-        if self.wall_data.is_empty() {
-            self.wall_data = vec![0u16; (GRID_W * GRID_H) as usize];
-        }
-        let wall_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("wall-data"),
-            size: (GRID_W * GRID_H * 2) as u64, // u16 per tile
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&wall_buffer, 0, bytemuck::cast_slice(&self.wall_data));
-
         let water_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("water-readback"),
             size: 256,
@@ -2638,6 +2657,16 @@ impl App {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let shadow_map_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2659,6 +2688,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: elevation_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wall_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -2964,6 +2997,16 @@ impl App {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         // Ping-pong: bg[0] reads A writes B, bg[1] reads B writes A
@@ -2991,6 +3034,10 @@ impl App {
                     binding: 4,
                     resource: sound_source_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wall_buffer.as_entire_binding(),
+                },
             ],
         });
         let sound_bg_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3016,6 +3063,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: sound_source_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wall_buffer.as_entire_binding(),
                 },
             ],
         });

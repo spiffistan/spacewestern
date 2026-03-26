@@ -31,6 +31,7 @@ struct Camera {
 @group(0) @binding(2) var<storage, read> grid: array<u32>;
 @group(0) @binding(3) var<uniform> camera: Camera;
 @group(0) @binding(4) var<storage, read> sources: array<f32>;
+@group(0) @binding(5) var<storage, read> wall_buf: array<u32>;
 
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 fn block_height(b: u32) -> u32 {
@@ -42,6 +43,13 @@ fn block_height(b: u32) -> u32 {
 }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
+
+// --- Wall data helpers (DN-008) ---
+fn read_wall_data_s(idx: u32) -> u32 {
+    let word = wall_buf[idx >> 1u];
+    if (idx & 1u) == 0u { return word & 0xFFFFu; } else { return (word >> 16u) & 0xFFFFu; }
+}
+fn wd_has_edge_s(wd: u32, edge: u32) -> bool { return (wd & (1u << edge)) != 0u; }
 
 // --- Thin wall helpers ---
 fn wall_thickness_raw_s(flags: u32) -> u32 { return (flags >> 5u) & 3u; }
@@ -90,6 +98,17 @@ fn sound_edge_blocked(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
     let gw = i32(camera.grid_w);
     let gh = i32(camera.grid_h);
 
+    // Check wall_data layer first (DN-008)
+    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
+        let a_wd = read_wall_data_s(u32(ay) * u32(gw) + u32(ax));
+        if wd_has_edge_s(a_wd, dir_a) { return true; }
+    }
+    if bx >= 0 && by >= 0 && bx < gw && by < gh {
+        let b_wd = read_wall_data_s(u32(by) * u32(gw) + u32(bx));
+        if wd_has_edge_s(b_wd, dir_b) { return true; }
+    }
+
+    // Fall back to block grid (legacy)
     if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
         let ab = grid[u32(ay) * u32(gw) + u32(ax)];
         let abh = block_height(ab);

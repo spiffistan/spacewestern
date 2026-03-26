@@ -45,6 +45,7 @@ struct Camera {
 @group(0) @binding(2) var<uniform> camera: Camera;
 @group(0) @binding(3) var<storage, read> grid: array<u32>;
 @group(0) @binding(4) var<storage, read> materials: array<GpuMaterial>;
+@group(0) @binding(5) var<storage, read> wall_buf: array<u32>;
 
 struct GpuMaterial {
     color_r: f32, color_g: f32, color_b: f32, render_style: f32,
@@ -76,6 +77,38 @@ fn get_block(x: i32, y: i32) -> u32 {
     return grid[u32(y) * u32(camera.grid_w) + u32(x)];
 }
 
+// --- Wall data helpers (DN-008) ---
+fn read_wall_data(idx: u32) -> u32 {
+    let word = wall_buf[idx >> 1u];
+    if (idx & 1u) == 0u { return word & 0xFFFFu; } else { return (word >> 16u) & 0xFFFFu; }
+}
+fn wd_edges(wd: u32) -> u32 { return wd & 0xFu; }
+fn wd_has_edge(wd: u32, edge: u32) -> bool { return (wd & (1u << edge)) != 0u; }
+
+// Check if wall_data blocks edge crossing from (ax,ay) to (bx,by)
+fn wd_edge_blocked(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    let dx = bx - ax;
+    let dy = by - ay;
+    var dir_a = 0u;
+    if dy < 0 { dir_a = 0u; }
+    else if dx > 0 { dir_a = 1u; }
+    else if dy > 0 { dir_a = 2u; }
+    else { dir_a = 3u; }
+    let dir_b = (dir_a + 2u) % 4u;
+    let gw = u32(camera.grid_w);
+    // Check tile A's wall_data for outgoing edge
+    if ax >= 0 && ay >= 0 && ax < i32(camera.grid_w) && ay < i32(camera.grid_h) {
+        let a_wd = read_wall_data(u32(ay) * gw + u32(ax));
+        if wd_has_edge(a_wd, dir_a) { return true; }
+    }
+    // Check tile B's wall_data for incoming edge
+    if bx >= 0 && by >= 0 && bx < i32(camera.grid_w) && by < i32(camera.grid_h) {
+        let b_wd = read_wall_data(u32(by) * gw + u32(bx));
+        if wd_has_edge(b_wd, dir_b) { return true; }
+    }
+    return false;
+}
+
 // --- Thin wall helpers ---
 fn wall_thickness_raw(flags: u32) -> u32 { return (flags >> 5u) & 3u; }
 fn is_thin_wall_block(b: u32) -> bool {
@@ -93,6 +126,10 @@ fn has_wall_on_edge(height: u32, flags: u32, edge: u32) -> bool {
 
 // Edge-blocked: is the crossing from (ax,ay) to (bx,by) blocked by a thin wall?
 fn edge_blocked_lm(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    // Check wall_data layer first (DN-008)
+    if wd_edge_blocked(ax, ay, bx, by) { return true; }
+
+    // Fall back to block grid (legacy)
     let dx = bx - ax;
     let dy = by - ay;
     var dir_a = 0u;

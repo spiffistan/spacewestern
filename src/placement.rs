@@ -272,19 +272,40 @@ impl App {
         }
     }
 
+    /// Place a wall directly into wall_data (DN-008 Phase 2).
+    /// Does NOT write to grid_data — the tile keeps its current block type.
+    pub(crate) fn place_wall_edge(&mut self, tx: i32, ty: i32, edges: u16, thickness: u16, material: u16) {
+        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { return; }
+        let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+        if idx >= self.wall_data.len() { return; }
+        let existing = self.wall_data[idx];
+        let existing_edges = wd_edges(existing);
+        let merged_edges = existing_edges | edges;
+        self.wall_data[idx] = pack_wall_data(merged_edges, thickness, material);
+        // Preserve door/window flags from existing
+        self.wall_data[idx] |= existing & (WD_HAS_DOOR | WD_DOOR_OPEN | WD_HAS_WINDOW);
+        self.grid_dirty = true;
+    }
+
     /// Check if placing a thin wall with the given edge would create a double wall
     /// (the adjacent tile already has a wall on the mirrored edge).
     pub(crate) fn is_double_wall(&self, tx: i32, ty: i32, edge: u8) -> bool {
         let (nx, ny) = match edge {
-            0 => (tx, ty - 1), // N edge → check tile to the north's S edge
-            1 => (tx + 1, ty), // E edge → check tile to the east's W edge
-            2 => (tx, ty + 1), // S edge → check tile to the south's N edge
-            _ => (tx - 1, ty), // W edge → check tile to the west's E edge
+            0 => (tx, ty - 1),
+            1 => (tx + 1, ty),
+            2 => (tx, ty + 1),
+            _ => (tx - 1, ty),
         };
         if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
             return false;
         }
         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+        let mirror_edge = (edge + 2) % 4;
+        // Check wall_data layer first
+        if nidx < self.wall_data.len() && wd_has_edge(self.wall_data[nidx], mirror_edge) {
+            return true;
+        }
+        // Fall back to block grid for legacy walls
         let nb = self.grid_data[nidx];
         let nbt = block_type_rs(nb);
         let nflags = block_flags_rs(nb);
@@ -293,13 +314,26 @@ impl App {
         if nh == 0 || !is_wall_block(nbt) {
             return false;
         }
-        let mirror_edge = (edge + 2) % 4;
         has_wall_on_edge(nh_raw, nflags, mirror_edge)
     }
 
     /// When placing a thin wall on a tile that already has a wall,
     /// merge the new edge into the existing edge bitmask.
     /// Returns Some((flags, merged_edge_mask)) if merge happened, None if no merge needed.
+    /// Check if tile already has wall edges (in wall_data or block grid) that can be merged.
+    /// Returns true if the tile has walls that the new edge would merge with.
+    pub(crate) fn tile_has_walls(&self, tx: i32, ty: i32) -> bool {
+        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { return false; }
+        let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+        // Check wall_data layer
+        if idx < self.wall_data.len() && wd_edges(self.wall_data[idx]) != 0 {
+            return true;
+        }
+        // Check block grid (legacy)
+        let block = self.grid_data[idx];
+        is_wall_block(block_type_rs(block)) && block_height_rs(block) > 0
+    }
+
     pub(crate) fn merge_thin_wall_edges(
         &self,
         tx: i32,
@@ -311,27 +345,43 @@ impl App {
             return None;
         }
         let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+
+        // Check wall_data first (DN-008 — preferred source)
+        if idx < self.wall_data.len() {
+            let wd = self.wall_data[idx];
+            let existing_edges = wd_edges(wd);
+            if existing_edges != 0 {
+                let new_bit = 1u16 << new_edge;
+                if (existing_edges & new_bit) != 0 { return None; } // already has this edge
+                let merged = existing_edges | new_bit;
+                let thick_bits = if thickness >= 4 { 0u16 } else { 4 - thickness as u16 };
+                let _mat = wd_material(wd);
+                let roof_flag = block_flags_rs(self.grid_data[idx]) & 2;
+                let flags = roof_flag | ((thick_bits as u8 & 3) << 5);
+                let edge_mask = (merged as u8) << 4; // convert WD edge bits to height-byte edge mask
+                return Some((flags, edge_mask));
+            }
+        }
+
+        // Fall back to block grid (legacy)
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
         let flags = block_flags_rs(block);
         let h = block_height_rs(block);
         let h_raw = block_height_raw(block);
 
-        // No existing wall → no merge needed
         if h == 0 || !is_wall_block(bt) {
             return None;
         }
-        // Full wall (thickness 0) → already covers everything
         let thick_raw = (flags >> 5) & 3;
         if thick_raw == 0 {
             return None;
         }
         let existing_mask = wall_edge_mask(h_raw);
         if existing_mask == 0 {
-            return None; // full wall (backward compat)
+            return None;
         }
         let new_mask = edge_to_mask(new_edge);
-        // Already has this edge → no merge needed
         if (existing_mask & new_mask) != 0 {
             return None;
         }
@@ -706,8 +756,10 @@ impl App {
                 let pipe_compat = gas_pipe_compat || liquid_pipe_compat;
                 let same_type = btu == bid || pipe_compat; // allow pipe↔restrictor
                 // Thin wall merge: allow placing on existing wall tiles for corner upgrades
+                let has_wd_walls = idx < self.wall_data.len() && wd_edges(self.wall_data[idx]) != 0;
                 let thin_wall_merge =
-                    is_wall_block(bid) && self.wall_thickness < 4 && is_wall_block(btu) && bh > 0;
+                    is_wall_block(bid) && self.wall_thickness < 4
+                    && (has_wd_walls || (is_wall_block(btu) && bh > 0));
 
                 if ((btu == BT_AIR || btu == BT_DIRT) && bh == 0)
                     || (wire_anywhere && btu != BT_WIRE)
@@ -828,6 +880,10 @@ impl App {
                                 continue;
                             }
 
+                            // Wall material for wall_data layer
+                            let wd_mat = wall_block_to_material(block_type_id);
+                            let wd_thick = self.wall_thickness as u16;
+
                             // Rule 2: auto-merge edges if tile already has a wall
                             if let Some((merged_flags, merged_mask)) =
                                 self.merge_thin_wall_edges(tx, ty, edge, self.wall_thickness)
@@ -839,6 +895,9 @@ impl App {
                                     make_block(block_type_id as u8, merged_h, merged_flags)
                                         | roof_h,
                                 );
+                                // Also write merged edges to wall_data
+                                let wd_edges = ((merged_mask >> 4) & 0xF) as u16;
+                                self.place_wall_edge(tx, ty, wd_edges, wd_thick, wd_mat);
                                 continue;
                             }
                             // New thin wall placement
@@ -853,6 +912,9 @@ impl App {
                                 ty,
                                 make_block(block_type_id as u8, tw_height, tw_flags) | roof_h,
                             );
+                            // Also write to wall_data
+                            let wd_edges = ((tw_edge_mask >> 4) & 0xF) as u16;
+                            self.place_wall_edge(tx, ty, wd_edges, wd_thick, wd_mat);
                             continue;
                         } else {
                             self.place_or_blueprint(
@@ -860,6 +922,11 @@ impl App {
                                 ty,
                                 make_block(block_type_id as u8, height, roof_flag) | roof_h,
                             );
+                            // Full-thickness walls: also write to wall_data (all 4 edges)
+                            if is_wall_block(block_type_id) {
+                                let wd_mat = wall_block_to_material(block_type_id);
+                                self.place_wall_edge(tx, ty, WD_EDGE_MASK, 4, wd_mat);
+                            }
                         }
                     }
 
@@ -946,14 +1013,19 @@ impl App {
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
 
-        // Air and bare dirt can't be destroyed
-        if bt == 0 || (bt == 2 && block == make_block(2, 0, 0)) {
+        // Air and bare dirt can't be destroyed (unless they have wall_data)
+        let has_wd = idx < self.wall_data.len() && self.wall_data[idx] != 0;
+        if !has_wd && (bt == 0 || (bt == 2 && block == make_block(2, 0, 0))) {
             return;
         }
 
         // Wall-mounted items (fan, inlet, outlet with height > 1): revert to stone wall
         // Revert to bare dirt — no roof, no height, no flags
         self.grid_data[idx] = make_block(2, 0, 0);
+        // Also clear wall_data at this tile
+        if idx < self.wall_data.len() {
+            self.wall_data[idx] = 0;
+        }
         self.grid_dirty = true;
         // Recompute roof heights since we may have removed a wall or roof tile
         compute_roof_heights(&mut self.grid_data);

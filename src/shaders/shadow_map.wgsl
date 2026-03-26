@@ -71,6 +71,7 @@ struct Camera {
 @group(0) @binding(1) var<uniform> camera: Camera;
 @group(0) @binding(2) var<storage, read> grid: array<u32>;
 @group(0) @binding(3) var<storage, read> elevation: array<f32>;
+@group(0) @binding(4) var<storage, read> wall_buf: array<u32>;
 
 fn block_type(b: u32) -> u32 { return b & 0xFFu; }
 fn block_height(b: u32) -> u32 {
@@ -100,6 +101,26 @@ fn get_roof_height(bx: i32, by: i32) -> f32 {
 fn get_elev(x: i32, y: i32) -> f32 {
     if x < 0 || y < 0 || x >= i32(camera.grid_w) || y >= i32(camera.grid_h) { return 0.0; }
     return elevation[(u32(y) * u32(camera.grid_w) + u32(x)) * 2u]; // stride 2: [elev, ao, ...]
+}
+
+// Wall data layer helpers (DN-008)
+fn read_wall_data(idx: u32) -> u32 {
+    let word = wall_buf[idx >> 1u];
+    if (idx & 1u) == 0u { return word & 0xFFFFu; } else { return (word >> 16u) & 0xFFFFu; }
+}
+fn wd_edges(wd: u32) -> u32 { return wd & 0xFu; }
+fn wd_thickness(wd: u32) -> u32 { return 4u - ((wd >> 4u) & 3u); }
+fn wd_has_edge(wd: u32, edge: u32) -> bool { return (wd & (1u << edge)) != 0u; }
+// Check if a sub-tile pixel is inside a wall defined by wall_data
+fn wd_is_wall_pixel(fx: f32, fy: f32, wd: u32) -> bool {
+    if (wd & 0xFu) == 0u { return false; }
+    let thick = wd_thickness(wd);
+    let tw_frac = f32(thick) * 0.25;
+    if wd_has_edge(wd, 0u) && fy < tw_frac { return true; }       // N
+    if wd_has_edge(wd, 1u) && fx > (1.0 - tw_frac) { return true; } // E
+    if wd_has_edge(wd, 2u) && fy > (1.0 - tw_frac) { return true; } // S
+    if wd_has_edge(wd, 3u) && fx < tw_frac { return true; }       // W
+    return false;
 }
 
 const SHADOW_MAX_DIST: f32 = 12.0;
@@ -162,11 +183,24 @@ fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_e
         }
 
         // Thin wall: only casts shadow in wall sub-cells
+        // Check wall_data layer first (DN-008), then fall back to block grid
+        let sfx = fract(sx);
+        let sfy = fract(sy);
+        let wd_idx = u32(by) * u32(camera.grid_w) + u32(bx);
+        let wd = read_wall_data(wd_idx);
+        if (wd & 0xFu) != 0u {
+            // Wall_data has edges — use it for thin wall check
+            if wd_is_wall_pixel(sfx, sfy, wd) {
+                // Wall pixel: check height (wall material height is typically 3)
+                let wall_h = 3.0 + get_elev(bx, by);
+                if current_h < wall_h { return vec4<f32>(tint, 0.0); }
+            }
+            // If not in wall pixel, might still be a block with height — fall through
+            if bh < 0.1 { continue; }
+        }
         let bf = block_flags(block);
         let tw_raw = (bf >> 5u) & 3u;
         if tw_raw != 0u && bh > 0.1 {
-            let sfx = fract(sx);
-            let sfy = fract(sy);
             let tw_thick = 4u - tw_raw;
             let tw_frac = f32(tw_thick) * 0.25;
             let tw_edge = (bf >> 3u) & 3u;
