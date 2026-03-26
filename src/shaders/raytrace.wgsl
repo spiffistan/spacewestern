@@ -2233,6 +2233,20 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
 }
 
 // --- Wall side face detection (3D bevel) ---
+// Get effective height at a tile, including wall_data walls
+fn effective_tile_height(nx: i32, ny: i32) -> u32 {
+    let bh = block_height(get_block(nx, ny));
+    if bh > 0u { return bh; }
+    // Check wall_data for wall height
+    if nx >= 0 && ny >= 0 && nx < i32(camera.grid_w) && ny < i32(camera.grid_h) {
+        let wd = read_wall_data(u32(ny) * u32(camera.grid_w) + u32(nx));
+        if (wd & 0xFu) != 0u {
+            return u32(wall_material_height(wd_material_s(wd)));
+        }
+    }
+    return 0u;
+}
+
 fn wall_side_shade(wx: f32, wy: f32, bx: i32, by: i32, height: u32) -> vec3<f32> {
     let fx = fract(wx);
     let fy = fract(wy);
@@ -2244,26 +2258,22 @@ fn wall_side_shade(wx: f32, wy: f32, bx: i32, by: i32, height: u32) -> vec3<f32>
     let edge_width = clamp(0.12 * fh, 0.04, 0.25);
 
     // Top edge (sun-facing: sun is upper-left)
-    let top_neighbor = get_block(bx, by - 1);
-    if block_height(top_neighbor) < height && fy < edge_width {
+    if effective_tile_height(bx, by - 1) < height && fy < edge_width {
         let t = 1.0 - fy / edge_width;
         shade += vec3<f32>(0.15, 0.14, 0.12) * t;
     }
     // Left edge (sun-facing)
-    let left_neighbor = get_block(bx - 1, by);
-    if block_height(left_neighbor) < height && fx < edge_width {
+    if effective_tile_height(bx - 1, by) < height && fx < edge_width {
         let t = 1.0 - fx / edge_width;
         shade += vec3<f32>(0.12, 0.11, 0.10) * t;
     }
     // Bottom edge (shadowed)
-    let bottom_neighbor = get_block(bx, by + 1);
-    if block_height(bottom_neighbor) < height && fy > (1.0 - edge_width) {
+    if effective_tile_height(bx, by + 1) < height && fy > (1.0 - edge_width) {
         let t = (fy - (1.0 - edge_width)) / edge_width;
         shade -= vec3<f32>(0.10, 0.10, 0.08) * t;
     }
     // Right edge (shadowed)
-    let right_neighbor = get_block(bx + 1, by);
-    if block_height(right_neighbor) < height && fx > (1.0 - edge_width) {
+    if effective_tile_height(bx + 1, by) < height && fx > (1.0 - edge_width) {
         let t = (fx - (1.0 - edge_width)) / edge_width;
         shade -= vec3<f32>(0.08, 0.08, 0.06) * t;
     }
@@ -2456,11 +2466,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     var is_wall_face = false;
     var wall_face_t = 0.0; // 0=top of face, 1=bottom of face
 
-    let south_block = get_block(bx, by + 1);
-    let south_h = block_height(south_block);
+    let south_h = effective_tile_height(bx, by + 1);
     let mat = get_material(btype);
-    let is_exterior_south = bheight > south_h && mat.shows_wall_face > 0.5
-        && !(is_door(block) && is_open(block));
+    let has_wall_face = mat.shows_wall_face > 0.5 || is_wd_wall;
+    let any_door_open = (is_door(block) && is_open(block)) || (wd_has_door(wd) && wd_door_open(wd));
+    let is_exterior_south = bheight > south_h && has_wall_face && !any_door_open;
 
     if is_exterior_south {
         let height_diff = f32(bheight - south_h);

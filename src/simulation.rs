@@ -1826,6 +1826,7 @@ impl App {
 
         // --- Construction: plebs build blueprints ---
         // 1. Handle Building activity progress
+        let mut wall_placements: Vec<(i32, i32, u32)> = Vec::new();
         for pleb in self.plebs.iter_mut() {
             if pleb.is_enemy {
                 continue;
@@ -1842,7 +1843,13 @@ impl App {
                         if let Some(bp) = self.blueprints.remove(&(tx, ty)) {
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                             if tidx < self.grid_data.len() {
-                                self.grid_data[tidx] = bp.block_data;
+                                let bp_bt = block_type_rs(bp.block_data);
+                                if is_wall_block(bp_bt) {
+                                    // Wall blocks go to wall_data (DN-008) — deferred
+                                    wall_placements.push((tx, ty, bp.block_data));
+                                } else {
+                                    self.grid_data[tidx] = bp.block_data;
+                                }
                                 self.grid_dirty = true;
                                 events.push(GameEventKind::Built {
                                     pleb: pleb.name.clone(),
@@ -1866,6 +1873,23 @@ impl App {
                     pleb.activity = PlebActivity::Idle;
                 }
             }
+        }
+
+        // Apply deferred wall placements from blueprint completion (DN-008)
+        for (tx, ty, block_data) in wall_placements {
+            let bp_bt = block_type_rs(block_data);
+            let mat = wall_block_to_material(bp_bt);
+            let h_raw = block_height_raw(block_data);
+            let flags = block_flags_rs(block_data);
+            let edges = (wall_edge_mask(h_raw) >> 4) as u16;
+            let thick_raw = (flags >> 5) & 3;
+            let thickness = if thick_raw == 0 {
+                4u16
+            } else {
+                (4 - thick_raw) as u16
+            };
+            let wd_edges = if edges == 0 { WD_EDGE_MASK } else { edges };
+            self.place_wall_edge(tx, ty, wd_edges, thickness, mat);
         }
 
         // --- Crafting: advance crafting progress ---

@@ -155,11 +155,14 @@ pub fn block_flags_rs(b: u32) -> u8 {
     ((b >> 16) & 0xFF) as u8
 }
 
-/// Get the visual/effective block height. For wall blocks, masks out the edge
-/// bitmask in bits 4-7 to return only the wall height (bits 0-3).
+/// Get the block height byte. Wall edge bitmask masking is no longer needed
+/// since walls are stored in wall_data (DN-008), not the block grid.
+/// Legacy wall blocks in grid_data still have edge bits, but extraction
+/// handles them; callers should use wall_data for wall edge info.
 pub fn block_height_rs(b: u32) -> u8 {
     let h = ((b >> 8) & 0xFF) as u8;
     let bt = block_type_rs(b);
+    // Legacy compat: mask wall type heights to lower 4 bits
     if is_wall_block(bt) { h & 0x0F } else { h }
 }
 
