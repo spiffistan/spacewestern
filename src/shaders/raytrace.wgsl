@@ -2355,10 +2355,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let face_height = min(height_diff * camera.oblique_strength, 0.35);
         let face_start = 1.0 - face_height; // face occupies bottom strip of tile
         if fy > face_start {
-            // Thin wall: only show face where wall sub-cells exist
+            // Thin wall: only show face where wall sub-cells exist.
+            // Check at the south edge of the tile (fy=0.99), not at face_start,
+            // because the face represents the wall as seen from the south.
             var show_face = true;
             if is_thin_wall(bflags) {
-                show_face = pixel_is_wall(fx, face_start - 0.01, bflags);
+                show_face = pixel_is_wall(fx, 0.99, bflags);
             }
             if show_face {
                 is_wall_face = true;

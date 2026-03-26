@@ -155,6 +155,31 @@ fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_e
             if is_open(block) { continue; } else { return vec4<f32>(tint, 0.0); }
         }
 
+        // Thin wall: only casts shadow in wall sub-cells
+        let bf = block_flags(block);
+        let tw_raw = (bf >> 5u) & 3u;
+        if tw_raw != 0u && bh > 0.1 {
+            let sfx = fract(sx);
+            let sfy = fract(sy);
+            let tw_thick = 4u - tw_raw;
+            let tw_frac = f32(tw_thick) * 0.25;
+            let tw_edge = (bf >> 3u) & 3u;
+            let tw_corner = (bf & 4u) != 0u;
+            var in_wall = false;
+            if tw_edge == 0u && sfy < tw_frac { in_wall = true; }
+            if tw_edge == 1u && sfx > (1.0 - tw_frac) { in_wall = true; }
+            if tw_edge == 2u && sfy > (1.0 - tw_frac) { in_wall = true; }
+            if tw_edge == 3u && sfx < tw_frac { in_wall = true; }
+            if tw_corner {
+                let tw_next = (tw_edge + 1u) % 4u;
+                if tw_next == 0u && sfy < tw_frac { in_wall = true; }
+                if tw_next == 1u && sfx > (1.0 - tw_frac) { in_wall = true; }
+                if tw_next == 2u && sfy > (1.0 - tw_frac) { in_wall = true; }
+                if tw_next == 3u && sfx < tw_frac { in_wall = true; }
+            }
+            if !in_wall { continue; }
+        }
+
         // Roofed floor: roof blocks ray at roof height
         if is_roofed_floor {
             if current_h < rh { continue; }
