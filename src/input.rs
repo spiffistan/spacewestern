@@ -523,18 +523,6 @@ impl App {
                         }
                     }
                 }
-                PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => {
-                    // Decrease wall thickness (thinner walls)
-                    if self.wall_thickness > 1 {
-                        self.wall_thickness -= 1;
-                    }
-                }
-                PhysicalKey::Code(KeyCode::Equal | KeyCode::NumpadAdd) => {
-                    // Increase wall thickness (thicker walls)
-                    if self.wall_thickness < 4 {
-                        self.wall_thickness += 1;
-                    }
-                }
                 PhysicalKey::Code(KeyCode::KeyT) => {
                     if let Some(idx) = self.selected_pleb {
                         if let Some(pleb) = self.plebs.get_mut(idx) {
@@ -562,6 +550,22 @@ impl App {
                     }
                 }
                 _ => {}
+            }
+            // Logical key matching for +/- (varies by keyboard layout)
+            if let winit::keyboard::Key::Character(ch) = &event.logical_key {
+                match ch.as_str() {
+                    "-" => {
+                        if self.wall_thickness > 1 {
+                            self.wall_thickness -= 1;
+                        }
+                    }
+                    "+" | "=" => {
+                        if self.wall_thickness < 4 {
+                            self.wall_thickness += 1;
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
         // Key release: throw grenade on B release
