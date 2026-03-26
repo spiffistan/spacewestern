@@ -64,6 +64,8 @@ pub const BT_WALL_LAMP: u32 = 56;
 pub const BT_WORKBENCH: u32 = 57;
 pub const BT_KILN: u32 = 58;
 pub const BT_WELL: u32 = 59;
+pub const BT_ROUGH_FLOOR: u32 = 60;
+pub const BT_SAW_HORSE: u32 = 61;
 
 /// Generate WGSL `const BT_*: u32 = N;` lines for all block type constants.
 /// Prepend this to shader source so WGSL can use the same names as Rust.
@@ -130,6 +132,8 @@ pub fn wgsl_block_constants() -> String {
         ("BT_WORKBENCH", BT_WORKBENCH),
         ("BT_KILN", BT_KILN),
         ("BT_WELL", BT_WELL),
+        ("BT_ROUGH_FLOOR", BT_ROUGH_FLOOR),
+        ("BT_SAW_HORSE", BT_SAW_HORSE),
     ];
     for &(name, val) in consts {
         s.push_str(&format!("const {}: u32 = {}u;\n", name, val));
@@ -202,6 +206,7 @@ pub fn is_ground_block(bt: u32) -> bool {
         BT_WOOD_FLOOR,
         BT_STONE_FLOOR,
         BT_CONCRETE_FLOOR,
+        BT_ROUGH_FLOOR,
         BT_DUG_GROUND
     )
 }

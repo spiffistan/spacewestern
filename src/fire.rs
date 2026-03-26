@@ -28,6 +28,7 @@ fn burn_time(bt: u32) -> Option<f32> {
         BT_BENCH => Some(15.0),
         BT_WOOD_WALL => Some(25.0),
         BT_WOOD_FLOOR => Some(20.0),
+        BT_ROUGH_FLOOR => Some(15.0), // rough planks burn faster
         BT_BED => Some(12.0),
         BT_BERRY_BUSH => Some(10.0),
         BT_CRATE => Some(15.0),
@@ -45,7 +46,7 @@ fn burn_replacement(bt: u32) -> u32 {
         BT_WOOD_WALL => BT_AIR,                       // wall collapses
         BT_BENCH | BT_BED | BT_CRATE => BT_AIR,       // furniture gone
         BT_TREE | BT_BERRY_BUSH | BT_CROP => BT_DIRT, // charred ground
-        BT_WOOD_FLOOR => BT_DIRT,                     // exposed dirt beneath
+        BT_WOOD_FLOOR | BT_ROUGH_FLOOR => BT_DIRT,    // exposed dirt beneath
         _ => BT_DIRT,
     }
 }

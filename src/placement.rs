@@ -467,7 +467,13 @@ impl App {
                 let block = self.grid_data[idx];
                 let bt = block & 0xFF;
                 // Replace floor types (26/27/28) with dirt (2)
-                if bt_is!(bt, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
+                if bt_is!(
+                    bt,
+                    BT_WOOD_FLOOR,
+                    BT_STONE_FLOOR,
+                    BT_CONCRETE_FLOOR,
+                    BT_ROUGH_FLOOR
+                ) {
                     let roof_flag = (block >> 16) & 2;
                     let roof_h = block & 0xFF000000;
                     self.grid_data[idx] = make_block(2, 0, roof_flag as u8) | roof_h;
@@ -792,6 +798,7 @@ impl App {
                     | BT_WOOD_FLOOR
                     | BT_STONE_FLOOR
                     | BT_CONCRETE_FLOOR
+                    | BT_ROUGH_FLOOR
                     | BT_FIREPLACE
                     | BT_BENCH
                     | BT_BED
@@ -1380,7 +1387,13 @@ impl App {
                 BuildTool::RemoveFloor => {
                     let block = self.grid_data[idx];
                     let bt_here = block_type_rs(block);
-                    if bt_is!(bt_here, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
+                    if bt_is!(
+                        bt_here,
+                        BT_WOOD_FLOOR,
+                        BT_STONE_FLOOR,
+                        BT_CONCRETE_FLOOR,
+                        BT_ROUGH_FLOOR
+                    ) {
                         let roof_flag = block_flags_rs(block) & 2;
                         let roof_h = block & 0xFF000000;
                         self.grid_data[idx] = make_block(2, 0, roof_flag) | roof_h;
@@ -1407,7 +1420,13 @@ impl App {
                         let bt_dig = block_type_rs(block);
                         let roof_h = block & 0xFF000000;
                         if bt_dig == BT_DIRT
-                            || bt_is!(bt_dig, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR)
+                            || bt_is!(
+                                bt_dig,
+                                BT_WOOD_FLOOR,
+                                BT_STONE_FLOOR,
+                                BT_CONCRETE_FLOOR,
+                                BT_ROUGH_FLOOR
+                            )
                         {
                             self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
                             self.grid_dirty = true;
@@ -1624,7 +1643,9 @@ impl App {
         }
 
         // Click crafting station (workbench or kiln): show recipe popup
-        if (bt == BT_WORKBENCH || bt == BT_KILN) && self.build_tool != BuildTool::Destroy {
+        if (bt == BT_WORKBENCH || bt == BT_KILN || bt == BT_SAW_HORSE)
+            && self.build_tool != BuildTool::Destroy
+        {
             let widx = by as u32 * GRID_W + bx as u32;
             self.block_sel.workbench = if self.block_sel.workbench == Some(widx) {
                 None

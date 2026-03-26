@@ -966,3 +966,40 @@ icon = "🪣"
 label = "Well"
 click = "simple"
 place_height = 1
+
+[[block]]
+id = 60
+name = "Rough Floor"
+color = [0.45, 0.34, 0.18]
+light_transmission = 1.0
+walkable = true
+is_removable = true
+is_flammable = true
+ignition_temp = 250.0
+thermal = { heat_capacity = 2.0, conductivity = 0.002, solar_absorption = 0.4 }
+[block.placement]
+category = "Floor"
+icon = "🪓"
+label = "Rough"
+click = "none"
+place_height = 0
+drag = "filled_rect"
+
+[[block]]
+id = 61
+name = "Saw Horse"
+color = [0.52, 0.38, 0.20]
+render_style = 45.0
+light_transmission = 1.0
+is_furniture = true
+walkable = false
+is_removable = true
+is_flammable = true
+ignition_temp = 280.0
+thermal = { heat_capacity = 2.0, conductivity = 0.002, solar_absorption = 0.4 }
+[block.placement]
+category = "Crafting"
+icon = "🪚"
+label = "Saw Horse"
+click = "simple"
+place_height = 1

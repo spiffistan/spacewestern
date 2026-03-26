@@ -123,6 +123,7 @@ pub fn tick_wetness(
             BT_WOOD_FLOOR,
             BT_STONE_FLOOR,
             BT_CONCRETE_FLOOR,
+            BT_ROUGH_FLOOR,
             BT_DUG_GROUND
         );
 

@@ -150,7 +150,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 59u)];
+    return materials[min(bt, 61u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -543,6 +543,141 @@ fn stone_detail(base_col: vec3<f32>, wx: f32, wy: f32) -> vec3<f32> {
     // Fine grain texture
     let grain = value_noise(pos * 12.0);
     color += vec3((grain - 0.5) * 0.025);
+
+    return color;
+}
+
+// --- Wood floor detail: finished planks with grain, knots, and nail dots ---
+fn wood_floor_detail(wx: f32, wy: f32) -> vec3<f32> {
+    let pos = vec2(wx, wy);
+
+    // Plank layout: 3 planks per tile running east-west
+    // Stagger plank seams between rows (brick-like offset)
+    let plank_row = floor(wy * 3.0);
+    let row_offset = fract(plank_row * 0.5) * 0.33; // stagger seams
+    let plank_col = floor((wx + row_offset) * 2.0);
+
+    // Per-plank color variation (warm wood tones)
+    let plank_id = plank_row * 7.0 + plank_col * 13.0;
+    let plank_hash = fract(sin(plank_id * 127.1 + 311.7) * 43758.5);
+    let base_warm = vec3<f32>(0.58, 0.42, 0.22);  // honey oak
+    let base_cool = vec3<f32>(0.48, 0.35, 0.18);  // darker oak
+    var color = mix(base_warm, base_cool, plank_hash);
+    // Slight reddish or golden tint per plank
+    let tint = fract(sin(plank_id * 73.3) * 21753.1);
+    color += vec3(tint * 0.03, tint * 0.01, -tint * 0.01);
+
+    // Plank seam lines (dark gaps between planks)
+    let py_in_plank = fract(wy * 3.0);
+    let seam_y = smoothstep(0.0, 0.04, py_in_plank) * smoothstep(0.0, 0.04, 1.0 - py_in_plank);
+    color *= 0.7 + seam_y * 0.3;
+
+    // End seams (where planks butt together along the row)
+    let px_in_plank = fract((wx + row_offset) * 2.0);
+    let seam_x = smoothstep(0.0, 0.03, px_in_plank) * smoothstep(0.0, 0.03, 1.0 - px_in_plank);
+    color *= 0.85 + seam_x * 0.15;
+
+    // Wood grain: flowing lines along plank length
+    let grain_freq = 8.0 + plank_hash * 4.0;
+    let grain_offset = fract(sin(plank_id * 41.7) * 9371.3) * 10.0;
+    let grain = sin((wx * grain_freq + grain_offset) + value_noise(pos * 2.0 + vec2(plank_id, 0.0)) * 2.0);
+    let grain_line = smoothstep(0.6, 0.8, abs(grain)) * 0.06;
+    color -= vec3(grain_line * 0.5, grain_line * 0.3, grain_line * 0.1);
+
+    // Knot holes (rare, per plank)
+    let knot_hash = fract(sin(plank_id * 193.7 + 47.1) * 43758.5);
+    if knot_hash > 0.75 {
+        let knot_cx = fract(sin(plank_id * 83.1) * 7531.3) * 0.6 + 0.2;
+        let knot_cy = fract(sin(plank_id * 131.7) * 3917.1) * 0.5 + 0.25;
+        let knot_wx = (plank_col + knot_cx - row_offset) / 2.0;
+        let knot_wy = (plank_row + knot_cy) / 3.0;
+        let knot_dist = length(vec2(wx - knot_wx, wy - knot_wy));
+        let knot_r = 0.03 + knot_hash * 0.02;
+        if knot_dist < knot_r * 2.5 {
+            // Concentric ring around knot
+            let ring = abs(knot_dist - knot_r) / knot_r;
+            let knot_dark = mix(color * 0.5, color * 0.7, ring);
+            color = mix(knot_dark, color, smoothstep(0.0, knot_r * 2.5, knot_dist));
+        }
+    }
+
+    // Nail dots at plank ends (near seams)
+    if px_in_plank < 0.06 || px_in_plank > 0.94 {
+        let nail_y = fract(wy * 3.0);
+        if abs(nail_y - 0.25) < 0.02 || abs(nail_y - 0.75) < 0.02 {
+            color = vec3(0.25, 0.23, 0.22); // dark iron nail head
+        }
+    }
+
+    // Subtle sheen variation (simulates wear/polish)
+    let wear = value_noise(pos * 1.5 + vec2(77.0, 33.0));
+    color *= 0.95 + wear * 0.10;
+
+    return color;
+}
+
+// --- Rough floor detail: early-game unfinished planks with gaps and dirt ---
+fn rough_floor_detail(wx: f32, wy: f32) -> vec3<f32> {
+    let pos = vec2(wx, wy);
+    let dirt_color = vec3<f32>(0.38, 0.30, 0.18);
+
+    // Irregular plank layout: 2-4 planks per tile, varying widths
+    // Use world-position hash to vary plank count per row
+    let row_id = floor(wy * 2.5);
+    let row_hash = fract(sin(row_id * 127.1 + 311.7) * 43758.5);
+
+    // Plank boundaries defined by accumulated widths (irregular)
+    let plank_y = fract(wy * 2.5);
+    let width_var = fract(sin(row_id * 73.3) * 43758.5) * 0.15;
+
+    // Gap between planks (wider and more irregular than finished floor)
+    let gap_width = 0.06 + row_hash * 0.04;
+    let near_gap = plank_y < gap_width || plank_y > (1.0 - gap_width);
+    if near_gap {
+        // Dirt visible through gaps
+        let dirt_noise = value_noise(pos * 6.0);
+        return dirt_color * (0.8 + dirt_noise * 0.2);
+    }
+
+    // Raw wood color — less uniform than finished, more weathered
+    let plank_id = row_id * 7.0 + floor(wx * 1.5) * 13.0;
+    let plank_hash = fract(sin(plank_id * 127.1) * 43758.5);
+    let base_light = vec3<f32>(0.52, 0.40, 0.22);  // raw pale wood
+    let base_dark = vec3<f32>(0.38, 0.28, 0.14);   // weathered dark
+    var color = mix(base_light, base_dark, plank_hash * 0.6);
+
+    // Rough grain: coarser and more visible than finished floor
+    let grain = sin(wx * 12.0 + value_noise(pos * 1.5) * 4.0 + plank_hash * 20.0);
+    let grain_strength = 0.08 + plank_hash * 0.04;
+    color -= vec3(smoothstep(0.5, 0.9, abs(grain)) * grain_strength);
+
+    // Saw marks: perpendicular cuts visible in rough-hewn wood
+    let saw = fract(wx * 8.0 + plank_hash * 3.0);
+    let saw_line = smoothstep(0.0, 0.03, saw) * smoothstep(0.0, 0.03, 1.0 - saw);
+    color *= 0.92 + saw_line * 0.08;
+
+    // Splinters / rough edges at plank boundaries
+    let edge_dist = min(plank_y - gap_width, (1.0 - gap_width) - plank_y);
+    let edge_noise = value_noise(pos * 15.0 + vec2(plank_id, 0.0));
+    if edge_dist < 0.08 && edge_noise > 0.6 {
+        // Splintered edge: darker, irregular
+        color = mix(color, dirt_color, (0.08 - edge_dist) * 5.0 * (edge_noise - 0.6) * 2.5);
+    }
+
+    // Occasional missing section (shows dirt)
+    let hole_hash = fract(sin(plank_id * 193.7 + wx * 47.1) * 43758.5);
+    if hole_hash > 0.95 {
+        let hole_pos = fract(pos * 4.0) - 0.5;
+        if length(hole_pos) < 0.08 {
+            return dirt_color * (0.7 + value_noise(pos * 8.0) * 0.3);
+        }
+    }
+
+    // Weathering: darker patches and stains
+    let stain = value_noise(pos * 2.0 + vec2(41.0, 97.0));
+    if stain > 0.65 {
+        color *= 0.85 + (stain - 0.65) * 0.3;
+    }
 
     return color;
 }
@@ -3558,6 +3693,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if camera.enable_terrain_detail > 0.5 && bheight > 0u && btype == BT_STONE {
         // Stone block surface: cracks, veins, strata
         color = stone_detail(color, world_x, world_y);
+    } else if camera.enable_terrain_detail > 0.5 && btype == BT_WOOD_FLOOR {
+        // Finished wood floor: planks with grain, knots, nails
+        color = wood_floor_detail(world_x, world_y);
+    } else if camera.enable_terrain_detail > 0.5 && btype == BT_ROUGH_FLOOR {
+        // Early-game rough floor: unfinished planks with gaps and dirt
+        color = rough_floor_detail(world_x, world_y);
     }
 
     // --- Elevation visual cues (ground-level blocks only) ---
@@ -3616,7 +3757,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let water_level = textureLoad(water_tex, vec2<i32>(bx, by), 0).r;
     let wt_idx = u32(by) * 256u + u32(bx);
     let wt_depth = water_table_buf[wt_idx]; // negative = below ground, positive = spring
-    let is_ground_tile = btype == BT_DIRT || btype == BT_WOOD_FLOOR || btype == BT_STONE_FLOOR || btype == BT_CONCRETE_FLOOR || btype == BT_DUG_GROUND;
+    let is_ground_tile = btype == BT_DIRT || btype == BT_WOOD_FLOOR || btype == BT_STONE_FLOOR || btype == BT_CONCRETE_FLOOR || btype == BT_ROUGH_FLOOR || btype == BT_DUG_GROUND;
     if is_ground_tile && effective_height == 0u {
         // Water table coloring: subtle moisture for high water table (even without surface water)
         let wt_moisture = clamp((wt_depth + 1.5) / 2.0, 0.0, 0.5); // 0 at -1.5, 0.5 at +0.5
@@ -4570,7 +4711,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 hover_tint = vec3(0.3, 0.8, 0.9); is_hover = true;
             }
             // Workbench, kiln, well: utility gold
-            if btype == BT_WORKBENCH || btype == BT_KILN || btype == BT_WELL {
+            if btype == BT_WORKBENCH || btype == BT_KILN || btype == BT_WELL || btype == BT_SAW_HORSE {
                 hover_tint = vec3(0.9, 0.7, 0.2); is_hover = true;
             }
             if is_hover {
