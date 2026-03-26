@@ -272,6 +272,71 @@ impl App {
         }
     }
 
+    /// Compute thin wall flags for a tile in a hollow rect drag.
+    /// Returns (edge, is_corner) where edge is 0=N,1=E,2=S,3=W.
+    pub(crate) fn thin_wall_edge_for_rect(
+        tx: i32,
+        ty: i32,
+        min_x: i32,
+        max_x: i32,
+        min_y: i32,
+        max_y: i32,
+        rotation: u32,
+    ) -> (u8, bool) {
+        let is_line_h = min_y == max_y && min_x != max_x; // horizontal line
+        let is_line_v = min_x == max_x && min_y != max_y; // vertical line
+        let is_single = min_x == max_x && min_y == max_y;
+
+        if is_single {
+            return (rotation as u8, false);
+        }
+
+        // Lines: all tiles get the same edge based on line orientation
+        // Rotation selects which side: 0=default, changes with Q/E
+        if is_line_h {
+            // Horizontal line: wall on N or S edge
+            let edge = if rotation % 2 == 0 { 0u8 } else { 2 }; // N or S
+            return (edge, false);
+        }
+        if is_line_v {
+            // Vertical line: wall on E or W edge
+            let edge = if rotation % 2 == 0 { 1u8 } else { 3 }; // E or W
+            return (edge, false);
+        }
+
+        // Rectangle: detect which edge of the rect this tile sits on
+        let on_top = ty == min_y;
+        let on_bot = ty == max_y;
+        let on_left = tx == min_x;
+        let on_right = tx == max_x;
+
+        let is_corner = (on_top || on_bot) && (on_left || on_right);
+        if is_corner {
+            // Primary edge + next clockwise = L shape
+            let edge = if on_top && on_right {
+                0u8 // N → N+E
+            } else if on_bot && on_right {
+                1 // E → E+S
+            } else if on_bot && on_left {
+                2 // S → S+W
+            } else {
+                3 // W → W+N
+            };
+            (edge, true)
+        } else {
+            let edge = if on_top {
+                0u8
+            } else if on_right {
+                1
+            } else if on_bot {
+                2
+            } else {
+                3
+            };
+            (edge, false)
+        }
+    }
+
     /// Compute tiles for a hollow rectangle (walls) between two corners.
     pub(crate) fn hollow_rect_tiles(x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<(i32, i32)> {
         let min_x = x0.min(x1);
@@ -679,52 +744,19 @@ impl App {
                         let flags = if is_wall_type && self.wall_thickness < 4 {
                             let (min_x, max_x) = (sx.min(ex), sx.max(ex));
                             let (min_y, max_y) = (sy.min(ey), sy.max(ey));
-                            let is_single = min_x == max_x && min_y == max_y;
-
-                            if is_single {
-                                // Single tile: use build_rotation as edge direction
-                                make_thin_wall_flags(
-                                    roof_flag,
-                                    self.build_rotation as u8,
-                                    self.wall_thickness,
-                                )
+                            let (edge, is_corner) = Self::thin_wall_edge_for_rect(
+                                tx,
+                                ty,
+                                min_x,
+                                max_x,
+                                min_y,
+                                max_y,
+                                self.build_rotation,
+                            );
+                            if is_corner {
+                                make_thin_wall_corner_flags(roof_flag, edge, self.wall_thickness)
                             } else {
-                                let on_top = ty == min_y;
-                                let on_bot = ty == max_y;
-                                let on_left = tx == min_x;
-                                let on_right = tx == max_x;
-                                let is_corner = (on_top || on_bot)
-                                    && (on_left || on_right)
-                                    && min_x != max_x
-                                    && min_y != max_y;
-                                if is_corner {
-                                    // Auto-corner: primary + next clockwise = L shape
-                                    let edge = if on_top && on_right {
-                                        0u8 // N → N+E
-                                    } else if on_bot && on_right {
-                                        1 // E → E+S
-                                    } else if on_bot && on_left {
-                                        2 // S → S+W
-                                    } else {
-                                        3 // W → W+N
-                                    };
-                                    make_thin_wall_corner_flags(
-                                        roof_flag,
-                                        edge,
-                                        self.wall_thickness,
-                                    )
-                                } else {
-                                    let edge = if on_top {
-                                        0u8
-                                    } else if on_right {
-                                        1
-                                    } else if on_bot {
-                                        2
-                                    } else {
-                                        3
-                                    };
-                                    make_thin_wall_flags(roof_flag, edge, self.wall_thickness)
-                                }
+                                make_thin_wall_flags(roof_flag, edge, self.wall_thickness)
                             }
                         } else {
                             roof_flag

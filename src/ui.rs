@@ -3675,11 +3675,73 @@ impl App {
                         let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
                             / self.render_scale
                             / bp_ppp;
-                        painter.rect_filled(
-                            egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
-                            0.0,
-                            color,
-                        );
+                        let tile_rect =
+                            egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1));
+
+                        // Thin wall preview: show sub-grid pattern
+                        let is_wall_tool =
+                            matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id));
+                        if is_wall_tool && self.wall_thickness < 4 && !is_destroy {
+                            let (min_x, max_x) = (sx.min(ex), sx.max(ex));
+                            let (min_y, max_y) = (sy.min(ey), sy.max(ey));
+                            let (edge, is_corner) = Self::thin_wall_edge_for_rect(
+                                *tx,
+                                *ty,
+                                min_x,
+                                max_x,
+                                min_y,
+                                max_y,
+                                self.build_rotation,
+                            );
+                            let thick = self.wall_thickness;
+                            let wall_frac = thick as f32 * 0.25;
+                            let tw = sx1 - sx0;
+                            let th = sy1 - sy0;
+                            // Draw primary edge sub-rect
+                            let primary_rect = match edge {
+                                0 => egui::Rect::from_min_size(
+                                    egui::pos2(sx0, sy0),
+                                    egui::vec2(tw, th * wall_frac),
+                                ),
+                                1 => egui::Rect::from_min_size(
+                                    egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
+                                    egui::vec2(tw * wall_frac, th),
+                                ),
+                                2 => egui::Rect::from_min_size(
+                                    egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
+                                    egui::vec2(tw, th * wall_frac),
+                                ),
+                                _ => egui::Rect::from_min_size(
+                                    egui::pos2(sx0, sy0),
+                                    egui::vec2(tw * wall_frac, th),
+                                ),
+                            };
+                            painter.rect_filled(primary_rect, 0.0, color);
+                            if is_corner {
+                                let next_edge = (edge + 1) % 4;
+                                let corner_rect = match next_edge {
+                                    0 => egui::Rect::from_min_size(
+                                        egui::pos2(sx0, sy0),
+                                        egui::vec2(tw, th * wall_frac),
+                                    ),
+                                    1 => egui::Rect::from_min_size(
+                                        egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
+                                        egui::vec2(tw * wall_frac, th),
+                                    ),
+                                    2 => egui::Rect::from_min_size(
+                                        egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
+                                        egui::vec2(tw, th * wall_frac),
+                                    ),
+                                    _ => egui::Rect::from_min_size(
+                                        egui::pos2(sx0, sy0),
+                                        egui::vec2(tw * wall_frac, th),
+                                    ),
+                                };
+                                painter.rect_filled(corner_rect, 0.0, color);
+                            }
+                        } else {
+                            painter.rect_filled(tile_rect, 0.0, color);
+                        }
                     }
                     // Draw direction arrows on pipe/wire line tiles
                     let is_line =
