@@ -4,7 +4,6 @@
 //! This module owns the `GpuMaterial` struct definition (must match all WGSL shaders)
 //! and re-exports the table builder for convenience.
 
-
 pub const NUM_MATERIALS: usize = 60;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
@@ -12,7 +11,9 @@ pub const NUM_MATERIALS: usize = 60;
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuMaterial {
     // Visual (vec4)
-    pub color_r: f32, pub color_g: f32, pub color_b: f32,
+    pub color_r: f32,
+    pub color_g: f32,
+    pub color_b: f32,
     pub render_style: f32,
 
     // Physical (vec4)
@@ -79,8 +80,16 @@ mod tests {
         for (i, m) in mats.iter().enumerate() {
             if m.light_intensity > 0.0 {
                 let color_sum = m.light_color_r + m.light_color_g + m.light_color_b;
-                assert!(color_sum > 0.1, "Light source {} has intensity but no color", i);
-                assert!(m.light_radius > 0.0, "Light source {} has intensity but no radius", i);
+                assert!(
+                    color_sum > 0.1,
+                    "Light source {} has intensity but no color",
+                    i
+                );
+                assert!(
+                    m.light_radius > 0.0,
+                    "Light source {} has intensity but no radius",
+                    i
+                );
             }
         }
     }
@@ -100,8 +109,11 @@ mod tests {
         let mats = build_material_table();
         for (i, m) in mats.iter().enumerate() {
             if m.is_flammable > 0.5 {
-                assert!(m.ignition_temp > 0.0,
-                    "Flammable material {} has no ignition temperature", i);
+                assert!(
+                    m.ignition_temp > 0.0,
+                    "Flammable material {} has no ignition temperature",
+                    i
+                );
             }
         }
     }

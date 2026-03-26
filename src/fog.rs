@@ -12,9 +12,9 @@ const TORCH_VISION_RADIUS: i32 = 8;
 const SUN_THRESHOLD: f32 = 0.1; // below this, it's "night" for fog purposes
 
 /// Fog value constants for the GPU texture (R8Unorm: 0-255 → 0.0-1.0)
-const FOG_SHROUDED: u8 = 0;     // 0.0 — completely black
-const FOG_EXPLORED: u8 = 76;    // ~0.3 — dimmed, desaturated
-const FOG_VISIBLE: u8 = 255;    // 1.0 — full rendering
+const FOG_SHROUDED: u8 = 0; // 0.0 — completely black
+const FOG_EXPLORED: u8 = 76; // ~0.3 — dimmed, desaturated
+const FOG_VISIBLE: u8 = 255; // 1.0 — full rendering
 
 /// Returns true if the tile at (x, y) blocks line of sight.
 fn blocks_vision(grid: &[u32], x: i32, y: i32) -> bool {
@@ -26,16 +26,22 @@ fn blocks_vision(grid: &[u32], x: i32, y: i32) -> bool {
     let bt = block_type_rs(block);
     let bh = block_height_rs(block);
 
-    if bh == 0 { return false; } // no height = no block
+    if bh == 0 {
+        return false;
+    } // no height = no block
 
     // Doors: open doors don't block
     let flags = block_flags_rs(block);
     let is_door = flags & 1 != 0;
     let is_open = flags & 4 != 0;
-    if is_door && is_open { return false; }
+    if is_door && is_open {
+        return false;
+    }
 
     // Glass and trees: don't block (can see through)
-    if bt_is!(bt, BT_GLASS, BT_TREE, BT_BERRY_BUSH, BT_CROP) { return false; }
+    if bt_is!(bt, BT_GLASS, BT_TREE, BT_BERRY_BUSH, BT_CROP) {
+        return false;
+    }
 
     // Everything else with height blocks
     true
@@ -46,14 +52,20 @@ fn blocks_vision(grid: &[u32], x: i32, y: i32) -> bool {
 fn cast_light(
     grid: &[u32],
     visibility: &mut [u8],
-    cx: i32, cy: i32,
+    cx: i32,
+    cy: i32,
     radius: i32,
     row: i32,
     start_slope: f32,
     end_slope: f32,
-    xx: i32, xy: i32, yx: i32, yy: i32,
+    xx: i32,
+    xy: i32,
+    yx: i32,
+    yy: i32,
 ) {
-    if start_slope < end_slope { return; }
+    if start_slope < end_slope {
+        return;
+    }
 
     let mut start = start_slope;
     let radius_sq = radius * radius;
@@ -102,14 +114,29 @@ fn cast_light(
             } else if blocks_vision(grid, mx, my) && j < radius {
                 // Hit a wall — recurse with narrowed range, then mark blocked
                 blocked = true;
-                cast_light(grid, visibility, cx, cy, radius, j + 1, start, l_slope, xx, xy, yx, yy);
+                cast_light(
+                    grid,
+                    visibility,
+                    cx,
+                    cy,
+                    radius,
+                    j + 1,
+                    start,
+                    l_slope,
+                    xx,
+                    xy,
+                    yx,
+                    yy,
+                );
                 new_start = r_slope;
             }
 
             dx += 1;
         }
 
-        if blocked { break; }
+        if blocked {
+            break;
+        }
     }
 }
 
@@ -123,18 +150,20 @@ fn compute_fov(grid: &[u32], visibility: &mut [u8], cx: i32, cy: i32, radius: i3
     // 8 octant multipliers — maps (dx, dy) in octant-local space to world offsets.
     // Each octant scans a 45° wedge.
     const MULTIPLIERS: [[i32; 4]; 8] = [
-        [ 1,  0,  0,  1],
-        [ 0,  1,  1,  0],
-        [ 0, -1,  1,  0],
-        [-1,  0,  0,  1],
-        [-1,  0,  0, -1],
-        [ 0, -1, -1,  0],
-        [ 0,  1, -1,  0],
-        [ 1,  0,  0, -1],
+        [1, 0, 0, 1],
+        [0, 1, 1, 0],
+        [0, -1, 1, 0],
+        [-1, 0, 0, 1],
+        [-1, 0, 0, -1],
+        [0, -1, -1, 0],
+        [0, 1, -1, 0],
+        [1, 0, 0, -1],
     ];
 
     for m in &MULTIPLIERS {
-        cast_light(grid, visibility, cx, cy, radius, 1, 1.0, 0.0, m[0], m[1], m[2], m[3]);
+        cast_light(
+            grid, visibility, cx, cy, radius, 1, 1.0, 0.0, m[0], m[1], m[2], m[3],
+        );
     }
 }
 
@@ -155,7 +184,8 @@ pub fn update_fog(
     let grid_size = (GRID_W * GRID_H) as usize;
 
     // Check if any colonist changed tiles
-    let current_tiles: Vec<(i32, i32)> = plebs.iter()
+    let current_tiles: Vec<(i32, i32)> = plebs
+        .iter()
         .filter(|p| !p.is_enemy)
         .map(|p| (p.x.floor() as i32, p.y.floor() as i32))
         .collect();
@@ -250,11 +280,17 @@ mod tests {
         compute_fov(&grid, &mut vis, 128, 128, 10);
 
         // Tile behind wall (131, 128) should NOT be visible
-        assert_eq!(vis[(128 * GRID_W + 131) as usize], 0,
-            "tile behind wall should be hidden");
+        assert_eq!(
+            vis[(128 * GRID_W + 131) as usize],
+            0,
+            "tile behind wall should be hidden"
+        );
         // Tile before wall (129, 128) should be visible
-        assert_eq!(vis[(128 * GRID_W + 129) as usize], 255,
-            "tile before wall should be visible");
+        assert_eq!(
+            vis[(128 * GRID_W + 129) as usize],
+            255,
+            "tile before wall should be visible"
+        );
     }
 
     #[test]
@@ -267,8 +303,11 @@ mod tests {
         compute_fov(&grid, &mut vis, 128, 128, 10);
 
         // Tile behind glass should be visible
-        assert_eq!(vis[(128 * GRID_W + 131) as usize], 255,
-            "should see through glass");
+        assert_eq!(
+            vis[(128 * GRID_W + 131) as usize],
+            255,
+            "should see through glass"
+        );
     }
 
     #[test]
@@ -278,10 +317,16 @@ mod tests {
         compute_fov(&grid, &mut vis, 128, 128, 5);
 
         // Tile at distance 6 should NOT be visible
-        assert_eq!(vis[(128 * GRID_W + 135) as usize], 0,
-            "beyond radius should be hidden");
+        assert_eq!(
+            vis[(128 * GRID_W + 135) as usize],
+            0,
+            "beyond radius should be hidden"
+        );
         // Tile at distance 4 should be visible
-        assert_eq!(vis[(128 * GRID_W + 132) as usize], 255,
-            "within radius should be visible");
+        assert_eq!(
+            vis[(128 * GRID_W + 132) as usize],
+            255,
+            "within radius should be visible"
+        );
     }
 }

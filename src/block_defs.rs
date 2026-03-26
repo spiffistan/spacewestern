@@ -1,9 +1,9 @@
 //! Data-driven block definitions loaded from blocks.toml.
 //! Replaces hardcoded material tables, build tool enums, and UI menu entries.
 
-use serde::Deserialize;
 use crate::materials::{GpuMaterial, NUM_MATERIALS};
 use bytemuck::Zeroable;
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct BlockFile {
@@ -17,26 +17,45 @@ pub struct BlockDef {
     pub name: String,
     pub color: [f32; 3],
 
-    #[serde(default)] pub render_style: f32,
-    #[serde(default)] pub is_solid: bool,
-    #[serde(default)] pub light_transmission: f32,
-    #[serde(default)] pub fluid_obstacle: bool,
-    #[serde(default)] pub default_height: f32,
-    #[serde(default)] pub is_emissive: bool,
-    #[serde(default)] pub is_furniture: bool,
-    #[serde(default)] pub walkable: bool,
-    #[serde(default)] pub is_removable: bool,
-    #[serde(default)] pub shows_wall_face: bool,
-    #[serde(default)] pub is_flammable: bool,
-    #[serde(default)] pub ignition_temp: f32,
-    #[serde(default)] pub is_wall: bool,
-    #[serde(default)] pub is_plant: bool,     // plants: no shadow casting, harvestable
-    #[serde(default)] pub is_harvestable: bool, // can be harvested via work queue
-    #[serde(default)] pub adjustable: bool,  // has a variable level (dimmer, restrictor, etc.)
+    #[serde(default)]
+    pub render_style: f32,
+    #[serde(default)]
+    pub is_solid: bool,
+    #[serde(default)]
+    pub light_transmission: f32,
+    #[serde(default)]
+    pub fluid_obstacle: bool,
+    #[serde(default)]
+    pub default_height: f32,
+    #[serde(default)]
+    pub is_emissive: bool,
+    #[serde(default)]
+    pub is_furniture: bool,
+    #[serde(default)]
+    pub walkable: bool,
+    #[serde(default)]
+    pub is_removable: bool,
+    #[serde(default)]
+    pub shows_wall_face: bool,
+    #[serde(default)]
+    pub is_flammable: bool,
+    #[serde(default)]
+    pub ignition_temp: f32,
+    #[serde(default)]
+    pub is_wall: bool,
+    #[serde(default)]
+    pub is_plant: bool, // plants: no shadow casting, harvestable
+    #[serde(default)]
+    pub is_harvestable: bool, // can be harvested via work queue
+    #[serde(default)]
+    pub adjustable: bool, // has a variable level (dimmer, restrictor, etc.)
 
-    #[serde(default)] pub light: Option<LightDef>,
-    #[serde(default)] pub thermal: Option<ThermalDef>,
-    #[serde(default)] pub placement: Option<PlacementDef>,
+    #[serde(default)]
+    pub light: Option<LightDef>,
+    #[serde(default)]
+    pub thermal: Option<ThermalDef>,
+    #[serde(default)]
+    pub placement: Option<PlacementDef>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -44,14 +63,18 @@ pub struct LightDef {
     pub intensity: f32,
     pub color: [f32; 3],
     pub radius: f32,
-    #[serde(default)] pub height: f32,
+    #[serde(default)]
+    pub height: f32,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct ThermalDef {
-    #[serde(default)] pub heat_capacity: f32,
-    #[serde(default)] pub conductivity: f32,
-    #[serde(default)] pub solar_absorption: f32,
+    #[serde(default)]
+    pub heat_capacity: f32,
+    #[serde(default)]
+    pub conductivity: f32,
+    #[serde(default)]
+    pub solar_absorption: f32,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -60,12 +83,18 @@ pub struct PlacementDef {
     pub category: String,
     pub icon: String,
     pub label: String,
-    #[serde(default)] pub click: ClickMode,
-    #[serde(default)] pub place_height: u8,
-    #[serde(default)] pub drag: Option<DragShape>,
-    #[serde(default)] pub rotatable: bool,
-    #[serde(default)] pub stays_selected: bool,
-    #[serde(default)] pub extra_flags: u8,
+    #[serde(default)]
+    pub click: ClickMode,
+    #[serde(default)]
+    pub place_height: u8,
+    #[serde(default)]
+    pub drag: Option<DragShape>,
+    #[serde(default)]
+    pub rotatable: bool,
+    #[serde(default)]
+    pub stays_selected: bool,
+    #[serde(default)]
+    pub extra_flags: u8,
 }
 
 #[derive(Deserialize, Clone, Debug, Default, PartialEq)]
@@ -93,8 +122,8 @@ pub enum DragShape {
 /// Runtime registry of all block definitions, built once at startup.
 /// Cached via OnceLock — TOML is parsed only once, not per-frame.
 pub struct BlockRegistry {
-    defs: Vec<Option<BlockDef>>,          // indexed by block ID (0..NUM_MATERIALS)
-    pub wall_ids: Vec<u8>,               // all IDs where is_wall=true
+    defs: Vec<Option<BlockDef>>, // indexed by block ID (0..NUM_MATERIALS)
+    pub wall_ids: Vec<u8>,       // all IDs where is_wall=true
     pub placeable: Vec<(u8, PlacementDef)>, // (block_id, placement) for build menu
 }
 
@@ -117,7 +146,12 @@ impl BlockRegistry {
 
         for def in file.block {
             let id = def.id as usize;
-            assert!(id < NUM_MATERIALS, "Block ID {} exceeds NUM_MATERIALS ({})", id, NUM_MATERIALS);
+            assert!(
+                id < NUM_MATERIALS,
+                "Block ID {} exceeds NUM_MATERIALS ({})",
+                id,
+                NUM_MATERIALS
+            );
             if def.is_wall {
                 wall_ids.push(def.id);
             }
@@ -127,7 +161,11 @@ impl BlockRegistry {
             defs[id] = Some(def);
         }
 
-        BlockRegistry { defs, wall_ids, placeable }
+        BlockRegistry {
+            defs,
+            wall_ids,
+            placeable,
+        }
     }
 
     pub fn get(&self, id: u32) -> Option<&BlockDef> {
@@ -144,7 +182,10 @@ impl BlockRegistry {
 
     #[allow(dead_code)]
     pub fn tools_in_category<'a>(&'a self, cat: &str) -> Vec<&'a (u8, PlacementDef)> {
-        self.placeable.iter().filter(|(_, p)| p.category == cat).collect()
+        self.placeable
+            .iter()
+            .filter(|(_, p)| p.category == cat)
+            .collect()
     }
 
     /// Build GPU material table from block definitions.
@@ -211,9 +252,9 @@ mod tests {
     #[test]
     fn test_wall_ids() {
         let reg = BlockRegistry::load();
-        assert!(reg.is_wall(1));  // Stone
-        assert!(reg.is_wall(4));  // Wall
-        assert!(reg.is_wall(5));  // Glass
+        assert!(reg.is_wall(1)); // Stone
+        assert!(reg.is_wall(4)); // Wall
+        assert!(reg.is_wall(5)); // Glass
         assert!(reg.is_wall(14)); // Insulated
         assert!(reg.is_wall(21)); // Wood
         assert!(reg.is_wall(35)); // Mud

@@ -95,8 +95,15 @@ pub fn generate_tree_sprites() -> Vec<u32> {
                         } else if dist < canopy_r + droop {
                             let shade = 1.0 - dist / canopy_r;
                             let g = (60.0 + shade * 70.0) as u8;
-                            (25 + (shade * 15.0) as u8, g, 30, (140.0 + shade * 60.0) as u8)
-                        } else { (0,0,0,0) }
+                            (
+                                25 + (shade * 15.0) as u8,
+                                g,
+                                30,
+                                (140.0 + shade * 60.0) as u8,
+                            )
+                        } else {
+                            (0, 0, 0, 0)
+                        }
                     }
                     5 => {
                         // Dense bush cluster: multiple lumps, no visible trunk
@@ -107,22 +114,36 @@ pub fn generate_tree_sprites() -> Vec<u32> {
                         if min_d < 0.22 {
                             let shade = 1.0 - min_d / 0.22;
                             let g = (55.0 + shade * 65.0) as u8;
-                            (35 + (shade * 15.0) as u8, g, 28, (100.0 + shade * 50.0) as u8)
-                        } else { (0,0,0,0) }
+                            (
+                                35 + (shade * 15.0) as u8,
+                                g,
+                                28,
+                                (100.0 + shade * 50.0) as u8,
+                            )
+                        } else {
+                            (0, 0, 0, 0)
+                        }
                     }
                     6 => {
                         // Tall cedar: narrow, very tall, prominent trunk
                         let trunk_r = 0.07;
                         let canopy_rx = 0.18;
                         let canopy_ry = 0.48;
-                        let ellipse = (cx/canopy_rx).powi(2) + (cy/canopy_ry).powi(2);
+                        let ellipse = (cx / canopy_rx).powi(2) + (cy / canopy_ry).powi(2);
                         if dist < trunk_r && cy > 0.1 {
                             (70, 45, 20, 50u8) // trunk visible below canopy
                         } else if ellipse < 1.0 {
                             let shade = 1.0 - ellipse;
                             let g = (35.0 + shade * 55.0) as u8;
-                            (12 + (shade * 15.0) as u8, g, 18, (170.0 + shade * 80.0) as u8)
-                        } else { (0,0,0,0) }
+                            (
+                                12 + (shade * 15.0) as u8,
+                                g,
+                                18,
+                                (170.0 + shade * 80.0) as u8,
+                            )
+                        } else {
+                            (0, 0, 0, 0)
+                        }
                     }
                     _ => {
                         // Birch: light bark, sparse canopy with gaps
@@ -134,12 +155,20 @@ pub fn generate_tree_sprites() -> Vec<u32> {
                         } else if dist < canopy_r && gap < 0.6 {
                             let shade = 1.0 - dist / canopy_r;
                             let g = (70.0 + shade * 80.0) as u8;
-                            (40 + (shade * 20.0) as u8, g, 15, (130.0 + shade * 70.0) as u8)
-                        } else { (0,0,0,0) }
+                            (
+                                40 + (shade * 20.0) as u8,
+                                g,
+                                15,
+                                (130.0 + shade * 70.0) as u8,
+                            )
+                        } else {
+                            (0, 0, 0, 0)
+                        }
                     }
                 };
 
-                let packed = (r as u32) | ((g as u32) << 8) | ((b as u32) << 16) | ((h as u32) << 24);
+                let packed =
+                    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16) | ((h as u32) << 24);
                 let idx = (variant * SPRITE_SIZE * SPRITE_SIZE + y * SPRITE_SIZE + x) as usize;
                 data[idx] = packed;
             }

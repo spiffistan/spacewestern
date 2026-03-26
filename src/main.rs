@@ -12,22 +12,29 @@ macro_rules! bt_is {
     }
 }
 
-mod materials;
-mod grid;
-mod sprites;
 mod block_defs;
+mod grid;
 pub mod item_defs;
+mod materials;
 pub mod recipe_defs;
+mod sprites;
 
-use materials::{GpuMaterial, build_material_table};
 use grid::*;
+use materials::{GpuMaterial, build_material_table};
 use sprites::generate_tree_sprites;
 
 mod pleb;
-use pleb::{Pleb, GpuPleb, is_walkable_pos, astar_path_terrain, adjacent_walkable, random_name, MAX_PLEBS, PlebActivity, PlebShift, MentalBreakKind};
+use pleb::{
+    GpuPleb, MAX_PLEBS, MentalBreakKind, Pleb, PlebActivity, PlebShift, adjacent_walkable,
+    astar_path_terrain, is_walkable_pos, random_name,
+};
 
 mod needs;
-use needs::{sample_environment, tick_needs, mood_label, AirReadback, BreathingState, breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate, find_nearest_well, BERRY_HUNGER_RESTORE, WELL_THIRST_RESTORE, WELL_DRINK_TIME, HEAT_CRISIS_TEMP};
+use needs::{
+    AirReadback, BERRY_HUNGER_RESTORE, BreathingState, HEAT_CRISIS_TEMP, WELL_DRINK_TIME,
+    WELL_THIRST_RESTORE, breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate,
+    find_nearest_well, mood_label, sample_environment, tick_needs,
+};
 
 mod build;
 mod camera;
@@ -35,16 +42,19 @@ mod fluid;
 
 use build::{BuildTool, FluidOverlay};
 use camera::CameraUniform;
-use fluid::{FluidParams, FLUID_SIM_W, FLUID_SIM_H, FLUID_SIM_MAX, FLUID_DYE_W, FLUID_DYE_H, FLUID_PRESSURE_ITERS, build_obstacle_field, smoothstep_f32, half_to_f32, f32_to_f16};
+use fluid::{
+    FLUID_DYE_H, FLUID_DYE_W, FLUID_PRESSURE_ITERS, FLUID_SIM_H, FLUID_SIM_MAX, FLUID_SIM_W,
+    FluidParams, build_obstacle_field, f32_to_f16, half_to_f32, smoothstep_f32,
+};
 
-mod pipes;
-mod ui;
 mod gpu_init;
+mod pipes;
 mod simulation;
+mod ui;
 use pipes::PipeNetwork;
 
 mod physics;
-use physics::{PhysicsBody, tick_bodies, nearest_body, projectile_def, PROJ_BULLET};
+use physics::{PROJ_BULLET, PhysicsBody, nearest_body, projectile_def, tick_bodies};
 
 mod zones;
 use zones::{Zone, ZoneKind};
@@ -53,7 +63,7 @@ mod weather;
 use weather::{WeatherState, tick_weather, tick_wetness};
 
 mod resources;
-use resources::{CrateInventory, CRATE_MAX_ITEMS};
+use resources::{CRATE_MAX_ITEMS, CrateInventory};
 
 #[path = "time.rs"]
 mod game_time;
@@ -75,34 +85,32 @@ mod placement;
 #[cfg(test)]
 pub(crate) use placement::compute_diagonal_wall_tiles;
 
-mod input;
-mod fog;
 mod fire;
+mod fog;
+mod input;
 
 const WORKGROUP_SIZE: u32 = 8;
 const DAY_DURATION: f32 = 60.0; // must match shader
 
 // --- Gameplay tuning constants ---
-const DOUBLE_CLICK_FRAMES: u32 = 30;       // ~0.5s at 60fps
-const PLEB_CLICK_RADIUS: f32 = 0.5;        // world units to detect pleb click
-const ZOOM_FACTOR: f32 = 1.1;              // per scroll tick
-const ZOOM_MIN_MULT: f32 = 0.2;            // relative to base zoom
-const ZOOM_MAX_MULT: f32 = 8.0;            // relative to base zoom
+const DOUBLE_CLICK_FRAMES: u32 = 30; // ~0.5s at 60fps
+const PLEB_CLICK_RADIUS: f32 = 0.5; // world units to detect pleb click
+const ZOOM_FACTOR: f32 = 1.1; // per scroll tick
+const ZOOM_MIN_MULT: f32 = 0.2; // relative to base zoom
+const ZOOM_MAX_MULT: f32 = 8.0; // relative to base zoom
 const BURST_SHOT_COUNT: u8 = 3;
 const LIGHTNING_SURGE_RADIUS: i32 = 12;
 const LIGHTNING_SURGE_VOLTAGE: f32 = 200.0;
 const LIGHTNING_BREAKER_RADIUS: i32 = 20;
 const WATER_INJECT_RADIUS: i32 = 3;
-const LIGHTMAP_MARGIN: f32 = 14.0;         // tiles of margin >= max light radius
+const LIGHTMAP_MARGIN: f32 = 14.0; // tiles of margin >= max light radius
 const MAX_SOUND_SOURCES: usize = 16;
-const SOUND_SOURCE_STRIDE: usize = 8;      // f32s per source in GPU buffer
-const READBACK_ALIGNMENT: u64 = 256;       // wgpu COPY_BYTES_PER_ROW_ALIGNMENT
-const DRAG_THRESHOLD: f64 = 3.0;           // pixels before drag is detected
-const CAMERA_START_HOUR: f32 = 8.0;        // game starts at 08:00
+const SOUND_SOURCE_STRIDE: usize = 8; // f32s per source in GPU buffer
+const READBACK_ALIGNMENT: u64 = 256; // wgpu COPY_BYTES_PER_ROW_ALIGNMENT
+const DRAG_THRESHOLD: f64 = 3.0; // pixels before drag is detected
+const CAMERA_START_HOUR: f32 = 8.0; // game starts at 08:00
 const DEFAULT_WINDOW_SIZE: (u32, u32) = (1440, 900);
-const WINDOW_SCALE: f32 = 0.75;            // fraction of monitor size
-
-
+const WINDOW_SCALE: f32 = 0.75; // fraction of monitor size
 
 // --- Application state ---
 struct App {
@@ -122,9 +130,9 @@ struct App {
     #[allow(dead_code)]
     start_time: Instant,
     // Time control
-    time_of_day: f32,        // current time in seconds (0..DAY_DURATION)
-    time_paused: bool,       // pause auto-advance
-    time_speed: f32,         // playback speed multiplier
+    time_of_day: f32,         // current time in seconds (0..DAY_DURATION)
+    time_paused: bool,        // pause auto-advance
+    time_speed: f32,          // playback speed multiplier
     last_frame_time: Instant, // for delta-time calculation
     last_click_frame: u32,
     last_click_pos: (i32, i32),
@@ -136,69 +144,69 @@ struct App {
     lightmap_frame: u32,
     // Build mode
     build_tool: BuildTool,
-    build_rotation: u32,       // 0=horizontal (E-W), 1=vertical (N-S)
-    hover_world: (f32, f32),   // world coords under mouse cursor
+    build_rotation: u32,     // 0=horizontal (E-W), 1=vertical (N-S)
+    hover_world: (f32, f32), // world coords under mouse cursor
     // Fluid simulation
     fluid_params: FluidParams,
-    fluid_dye_phase: usize,    // 0 or 1: which dye texture is current (readable)
-    output_phase: usize,       // 0 or 1: ping-pong for temporal reprojection
-    prev_cam_x: f32,           // previous frame's camera center (for temporal reprojection)
+    fluid_dye_phase: usize, // 0 or 1: which dye texture is current (readable)
+    output_phase: usize,    // 0 or 1: ping-pong for temporal reprojection
+    prev_cam_x: f32,        // previous frame's camera center (for temporal reprojection)
     prev_cam_y: f32,
     prev_cam_zoom: f32,
     prev_cam_time: f32,
     fluid_overlay: FluidOverlay,
-    pipe_network: PipeNetwork,         // gas pipe simulation
-    liquid_network: PipeNetwork,       // liquid pipe simulation
-    fluid_speed: f32,             // fluid simulation speed multiplier
-    enable_terrain_detail: bool,  // procedural terrain variation (grass, pebbles, etc.)
-    terrain_ao_strength: f32,     // terrain ambient occlusion strength (0-1)
-    enable_prox_glow: bool,       // per-pixel proximity glow (expensive)
-    enable_dir_bleed: bool,       // directional light bleed (expensive)
-    enable_temporal: bool,        // temporal reprojection (reuse previous frame)
-    enable_ricochets: bool,       // bullets bounce off walls
-    hires_fluid: bool,            // 512x512 fluid sim (4x compute cost)
-    fluid_pressure_iters: u32,    // Jacobi pressure solver iterations (quality vs perf)
-    lightmap_interval: u32,       // recompute lightmap every N frames
-    lightmap_iterations: u32,     // lightmap propagation iterations (radius)
-    shadow_map_scale: u32,        // shadow map texels per grid cell (0 = per-pixel, 1-16 = shadow map)
+    pipe_network: PipeNetwork,   // gas pipe simulation
+    liquid_network: PipeNetwork, // liquid pipe simulation
+    fluid_speed: f32,            // fluid simulation speed multiplier
+    enable_terrain_detail: bool, // procedural terrain variation (grass, pebbles, etc.)
+    terrain_ao_strength: f32,    // terrain ambient occlusion strength (0-1)
+    enable_prox_glow: bool,      // per-pixel proximity glow (expensive)
+    enable_dir_bleed: bool,      // directional light bleed (expensive)
+    enable_temporal: bool,       // temporal reprojection (reuse previous frame)
+    enable_ricochets: bool,      // bullets bounce off walls
+    hires_fluid: bool,           // 512x512 fluid sim (4x compute cost)
+    fluid_pressure_iters: u32,   // Jacobi pressure solver iterations (quality vs perf)
+    lightmap_interval: u32,      // recompute lightmap every N frames
+    lightmap_iterations: u32,    // lightmap propagation iterations (radius)
+    shadow_map_scale: u32, // shadow map texels per grid cell (0 = per-pixel, 1-16 = shadow map)
     #[allow(dead_code)]
-    shadow_map_max_scale: u32,    // allocated texture supports up to this scale
+    shadow_map_max_scale: u32, // allocated texture supports up to this scale
     // Sound propagation
     sound_enabled: bool,
-    sound_phase: usize,            // 0 or 1 ping-pong
+    sound_phase: usize, // 0 or 1 ping-pong
     sound_sources: Vec<SoundSource>,
-    sound_speed: f32,              // wave propagation speed (c)
-    sound_damping: f32,            // damping factor per step
-    sound_coupling: f32,           // sound→gas velocity coupling strength
-    sound_iters_per_frame: u32,    // iterations per frame (controls propagation speed)
-    camera_pan_speed: f32,         // WASD pan speed (tiles/sec at zoom=1)
-    dye_w: u32,                   // current dye texture width (tracks render resolution)
-    dye_h: u32,                   // current dye texture height
-    sandbox_mode: bool,           // enables sandbox build category + debug tools
-    sandbox_tool: SandboxTool,    // current sandbox action
-    show_pipe_overlay: bool,       // draw gas pipe contents as egui overlay (ventilation)
-    show_liquid_overlay: bool,     // draw liquid pipe contents as egui overlay
-    show_flow_overlay: bool,       // draw flow arrows on pipes (pressure) and wires (current)
-    show_velocity_arrows: bool,    // draw fluid velocity vector field on overlays
-    pipe_width: f32,               // pipe conductance multiplier (1=narrow, 10=wide)
+    sound_speed: f32,                     // wave propagation speed (c)
+    sound_damping: f32,                   // damping factor per step
+    sound_coupling: f32,                  // sound→gas velocity coupling strength
+    sound_iters_per_frame: u32,           // iterations per frame (controls propagation speed)
+    camera_pan_speed: f32,                // WASD pan speed (tiles/sec at zoom=1)
+    dye_w: u32,                           // current dye texture width (tracks render resolution)
+    dye_h: u32,                           // current dye texture height
+    sandbox_mode: bool,                   // enables sandbox build category + debug tools
+    sandbox_tool: SandboxTool,            // current sandbox action
+    show_pipe_overlay: bool,              // draw gas pipe contents as egui overlay (ventilation)
+    show_liquid_overlay: bool,            // draw liquid pipe contents as egui overlay
+    show_flow_overlay: bool, // draw flow arrows on pipes (pressure) and wires (current)
+    show_velocity_arrows: bool, // draw fluid velocity vector field on overlays
+    pipe_width: f32,         // pipe conductance multiplier (1=narrow, 10=wide)
     drag_start: Option<(i32, i32)>, // grid coords where drag started (for shape building)
-    block_sel: BlockSelection,      // which popup/slider is open
+    block_sel: BlockSelection, // which popup/slider is open
     build_category: Option<&'static str>, // selected build category, None = collapsed
-    debug: DebugReadback,          // shift-hover readback state
+    debug: DebugReadback,    // shift-hover readback state
     middle_mouse_pressed: bool, // middle mouse button held (fast pan)
     // Pleb (character)
     plebs: Vec<Pleb>,
-    selected_pleb: Option<usize>,  // index into plebs vec
+    selected_pleb: Option<usize>, // index into plebs vec
     placing_pleb: bool,
     next_pleb_id: usize,
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
-    show_pleb_help: bool,      // show controls modal
-    show_inventory: bool,      // show pleb inventory window
-    inv_selected_slot: Option<usize>, // selected inventory slot for swap/drop
-    show_schedule: bool,       // show shift schedule window
-    show_priorities: bool,     // show work priorities window
+    show_pleb_help: bool,                               // show controls modal
+    show_inventory: bool,                               // show pleb inventory window
+    inv_selected_slot: Option<usize>,                   // selected inventory slot for swap/drop
+    show_schedule: bool,                                // show shift schedule window
+    show_priorities: bool,                              // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
-    auto_doors: Vec<(i32, i32, f32)>,  // (x, y, time_opened) for auto-closing
+    auto_doors: Vec<(i32, i32, f32)>, // (x, y, time_opened) for auto-closing
     physics_bodies: Vec<PhysicsBody>,
     ground_items: Vec<resources::GroundItem>,
     blueprints: std::collections::HashMap<(i32, i32), Blueprint>,
@@ -227,20 +235,20 @@ struct App {
     grenade_charge: f32,
     grenade_impacts: Vec<(f32, f32)>,
     burst_mode: bool,
-    burst_queue: u8,       // remaining burst shots to fire (0 = none)
-    burst_delay: f32,      // seconds until next burst shot
+    burst_queue: u8,  // remaining burst shots to fire (0 = none)
+    burst_delay: f32, // seconds until next burst shot
     // Weather system
     weather: WeatherState,
     weather_timer: f32,
     // Lightning
-    lightning_timer: f32,           // seconds until next potential strike
-    lightning_flash: f32,           // flash brightness (decays rapidly, 0-1)
+    lightning_timer: f32,                 // seconds until next potential strike
+    lightning_flash: f32,                 // flash brightness (decays rapidly, 0-1)
     lightning_strike: Option<(f32, f32)>, // (x, y) of current strike for rendering
-    lightning_surge_done: bool,         // prevents re-injecting voltage surge
+    lightning_surge_done: bool,           // prevents re-injecting voltage surge
     // Wind variation: slowly drifting target angle + magnitude
-    wind_target_angle: f32,    // target angle in radians
-    wind_target_mag: f32,      // target magnitude
-    wind_change_timer: f32,    // seconds until next target shift
+    wind_target_angle: f32, // target angle in radians
+    wind_target_mag: f32,   // target magnitude
+    wind_change_timer: f32, // seconds until next target shift
     wetness_data: Vec<f32>,
     // Zones & work queue
     zones: Vec<Zone>,
@@ -252,8 +260,8 @@ struct App {
     water_frame: u32,
     water_table: Vec<f32>, // static water table height map (CPU copy for info overlay)
     elevation_data: Vec<f32>, // terrain elevation (0.0–6.0 tiles of height)
-    terrain_data: Vec<u32>,   // per-tile terrain type, vegetation, richness etc.
-    terrain_dirty: bool,      // true when terrain_data needs re-upload to GPU
+    terrain_data: Vec<u32>, // per-tile terrain type, vegetation, richness etc.
+    terrain_dirty: bool,   // true when terrain_data needs re-upload to GPU
     terrain_params: grid::TerrainParams,
     game_state: GameState,
     // Diagonal wall drag preview: (x, y, variant) per tile
@@ -263,9 +271,9 @@ struct App {
     voltage_readback_pending: bool,
     // Fog of war
     fog_enabled: bool,
-    fog_visibility: Vec<u8>,     // 256×256, per-tile: 0=not visible, 255=visible
-    fog_explored: Vec<u8>,       // 256×256, per-tile: 0=shrouded, 255=explored
-    fog_texture_data: Vec<u8>,   // 256×256, composed for GPU upload
+    fog_visibility: Vec<u8>, // 256×256, per-tile: 0=not visible, 255=visible
+    fog_explored: Vec<u8>,   // 256×256, per-tile: 0=shrouded, 255=explored
+    fog_texture_data: Vec<u8>, // 256×256, composed for GPU upload
     fog_dirty: bool,
     fog_prev_tiles: Vec<(i32, i32)>, // per-pleb last known tile
     fog_vision_radius: i32,
@@ -317,9 +325,9 @@ struct GfxState {
     shadow_map_pipeline: wgpu::ComputePipeline,
     shadow_map_bind_group: wgpu::BindGroup,
     // Sound wave propagation
-    sound_textures: [wgpu::Texture; 2],      // Rg32Float ping-pong (R=pressure, G=velocity)
+    sound_textures: [wgpu::Texture; 2], // Rg32Float ping-pong (R=pressure, G=velocity)
     sound_pipeline: wgpu::ComputePipeline,
-    sound_bind_groups: [wgpu::BindGroup; 2],  // ping-pong
+    sound_bind_groups: [wgpu::BindGroup; 2], // ping-pong
     sound_source_buffer: wgpu::Buffer,
     elevation_buffer: wgpu::Buffer,
     terrain_buffer: wgpu::Buffer,
@@ -337,13 +345,16 @@ struct GfxState {
     fluid_params_buffer: wgpu::Buffer,
     fluid_vel: [wgpu::Texture; 2],
     fluid_pres: [wgpu::Texture; 2],
-    #[allow(dead_code)] fluid_div: wgpu::Texture,
-    #[allow(dead_code)] fluid_curl: wgpu::Texture,
+    #[allow(dead_code)]
+    fluid_div: wgpu::Texture,
+    #[allow(dead_code)]
+    fluid_curl: wgpu::Texture,
     fluid_dye: [wgpu::Texture; 2],
     fluid_obstacle: wgpu::Texture,
-    #[allow(dead_code)] fluid_dummy_rg: wgpu::Texture,
+    #[allow(dead_code)]
+    fluid_dummy_rg: wgpu::Texture,
     fluid_dummy_r: wgpu::Texture,   // 1x1 R32Float dummy (read)
-    fluid_dummy_r_w: wgpu::Texture,  // 1x1 R32Float dummy (write, separate to avoid read-write conflict)
+    fluid_dummy_r_w: wgpu::Texture, // 1x1 R32Float dummy (write, separate to avoid read-write conflict)
     // Fluid pipelines
     fluid_p_curl: wgpu::ComputePipeline,
     fluid_p_vorticity: wgpu::ComputePipeline,
@@ -361,14 +372,14 @@ struct GfxState {
     fluid_bg_divergence: wgpu::BindGroup,
     fluid_bg_gradient: wgpu::BindGroup,
     fluid_bg_advect_vel: wgpu::BindGroup,
-    fluid_bg_pressure: [wgpu::BindGroup; 2],       // ping-pong
-    fluid_bg_pressure_clear: wgpu::BindGroup,       // A→B clear
-    fluid_bg_advect_dye: [wgpu::BindGroup; 2],     // ping-pong dye
+    fluid_bg_pressure: [wgpu::BindGroup; 2],   // ping-pong
+    fluid_bg_pressure_clear: wgpu::BindGroup,  // A→B clear
+    fluid_bg_advect_dye: [wgpu::BindGroup; 2], // ping-pong dye
     // Debug readback
-    debug_readback_buffer: wgpu::Buffer,            // staging buffer for single texel readback
-    block_temp_readback_buffer: wgpu::Buffer,       // staging buffer for block temp readback
-    voltage_readback_buffer: wgpu::Buffer,         // full grid voltage readback for per-tile labels
-    pipe_flow_buffer: wgpu::Buffer,               // per-tile flow direction (2 f32 per tile: flow_x, flow_y)
+    debug_readback_buffer: wgpu::Buffer, // staging buffer for single texel readback
+    block_temp_readback_buffer: wgpu::Buffer, // staging buffer for block temp readback
+    voltage_readback_buffer: wgpu::Buffer, // full grid voltage readback for per-tile labels
+    pipe_flow_buffer: wgpu::Buffer,      // per-tile flow direction (2 f32 per tile: flow_x, flow_y)
     // Pleb air readback — one texel per pleb, each at 256-byte aligned offset
     pleb_air_readback_buffer: wgpu::Buffer,
     // Fog of war
@@ -409,19 +420,43 @@ impl App {
                 lm_vp_max_y: GRID_H as f32,
                 lm_scale: LIGHTMAP_SCALE as f32,
                 fluid_overlay: 0.0,
-                sun_dir_x: 0.0, sun_dir_y: 0.0, sun_elevation: 0.0,
+                sun_dir_x: 0.0,
+                sun_dir_y: 0.0,
+                sun_elevation: 0.0,
                 sun_intensity: 0.0,
-                sun_color_r: 0.0, sun_color_g: 0.0, sun_color_b: 0.0,
-                ambient_r: 0.0, ambient_g: 0.0, ambient_b: 0.0,
+                sun_color_r: 0.0,
+                sun_color_g: 0.0,
+                sun_color_b: 0.0,
+                ambient_r: 0.0,
+                ambient_g: 0.0,
+                ambient_b: 0.0,
                 enable_prox_glow: 1.0,
                 enable_dir_bleed: 1.0,
                 force_refresh: 1.0,
-                pleb_x: 0.0, pleb_y: 0.0, pleb_angle: 0.0, pleb_selected: 0.0, pleb_torch: 0.0, pleb_headlight: 0.0,
-                prev_center_x: 0.0, prev_center_y: 0.0, prev_zoom: 0.0, prev_time: 0.0,
-                rain_intensity: 0.0, cloud_cover: 0.0, wind_magnitude: 0.0, wind_angle: 0.0,
-                use_shadow_map: 1.0, shadow_map_scale: 8.0, sound_speed: 0.0, sound_damping: 0.0,
-                sound_coupling: 0.0, enable_terrain_detail: 1.0, terrain_ao_strength: 2.5, fog_enabled: 0.0,
-                hover_x: -1.0, hover_y: -1.0,
+                pleb_x: 0.0,
+                pleb_y: 0.0,
+                pleb_angle: 0.0,
+                pleb_selected: 0.0,
+                pleb_torch: 0.0,
+                pleb_headlight: 0.0,
+                prev_center_x: 0.0,
+                prev_center_y: 0.0,
+                prev_zoom: 0.0,
+                prev_time: 0.0,
+                rain_intensity: 0.0,
+                cloud_cover: 0.0,
+                wind_magnitude: 0.0,
+                wind_angle: 0.0,
+                use_shadow_map: 1.0,
+                shadow_map_scale: 8.0,
+                sound_speed: 0.0,
+                sound_damping: 0.0,
+                sound_coupling: 0.0,
+                enable_terrain_detail: 1.0,
+                terrain_ao_strength: 2.5,
+                fog_enabled: 0.0,
+                hover_x: -1.0,
+                hover_y: -1.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -570,7 +605,7 @@ impl App {
             water_frame: 0,
             water_table: Vec::new(),
             elevation_data: Vec::new(), // populated after grid gen in init_gfx_async
-            terrain_data: Vec::new(),  // populated after grid gen in init_gfx_async
+            terrain_data: Vec::new(),   // populated after grid gen in init_gfx_async
             terrain_dirty: false,
             terrain_params: grid::TerrainParams::default(),
             game_state: GameState::MainMenu,
@@ -592,21 +627,29 @@ impl App {
 
     /// Inject a voltage surge into conductors near (cx, cy) and trip nearby breakers.
     fn lightning_surge(&mut self, cx: i32, cy: i32) {
-        let gfx = match &self.gfx { Some(g) => g, None => return };
+        let gfx = match &self.gfx {
+            Some(g) => g,
+            None => return,
+        };
         let mut surge_count = 0u32;
         for dy in -LIGHTNING_SURGE_RADIUS..=LIGHTNING_SURGE_RADIUS {
             for dx in -LIGHTNING_SURGE_RADIUS..=LIGHTNING_SURGE_RADIUS {
                 let nx = cx + dx;
                 let ny = cy + dy;
-                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+                    continue;
+                }
                 let dist_sq = (dx * dx + dy * dy) as f32;
-                if dist_sq > (LIGHTNING_SURGE_RADIUS * LIGHTNING_SURGE_RADIUS) as f32 { continue; }
+                if dist_sq > (LIGHTNING_SURGE_RADIUS * LIGHTNING_SURGE_RADIUS) as f32 {
+                    continue;
+                }
                 let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                 let bt = block_type_rs(self.grid_data[nidx]);
                 let flags = block_flags_rs(self.grid_data[nidx]);
                 if is_conductor_rs(bt, flags) {
                     let dist = dist_sq.sqrt();
-                    let surge = LIGHTNING_SURGE_VOLTAGE * (1.0 - dist / LIGHTNING_SURGE_RADIUS as f32).max(0.0);
+                    let surge = LIGHTNING_SURGE_VOLTAGE
+                        * (1.0 - dist / LIGHTNING_SURGE_RADIUS as f32).max(0.0);
                     gfx.queue.write_buffer(
                         &gfx.voltage_buffer,
                         (nidx as u64) * 4,
@@ -616,13 +659,21 @@ impl App {
                 }
             }
         }
-        log::warn!("LIGHTNING SURGE: center=({},{}) hit {} conductors, max={}V", cx, cy, surge_count, LIGHTNING_SURGE_VOLTAGE);
+        log::warn!(
+            "LIGHTNING SURGE: center=({},{}) hit {} conductors, max={}V",
+            cx,
+            cy,
+            surge_count,
+            LIGHTNING_SURGE_VOLTAGE
+        );
         // Trip breakers in nearby area
         for dy in -LIGHTNING_BREAKER_RADIUS..=LIGHTNING_BREAKER_RADIUS {
             for dx in -LIGHTNING_BREAKER_RADIUS..=LIGHTNING_BREAKER_RADIUS {
                 let bnx = cx + dx;
                 let bny = cy + dy;
-                if bnx < 0 || bny < 0 || bnx >= GRID_W as i32 || bny >= GRID_H as i32 { continue; }
+                if bnx < 0 || bny < 0 || bnx >= GRID_W as i32 || bny >= GRID_H as i32 {
+                    continue;
+                }
                 let bnidx = (bny as u32 * GRID_W + bnx as u32) as usize;
                 let cb = self.grid_data[bnidx];
                 if (cb & 0xFF) as u32 == BT_BREAKER && ((cb >> 16) & 4) != 0 {
@@ -640,9 +691,6 @@ impl App {
         let ry = (wy - self.camera.center_y) * self.camera.zoom + self.camera.screen_h * 0.5;
         (rx / self.render_scale, ry / self.render_scale)
     }
-
-
-
 
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
         let width = new_size.width.max(1);
@@ -688,12 +736,10 @@ impl App {
             ..output_desc
         });
 
-        let output_view_a = gfx
-            .output_textures[0]
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let output_view_b = gfx
-            .output_textures[1]
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view_a =
+            gfx.output_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view_b =
+            gfx.output_textures[1].create_view(&wgpu::TextureViewDescriptor::default());
 
         // Recreate dye textures at render resolution (square — world is square)
         let dye_size = render_w.max(render_h);
@@ -701,23 +747,30 @@ impl App {
         self.dye_h = dye_size;
         let dye_desc = wgpu::TextureDescriptor {
             label: Some("fluid-dye-a"),
-            size: wgpu::Extent3d { width: dye_size, height: dye_size, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width: dye_size,
+                height: dye_size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         };
         gfx.fluid_dye[0] = gfx.device.create_texture(&dye_desc);
         gfx.fluid_dye[1] = gfx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("fluid-dye-b"), ..dye_desc
+            label: Some("fluid-dye-b"),
+            ..dye_desc
         });
 
         // Rebuild bind groups with new texture view
-        let lightmap_sample_view = gfx
-            .lightmap_textures[0]
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let lightmap_sample_view =
+            gfx.lightmap_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
         let lightmap_sampler = gfx.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("lightmap-sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -749,127 +802,429 @@ impl App {
         let fv_vel_a_view = gfx.fluid_vel[0].create_view(&wgpu::TextureViewDescriptor::default());
         let fv_pres_b_view = gfx.fluid_pres[1].create_view(&wgpu::TextureViewDescriptor::default());
         let water_view = gfx.water_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
-        let shadow_map_view = gfx.shadow_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_map_view = gfx
+            .shadow_map_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let sound_view = gfx.sound_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
         gfx.compute_bind_groups = [
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("compute-bg-0"), // dye_A, write output_A, read prev output_B
                 layout: &compute_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_a) },
-                    wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
-                    wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
-                    wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
-                    wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
-                    wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&gfx.fog_texture.create_view(&wgpu::TextureViewDescriptor::default())) },
-                    wgpu::BindGroupEntry { binding: 22, resource: wgpu::BindingResource::Sampler(&fog_sampler) },
-                    wgpu::BindGroupEntry { binding: 23, resource: gfx.terrain_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
-                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
-                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
-                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b_view) },
-                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_b) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&output_view_a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: gfx.camera_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: gfx.grid_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&lightmap_sample_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: gfx.sprite_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: gfx.material_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: gfx.pleb_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: gfx.block_temp_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: gfx.voltage_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: gfx.pipe_flow_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: wgpu::BindingResource::TextureView(&water_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 17,
+                        resource: gfx.water_table_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 18,
+                        resource: wgpu::BindingResource::TextureView(&shadow_map_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 19,
+                        resource: wgpu::BindingResource::TextureView(&sound_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 20,
+                        resource: gfx.elevation_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 21,
+                        resource: wgpu::BindingResource::TextureView(
+                            &gfx.fog_texture
+                                .create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 22,
+                        resource: wgpu::BindingResource::Sampler(&fog_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 23,
+                        resource: gfx.terrain_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(&fv_dye_a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&fv_vel_a_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(&fv_pres_b_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::TextureView(&output_view_b),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("compute-bg-1"), // dye_A, write output_B, read prev output_A
                 layout: &compute_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_b) },
-                    wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
-                    wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
-                    wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
-                    wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
-                    wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&gfx.fog_texture.create_view(&wgpu::TextureViewDescriptor::default())) },
-                    wgpu::BindGroupEntry { binding: 22, resource: wgpu::BindingResource::Sampler(&fog_sampler) },
-                    wgpu::BindGroupEntry { binding: 23, resource: gfx.terrain_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
-                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
-                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
-                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b_view) },
-                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_a) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&output_view_b),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: gfx.camera_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: gfx.grid_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&lightmap_sample_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: gfx.sprite_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: gfx.material_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: gfx.pleb_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: gfx.block_temp_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: gfx.voltage_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: gfx.pipe_flow_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: wgpu::BindingResource::TextureView(&water_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 17,
+                        resource: gfx.water_table_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 18,
+                        resource: wgpu::BindingResource::TextureView(&shadow_map_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 19,
+                        resource: wgpu::BindingResource::TextureView(&sound_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 20,
+                        resource: gfx.elevation_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 21,
+                        resource: wgpu::BindingResource::TextureView(
+                            &gfx.fog_texture
+                                .create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 22,
+                        resource: wgpu::BindingResource::Sampler(&fog_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 23,
+                        resource: gfx.terrain_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(&fv_dye_a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&fv_vel_a_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(&fv_pres_b_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::TextureView(&output_view_a),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("compute-bg-2"), // dye_B, write output_A, read prev output_B
                 layout: &compute_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_a) },
-                    wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
-                    wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
-                    wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
-                    wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
-                    wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&gfx.fog_texture.create_view(&wgpu::TextureViewDescriptor::default())) },
-                    wgpu::BindGroupEntry { binding: 22, resource: wgpu::BindingResource::Sampler(&fog_sampler) },
-                    wgpu::BindGroupEntry { binding: 23, resource: gfx.terrain_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
-                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
-                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
-                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b_view) },
-                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_b) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&output_view_a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: gfx.camera_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: gfx.grid_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&lightmap_sample_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: gfx.sprite_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: gfx.material_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: gfx.pleb_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: gfx.block_temp_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: gfx.voltage_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: gfx.pipe_flow_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: wgpu::BindingResource::TextureView(&water_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 17,
+                        resource: gfx.water_table_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 18,
+                        resource: wgpu::BindingResource::TextureView(&shadow_map_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 19,
+                        resource: wgpu::BindingResource::TextureView(&sound_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 20,
+                        resource: gfx.elevation_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 21,
+                        resource: wgpu::BindingResource::TextureView(
+                            &gfx.fog_texture
+                                .create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 22,
+                        resource: wgpu::BindingResource::Sampler(&fog_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 23,
+                        resource: gfx.terrain_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(&fv_dye_b),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&fv_vel_a_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(&fv_pres_b_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::TextureView(&output_view_b),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("compute-bg-3"), // dye_B, write output_B, read prev output_A
                 layout: &compute_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&output_view_b) },
-                    wgpu::BindGroupEntry { binding: 1, resource: gfx.camera_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: gfx.grid_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lightmap_sample_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
-                    wgpu::BindGroupEntry { binding: 5, resource: gfx.sprite_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 11, resource: gfx.material_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 12, resource: gfx.pleb_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 13, resource: gfx.block_temp_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 14, resource: gfx.voltage_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 15, resource: gfx.pipe_flow_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&water_view) },
-                    wgpu::BindGroupEntry { binding: 17, resource: gfx.water_table_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
-                    wgpu::BindGroupEntry { binding: 19, resource: wgpu::BindingResource::TextureView(&sound_view) },
-                    wgpu::BindGroupEntry { binding: 20, resource: gfx.elevation_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 21, resource: wgpu::BindingResource::TextureView(&gfx.fog_texture.create_view(&wgpu::TextureViewDescriptor::default())) },
-                    wgpu::BindGroupEntry { binding: 22, resource: wgpu::BindingResource::Sampler(&fog_sampler) },
-                    wgpu::BindGroupEntry { binding: 23, resource: gfx.terrain_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
-                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler) },
-                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&fv_vel_a_view) },
-                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&fv_pres_b_view) },
-                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&output_view_a) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&output_view_b),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: gfx.camera_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: gfx.grid_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&lightmap_sample_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: gfx.sprite_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: gfx.material_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: gfx.pleb_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: gfx.block_temp_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: gfx.voltage_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: gfx.pipe_flow_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: wgpu::BindingResource::TextureView(&water_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 17,
+                        resource: gfx.water_table_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 18,
+                        resource: wgpu::BindingResource::TextureView(&shadow_map_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 19,
+                        resource: wgpu::BindingResource::TextureView(&sound_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 20,
+                        resource: gfx.elevation_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 21,
+                        resource: wgpu::BindingResource::TextureView(
+                            &gfx.fog_texture
+                                .create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 22,
+                        resource: wgpu::BindingResource::Sampler(&fog_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 23,
+                        resource: gfx.terrain_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(&fv_dye_b),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::Sampler(&fluid_dye_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&fv_vel_a_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(&fv_pres_b_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::TextureView(&output_view_a),
+                    },
                 ],
             }),
         ];
@@ -917,49 +1272,124 @@ impl App {
         // Recreate fluid dye bind groups (advect_dye + splat reference dye textures)
         let fluid_dye_bgl = gfx.fluid_p_advect_dye.get_bind_group_layout(0);
         let fv_vel_a_fluid = gfx.fluid_vel[0].create_view(&wgpu::TextureViewDescriptor::default());
-        let fv_obstacle_view = gfx.fluid_obstacle.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_obstacle_view = gfx
+            .fluid_obstacle
+            .create_view(&wgpu::TextureViewDescriptor::default());
         gfx.fluid_bg_advect_dye = [
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("fluid-bg-advect-dye-0"), layout: &fluid_dye_bgl,
+                label: Some("fluid-bg-advect-dye-0"),
+                layout: &fluid_dye_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_vel_a_fluid) },
-                    wgpu::BindGroupEntry { binding: 3, resource: gfx.fluid_params_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 4, resource: gfx.grid_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&fv_obstacle_view) },
-                    wgpu::BindGroupEntry { binding: 6, resource: gfx.block_temp_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&fv_dye_a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&fv_dye_b),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&fv_vel_a_fluid),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: gfx.fluid_params_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: gfx.grid_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&fv_obstacle_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: gfx.block_temp_buffer.as_entire_binding(),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("fluid-bg-advect-dye-1"), layout: &fluid_dye_bgl,
+                label: Some("fluid-bg-advect-dye-1"),
+                layout: &fluid_dye_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_dye_b) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_vel_a_fluid) },
-                    wgpu::BindGroupEntry { binding: 3, resource: gfx.fluid_params_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 4, resource: gfx.grid_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&fv_obstacle_view) },
-                    wgpu::BindGroupEntry { binding: 6, resource: gfx.block_temp_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&fv_dye_b),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&fv_dye_a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&fv_vel_a_fluid),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: gfx.fluid_params_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: gfx.grid_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&fv_obstacle_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: gfx.block_temp_buffer.as_entire_binding(),
+                    },
                 ],
             }),
         ];
         // Splat uses dye_a at binding 7 — recreate with new dye texture
         let fluid_sim_bgl = gfx.fluid_p_splat.get_bind_group_layout(0);
         let fv_vel_b = gfx.fluid_vel[1].create_view(&wgpu::TextureViewDescriptor::default());
-        let fv_dummy_r = gfx.fluid_dummy_r.create_view(&wgpu::TextureViewDescriptor::default());
-        let fv_dummy_r_w = gfx.fluid_dummy_r_w.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dummy_r = gfx
+            .fluid_dummy_r
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dummy_r_w = gfx
+            .fluid_dummy_r_w
+            .create_view(&wgpu::TextureViewDescriptor::default());
         gfx.fluid_bg_splat = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("fluid-bg-splat"), layout: &fluid_sim_bgl,
+            label: Some("fluid-bg-splat"),
+            layout: &fluid_sim_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fv_vel_b) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fv_vel_a_fluid) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fv_dummy_r) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&fv_dummy_r_w) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&fv_obstacle_view) },
-                wgpu::BindGroupEntry { binding: 5, resource: gfx.fluid_params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: gfx.grid_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&fv_dye_a) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&fv_vel_b),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&fv_vel_a_fluid),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&fv_dummy_r),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&fv_dummy_r_w),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&fv_obstacle_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: gfx.fluid_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: gfx.grid_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&fv_dye_a),
+                },
             ],
         });
     }
@@ -970,26 +1400,45 @@ impl App {
             let gfx = self.gfx.as_ref().unwrap();
             let expected_w = ((gfx.config.width as f32) * self.render_scale).max(1.0) as u32;
             let expected_h = ((gfx.config.height as f32) * self.render_scale).max(1.0) as u32;
-            if expected_w != self.camera.screen_w as u32 || expected_h != self.camera.screen_h as u32 {
+            if expected_w != self.camera.screen_w as u32
+                || expected_h != self.camera.screen_h as u32
+            {
                 let size = PhysicalSize::new(gfx.config.width, gfx.config.height);
                 let _ = gfx;
                 self.resize(size);
             }
         }
 
-
         let dt = self.update_simulation();
 
         // WASD camera pan (always active)
         {
-            let shift = self.pressed_keys.contains(&KeyCode::ShiftLeft) || self.pressed_keys.contains(&KeyCode::ShiftRight);
-            let pan_speed = self.camera_pan_speed / self.camera.zoom * if shift { 2.0 } else { 1.0 };
+            let shift = self.pressed_keys.contains(&KeyCode::ShiftLeft)
+                || self.pressed_keys.contains(&KeyCode::ShiftRight);
+            let pan_speed =
+                self.camera_pan_speed / self.camera.zoom * if shift { 2.0 } else { 1.0 };
             let mut pan_x = 0.0f32;
             let mut pan_y = 0.0f32;
-            if self.pressed_keys.contains(&KeyCode::KeyW) || self.pressed_keys.contains(&KeyCode::ArrowUp) { pan_y -= 1.0; }
-            if self.pressed_keys.contains(&KeyCode::KeyS) || self.pressed_keys.contains(&KeyCode::ArrowDown) { pan_y += 1.0; }
-            if self.pressed_keys.contains(&KeyCode::KeyA) || self.pressed_keys.contains(&KeyCode::ArrowLeft) { pan_x -= 1.0; }
-            if self.pressed_keys.contains(&KeyCode::KeyD) || self.pressed_keys.contains(&KeyCode::ArrowRight) { pan_x += 1.0; }
+            if self.pressed_keys.contains(&KeyCode::KeyW)
+                || self.pressed_keys.contains(&KeyCode::ArrowUp)
+            {
+                pan_y -= 1.0;
+            }
+            if self.pressed_keys.contains(&KeyCode::KeyS)
+                || self.pressed_keys.contains(&KeyCode::ArrowDown)
+            {
+                pan_y += 1.0;
+            }
+            if self.pressed_keys.contains(&KeyCode::KeyA)
+                || self.pressed_keys.contains(&KeyCode::ArrowLeft)
+            {
+                pan_x -= 1.0;
+            }
+            if self.pressed_keys.contains(&KeyCode::KeyD)
+                || self.pressed_keys.contains(&KeyCode::ArrowRight)
+            {
+                pan_x += 1.0;
+            }
             if pan_x != 0.0 || pan_y != 0.0 {
                 let len = (pan_x * pan_x + pan_y * pan_y).sqrt();
                 self.camera.center_x += pan_x / len * pan_speed * dt;
@@ -1013,7 +1462,9 @@ impl App {
             let (temps, destroyed) = fire::tick_fire(
                 &self.grid_data,
                 &mut self.burn_progress,
-                dt, self.time_speed, self.frame_count,
+                dt,
+                self.time_speed,
+                self.frame_count,
                 self.camera.rain_intensity,
                 self.camera.wind_angle,
                 self.camera.wind_magnitude,
@@ -1033,7 +1484,8 @@ impl App {
                 } else {
                     let replacement = fire::burn_replacement_pub(bt);
                     let roof_h = self.grid_data[idx] & 0xFF000000;
-                    self.grid_data[idx] = make_block(replacement as u8, 0, 0) | (if replacement == BT_AIR { 0 } else { roof_h });
+                    self.grid_data[idx] = make_block(replacement as u8, 0, 0)
+                        | (if replacement == BT_AIR { 0 } else { roof_h });
                 }
                 self.grid_dirty = true;
                 let evt = GameEventKind::FireConsumed(bx, by);
@@ -1060,22 +1512,33 @@ impl App {
 
         // Re-upload grid if dirty (door toggled etc.)
         if self.grid_dirty {
-            gfx.queue.write_buffer(
-                &gfx.grid_buffer,
-                0,
-                bytemuck::cast_slice(&self.grid_data),
-            );
+            gfx.queue
+                .write_buffer(&gfx.grid_buffer, 0, bytemuck::cast_slice(&self.grid_data));
             // Rebuild fluid obstacle field
             let obs_data = build_obstacle_field(&self.grid_data);
             gfx.queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: &gfx.fluid_obstacle, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gfx.fluid_obstacle,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
                 &obs_data,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(GRID_W), rows_per_image: Some(GRID_H) },
-                wgpu::Extent3d { width: GRID_W, height: GRID_H, depth_or_array_layers: 1 },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(GRID_W),
+                    rows_per_image: Some(GRID_H),
+                },
+                wgpu::Extent3d {
+                    width: GRID_W,
+                    height: GRID_H,
+                    depth_or_array_layers: 1,
+                },
             );
             self.grid_dirty = false;
             self.pipe_network.rebuild(&self.grid_data);
-            self.liquid_network.rebuild_with(&self.grid_data, pipes::is_liquid_pipe_component);
+            self.liquid_network
+                .rebuild_with(&self.grid_data, pipes::is_liquid_pipe_component);
         }
 
         // Re-upload terrain data if dirty (compaction changed)
@@ -1091,17 +1554,32 @@ impl App {
         // Upload fog texture when changed
         if self.fog_dirty {
             gfx.queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: &gfx.fog_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gfx.fog_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
                 &self.fog_texture_data,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(GRID_W), rows_per_image: Some(GRID_H) },
-                wgpu::Extent3d { width: GRID_W, height: GRID_H, depth_or_array_layers: 1 },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(GRID_W),
+                    rows_per_image: Some(GRID_H),
+                },
+                wgpu::Extent3d {
+                    width: GRID_W,
+                    height: GRID_H,
+                    depth_or_array_layers: 1,
+                },
             );
             self.fog_dirty = false;
         }
 
         // Tick pipe network simulation — store outlet injections for post-shader application
         let pipe_injections = self.pipe_network.tick(dt, &self.grid_data, self.pipe_width);
-        let liquid_injections = self.liquid_network.tick(dt, &self.grid_data, self.pipe_width);
+        let liquid_injections = self
+            .liquid_network
+            .tick(dt, &self.grid_data, self.pipe_width);
 
         // Process liquid output: dump water onto ground surface + water table + wetness
         // Batch water texture writes: accumulate into staging buffer, write once
@@ -1114,14 +1592,17 @@ impl App {
                 for dx in -spread..=spread {
                     let nx = cx + dx;
                     let ny = cy + dy;
-                    if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                    if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+                        continue;
+                    }
                     let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                     let dist = ((dx * dx + dy * dy) as f32).sqrt();
                     let falloff = (1.0 - dist / (spread as f32 + 1.0)).max(0.0);
                     let amount = pressure.min(3.0) * falloff;
                     self.wetness_data[nidx] = (self.wetness_data[nidx] + amount * dt).min(1.0);
                     if nidx < self.water_table.len() {
-                        self.water_table[nidx] = (self.water_table[nidx] + amount * 0.3 * dt).min(0.5);
+                        self.water_table[nidx] =
+                            (self.water_table[nidx] + amount * 0.3 * dt).min(0.5);
                     }
                     let water_level = (amount * 0.5 * dt).min(0.5);
                     water_dirty_tiles.push((nx as u32, ny as u32, water_level));
@@ -1146,12 +1627,24 @@ impl App {
                 wgpu::TexelCopyTextureInfo {
                     texture: &gfx.water_textures[self.water_phase],
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: min_x, y: min_y, z: 0 },
+                    origin: wgpu::Origin3d {
+                        x: min_x,
+                        y: min_y,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 bytemuck::cast_slice(&region),
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 4), rows_per_image: Some(h as u32) },
-                wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w as u32 * 4),
+                    rows_per_image: Some(h as u32),
+                },
+                wgpu::Extent3d {
+                    width: w as u32,
+                    height: h as u32,
+                    depth_or_array_layers: 1,
+                },
             );
         }
 
@@ -1160,20 +1653,26 @@ impl App {
         {
             let grid_size = (GRID_W * GRID_H) as usize;
             let mut flow_buf = vec![[0.0f32; 2]; grid_size];
-            for (&idx, cell) in self.pipe_network.cells.iter().chain(self.liquid_network.cells.iter()) {
+            for (&idx, cell) in self
+                .pipe_network
+                .cells
+                .iter()
+                .chain(self.liquid_network.cells.iter())
+            {
                 if (idx as usize) < grid_size {
                     flow_buf[idx as usize] = [cell.flow_x, cell.flow_y];
                 }
             }
-            gfx.queue.write_buffer(
-                &gfx.pipe_flow_buffer,
-                0,
-                bytemuck::cast_slice(&flow_buf),
-            );
+            gfx.queue
+                .write_buffer(&gfx.pipe_flow_buffer, 0, bytemuck::cast_slice(&flow_buf));
         }
 
         // Upload fluid params (sim_w/h control effective resolution within max-size textures)
-        let fluid_res = if self.hires_fluid { FLUID_SIM_MAX } else { FLUID_SIM_W };
+        let fluid_res = if self.hires_fluid {
+            FLUID_SIM_MAX
+        } else {
+            FLUID_SIM_W
+        };
         self.fluid_params.sim_w = fluid_res as f32;
         self.fluid_params.sim_h = fluid_res as f32;
         self.fluid_params.dye_w = self.dye_w as f32;
@@ -1183,12 +1682,17 @@ impl App {
         self.fluid_params.splat_active = if false { 1.0 } else { 0.0 };
 
         // Sound→Gas coupling: override splat with sound source velocity if no mouse active
-        if self.sound_enabled && self.sound_coupling > 0.001
-            && !self.sound_sources.is_empty() && !false
+        if self.sound_enabled
+            && self.sound_coupling > 0.001
+            && !self.sound_sources.is_empty()
+            && !false
         {
-            if let Some(src) = self.sound_sources.iter()
-                .max_by(|a, b| a.amplitude.abs().partial_cmp(&b.amplitude.abs()).unwrap_or(std::cmp::Ordering::Equal))
-            {
+            if let Some(src) = self.sound_sources.iter().max_by(|a, b| {
+                a.amplitude
+                    .abs()
+                    .partial_cmp(&b.amplitude.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
                 let coupling = self.sound_coupling;
                 let fx = src.x / GRID_W as f32 * fluid_res as f32;
                 let fy = src.y / GRID_H as f32 * fluid_res as f32;
@@ -1224,7 +1728,11 @@ impl App {
             }
         }
 
-        gfx.queue.write_buffer(&gfx.fluid_params_buffer, 0, bytemuck::bytes_of(&self.fluid_params));
+        gfx.queue.write_buffer(
+            &gfx.fluid_params_buffer,
+            0,
+            bytemuck::bytes_of(&self.fluid_params),
+        );
 
         // Compute lightmap viewport bounds (grid coordinates with margin for light propagation)
         let half_w = self.camera.screen_w * 0.5 / self.camera.zoom;
@@ -1246,10 +1754,14 @@ impl App {
         // Fog of war: update visibility when enabled
         if self.fog_enabled {
             let changed = fog::update_fog(
-                &self.grid_data, &self.plebs, self.camera.sun_intensity,
+                &self.grid_data,
+                &self.plebs,
+                self.camera.sun_intensity,
                 self.fog_vision_radius,
-                &mut self.fog_visibility, &mut self.fog_explored,
-                &mut self.fog_texture_data, &mut self.fog_prev_tiles,
+                &mut self.fog_visibility,
+                &mut self.fog_explored,
+                &mut self.fog_texture_data,
+                &mut self.fog_prev_tiles,
             );
             if changed {
                 self.fog_dirty = true;
@@ -1268,7 +1780,8 @@ impl App {
             for (i, p) in self.plebs.iter().enumerate().take(MAX_PLEBS) {
                 gpu_plebs[i] = p.to_gpu(self.selected_pleb == Some(i));
             }
-            gfx.queue.write_buffer(&gfx.pleb_buffer, 0, bytemuck::cast_slice(&gpu_plebs));
+            gfx.queue
+                .write_buffer(&gfx.pleb_buffer, 0, bytemuck::cast_slice(&gpu_plebs));
         }
         // --- egui frame setup (before bp_cam/blueprint computation) ---
         // gfx borrow ends here (re-borrowed later for GPU submission)
@@ -1305,12 +1818,13 @@ impl App {
             let hbx = hwx.floor() as i32;
             let hby = hwy.floor() as i32;
             // Diagonal wall drag: compute per-tile variants for triangle preview
-            let diag_drag_tiles: Vec<(i32, i32, u8)> = if self.drag_start.is_some() && self.build_tool == BuildTool::Place(44) {
-                let (sx, sy) = self.drag_start.unwrap();
-                Self::diagonal_wall_tiles(sx, sy, hbx, hby, self.build_rotation)
-            } else {
-                Vec::new()
-            };
+            let diag_drag_tiles: Vec<(i32, i32, u8)> =
+                if self.drag_start.is_some() && self.build_tool == BuildTool::Place(44) {
+                    let (sx, sy) = self.drag_start.unwrap();
+                    Self::diagonal_wall_tiles(sx, sy, hbx, hby, self.build_rotation)
+                } else {
+                    Vec::new()
+                };
 
             self.diag_preview = diag_drag_tiles.clone();
             let tiles: Vec<(i32, i32)> = if !diag_drag_tiles.is_empty() {
@@ -1320,17 +1834,33 @@ impl App {
                 match self.build_tool {
                     BuildTool::Place(id) => {
                         let reg = block_defs::BlockRegistry::cached();
-                        let shape = reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref());
+                        let shape = reg
+                            .get(id)
+                            .and_then(|d| d.placement.as_ref())
+                            .and_then(|p| p.drag.as_ref());
                         match shape {
                             Some(block_defs::DragShape::Line) => Self::line_tiles(sx, sy, hbx, hby),
-                            Some(block_defs::DragShape::FilledRect) => Self::filled_rect_tiles(sx, sy, hbx, hby),
-                            Some(block_defs::DragShape::HollowRect) => Self::hollow_rect_tiles(sx, sy, hbx, hby),
-                            Some(block_defs::DragShape::DiagonalLine) => Self::diagonal_wall_tiles(sx, sy, hbx, hby, self.build_rotation).iter().map(|&(x, y, _)| (x, y)).collect(),
+                            Some(block_defs::DragShape::FilledRect) => {
+                                Self::filled_rect_tiles(sx, sy, hbx, hby)
+                            }
+                            Some(block_defs::DragShape::HollowRect) => {
+                                Self::hollow_rect_tiles(sx, sy, hbx, hby)
+                            }
+                            Some(block_defs::DragShape::DiagonalLine) => {
+                                Self::diagonal_wall_tiles(sx, sy, hbx, hby, self.build_rotation)
+                                    .iter()
+                                    .map(|&(x, y, _)| (x, y))
+                                    .collect()
+                            }
                             _ => vec![(hbx, hby)],
                         }
                     }
-                    BuildTool::Destroy | BuildTool::GrowingZone | BuildTool::StorageZone => Self::filled_rect_tiles(sx, sy, hbx, hby),
-                    BuildTool::Roof | BuildTool::RemoveRoof => Self::filled_rect_tiles(sx, sy, hbx, hby),
+                    BuildTool::Destroy | BuildTool::GrowingZone | BuildTool::StorageZone => {
+                        Self::filled_rect_tiles(sx, sy, hbx, hby)
+                    }
+                    BuildTool::Roof | BuildTool::RemoveRoof => {
+                        Self::filled_rect_tiles(sx, sy, hbx, hby)
+                    }
                     BuildTool::RemoveFloor => Self::filled_rect_tiles(sx, sy, hbx, hby),
                     _ => vec![(hbx, hby)],
                 }
@@ -1338,125 +1868,235 @@ impl App {
                 // No drag: single-tile or multi-tile preview
                 match self.build_tool {
                     BuildTool::Place(9) => self.bench_tiles(hbx, hby, self.build_rotation).to_vec(),
-                    BuildTool::Place(30) | BuildTool::Place(52) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
+                    BuildTool::Place(30) | BuildTool::Place(52) => {
+                        self.bed_tiles(hbx, hby, self.build_rotation).to_vec()
+                    }
                     BuildTool::Place(37) => self.solar_tiles(hbx, hby).to_vec(),
                     BuildTool::Place(39) => self.bed_tiles(hbx, hby, self.build_rotation).to_vec(),
-                    BuildTool::Place(40) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
-                    BuildTool::Place(41) => vec![(hbx, hby), (hbx+1, hby), (hbx, hby+1), (hbx+1, hby+1)],
-                    BuildTool::Place(50) | BuildTool::Place(51) => self.bridge_tiles(hbx, hby, self.build_rotation).to_vec(),
+                    BuildTool::Place(40) => vec![
+                        (hbx, hby),
+                        (hbx + 1, hby),
+                        (hbx, hby + 1),
+                        (hbx + 1, hby + 1),
+                    ],
+                    BuildTool::Place(41) => vec![
+                        (hbx, hby),
+                        (hbx + 1, hby),
+                        (hbx, hby + 1),
+                        (hbx + 1, hby + 1),
+                    ],
+                    BuildTool::Place(50) | BuildTool::Place(51) => {
+                        self.bridge_tiles(hbx, hby, self.build_rotation).to_vec()
+                    }
                     _ => vec![(hbx, hby)],
                 }
             };
             let on_furniture = self.build_tool == BuildTool::Place(11);
             let is_physics = self.build_tool == BuildTool::WoodBox;
-            let on_wall = matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Window | BuildTool::Door | BuildTool::Place(19) | BuildTool::Place(20));
-            tiles.iter().map(|&(tx, ty)| {
-                if is_physics {
-                    // Physics bodies can be placed anywhere
-                    ((tx, ty), true)
-                } else if on_wall {
-                    let valid = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
-                        let bidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        let b = self.grid_data[bidx];
-                        let bbt = b & 0xFF;
-                        let bbh = (b >> 8) & 0xFF;
-                        if self.build_tool == BuildTool::Window {
-                            bt_is!(bbt, BT_STONE, BT_WALL, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && bbh > 0
-                        } else if self.build_tool == BuildTool::Door {
-                            bt_is!(bbt, BT_STONE, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && bbh > 0
-                        } else if matches!(self.build_tool, BuildTool::Place(19) | BuildTool::Place(20)) {
-                            bt_is!(bbt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && bbh > 0
-                        } else if self.build_tool == BuildTool::Place(12) {
-                            bt_is!(bbt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && bbh > 0
+            let on_wall = matches!(
+                self.build_tool,
+                BuildTool::Place(12)
+                    | BuildTool::Window
+                    | BuildTool::Door
+                    | BuildTool::Place(19)
+                    | BuildTool::Place(20)
+            );
+            tiles
+                .iter()
+                .map(|&(tx, ty)| {
+                    if is_physics {
+                        // Physics bodies can be placed anywhere
+                        ((tx, ty), true)
+                    } else if on_wall {
+                        let valid =
+                            if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                                let bidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                                let b = self.grid_data[bidx];
+                                let bbt = b & 0xFF;
+                                let bbh = (b >> 8) & 0xFF;
+                                if self.build_tool == BuildTool::Window {
+                                    bt_is!(
+                                        bbt,
+                                        BT_STONE,
+                                        BT_WALL,
+                                        BT_INSULATED,
+                                        BT_WOOD_WALL,
+                                        BT_STEEL_WALL,
+                                        BT_SANDSTONE,
+                                        BT_GRANITE,
+                                        BT_LIMESTONE
+                                    ) && bbh > 0
+                                } else if self.build_tool == BuildTool::Door {
+                                    bt_is!(
+                                        bbt,
+                                        BT_STONE,
+                                        BT_GLASS,
+                                        BT_INSULATED,
+                                        BT_WOOD_WALL,
+                                        BT_STEEL_WALL,
+                                        BT_SANDSTONE,
+                                        BT_GRANITE,
+                                        BT_LIMESTONE
+                                    ) && bbh > 0
+                                } else if matches!(
+                                    self.build_tool,
+                                    BuildTool::Place(19) | BuildTool::Place(20)
+                                ) {
+                                    bt_is!(
+                                        bbt,
+                                        BT_STONE,
+                                        BT_WALL,
+                                        BT_GLASS,
+                                        BT_INSULATED,
+                                        BT_WOOD_WALL,
+                                        BT_STEEL_WALL,
+                                        BT_SANDSTONE,
+                                        BT_GRANITE,
+                                        BT_LIMESTONE
+                                    ) && bbh > 0
+                                } else if self.build_tool == BuildTool::Place(12) {
+                                    bt_is!(
+                                        bbt,
+                                        BT_STONE,
+                                        BT_WALL,
+                                        BT_GLASS,
+                                        BT_INSULATED,
+                                        BT_WOOD_WALL,
+                                        BT_STEEL_WALL,
+                                        BT_SANDSTONE,
+                                        BT_GRANITE,
+                                        BT_LIMESTONE
+                                    ) && bbh > 0
+                                } else {
+                                    bt_is!(bbt, BT_STONE, BT_WALL) && bbh > 0
+                                }
+                            } else {
+                                false
+                            };
+                        // Inlet/Outlet/Fan can also place on ground
+                        if !valid
+                            && matches!(
+                                self.build_tool,
+                                BuildTool::Place(19) | BuildTool::Place(20) | BuildTool::Place(12)
+                            )
+                        {
+                            ((tx, ty), self.can_place_on(tx, ty, false))
                         } else {
-                            bt_is!(bbt, BT_STONE, BT_WALL) && bbh > 0
+                            ((tx, ty), valid)
                         }
-                    } else { false };
-                    // Inlet/Outlet/Fan can also place on ground
-                    if !valid && matches!(self.build_tool, BuildTool::Place(19) | BuildTool::Place(20) | BuildTool::Place(12)) {
-                        ((tx, ty), self.can_place_on(tx, ty, false))
-                    } else {
-                        ((tx, ty), valid)
-                    }
-                } else if self.build_tool == BuildTool::Place(36) {
-                    // Wire can go anywhere
-                    ((tx, ty), tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32)
-                } else if self.build_tool == BuildTool::Place(52) {
-                    // Liquid Intake: whole-unit validation — one ground + one water/dug
-                    let intake_tiles = self.bed_tiles(hbx, hby, self.build_rotation);
-                    let (gi, wi) = self.intake_tile_assignment(&intake_tiles);
-                    ((tx, ty), gi.is_some() && wi.is_some())
-                } else if matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(46)) {
-                    // Gas Pipe/Restrictor: on empty ground OR existing gas pipe/restrictor
-                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
-                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || bt_is!(tbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE)
-                    } else { false };
-                    ((tx, ty), ok)
-                } else if self.build_tool == BuildTool::Place(49) {
-                    // Liquid Pipe: on empty ground, existing liquid pipe, or bridge
-                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
-                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || bt_is!(tbt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE)
-                    } else { false };
-                    ((tx, ty), ok)
-                } else if matches!(self.build_tool, BuildTool::Place(50) | BuildTool::Place(51)) {
-                    // Bridges: on empty ground or existing pipes/wires
-                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
-                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false)
-                            || (self.build_tool == BuildTool::Place(50) && (pipes::is_gas_pipe_component(tbt) || pipes::is_liquid_pipe_component(tbt)))
-                            || (self.build_tool == BuildTool::Place(51) && tbt == BT_WIRE)
-                    } else { false };
-                    ((tx, ty), ok)
-                } else if matches!(self.build_tool, BuildTool::Place(53) | BuildTool::Place(54)) {
-                    // Liquid pump/output: on empty ground or on liquid pipe
-                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
-                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || tbt == BT_LIQUID_PIPE
-                    } else { false };
-                    ((tx, ty), ok)
-                } else if matches!(self.build_tool, BuildTool::Place(42) | BuildTool::Place(43) | BuildTool::Place(45)) {
-                    // Switch/Dimmer/Breaker: on empty ground or on wire
-                    let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
-                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        let tbt = self.grid_data[tidx] & 0xFF;
-                        self.can_place_on(tx, ty, false) || tbt == BT_WIRE
-                    } else { false };
-                    ((tx, ty), ok)
-                } else {
-                    // Wall-adjacent items: valid only if adjacent to a wall
-                    let is_wall_adjacent = match self.build_tool {
-                        BuildTool::Place(id) => {
-                            let reg2 = block_defs::BlockRegistry::cached();
-                            reg2.get(id).and_then(|d| d.placement.as_ref())
-                                .map(|p| p.click == block_defs::ClickMode::WallAdjacent)
-                                .unwrap_or(false)
-                        }
-                        _ => false,
-                    };
-                    if is_wall_adjacent {
-                        ((tx, ty), self.wall_adjacent_direction(tx, ty).is_some())
-                    } else if matches!(self.build_tool, BuildTool::Place(id) if id == BT_WELL) {
-                        // Well: must be on dug ground
+                    } else if self.build_tool == BuildTool::Place(36) {
+                        // Wire can go anywhere
+                        (
+                            (tx, ty),
+                            tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32,
+                        )
+                    } else if self.build_tool == BuildTool::Place(52) {
+                        // Liquid Intake: whole-unit validation — one ground + one water/dug
+                        let intake_tiles = self.bed_tiles(hbx, hby, self.build_rotation);
+                        let (gi, wi) = self.intake_tile_assignment(&intake_tiles);
+                        ((tx, ty), gi.is_some() && wi.is_some())
+                    } else if matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(46))
+                    {
+                        // Gas Pipe/Restrictor: on empty ground OR existing gas pipe/restrictor
                         let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                            block_type_rs(self.grid_data[tidx]) == BT_DUG_GROUND
-                        } else { false };
+                            let tbt = self.grid_data[tidx] & 0xFF;
+                            self.can_place_on(tx, ty, false)
+                                || bt_is!(tbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE)
+                        } else {
+                            false
+                        };
+                        ((tx, ty), ok)
+                    } else if self.build_tool == BuildTool::Place(49) {
+                        // Liquid Pipe: on empty ground, existing liquid pipe, or bridge
+                        let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tbt = self.grid_data[tidx] & 0xFF;
+                            self.can_place_on(tx, ty, false)
+                                || bt_is!(tbt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE)
+                        } else {
+                            false
+                        };
+                        ((tx, ty), ok)
+                    } else if matches!(self.build_tool, BuildTool::Place(50) | BuildTool::Place(51))
+                    {
+                        // Bridges: on empty ground or existing pipes/wires
+                        let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tbt = self.grid_data[tidx] & 0xFF;
+                            self.can_place_on(tx, ty, false)
+                                || (self.build_tool == BuildTool::Place(50)
+                                    && (pipes::is_gas_pipe_component(tbt)
+                                        || pipes::is_liquid_pipe_component(tbt)))
+                                || (self.build_tool == BuildTool::Place(51) && tbt == BT_WIRE)
+                        } else {
+                            false
+                        };
+                        ((tx, ty), ok)
+                    } else if matches!(self.build_tool, BuildTool::Place(53) | BuildTool::Place(54))
+                    {
+                        // Liquid pump/output: on empty ground or on liquid pipe
+                        let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tbt = self.grid_data[tidx] & 0xFF;
+                            self.can_place_on(tx, ty, false) || tbt == BT_LIQUID_PIPE
+                        } else {
+                            false
+                        };
+                        ((tx, ty), ok)
+                    } else if matches!(
+                        self.build_tool,
+                        BuildTool::Place(42) | BuildTool::Place(43) | BuildTool::Place(45)
+                    ) {
+                        // Switch/Dimmer/Breaker: on empty ground or on wire
+                        let ok = if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                            let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let tbt = self.grid_data[tidx] & 0xFF;
+                            self.can_place_on(tx, ty, false) || tbt == BT_WIRE
+                        } else {
+                            false
+                        };
                         ((tx, ty), ok)
                     } else {
-                        ((tx, ty), self.can_place_on(tx, ty, on_furniture))
+                        // Wall-adjacent items: valid only if adjacent to a wall
+                        let is_wall_adjacent = match self.build_tool {
+                            BuildTool::Place(id) => {
+                                let reg2 = block_defs::BlockRegistry::cached();
+                                reg2.get(id)
+                                    .and_then(|d| d.placement.as_ref())
+                                    .map(|p| p.click == block_defs::ClickMode::WallAdjacent)
+                                    .unwrap_or(false)
+                            }
+                            _ => false,
+                        };
+                        if is_wall_adjacent {
+                            ((tx, ty), self.wall_adjacent_direction(tx, ty).is_some())
+                        } else if matches!(self.build_tool, BuildTool::Place(id) if id == BT_WELL) {
+                            // Well: must be on dug ground
+                            let ok =
+                                if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                                    let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                                    block_type_rs(self.grid_data[tidx]) == BT_DUG_GROUND
+                                } else {
+                                    false
+                                };
+                            ((tx, ty), ok)
+                        } else {
+                            ((tx, ty), self.can_place_on(tx, ty, on_furniture))
+                        }
                     }
-                }
-            }).collect()
+                })
+                .collect()
         } else {
             vec![]
         };
-        let bp_cam = (self.camera.center_x, self.camera.center_y, self.camera.zoom, self.camera.screen_w, self.camera.screen_h);
+        let bp_cam = (
+            self.camera.center_x,
+            self.camera.center_y,
+            self.camera.zoom,
+            self.camera.screen_w,
+            self.camera.screen_h,
+        );
 
         // Draw all UI (egui pass was started above, ctx is the cloned context)
         self.draw_ui(&ctx, bp_cam, blueprint_tiles, dt);
@@ -1465,7 +2105,9 @@ impl App {
         let egui_state = self.egui_state.as_mut().unwrap();
         let window = self.window.as_ref().unwrap();
         let egui_output = ctx.end_pass();
-        egui_state.winit_state.handle_platform_output(window, egui_output.platform_output.clone());
+        egui_state
+            .winit_state
+            .handle_platform_output(window, egui_output.platform_output.clone());
         let paint_jobs = ctx.tessellate(egui_output.shapes, ctx.pixels_per_point());
 
         let gfx = self.gfx.as_ref().unwrap();
@@ -1476,14 +2118,22 @@ impl App {
 
         // Upload egui textures
         for (id, image_delta) in &egui_output.textures_delta.set {
-            egui_state.renderer.update_texture(&gfx.device, &gfx.queue, *id, image_delta);
+            egui_state
+                .renderer
+                .update_texture(&gfx.device, &gfx.queue, *id, image_delta);
         }
         let mut encoder = gfx
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame-encoder"),
             });
-        egui_state.renderer.update_buffers(&gfx.device, &gfx.queue, &mut encoder, &paint_jobs, &screen_descriptor);
+        egui_state.renderer.update_buffers(
+            &gfx.device,
+            &gfx.queue,
+            &mut encoder,
+            &paint_jobs,
+            &screen_descriptor,
+        );
 
         // Lightmap: viewport-culled propagation at 2x resolution
         self.lightmap_frame += 1;
@@ -1535,61 +2185,139 @@ impl App {
         let dye_wg_y = (dye_h + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
         // 1. Curl
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-curl"), timestamp_writes: None });
-          p.set_pipeline(&gfx.fluid_p_curl); p.set_bind_group(0, &gfx.fluid_bg_curl, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fluid-curl"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&gfx.fluid_p_curl);
+            p.set_bind_group(0, &gfx.fluid_bg_curl, &[]);
+            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+        }
         // 2. Vorticity
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-vorticity"), timestamp_writes: None });
-          p.set_pipeline(&gfx.fluid_p_vorticity); p.set_bind_group(0, &gfx.fluid_bg_vorticity, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fluid-vorticity"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&gfx.fluid_p_vorticity);
+            p.set_bind_group(0, &gfx.fluid_bg_vorticity, &[]);
+            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+        }
         // 3. Splat
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-splat"), timestamp_writes: None });
-          p.set_pipeline(&gfx.fluid_p_splat); p.set_bind_group(0, &gfx.fluid_bg_splat, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fluid-splat"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&gfx.fluid_p_splat);
+            p.set_bind_group(0, &gfx.fluid_bg_splat, &[]);
+            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+        }
         // 4. Divergence
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-div"), timestamp_writes: None });
-          p.set_pipeline(&gfx.fluid_p_divergence); p.set_bind_group(0, &gfx.fluid_bg_divergence, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fluid-div"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&gfx.fluid_p_divergence);
+            p.set_bind_group(0, &gfx.fluid_bg_divergence, &[]);
+            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+        }
         // 5. Pressure clear
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-pres-clear"), timestamp_writes: None });
-          p.set_pipeline(&gfx.fluid_p_pressure_clear); p.set_bind_group(0, &gfx.fluid_bg_pressure_clear, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fluid-pres-clear"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&gfx.fluid_p_pressure_clear);
+            p.set_bind_group(0, &gfx.fluid_bg_pressure_clear, &[]);
+            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+        }
         // 6. Pressure Jacobi (16 iterations, ping-pong)
         for i in 0..self.fluid_pressure_iters {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-pressure"), timestamp_writes: None });
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fluid-pressure"),
+                timestamp_writes: None,
+            });
             p.set_pipeline(&gfx.fluid_p_pressure);
             p.set_bind_group(0, &gfx.fluid_bg_pressure[(i as usize) % 2], &[]);
             p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
         }
         // 7. Gradient subtract
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-gradient"), timestamp_writes: None });
-          p.set_pipeline(&gfx.fluid_p_gradient); p.set_bind_group(0, &gfx.fluid_bg_gradient, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fluid-gradient"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&gfx.fluid_p_gradient);
+            p.set_bind_group(0, &gfx.fluid_bg_gradient, &[]);
+            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+        }
         // 8. Advect velocity
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-advect-vel"), timestamp_writes: None });
-          p.set_pipeline(&gfx.fluid_p_advect_vel); p.set_bind_group(0, &gfx.fluid_bg_advect_vel, &[]); p.dispatch_workgroups(fluid_wg, fluid_wg, 1); }
+        {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fluid-advect-vel"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&gfx.fluid_p_advect_vel);
+            p.set_bind_group(0, &gfx.fluid_bg_advect_vel, &[]);
+            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+        }
         // 9. Advect dye (512x512)
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fluid-advect-dye"), timestamp_writes: None });
-          p.set_pipeline(&gfx.fluid_p_advect_dye); p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]); p.dispatch_workgroups(dye_wg_x, dye_wg_y, 1); }
+        {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("fluid-advect-dye"),
+                timestamp_writes: None,
+            });
+            p.set_pipeline(&gfx.fluid_p_advect_dye);
+            p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]);
+            p.dispatch_workgroups(dye_wg_x, dye_wg_y, 1);
+        }
         // Flip dye phase for next frame
         self.fluid_dye_phase = 1 - self.fluid_dye_phase;
 
         // 10. Thermal exchange (256x256)
-        { let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("thermal"), timestamp_writes: None });
-          let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
-          p.set_pipeline(&gfx.thermal_pipeline); p.set_bind_group(0, &gfx.thermal_bind_group, &[]); p.dispatch_workgroups(tw, th, 1); }
+        {
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("thermal"),
+                timestamp_writes: None,
+            });
+            let tw = (GRID_W + 7) / 8;
+            let th = (GRID_H + 7) / 8;
+            p.set_pipeline(&gfx.thermal_pipeline);
+            p.set_bind_group(0, &gfx.thermal_bind_group, &[]);
+            p.dispatch_workgroups(tw, th, 1);
+        }
 
         // 11. Power grid voltage relaxation (256x256)
         #[cfg(target_arch = "wasm32")]
         let power_iters = 4;
         #[cfg(not(target_arch = "wasm32"))]
         let power_iters = 8;
-        { let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
-          for _ in 0..power_iters {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("power"), timestamp_writes: None });
-            p.set_pipeline(&gfx.power_pipeline); p.set_bind_group(0, &gfx.power_bind_group, &[]); p.dispatch_workgroups(tw, th, 1);
-          }
+        {
+            let tw = (GRID_W + 7) / 8;
+            let th = (GRID_H + 7) / 8;
+            for _ in 0..power_iters {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("power"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.power_pipeline);
+                p.set_bind_group(0, &gfx.power_bind_group, &[]);
+                p.dispatch_workgroups(tw, th, 1);
+            }
         }
 
         // 12. Ground water simulation (256x256, every 4 frames)
         self.water_frame += 1;
         if self.water_frame % 4 == 0 && !self.time_paused {
-            let tw = (GRID_W + 7) / 8; let th = (GRID_H + 7) / 8;
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("water"), timestamp_writes: None });
+            let tw = (GRID_W + 7) / 8;
+            let th = (GRID_H + 7) / 8;
+            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("water"),
+                timestamp_writes: None,
+            });
             p.set_pipeline(&gfx.water_pipeline);
             p.set_bind_group(0, &gfx.water_bind_groups[self.water_phase], &[]);
             p.dispatch_workgroups(tw, th, 1);
@@ -1610,7 +2338,11 @@ impl App {
                 wgpu::TexelCopyTextureInfo {
                     texture: &gfx.fluid_dye[dye_idx],
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: dye_x, y: dye_y, z: 0 },
+                    origin: wgpu::Origin3d {
+                        x: dye_x,
+                        y: dye_y,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::TexelCopyBufferInfo {
@@ -1621,7 +2353,11 @@ impl App {
                         rows_per_image: Some(1),
                     },
                 },
-                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
             );
             self.debug.fluid_pending = true;
 
@@ -1633,14 +2369,26 @@ impl App {
                 wgpu::TexelCopyTextureInfo {
                     texture: &gfx.water_textures[water_read_idx],
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: water_bx, y: water_by, z: 0 },
+                    origin: wgpu::Origin3d {
+                        x: water_bx,
+                        y: water_by,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::TexelCopyBufferInfo {
                     buffer: &gfx.water_readback_buffer,
-                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(READBACK_ALIGNMENT as u32), rows_per_image: Some(1) },
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(READBACK_ALIGNMENT as u32),
+                        rows_per_image: Some(1),
+                    },
                 },
-                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
             );
             self.debug.water_pending = true;
 
@@ -1650,13 +2398,17 @@ impl App {
             if btx >= 0 && bty >= 0 && btx < GRID_W as i32 && bty < GRID_H as i32 {
                 let bt_idx = (bty as u32 * GRID_W + btx as u32) as u64;
                 encoder.copy_buffer_to_buffer(
-                    &gfx.block_temp_buffer, bt_idx * 4,
-                    &gfx.block_temp_readback_buffer, 0,
+                    &gfx.block_temp_buffer,
+                    bt_idx * 4,
+                    &gfx.block_temp_readback_buffer,
+                    0,
                     4,
                 );
                 encoder.copy_buffer_to_buffer(
-                    &gfx.voltage_buffer, bt_idx * 4,
-                    &gfx.block_temp_readback_buffer, 4, // second f32
+                    &gfx.voltage_buffer,
+                    bt_idx * 4,
+                    &gfx.block_temp_readback_buffer,
+                    4, // second f32
                     4,
                 );
                 self.debug.block_temp_pending = true;
@@ -1665,12 +2417,16 @@ impl App {
         }
 
         // Copy full voltage buffer for per-tile labels (power overlay or flow overlay)
-        if matches!(self.fluid_overlay, FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts)
-            || self.show_flow_overlay
+        if matches!(
+            self.fluid_overlay,
+            FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts
+        ) || self.show_flow_overlay
         {
             encoder.copy_buffer_to_buffer(
-                &gfx.voltage_buffer, 0,
-                &gfx.voltage_readback_buffer, 0,
+                &gfx.voltage_buffer,
+                0,
+                &gfx.voltage_readback_buffer,
+                0,
                 (GRID_W * GRID_H * 4) as u64,
             );
             self.voltage_readback_pending = true;
@@ -1680,15 +2436,19 @@ impl App {
         if !self.plebs.is_empty() {
             let dye_idx = self.fluid_dye_phase;
             for (i, pleb) in self.plebs.iter().enumerate() {
-                let dye_x = ((pleb.x / GRID_W as f32) * dye_w as f32)
-                    .clamp(0.0, (dye_w - 1) as f32) as u32;
-                let dye_y = ((pleb.y / GRID_H as f32) * dye_h as f32)
-                    .clamp(0.0, (dye_h - 1) as f32) as u32;
+                let dye_x =
+                    ((pleb.x / GRID_W as f32) * dye_w as f32).clamp(0.0, (dye_w - 1) as f32) as u32;
+                let dye_y =
+                    ((pleb.y / GRID_H as f32) * dye_h as f32).clamp(0.0, (dye_h - 1) as f32) as u32;
                 encoder.copy_texture_to_buffer(
                     wgpu::TexelCopyTextureInfo {
                         texture: &gfx.fluid_dye[dye_idx],
                         mip_level: 0,
-                        origin: wgpu::Origin3d { x: dye_x, y: dye_y, z: 0 },
+                        origin: wgpu::Origin3d {
+                            x: dye_x,
+                            y: dye_y,
+                            z: 0,
+                        },
                         aspect: wgpu::TextureAspect::All,
                     },
                     wgpu::TexelCopyBufferInfo {
@@ -1699,7 +2459,11 @@ impl App {
                             rows_per_image: Some(1),
                         },
                     },
-                    wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
                 );
             }
             self.pleb_air_readback_pending = true;
@@ -1729,13 +2493,19 @@ impl App {
             self.camera.sound_damping = self.sound_damping;
             self.camera.sound_coupling = self.sound_coupling;
             // Re-upload camera with sound params
-            gfx.queue.write_buffer(&gfx.camera_buffer, 0, bytemuck::bytes_of(&self.camera));
+            gfx.queue
+                .write_buffer(&gfx.camera_buffer, 0, bytemuck::bytes_of(&self.camera));
 
             // Pack active sound sources into buffer
             let mut source_data = vec![0.0f32; 1 + MAX_SOUND_SOURCES * SOUND_SOURCE_STRIDE];
             let count = self.sound_sources.len().min(MAX_SOUND_SOURCES);
             source_data[0] = count as f32;
-            for (i, src) in self.sound_sources.iter().enumerate().take(MAX_SOUND_SOURCES) {
+            for (i, src) in self
+                .sound_sources
+                .iter()
+                .enumerate()
+                .take(MAX_SOUND_SOURCES)
+            {
                 let base = 1 + i * SOUND_SOURCE_STRIDE;
                 source_data[base] = src.x;
                 source_data[base + 1] = src.y;
@@ -1745,7 +2515,11 @@ impl App {
                 source_data[base + 5] = src.pattern as f32;
                 source_data[base + 6] = src.duration;
             }
-            gfx.queue.write_buffer(&gfx.sound_source_buffer, 0, bytemuck::cast_slice(&source_data));
+            gfx.queue.write_buffer(
+                &gfx.sound_source_buffer,
+                0,
+                bytemuck::cast_slice(&source_data),
+            );
 
             // Tick sources: advance phase, decrement duration, remove expired
             let dt_sound = 1.0 / 60.0;
@@ -1762,7 +2536,8 @@ impl App {
             let sh = (GRID_H + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             for _ in 0..iters {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("sound-pass"), timestamp_writes: None,
+                    label: Some("sound-pass"),
+                    timestamp_writes: None,
                 });
                 cpass.set_pipeline(&gfx.sound_pipeline);
                 cpass.set_bind_group(0, &gfx.sound_bind_groups[self.sound_phase], &[]);
@@ -1782,7 +2557,11 @@ impl App {
                 timestamp_writes: None,
             });
             cpass.set_pipeline(&gfx.compute_pipeline);
-            cpass.set_bind_group(0, &gfx.compute_bind_groups[self.fluid_dye_phase * 2 + self.output_phase], &[]);
+            cpass.set_bind_group(
+                0,
+                &gfx.compute_bind_groups[self.fluid_dye_phase * 2 + self.output_phase],
+                &[],
+            );
             let wg_x = (rt_w + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             let wg_y = (rt_h + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             cpass.dispatch_workgroups(wg_x, wg_y, 1);
@@ -1837,17 +2616,16 @@ impl App {
                         temp_buf[idx as usize] = cell.gas[3];
                     }
                 }
-                gfx.queue.write_buffer(
-                    &gfx.block_temp_buffer,
-                    0,
-                    bytemuck::cast_slice(&temp_buf),
-                );
+                gfx.queue
+                    .write_buffer(&gfx.block_temp_buffer, 0, bytemuck::cast_slice(&temp_buf));
             }
 
             // Apply pipe outlet injections to dye texture (AFTER shader runs)
             // Write into cells ADJACENT to the outlet (in the outlet's facing direction)
             for &(ox, oy, gas, pressure) in &pipe_injections {
-                if pressure < 0.05 { continue; }
+                if pressure < 0.05 {
+                    continue;
+                }
                 let grid_idx = (oy as u32) * GRID_W + (ox as u32);
                 let block = self.grid_data[grid_idx as usize];
                 let dir_bits = (block >> 19) & 3; // bits 3-4 of flags = direction
@@ -1860,7 +2638,13 @@ impl App {
                 };
                 let inject_x = ox as i32 + adx;
                 let inject_y = oy as i32 + ady;
-                if inject_x < 0 || inject_y < 0 || inject_x >= GRID_W as i32 || inject_y >= GRID_H as i32 { continue; }
+                if inject_x < 0
+                    || inject_y < 0
+                    || inject_x >= GRID_W as i32
+                    || inject_y >= GRID_H as i32
+                {
+                    continue;
+                }
 
                 // Dye texture is render-resolution; map world coords to dye pixel coords
                 let dye_x = ((inject_x as f32 / GRID_W as f32) * dye_w as f32) as i32;
@@ -1885,8 +2669,16 @@ impl App {
                             aspect: wgpu::TextureAspect::All,
                         },
                         bytes,
-                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
-                        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(8),
+                            rows_per_image: Some(1),
+                        },
+                        wgpu::Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth_or_array_layers: 1,
+                        },
                     );
                 }
             }
@@ -1897,7 +2689,9 @@ impl App {
                 for oy in -radius..=radius {
                     for ox in -radius..=radius {
                         let dist = ((ox * ox + oy * oy) as f32).sqrt();
-                        if dist > radius as f32 + 0.5 { continue; }
+                        if dist > radius as f32 + 0.5 {
+                            continue;
+                        }
                         let strength = 1.0 - dist / (radius as f32 + 1.0);
                         let wx = (gx as i32 + ox).clamp(0, GRID_W as i32 - 1);
                         let wy = (gy as i32 + oy).clamp(0, GRID_H as i32 - 1);
@@ -1921,8 +2715,16 @@ impl App {
                                     aspect: wgpu::TextureAspect::All,
                                 },
                                 bytes,
-                                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
-                                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                                wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(8),
+                                    rows_per_image: Some(1),
+                                },
+                                wgpu::Extent3d {
+                                    width: 1,
+                                    height: 1,
+                                    depth_or_array_layers: 1,
+                                },
                             );
                         }
                     }
@@ -1939,7 +2741,12 @@ impl App {
                 {
                     let buffer_slice = gfx.debug_readback_buffer.slice(..);
                     buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                    gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                    gfx.device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: None,
+                            timeout: None,
+                        })
+                        .ok();
                     let data = buffer_slice.get_mapped_range();
                     let f16_data: &[u16] = bytemuck::cast_slice(&data);
                     for i in 0..4 {
@@ -1957,7 +2764,12 @@ impl App {
                 {
                     let buffer_slice = gfx.water_readback_buffer.slice(..);
                     buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                    gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                    gfx.device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: None,
+                            timeout: None,
+                        })
+                        .ok();
                     let data = buffer_slice.get_mapped_range();
                     let f32_data: &[f32] = bytemuck::cast_slice(&data);
                     self.debug.water_level = f32_data[0];
@@ -1974,7 +2786,12 @@ impl App {
                 {
                     let buffer_slice = gfx.block_temp_readback_buffer.slice(..8); // 2 f32s
                     buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                    gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                    gfx.device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: None,
+                            timeout: None,
+                        })
+                        .ok();
                     let data = buffer_slice.get_mapped_range();
                     let values: &[f32] = bytemuck::cast_slice(&data);
                     self.debug.block_temp = values[0];
@@ -1992,7 +2809,12 @@ impl App {
                     let buf_size = (GRID_W * GRID_H * 4) as u64;
                     let buffer_slice = gfx.voltage_readback_buffer.slice(..buf_size);
                     buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                    gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                    gfx.device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: None,
+                            timeout: None,
+                        })
+                        .ok();
                     let data = buffer_slice.get_mapped_range();
                     let values: &[f32] = bytemuck::cast_slice(&data);
                     self.voltage_data.clear();
@@ -2012,7 +2834,12 @@ impl App {
                         let read_size = num_plebs as u64 * READBACK_ALIGNMENT;
                         let buffer_slice = gfx.pleb_air_readback_buffer.slice(..read_size);
                         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                        gfx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+                        gfx.device
+                            .poll(wgpu::PollType::Wait {
+                                submission_index: None,
+                                timeout: None,
+                            })
+                            .ok();
                         let data = buffer_slice.get_mapped_range();
                         self.pleb_air_data.resize(num_plebs, AirReadback::default());
                         for i in 0..num_plebs {
@@ -2031,11 +2858,11 @@ impl App {
                 }
             }
 
-            let mut egui_encoder = gfx
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("egui-encoder"),
-                });
+            let mut egui_encoder =
+                gfx.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("egui-encoder"),
+                    });
             let rpass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("egui-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2052,10 +2879,10 @@ impl App {
                 occlusion_query_set: None,
             });
             // SAFETY: egui_encoder lives until after rpass is dropped (submit consumes both)
-            let mut rpass: wgpu::RenderPass<'static> = unsafe {
-                std::mem::transmute(rpass)
-            };
-            egui_state.renderer.render(&mut rpass, &paint_jobs, &screen_descriptor);
+            let mut rpass: wgpu::RenderPass<'static> = unsafe { std::mem::transmute(rpass) };
+            egui_state
+                .renderer
+                .render(&mut rpass, &paint_jobs, &screen_descriptor);
             drop(rpass);
             gfx.queue.submit(std::iter::once(egui_encoder.finish()));
         }
@@ -2069,7 +2896,6 @@ impl App {
 
         self.window.as_ref().unwrap().request_redraw();
     }
-
 }
 
 impl ApplicationHandler for App {
@@ -2081,11 +2907,15 @@ impl ApplicationHandler for App {
         #[cfg(not(target_arch = "wasm32"))]
         let attrs = {
             // 50% larger than default, matching monitor aspect ratio
-            let monitor = event_loop.primary_monitor()
+            let monitor = event_loop
+                .primary_monitor()
                 .or_else(|| event_loop.available_monitors().next());
             let (w, h) = if let Some(m) = monitor {
                 let size = m.size();
-                ((size.width as f32 * WINDOW_SCALE) as u32, (size.height as f32 * WINDOW_SCALE) as u32)
+                (
+                    (size.width as f32 * WINDOW_SCALE) as u32,
+                    (size.height as f32 * WINDOW_SCALE) as u32,
+                )
             } else {
                 DEFAULT_WINDOW_SIZE
             };
@@ -2196,7 +3026,9 @@ impl ApplicationHandler for App {
 
         // Let egui process the event first
         if let Some(egui_state) = self.egui_state.as_mut() {
-            let response = egui_state.winit_state.on_window_event(self.window.as_ref().unwrap(), &event);
+            let response = egui_state
+                .winit_state
+                .on_window_event(self.window.as_ref().unwrap(), &event);
             if response.consumed {
                 return; // egui consumed this event (e.g., clicking on the UI)
             }
@@ -2210,13 +3042,16 @@ impl ApplicationHandler for App {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 50.0,
                 };
-        let base_zoom = (self.camera.screen_w / 64.0).min(self.camera.screen_h / 64.0);
+                let base_zoom = (self.camera.screen_w / 64.0).min(self.camera.screen_h / 64.0);
                 if scroll > 0.0 {
                     self.camera.zoom *= ZOOM_FACTOR;
                 } else if scroll < 0.0 {
                     self.camera.zoom /= ZOOM_FACTOR;
                 }
-                self.camera.zoom = self.camera.zoom.clamp(base_zoom * ZOOM_MIN_MULT, base_zoom * ZOOM_MAX_MULT);
+                self.camera.zoom = self
+                    .camera
+                    .zoom
+                    .clamp(base_zoom * ZOOM_MIN_MULT, base_zoom * ZOOM_MAX_MULT);
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -2226,16 +3061,25 @@ impl ApplicationHandler for App {
                         self.mouse_dragged = false;
                         // Start drag for shape-building tools
                         let is_shape_tool = match self.build_tool {
-                            BuildTool::Destroy | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof | BuildTool::GrowingZone | BuildTool::StorageZone => true,
+                            BuildTool::Destroy
+                            | BuildTool::Roof
+                            | BuildTool::RemoveFloor
+                            | BuildTool::RemoveRoof
+                            | BuildTool::GrowingZone
+                            | BuildTool::StorageZone => true,
                             BuildTool::Place(id) => {
                                 let reg = block_defs::BlockRegistry::cached();
-                                reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref())
-                                    .map(|s| *s != block_defs::DragShape::None).unwrap_or(false)
+                                reg.get(id)
+                                    .and_then(|d| d.placement.as_ref())
+                                    .and_then(|p| p.drag.as_ref())
+                                    .map(|s| *s != block_defs::DragShape::None)
+                                    .unwrap_or(false)
                             }
                             _ => false,
                         };
                         if is_shape_tool {
-                            let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                            let (wx, wy) =
+                                self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             self.drag_start = Some((wx.floor() as i32, wy.floor() as i32));
                         }
                     } else {
@@ -2243,13 +3087,15 @@ impl ApplicationHandler for App {
                         if self.mouse_dragged && self.drag_start.is_some() {
                             // Apply the drag shape
                             let (sx, sy) = self.drag_start.unwrap();
-                            let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                            let (wx, wy) =
+                                self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             let (ex, ey) = (wx.floor() as i32, wy.floor() as i32);
                             self.apply_drag_shape(sx, sy, ex, ey);
                         } else if self.select_drag_start.is_some() {
                             // Complete selection rectangle — find individual items
                             let (sx, sy) = self.select_drag_start.unwrap();
-                            let (ex, ey) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                            let (ex, ey) =
+                                self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             let min_x = sx.min(ex).floor() as i32;
                             let min_y = sy.min(ey).floor() as i32;
                             let max_x = sx.max(ex).ceil() as i32;
@@ -2258,7 +3104,13 @@ impl ApplicationHandler for App {
                             let mut seen = std::collections::HashSet::new();
                             for gy in min_y..max_y {
                                 for gx in min_x..max_x {
-                                    if gx < 0 || gy < 0 || gx >= GRID_W as i32 || gy >= GRID_H as i32 { continue; }
+                                    if gx < 0
+                                        || gy < 0
+                                        || gx >= GRID_W as i32
+                                        || gy >= GRID_H as i32
+                                    {
+                                        continue;
+                                    }
                                     let bidx = (gy as u32 * GRID_W + gx as u32) as usize;
                                     let b = self.grid_data[bidx];
                                     let bbt = block_type_rs(b);
@@ -2266,17 +3118,28 @@ impl ApplicationHandler for App {
                                     let is_gnd = is_ground_block(bbt as u32);
                                     // Include blueprints even on ground tiles
                                     let has_blueprint = self.blueprints.contains_key(&(gx, gy));
-                                    if is_gnd && !has_blueprint { continue; }
+                                    if is_gnd && !has_blueprint {
+                                        continue;
+                                    }
                                     let bt_for_sel = if has_blueprint {
                                         (self.blueprints[&(gx, gy)].block_data & 0xFF) as u32
-                                    } else { bbt as u32 };
+                                    } else {
+                                        bbt as u32
+                                    };
                                     let (ox, oy, ow, oh) = if has_blueprint {
                                         (gx, gy, 1, 1)
                                     } else {
                                         self.get_block_bounds(gx, gy, bbt, bflags)
                                     };
                                     if seen.insert((ox, oy)) {
-                                        items.push(SelectedItem { x: ox, y: oy, w: ow, h: oh, block_type: bt_for_sel, pleb_idx: None });
+                                        items.push(SelectedItem {
+                                            x: ox,
+                                            y: oy,
+                                            w: ow,
+                                            h: oh,
+                                            block_type: bt_for_sel,
+                                            pleb_idx: None,
+                                        });
                                     }
                                 }
                             }
@@ -2287,26 +3150,45 @@ impl ApplicationHandler for App {
                                 let py = pleb.y.floor() as i32;
                                 if px >= min_x && px < max_x && py >= min_y && py < max_y {
                                     items.push(SelectedItem {
-                                        x: px, y: py, w: 1, h: 1,
-                                        block_type: SEL_PLEB, pleb_idx: Some(pi),
+                                        x: px,
+                                        y: py,
+                                        w: 1,
+                                        h: 1,
+                                        block_type: SEL_PLEB,
+                                        pleb_idx: Some(pi),
                                     });
-                                    if first_pleb.is_none() { first_pleb = Some(pi); }
+                                    if first_pleb.is_none() {
+                                        first_pleb = Some(pi);
+                                    }
                                 }
                             }
                             self.world_sel = WorldSelection { items };
                             // If exactly one pleb selected, make it the active pleb
-                            self.selected_pleb = if self.world_sel.items.iter().filter(|i| i.pleb_idx.is_some()).count() == 1 {
+                            self.selected_pleb = if self
+                                .world_sel
+                                .items
+                                .iter()
+                                .filter(|i| i.pleb_idx.is_some())
+                                .count()
+                                == 1
+                            {
                                 first_pleb
                             } else {
                                 None
                             };
                         } else if !self.mouse_dragged {
-                            let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                            let (wx, wy) =
+                                self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             // Ctrl+left-click on Mac = right-click equivalent
                             let ctrl_held = self.pressed_keys.contains(&KeyCode::ControlLeft)
                                 || self.pressed_keys.contains(&KeyCode::ControlRight);
                             if ctrl_held && self.selected_pleb.is_some() {
-                                self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
+                                self.open_context_menu(
+                                    self.last_mouse_x as f32,
+                                    self.last_mouse_y as f32,
+                                    wx,
+                                    wy,
+                                );
                             } else {
                                 self.handle_click(wx, wy);
                             }
@@ -2327,7 +3209,12 @@ impl ApplicationHandler for App {
                     if state.is_pressed() {
                         let (wx, wy) = self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                         if self.selected_pleb.is_some() {
-                            self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
+                            self.open_context_menu(
+                                self.last_mouse_x as f32,
+                                self.last_mouse_y as f32,
+                                wx,
+                                wy,
+                            );
                         } else {
                             self.try_pick_light(wx, wy);
                         }
@@ -2391,7 +3278,8 @@ mod tests {
     /// the solid halves share at least one edge pixel.
     fn assert_no_gaps(tiles: &[(i32, i32, u8)], label: &str) {
         // Build a set of (x, y, variant) for quick lookup
-        let tile_set: std::collections::HashMap<(i32, i32), u8> = tiles.iter().map(|&(x, y, v)| ((x, y), v)).collect();
+        let tile_set: std::collections::HashMap<(i32, i32), u8> =
+            tiles.iter().map(|&(x, y, v)| ((x, y), v)).collect();
 
         // For each tile, check that it connects to at least one neighbor's solid half
         for &(tx, ty, tv) in tiles {
@@ -2402,20 +3290,22 @@ mod tests {
                 if let Some(&nv) = tile_set.get(&(nx, ny)) {
                     // Check if the shared edge has solid pixels on both sides.
                     // Sample 5 points along the shared edge.
-                    let edge_solid_count = (0..5).filter(|&i| {
-                        let t = (i as f32 + 0.5) / 5.0;
-                        let (tfx, tfy, nfx, nfy) = if nx == tx - 1 {
-                            // neighbor is to the left: shared edge at fx=0 of current, fx=1 of neighbor
-                            (0.0, t, 1.0, t)
-                        } else if nx == tx + 1 {
-                            (1.0, t, 0.0, t)
-                        } else if ny == ty - 1 {
-                            (t, 0.0, t, 1.0)
-                        } else {
-                            (t, 1.0, t, 0.0)
-                        };
-                        is_wall(tfx, tfy, tv) && is_wall(nfx, nfy, nv)
-                    }).count();
+                    let edge_solid_count = (0..5)
+                        .filter(|&i| {
+                            let t = (i as f32 + 0.5) / 5.0;
+                            let (tfx, tfy, nfx, nfy) = if nx == tx - 1 {
+                                // neighbor is to the left: shared edge at fx=0 of current, fx=1 of neighbor
+                                (0.0, t, 1.0, t)
+                            } else if nx == tx + 1 {
+                                (1.0, t, 0.0, t)
+                            } else if ny == ty - 1 {
+                                (t, 0.0, t, 1.0)
+                            } else {
+                                (t, 1.0, t, 0.0)
+                            };
+                            is_wall(tfx, tfy, tv) && is_wall(nfx, nfy, nv)
+                        })
+                        .count();
 
                     if edge_solid_count >= 3 {
                         connected = true;
@@ -2431,7 +3321,10 @@ mod tests {
                 let is_endpoint = (tx, ty) == (tiles[0].0, tiles[0].1)
                     || (tx, ty) == (tiles.last().unwrap().0, tiles.last().unwrap().1);
                 if !is_endpoint {
-                    panic!("{}: tile ({},{}) variant {} has no connected neighbor", label, tx, ty, tv);
+                    panic!(
+                        "{}: tile ({},{}) variant {} has no connected neighbor",
+                        label, tx, ty, tv
+                    );
                 }
             }
         }
@@ -2452,10 +3345,10 @@ mod tests {
         // Test all 8 combinations: 4 variants × 2 drag orientations (but variant
         // auto-adapts to drag direction, so we test all 4 rotations × 4 directions)
         let directions: [(i32, i32, &str); 4] = [
-            (3, 3, "right-down"),    // \ direction
-            (-3, -3, "left-up"),     // \ direction
-            (3, -3, "right-up"),     // / direction
-            (-3, 3, "left-down"),    // / direction
+            (3, 3, "right-down"), // \ direction
+            (-3, -3, "left-up"),  // \ direction
+            (3, -3, "right-up"),  // / direction
+            (-3, 3, "left-down"), // / direction
         ];
 
         for rotation in 0..4u32 {
@@ -2495,7 +3388,9 @@ mod tests {
         let mut rev_set: Vec<(i32, i32)> = rev.iter().map(|&(x, y, _)| (x, y)).collect();
         fwd_set.sort();
         rev_set.sort();
-        assert_eq!(fwd_set, rev_set, "forward and reverse drags should cover same tiles");
+        assert_eq!(
+            fwd_set, rev_set,
+            "forward and reverse drags should cover same tiles"
+        );
     }
 }
-

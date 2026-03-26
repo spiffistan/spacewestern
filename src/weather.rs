@@ -37,7 +37,12 @@ impl WeatherState {
 
 /// Transition weather based on time elapsed. Returns new state.
 /// Weather changes roughly every 30-90 game seconds.
-pub fn tick_weather(current: &WeatherState, timer: &mut f32, dt: f32, time_speed: f32) -> Option<WeatherState> {
+pub fn tick_weather(
+    current: &WeatherState,
+    timer: &mut f32,
+    dt: f32,
+    time_speed: f32,
+) -> Option<WeatherState> {
     *timer -= dt * time_speed;
     if *timer > 0.0 {
         return None;
@@ -49,26 +54,44 @@ pub fn tick_weather(current: &WeatherState, timer: &mut f32, dt: f32, time_speed
 
     let next = match current {
         WeatherState::Clear => {
-            if r < 0.6 { WeatherState::Clear }
-            else if r < 0.85 { WeatherState::Cloudy }
-            else { WeatherState::LightRain }
+            if r < 0.6 {
+                WeatherState::Clear
+            } else if r < 0.85 {
+                WeatherState::Cloudy
+            } else {
+                WeatherState::LightRain
+            }
         }
         WeatherState::Cloudy => {
-            if r < 0.3 { WeatherState::Clear }
-            else if r < 0.6 { WeatherState::Cloudy }
-            else if r < 0.85 { WeatherState::LightRain }
-            else { WeatherState::HeavyRain }
+            if r < 0.3 {
+                WeatherState::Clear
+            } else if r < 0.6 {
+                WeatherState::Cloudy
+            } else if r < 0.85 {
+                WeatherState::LightRain
+            } else {
+                WeatherState::HeavyRain
+            }
         }
         WeatherState::LightRain => {
-            if r < 0.2 { WeatherState::Cloudy }
-            else if r < 0.5 { WeatherState::LightRain }
-            else if r < 0.8 { WeatherState::HeavyRain }
-            else { WeatherState::Clear }
+            if r < 0.2 {
+                WeatherState::Cloudy
+            } else if r < 0.5 {
+                WeatherState::LightRain
+            } else if r < 0.8 {
+                WeatherState::HeavyRain
+            } else {
+                WeatherState::Clear
+            }
         }
         WeatherState::HeavyRain => {
-            if r < 0.4 { WeatherState::HeavyRain }
-            else if r < 0.7 { WeatherState::LightRain }
-            else { WeatherState::Cloudy }
+            if r < 0.4 {
+                WeatherState::HeavyRain
+            } else if r < 0.7 {
+                WeatherState::LightRain
+            } else {
+                WeatherState::Cloudy
+            }
         }
     };
 
@@ -94,7 +117,14 @@ pub fn tick_wetness(
         let roof_h = (b >> 24) & 0xFF;
         let bt = b & 0xFF;
         let is_outdoor = roof_h == 0;
-        let is_ground = bt_is!(bt, BT_DIRT, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR, BT_DUG_GROUND);
+        let is_ground = bt_is!(
+            bt,
+            BT_DIRT,
+            BT_WOOD_FLOOR,
+            BT_STONE_FLOOR,
+            BT_CONCRETE_FLOOR,
+            BT_DUG_GROUND
+        );
 
         if is_ground {
             if is_outdoor && rain_intensity > 0.0 {
@@ -123,7 +153,9 @@ mod tests {
     fn test_rain_intensity() {
         assert_eq!(WeatherState::Clear.rain_intensity(), 0.0);
         assert!(WeatherState::LightRain.rain_intensity() > 0.0);
-        assert!(WeatherState::HeavyRain.rain_intensity() > WeatherState::LightRain.rain_intensity());
+        assert!(
+            WeatherState::HeavyRain.rain_intensity() > WeatherState::LightRain.rain_intensity()
+        );
     }
 
     #[test]

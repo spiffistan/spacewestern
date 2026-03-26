@@ -12,18 +12,29 @@ impl App {
         self.water_table = grid::generate_water_table_seeded(&self.grid_data, seed);
         grid::adjust_water_table_for_elevation(&mut self.water_table, &self.elevation_data);
         self.terrain_data = grid::generate_terrain_with_params(
-            &self.elevation_data, &self.water_table, &self.terrain_params);
+            &self.elevation_data,
+            &self.water_table,
+            &self.terrain_params,
+        );
         self.terrain_dirty = true;
         self.grid_dirty = true;
     }
 
     /// Pixels-per-point scale factor for the current window.
     fn ppp(&self) -> f32 {
-        self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0)
+        self.window
+            .as_ref()
+            .map(|w| w.scale_factor() as f32)
+            .unwrap_or(1.0)
     }
 
     /// Convert world coords to screen coords for egui overlay drawing.
-    fn world_to_screen_ui(&self, wx: f32, wy: f32, bp_cam: (f32,f32,f32,f32,f32)) -> egui::Pos2 {
+    fn world_to_screen_ui(
+        &self,
+        wx: f32,
+        wy: f32,
+        bp_cam: (f32, f32, f32, f32, f32),
+    ) -> egui::Pos2 {
         let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
         let ppp = self.ppp();
         let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / ppp;
@@ -33,11 +44,17 @@ impl App {
 
     /// Tile size in screen pixels at current zoom.
     #[allow(dead_code)]
-    fn tile_px(&self, bp_cam: (f32,f32,f32,f32,f32)) -> f32 {
+    fn tile_px(&self, bp_cam: (f32, f32, f32, f32, f32)) -> f32 {
         bp_cam.2 / self.render_scale / self.ppp()
     }
 
-    pub fn draw_ui(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: Vec<((i32,i32), bool)>, dt: f32) {
+    pub fn draw_ui(
+        &mut self,
+        ctx: &egui::Context,
+        bp_cam: (f32, f32, f32, f32, f32),
+        blueprint_tiles: Vec<((i32, i32), bool)>,
+        dt: f32,
+    ) {
         match self.game_state {
             GameState::MainMenu => self.draw_main_menu(ctx),
             GameState::MapGen => self.draw_map_gen_screen(ctx),
@@ -71,7 +88,8 @@ impl App {
             .show(ctx, |ui| {
                 let screen = ctx.content_rect();
                 ui.allocate_exact_size(screen.size(), egui::Sense::hover());
-                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_rgb(10, 12, 18));
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_rgb(10, 12, 18));
             });
 
         egui::Area::new(egui::Id::new("main_menu"))
@@ -79,22 +97,37 @@ impl App {
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(20.0);
-                    ui.label(egui::RichText::new("RAYWORLD").size(36.0).strong()
-                        .color(egui::Color32::from_rgb(200, 180, 120)));
-                    ui.label(egui::RichText::new("A colony survival game").size(14.0)
-                        .color(egui::Color32::from_gray(140)));
+                    ui.label(
+                        egui::RichText::new("RAYWORLD")
+                            .size(36.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(200, 180, 120)),
+                    );
+                    ui.label(
+                        egui::RichText::new("A colony survival game")
+                            .size(14.0)
+                            .color(egui::Color32::from_gray(140)),
+                    );
                     ui.add_space(30.0);
 
                     let btn_size = egui::Vec2::new(200.0, 36.0);
-                    if ui.add_sized(btn_size, egui::Button::new(
-                        egui::RichText::new("New Game").size(16.0)
-                    )).clicked() {
+                    if ui
+                        .add_sized(
+                            btn_size,
+                            egui::Button::new(egui::RichText::new("New Game").size(16.0)),
+                        )
+                        .clicked()
+                    {
                         self.game_state = GameState::MapGen;
                     }
                     ui.add_space(4.0);
-                    if ui.add_sized(btn_size, egui::Button::new(
-                        egui::RichText::new("Sample Map").size(14.0)
-                    )).clicked() {
+                    if ui
+                        .add_sized(
+                            btn_size,
+                            egui::Button::new(egui::RichText::new("Sample Map").size(14.0)),
+                        )
+                        .clicked()
+                    {
                         self.regenerate_world_preview();
                         grid::generate_sample_buildings(&mut self.grid_data);
                         compute_roof_heights(&mut self.grid_data);
@@ -104,8 +137,11 @@ impl App {
                         self.game_state = GameState::Playing;
                     }
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new(format!("v{}", include_str!("../VERSION").trim()))
-                        .size(10.0).color(egui::Color32::from_gray(80)));
+                    ui.label(
+                        egui::RichText::new(format!("v{}", include_str!("../VERSION").trim()))
+                            .size(10.0)
+                            .color(egui::Color32::from_gray(80)),
+                    );
                 });
             });
     }
@@ -118,7 +154,8 @@ impl App {
             .show(ctx, |ui| {
                 let screen = ctx.content_rect();
                 ui.allocate_exact_size(screen.size(), egui::Sense::hover());
-                ui.painter().rect_filled(screen, 0.0, egui::Color32::from_rgb(10, 12, 18));
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_rgb(10, 12, 18));
             });
 
         let mut start_game = false;
@@ -135,9 +172,15 @@ impl App {
                         ui.label(egui::RichText::new("Terrain").strong().size(12.0));
                         ui.add_space(2.0);
 
-                        let slider = |ui: &mut egui::Ui, label: &str, val: &mut f32, color: egui::Color32| {
+                        let slider = |ui: &mut egui::Ui,
+                                      label: &str,
+                                      val: &mut f32,
+                                      color: egui::Color32| {
                             ui.horizontal(|ui| {
-                                let (dot_rect, _) = ui.allocate_exact_size(egui::Vec2::splat(8.0), egui::Sense::hover());
+                                let (dot_rect, _) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(8.0),
+                                    egui::Sense::hover(),
+                                );
                                 ui.painter_at(dot_rect).rect_filled(dot_rect, 2.0, color);
                                 ui.label(egui::RichText::new(label).size(9.0).monospace());
                                 ui.spacing_mut().slider_width = 60.0;
@@ -145,36 +188,87 @@ impl App {
                             });
                         };
 
-                        slider(ui, "Grass ", &mut self.terrain_params.grass, egui::Color32::from_rgb(107, 92, 56));
-                        slider(ui, "Loam  ", &mut self.terrain_params.loam, egui::Color32::from_rgb(97, 77, 46));
-                        slider(ui, "Clay  ", &mut self.terrain_params.clay, egui::Color32::from_rgb(128, 97, 64));
-                        slider(ui, "Chalky", &mut self.terrain_params.chalky, egui::Color32::from_rgb(173, 168, 153));
-                        slider(ui, "Rocky ", &mut self.terrain_params.rocky, egui::Color32::from_rgb(115, 107, 97));
-                        slider(ui, "Gravel", &mut self.terrain_params.gravel, egui::Color32::from_rgb(122, 117, 107));
-                        slider(ui, "Peat  ", &mut self.terrain_params.peat, egui::Color32::from_rgb(56, 46, 31));
-                        slider(ui, "Marsh ", &mut self.terrain_params.marsh, egui::Color32::from_rgb(77, 89, 56));
+                        slider(
+                            ui,
+                            "Grass ",
+                            &mut self.terrain_params.grass,
+                            egui::Color32::from_rgb(107, 92, 56),
+                        );
+                        slider(
+                            ui,
+                            "Loam  ",
+                            &mut self.terrain_params.loam,
+                            egui::Color32::from_rgb(97, 77, 46),
+                        );
+                        slider(
+                            ui,
+                            "Clay  ",
+                            &mut self.terrain_params.clay,
+                            egui::Color32::from_rgb(128, 97, 64),
+                        );
+                        slider(
+                            ui,
+                            "Chalky",
+                            &mut self.terrain_params.chalky,
+                            egui::Color32::from_rgb(173, 168, 153),
+                        );
+                        slider(
+                            ui,
+                            "Rocky ",
+                            &mut self.terrain_params.rocky,
+                            egui::Color32::from_rgb(115, 107, 97),
+                        );
+                        slider(
+                            ui,
+                            "Gravel",
+                            &mut self.terrain_params.gravel,
+                            egui::Color32::from_rgb(122, 117, 107),
+                        );
+                        slider(
+                            ui,
+                            "Peat  ",
+                            &mut self.terrain_params.peat,
+                            egui::Color32::from_rgb(56, 46, 31),
+                        );
+                        slider(
+                            ui,
+                            "Marsh ",
+                            &mut self.terrain_params.marsh,
+                            egui::Color32::from_rgb(77, 89, 56),
+                        );
 
                         ui.add_space(4.0);
                         ui.separator();
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Ponds").size(10.0));
                             ui.spacing_mut().slider_width = 60.0;
-                            ui.add(egui::Slider::new(&mut self.terrain_params.pond_density, 0.0..=1.0).show_value(false));
+                            ui.add(
+                                egui::Slider::new(&mut self.terrain_params.pond_density, 0.0..=1.0)
+                                    .show_value(false),
+                            );
                         });
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Seed").size(10.0));
                             let mut seed_i = self.terrain_params.seed as i32;
-                            if ui.add(egui::DragValue::new(&mut seed_i).range(0..=9999)).changed() {
+                            if ui
+                                .add(egui::DragValue::new(&mut seed_i).range(0..=9999))
+                                .changed()
+                            {
                                 self.terrain_params.seed = seed_i.max(0) as u32;
                             }
                             if ui.small_button("Random").clicked() {
-                                self.terrain_params.seed = (self.frame_count.wrapping_mul(2654435761)) % 10000;
+                                self.terrain_params.seed =
+                                    (self.frame_count.wrapping_mul(2654435761)) % 10000;
                                 self.regenerate_world_preview();
                             }
                         });
 
                         ui.add_space(8.0);
-                        ui.label(egui::RichText::new(format!("Map: {}×{}", GRID_W, GRID_H)).size(9.0).weak());
+                        ui.label(
+                            egui::RichText::new(format!("Map: {}×{}", GRID_W, GRID_H))
+                                .size(9.0)
+                                .weak(),
+                        );
                         ui.add_space(4.0);
                         if ui.button("Preview").clicked() {
                             self.regenerate_world_preview();
@@ -188,7 +282,9 @@ impl App {
                         ui.label(egui::RichText::new("Preview").strong().size(11.0));
                         let preview_size = 256.0;
                         let (rect, _) = ui.allocate_exact_size(
-                            egui::Vec2::splat(preview_size), egui::Sense::hover());
+                            egui::Vec2::splat(preview_size),
+                            egui::Sense::hover(),
+                        );
                         let painter = ui.painter_at(rect);
                         painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 20));
 
@@ -215,8 +311,12 @@ impl App {
                                         let py = rect.min.y + ty as f32 * scale;
                                         painter.rect_filled(
                                             egui::Rect::from_min_size(
-                                                egui::pos2(px, py), egui::vec2(px_size, px_size)),
-                                            0.0, colors[tt]);
+                                                egui::pos2(px, py),
+                                                egui::vec2(px_size, px_size),
+                                            ),
+                                            0.0,
+                                            colors[tt],
+                                        );
                                     }
                                 }
                             }
@@ -226,11 +326,17 @@ impl App {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button(egui::RichText::new("← Back").size(12.0)).clicked() {
+                    if ui
+                        .button(egui::RichText::new("← Back").size(12.0))
+                        .clicked()
+                    {
                         self.game_state = GameState::MainMenu;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(egui::RichText::new("Start Game →").size(14.0).strong()).clicked() {
+                        if ui
+                            .button(egui::RichText::new("Start Game →").size(14.0).strong())
+                            .clicked()
+                        {
                             start_game = true;
                         }
                     });
@@ -258,17 +364,45 @@ impl App {
                         ui.vertical(|ui| {
                             ui.label(egui::RichText::new("Atmosphere").size(9.0).weak());
                             ui.horizontal(|ui| {
-                                if ui.selectable_label(*ov == FluidOverlay::Gases, "Gases").clicked() {
-                                    *ov = if *ov == FluidOverlay::Gases { FluidOverlay::None } else { FluidOverlay::Gases };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Gases, "Gases")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Gases {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Gases
+                                    };
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::Smoke, "Smoke").clicked() {
-                                    *ov = if *ov == FluidOverlay::Smoke { FluidOverlay::None } else { FluidOverlay::Smoke };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Smoke, "Smoke")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Smoke {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Smoke
+                                    };
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::O2, "O\u{2082}").clicked() {
-                                    *ov = if *ov == FluidOverlay::O2 { FluidOverlay::None } else { FluidOverlay::O2 };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::O2, "O\u{2082}")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::O2 {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::O2
+                                    };
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::CO2, "CO\u{2082}").clicked() {
-                                    *ov = if *ov == FluidOverlay::CO2 { FluidOverlay::None } else { FluidOverlay::CO2 };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::CO2, "CO\u{2082}")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::CO2 {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::CO2
+                                    };
                                 }
                             });
                         });
@@ -277,8 +411,15 @@ impl App {
                         ui.vertical(|ui| {
                             ui.label(egui::RichText::new("Thermal").size(9.0).weak());
                             ui.horizontal(|ui| {
-                                if ui.selectable_label(*ov == FluidOverlay::Temp, "Temp").clicked() {
-                                    *ov = if *ov == FluidOverlay::Temp { FluidOverlay::None } else { FluidOverlay::Temp };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Temp, "Temp")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Temp {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Temp
+                                    };
                                 }
                             });
                         });
@@ -287,11 +428,25 @@ impl App {
                         ui.vertical(|ui| {
                             ui.label(egui::RichText::new("Physics").size(9.0).weak());
                             ui.horizontal(|ui| {
-                                if ui.selectable_label(*ov == FluidOverlay::Velocity, "Vel").clicked() {
-                                    *ov = if *ov == FluidOverlay::Velocity { FluidOverlay::None } else { FluidOverlay::Velocity };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Velocity, "Vel")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Velocity {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Velocity
+                                    };
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::Pressure, "Pres").clicked() {
-                                    *ov = if *ov == FluidOverlay::Pressure { FluidOverlay::None } else { FluidOverlay::Pressure };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Pressure, "Pres")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Pressure {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Pressure
+                                    };
                                 }
                             });
                         });
@@ -300,23 +455,53 @@ impl App {
                         ui.vertical(|ui| {
                             ui.label(egui::RichText::new("Infra").size(9.0).weak());
                             ui.horizontal(|ui| {
-                                if ui.selectable_label(self.show_pipe_overlay, "Vent").clicked() {
+                                if ui
+                                    .selectable_label(self.show_pipe_overlay, "Vent")
+                                    .clicked()
+                                {
                                     self.show_pipe_overlay = !self.show_pipe_overlay;
                                 }
-                                if ui.selectable_label(self.show_liquid_overlay, "Liquid").clicked() {
+                                if ui
+                                    .selectable_label(self.show_liquid_overlay, "Liquid")
+                                    .clicked()
+                                {
                                     self.show_liquid_overlay = !self.show_liquid_overlay;
                                 }
-                                if ui.selectable_label(self.show_flow_overlay, "Flow").clicked() {
+                                if ui
+                                    .selectable_label(self.show_flow_overlay, "Flow")
+                                    .clicked()
+                                {
                                     self.show_flow_overlay = !self.show_flow_overlay;
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::Power, "Volts").clicked() {
-                                    *ov = if *ov == FluidOverlay::Power { FluidOverlay::None } else { FluidOverlay::Power };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Power, "Volts")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Power {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Power
+                                    };
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::PowerAmps, "Amps").clicked() {
-                                    *ov = if *ov == FluidOverlay::PowerAmps { FluidOverlay::None } else { FluidOverlay::PowerAmps };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::PowerAmps, "Amps")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::PowerAmps {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::PowerAmps
+                                    };
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::PowerWatts, "Watts").clicked() {
-                                    *ov = if *ov == FluidOverlay::PowerWatts { FluidOverlay::None } else { FluidOverlay::PowerWatts };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::PowerWatts, "Watts")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::PowerWatts {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::PowerWatts
+                                    };
                                 }
                             });
                         });
@@ -324,13 +509,30 @@ impl App {
                         ui.vertical(|ui| {
                             ui.label(egui::RichText::new("Environ").size(9.0).weak());
                             ui.horizontal(|ui| {
-                                if ui.selectable_label(*ov == FluidOverlay::Water, "Water").clicked() {
-                                    *ov = if *ov == FluidOverlay::Water { FluidOverlay::None } else { FluidOverlay::Water };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Water, "Water")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Water {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Water
+                                    };
                                 }
-                                if ui.selectable_label(*ov == FluidOverlay::WaterTable, "Table").clicked() {
-                                    *ov = if *ov == FluidOverlay::WaterTable { FluidOverlay::None } else { FluidOverlay::WaterTable };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::WaterTable, "Table")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::WaterTable {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::WaterTable
+                                    };
                                 }
-                                if ui.selectable_label(self.show_velocity_arrows, "Arrows").clicked() {
+                                if ui
+                                    .selectable_label(self.show_velocity_arrows, "Arrows")
+                                    .clicked()
+                                {
                                     self.show_velocity_arrows = !self.show_velocity_arrows;
                                 }
                             });
@@ -340,8 +542,15 @@ impl App {
                         ui.vertical(|ui| {
                             ui.label(egui::RichText::new("Sound").size(9.0).weak());
                             ui.horizontal(|ui| {
-                                if ui.selectable_label(*ov == FluidOverlay::Sound, "Waves").clicked() {
-                                    *ov = if *ov == FluidOverlay::Sound { FluidOverlay::None } else { FluidOverlay::Sound };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Sound, "Waves")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Sound {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Sound
+                                    };
                                 }
                             });
                         });
@@ -349,15 +558,21 @@ impl App {
                         ui.vertical(|ui| {
                             ui.label(egui::RichText::new("Terrain").size(9.0).weak());
                             ui.horizontal(|ui| {
-                                if ui.selectable_label(*ov == FluidOverlay::Terrain, "Type").clicked() {
-                                    *ov = if *ov == FluidOverlay::Terrain { FluidOverlay::None } else { FluidOverlay::Terrain };
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Terrain, "Type")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Terrain {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Terrain
+                                    };
                                 }
                             });
                         });
                     });
                 });
             });
-
     }
 
     fn draw_layer_legend(&mut self, ctx: &egui::Context) {
@@ -376,7 +591,10 @@ impl App {
                     dot(ui, col, label);
                 }
             };
-            let show_legend = self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay || self.show_liquid_overlay || self.show_flow_overlay;
+            let show_legend = self.fluid_overlay != FluidOverlay::None
+                || self.show_pipe_overlay
+                || self.show_liquid_overlay
+                || self.show_flow_overlay;
             if show_legend {
                 egui::Area::new(egui::Id::new("layer_legend"))
                     .anchor(egui::Align2::RIGHT_TOP, [-10.0, 80.0])
@@ -386,114 +604,211 @@ impl App {
                             ui.spacing_mut().item_spacing.y = 2.0;
                             match self.fluid_overlay {
                                 FluidOverlay::Gases => {
-                                    dot(ui, egui::Color32::from_rgb(230, 230, 235), "Smoke (white)");
-                                    dot(ui, egui::Color32::from_rgb(50, 100, 255), "O\u{2082} deficit (blue)");
-                                    dot(ui, egui::Color32::from_rgb(180, 200, 25), "CO\u{2082} (yellow-green)");
+                                    dot(
+                                        ui,
+                                        egui::Color32::from_rgb(230, 230, 235),
+                                        "Smoke (white)",
+                                    );
+                                    dot(
+                                        ui,
+                                        egui::Color32::from_rgb(50, 100, 255),
+                                        "O\u{2082} deficit (blue)",
+                                    );
+                                    dot(
+                                        ui,
+                                        egui::Color32::from_rgb(180, 200, 25),
+                                        "CO\u{2082} (yellow-green)",
+                                    );
                                 }
                                 FluidOverlay::Smoke => {
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(0, 0, 0), "None"),
-                                        (egui::Color32::from_rgb(200, 50, 0), "Low density"),
-                                        (egui::Color32::from_rgb(255, 200, 0), "Medium"),
-                                        (egui::Color32::from_rgb(255, 255, 255), "High density"),
-                                    ]);
+                                    grad(
+                                        ui,
+                                        &[
+                                            (egui::Color32::from_rgb(0, 0, 0), "None"),
+                                            (egui::Color32::from_rgb(200, 50, 0), "Low density"),
+                                            (egui::Color32::from_rgb(255, 200, 0), "Medium"),
+                                            (
+                                                egui::Color32::from_rgb(255, 255, 255),
+                                                "High density",
+                                            ),
+                                        ],
+                                    );
                                 }
                                 FluidOverlay::O2 => {
-                                    dot(ui, egui::Color32::from_rgb(25, 100, 255), "High O\u{2082}");
+                                    dot(
+                                        ui,
+                                        egui::Color32::from_rgb(25, 100, 255),
+                                        "High O\u{2082}",
+                                    );
                                     dot(ui, egui::Color32::from_rgb(230, 25, 0), "Low O\u{2082}");
                                 }
                                 FluidOverlay::CO2 => {
-                                    dot(ui, egui::Color32::from_rgb(180, 200, 25), "High CO\u{2082}");
+                                    dot(
+                                        ui,
+                                        egui::Color32::from_rgb(180, 200, 25),
+                                        "High CO\u{2082}",
+                                    );
                                     dot(ui, egui::Color32::from_rgb(40, 40, 40), "Low CO\u{2082}");
                                 }
                                 FluidOverlay::Temp => {
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(38, 0, 102), "< -15\u{b0}C"),
-                                        (egui::Color32::from_rgb(0, 25, 178), "0\u{b0}C"),
-                                        (egui::Color32::from_rgb(178, 217, 178), "15-25\u{b0}C"),
-                                        (egui::Color32::from_rgb(255, 217, 76), "30-40\u{b0}C"),
-                                        (egui::Color32::from_rgb(255, 115, 25), "50-60\u{b0}C"),
-                                        (egui::Color32::from_rgb(230, 30, 13), "80-100\u{b0}C"),
-                                        (egui::Color32::from_rgb(217, 25, 140), "200\u{b0}C"),
-                                        (egui::Color32::from_rgb(153, 38, 217), "400\u{b0}C"),
-                                        (egui::Color32::from_rgb(128, 76, 255), "500\u{b0}C+"),
-                                    ]);
+                                    grad(
+                                        ui,
+                                        &[
+                                            (egui::Color32::from_rgb(38, 0, 102), "< -15\u{b0}C"),
+                                            (egui::Color32::from_rgb(0, 25, 178), "0\u{b0}C"),
+                                            (
+                                                egui::Color32::from_rgb(178, 217, 178),
+                                                "15-25\u{b0}C",
+                                            ),
+                                            (egui::Color32::from_rgb(255, 217, 76), "30-40\u{b0}C"),
+                                            (egui::Color32::from_rgb(255, 115, 25), "50-60\u{b0}C"),
+                                            (egui::Color32::from_rgb(230, 30, 13), "80-100\u{b0}C"),
+                                            (egui::Color32::from_rgb(217, 25, 140), "200\u{b0}C"),
+                                            (egui::Color32::from_rgb(153, 38, 217), "400\u{b0}C"),
+                                            (egui::Color32::from_rgb(128, 76, 255), "500\u{b0}C+"),
+                                        ],
+                                    );
                                 }
                                 FluidOverlay::Velocity => {
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(25, 38, 76), "Still"),
-                                        (egui::Color32::from_rgb(50, 130, 200), "Slow"),
-                                        (egui::Color32::from_rgb(100, 217, 255), "Fast"),
-                                    ]);
+                                    grad(
+                                        ui,
+                                        &[
+                                            (egui::Color32::from_rgb(25, 38, 76), "Still"),
+                                            (egui::Color32::from_rgb(50, 130, 200), "Slow"),
+                                            (egui::Color32::from_rgb(100, 217, 255), "Fast"),
+                                        ],
+                                    );
                                     dot(ui, egui::Color32::WHITE, "Arrow = direction");
                                 }
                                 FluidOverlay::Pressure => {
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(38, 64, 204), "Negative"),
-                                        (egui::Color32::from_rgb(128, 128, 140), "Neutral"),
-                                        (egui::Color32::from_rgb(217, 51, 38), "Positive"),
-                                    ]);
+                                    grad(
+                                        ui,
+                                        &[
+                                            (egui::Color32::from_rgb(38, 64, 204), "Negative"),
+                                            (egui::Color32::from_rgb(128, 128, 140), "Neutral"),
+                                            (egui::Color32::from_rgb(217, 51, 38), "Positive"),
+                                        ],
+                                    );
                                 }
                                 FluidOverlay::Power => {
                                     ui.label(egui::RichText::new("Voltage").size(10.0).strong());
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(25, 76, 25), "Low voltage"),
-                                        (egui::Color32::from_rgb(50, 200, 50), "Normal"),
-                                        (egui::Color32::from_rgb(230, 200, 25), "High load"),
-                                        (egui::Color32::from_rgb(255, 50, 25), "Overload"),
-                                    ]);
+                                    grad(
+                                        ui,
+                                        &[
+                                            (egui::Color32::from_rgb(25, 76, 25), "Low voltage"),
+                                            (egui::Color32::from_rgb(50, 200, 50), "Normal"),
+                                            (egui::Color32::from_rgb(230, 200, 25), "High load"),
+                                            (egui::Color32::from_rgb(255, 50, 25), "Overload"),
+                                        ],
+                                    );
                                 }
                                 FluidOverlay::PowerAmps => {
-                                    ui.label(egui::RichText::new("Current (Amps)").size(10.0).strong());
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(15, 15, 30), "No current"),
-                                        (egui::Color32::from_rgb(40, 80, 180), "Low"),
-                                        (egui::Color32::from_rgb(100, 200, 255), "Medium"),
-                                        (egui::Color32::from_rgb(255, 255, 220), "High"),
-                                    ]);
+                                    ui.label(
+                                        egui::RichText::new("Current (Amps)").size(10.0).strong(),
+                                    );
+                                    grad(
+                                        ui,
+                                        &[
+                                            (egui::Color32::from_rgb(15, 15, 30), "No current"),
+                                            (egui::Color32::from_rgb(40, 80, 180), "Low"),
+                                            (egui::Color32::from_rgb(100, 200, 255), "Medium"),
+                                            (egui::Color32::from_rgb(255, 255, 220), "High"),
+                                        ],
+                                    );
                                 }
                                 FluidOverlay::PowerWatts => {
-                                    ui.label(egui::RichText::new("Power (Watts)").size(10.0).strong());
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(50, 200, 50), "Generating"),
-                                        (egui::Color32::from_rgb(60, 60, 60), "Idle"),
-                                        (egui::Color32::from_rgb(255, 100, 50), "Consuming"),
-                                    ]);
+                                    ui.label(
+                                        egui::RichText::new("Power (Watts)").size(10.0).strong(),
+                                    );
+                                    grad(
+                                        ui,
+                                        &[
+                                            (egui::Color32::from_rgb(50, 200, 50), "Generating"),
+                                            (egui::Color32::from_rgb(60, 60, 60), "Idle"),
+                                            (egui::Color32::from_rgb(255, 100, 50), "Consuming"),
+                                        ],
+                                    );
                                 }
                                 FluidOverlay::Sound => {
-                                    ui.label(egui::RichText::new("Compression (+)").size(10.0).strong());
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(40, 40, 40), "10 dB  Leaves rustling"),
-                                        (egui::Color32::from_rgb(60, 70, 55), "40 dB  Home noise"),
-                                        (egui::Color32::from_rgb(160, 140, 20), "60 dB  Conversation"),
-                                        (egui::Color32::from_rgb(200, 100, 10), "80 dB  Alarm bell"),
-                                        (egui::Color32::from_rgb(255, 50, 10), "100 dB Gunshot \u{26a0}"),
-                                        (egui::Color32::from_rgb(220, 20, 80), "120 dB Thunder"),
-                                        (egui::Color32::from_rgb(140, 20, 200), "140 dB Blast wave"),
-                                        (egui::Color32::from_rgb(255, 255, 200), "180 dB Explosion"),
-                                    ]);
+                                    ui.label(
+                                        egui::RichText::new("Compression (+)").size(10.0).strong(),
+                                    );
+                                    grad(
+                                        ui,
+                                        &[
+                                            (
+                                                egui::Color32::from_rgb(40, 40, 40),
+                                                "10 dB  Leaves rustling",
+                                            ),
+                                            (
+                                                egui::Color32::from_rgb(60, 70, 55),
+                                                "40 dB  Home noise",
+                                            ),
+                                            (
+                                                egui::Color32::from_rgb(160, 140, 20),
+                                                "60 dB  Conversation",
+                                            ),
+                                            (
+                                                egui::Color32::from_rgb(200, 100, 10),
+                                                "80 dB  Alarm bell",
+                                            ),
+                                            (
+                                                egui::Color32::from_rgb(255, 50, 10),
+                                                "100 dB Gunshot \u{26a0}",
+                                            ),
+                                            (
+                                                egui::Color32::from_rgb(220, 20, 80),
+                                                "120 dB Thunder",
+                                            ),
+                                            (
+                                                egui::Color32::from_rgb(140, 20, 200),
+                                                "140 dB Blast wave",
+                                            ),
+                                            (
+                                                egui::Color32::from_rgb(255, 255, 200),
+                                                "180 dB Explosion",
+                                            ),
+                                        ],
+                                    );
                                     ui.add_space(2.0);
-                                    ui.label(egui::RichText::new("Rarefaction (-)").size(10.0).strong());
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(30, 40, 70), "Low vacuum"),
-                                        (egui::Color32::from_rgb(20, 50, 130), "Medium vacuum"),
-                                        (egui::Color32::from_rgb(40, 80, 180), "Strong rarefaction"),
-                                    ]);
+                                    ui.label(
+                                        egui::RichText::new("Rarefaction (-)").size(10.0).strong(),
+                                    );
+                                    grad(
+                                        ui,
+                                        &[
+                                            (egui::Color32::from_rgb(30, 40, 70), "Low vacuum"),
+                                            (egui::Color32::from_rgb(20, 50, 130), "Medium vacuum"),
+                                            (
+                                                egui::Color32::from_rgb(40, 80, 180),
+                                                "Strong rarefaction",
+                                            ),
+                                        ],
+                                    );
                                     ui.add_space(2.0);
-                                    ui.label(egui::RichText::new("\u{26a0} > 100 dB at pleb = damage").size(9.0).weak());
+                                    ui.label(
+                                        egui::RichText::new("\u{26a0} > 100 dB at pleb = damage")
+                                            .size(9.0)
+                                            .weak(),
+                                    );
                                 }
                                 FluidOverlay::Terrain => {
-                                    ui.label(egui::RichText::new("Terrain Type").size(10.0).strong());
-                                    grad(ui, &[
-                                        (egui::Color32::from_rgb(107, 92, 56), "Grass"),
-                                        (egui::Color32::from_rgb(173, 168, 153), "Chalky"),
-                                        (egui::Color32::from_rgb(115, 107, 97), "Rocky"),
-                                        (egui::Color32::from_rgb(128, 97, 64), "Clay"),
-                                        (egui::Color32::from_rgb(122, 117, 107), "Gravel"),
-                                        (egui::Color32::from_rgb(56, 46, 31), "Peat"),
-                                        (egui::Color32::from_rgb(77, 89, 56), "Marsh"),
-                                        (egui::Color32::from_rgb(97, 77, 46), "Loam"),
-                                    ]);
+                                    ui.label(
+                                        egui::RichText::new("Terrain Type").size(10.0).strong(),
+                                    );
+                                    grad(
+                                        ui,
+                                        &[
+                                            (egui::Color32::from_rgb(107, 92, 56), "Grass"),
+                                            (egui::Color32::from_rgb(173, 168, 153), "Chalky"),
+                                            (egui::Color32::from_rgb(115, 107, 97), "Rocky"),
+                                            (egui::Color32::from_rgb(128, 97, 64), "Clay"),
+                                            (egui::Color32::from_rgb(122, 117, 107), "Gravel"),
+                                            (egui::Color32::from_rgb(56, 46, 31), "Peat"),
+                                            (egui::Color32::from_rgb(77, 89, 56), "Marsh"),
+                                            (egui::Color32::from_rgb(97, 77, 46), "Loam"),
+                                        ],
+                                    );
                                 }
                                 _ => {}
                             }
@@ -507,11 +822,17 @@ impl App {
                                 dot(ui, egui::Color32::from_rgb(200, 180, 25), "CO\u{2082}");
                                 dot(ui, egui::Color32::from_rgb(128, 128, 128), "Smoke");
                                 dot(ui, egui::Color32::from_rgb(230, 50, 30), "Hot gas");
-                                ui.label(egui::RichText::new("Brighter = more pressure").size(9.0).weak());
+                                ui.label(
+                                    egui::RichText::new("Brighter = more pressure")
+                                        .size(9.0)
+                                        .weak(),
+                                );
                             }
                             // Liquid overlay legend
                             if self.show_liquid_overlay {
-                                if self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay {
+                                if self.fluid_overlay != FluidOverlay::None
+                                    || self.show_pipe_overlay
+                                {
                                     ui.separator();
                                 }
                                 ui.label(egui::RichText::new("Liquid").strong().size(10.0));
@@ -519,7 +840,10 @@ impl App {
                                 dot(ui, egui::Color32::from_rgb(100, 180, 255), "High pressure");
                             }
                             if self.show_flow_overlay {
-                                if self.fluid_overlay != FluidOverlay::None || self.show_pipe_overlay || self.show_liquid_overlay {
+                                if self.fluid_overlay != FluidOverlay::None
+                                    || self.show_pipe_overlay
+                                    || self.show_liquid_overlay
+                                {
                                     ui.separator();
                                 }
                                 ui.label(egui::RichText::new("Pipe Flow").strong().size(10.0));
@@ -542,12 +866,26 @@ impl App {
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .interactable(false)
             .show(ctx, |ui| {
-                let frame_ms = if self.fps_display > 0.0 { 1000.0 / self.fps_display } else { 0.0 };
+                let frame_ms = if self.fps_display > 0.0 {
+                    1000.0 / self.fps_display
+                } else {
+                    0.0
+                };
                 let rw = self.camera.screen_w as u32;
                 let rh = self.camera.screen_h as u32;
-                ui.label(egui::RichText::new(format!("v{} | {:.0} fps ({:.1}ms) | {}x{}", include_str!("../VERSION").trim(), self.fps_display, frame_ms, rw, rh)).color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180)).size(12.0));
+                ui.label(
+                    egui::RichText::new(format!(
+                        "v{} | {:.0} fps ({:.1}ms) | {}x{}",
+                        include_str!("../VERSION").trim(),
+                        self.fps_display,
+                        frame_ms,
+                        rw,
+                        rh
+                    ))
+                    .color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180))
+                    .size(12.0),
+                );
             });
-
     }
 
     fn draw_menu_bar(&mut self, ctx: &egui::Context, _dt: f32) {
@@ -570,24 +908,55 @@ impl App {
                 let day_frac = time_val / DAY_DURATION;
                 let hours = (day_frac * 24.0) as u32;
                 let minutes = ((day_frac * 24.0 - hours as f32) * 60.0) as u32;
-                let phase = if day_frac < 0.15 { "Night" }
-                    else if day_frac < 0.25 { "Dawn" }
-                    else if day_frac < 0.75 { "Day" }
-                    else if day_frac < 0.85 { "Dusk" }
-                    else { "Night" };
+                let phase = if day_frac < 0.15 {
+                    "Night"
+                } else if day_frac < 0.25 {
+                    "Dawn"
+                } else if day_frac < 0.75 {
+                    "Day"
+                } else if day_frac < 0.85 {
+                    "Dusk"
+                } else {
+                    "Night"
+                };
                 let time_label = format!("{:02}:{:02} {}", hours, minutes, phase);
                 ui.menu_button(time_label, |ui| {
-                    ui.add(egui::Slider::new(&mut time_val, 0.0..=DAY_DURATION)
-                        .text("Time").show_value(false));
+                    ui.add(
+                        egui::Slider::new(&mut time_val, 0.0..=DAY_DURATION)
+                            .text("Time")
+                            .show_value(false),
+                    );
                     ui.horizontal(|ui| {
-                        if ui.button(if paused { "Play" } else { "Pause" }).clicked() { paused = !paused; }
-                        ui.add(egui::Slider::new(&mut speed, 0.1..=5.0).text("Speed").logarithmic(true));
+                        if ui.button(if paused { "Play" } else { "Pause" }).clicked() {
+                            paused = !paused;
+                        }
+                        ui.add(
+                            egui::Slider::new(&mut speed, 0.1..=5.0)
+                                .text("Speed")
+                                .logarithmic(true),
+                        );
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Night").clicked()  { time_val = DAY_DURATION * 0.0; paused = true; self.camera.force_refresh = 5.0; }
-                        if ui.button("Dawn").clicked()   { time_val = DAY_DURATION * 0.18; paused = true; self.camera.force_refresh = 5.0; }
-                        if ui.button("Day").clicked()    { time_val = DAY_DURATION * 0.5; paused = true; self.camera.force_refresh = 5.0; }
-                        if ui.button("Dusk").clicked()   { time_val = DAY_DURATION * 0.82; paused = true; self.camera.force_refresh = 5.0; }
+                        if ui.button("Night").clicked() {
+                            time_val = DAY_DURATION * 0.0;
+                            paused = true;
+                            self.camera.force_refresh = 5.0;
+                        }
+                        if ui.button("Dawn").clicked() {
+                            time_val = DAY_DURATION * 0.18;
+                            paused = true;
+                            self.camera.force_refresh = 5.0;
+                        }
+                        if ui.button("Day").clicked() {
+                            time_val = DAY_DURATION * 0.5;
+                            paused = true;
+                            self.camera.force_refresh = 5.0;
+                        }
+                        if ui.button("Dusk").clicked() {
+                            time_val = DAY_DURATION * 0.82;
+                            paused = true;
+                            self.camera.force_refresh = 5.0;
+                        }
                     });
                 });
 
@@ -601,10 +970,22 @@ impl App {
                     WeatherState::HeavyRain => "Heavy Rain",
                 };
                 ui.menu_button(format!("Weather: {}", weather_label), |ui| {
-                    if ui.button("Clear").clicked() { self.weather = WeatherState::Clear; self.weather_timer = 45.0; }
-                    if ui.button("Cloudy").clicked() { self.weather = WeatherState::Cloudy; self.weather_timer = 45.0; }
-                    if ui.button("Light Rain").clicked() { self.weather = WeatherState::LightRain; self.weather_timer = 45.0; }
-                    if ui.button("Heavy Rain").clicked() { self.weather = WeatherState::HeavyRain; self.weather_timer = 45.0; }
+                    if ui.button("Clear").clicked() {
+                        self.weather = WeatherState::Clear;
+                        self.weather_timer = 45.0;
+                    }
+                    if ui.button("Cloudy").clicked() {
+                        self.weather = WeatherState::Cloudy;
+                        self.weather_timer = 45.0;
+                    }
+                    if ui.button("Light Rain").clicked() {
+                        self.weather = WeatherState::LightRain;
+                        self.weather_timer = 45.0;
+                    }
+                    if ui.button("Heavy Rain").clicked() {
+                        self.weather = WeatherState::HeavyRain;
+                        self.weather_timer = 45.0;
+                    }
                 });
 
                 ui.separator();
@@ -614,143 +995,252 @@ impl App {
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
 
                 // Lighting menu
-                egui::containers::menu::MenuButton::new("Lighting").config(keep_open.clone()).ui(ui, |ui| {
-                    ui.add(egui::Slider::new(&mut glass_light, 0.0..=0.5).text("Window glow").step_by(0.01));
-                    ui.add(egui::Slider::new(&mut indoor_glow, 0.0..=1.0).text("Indoor glow").step_by(0.01));
-                    ui.add(egui::Slider::new(&mut bleed, 0.0..=2.0).text("Light bleed").step_by(0.01));
-                    ui.separator();
-                    ui.label("Foliage Shadows");
-                    ui.add(egui::Slider::new(&mut foliage_opacity, 0.0..=1.0).text("Canopy density").step_by(0.01));
-                    ui.add(egui::Slider::new(&mut foliage_variation, 0.0..=1.0).text("Tree variation").step_by(0.01));
-                });
+                egui::containers::menu::MenuButton::new("Lighting")
+                    .config(keep_open.clone())
+                    .ui(ui, |ui| {
+                        ui.add(
+                            egui::Slider::new(&mut glass_light, 0.0..=0.5)
+                                .text("Window glow")
+                                .step_by(0.01),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut indoor_glow, 0.0..=1.0)
+                                .text("Indoor glow")
+                                .step_by(0.01),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut bleed, 0.0..=2.0)
+                                .text("Light bleed")
+                                .step_by(0.01),
+                        );
+                        ui.separator();
+                        ui.label("Foliage Shadows");
+                        ui.add(
+                            egui::Slider::new(&mut foliage_opacity, 0.0..=1.0)
+                                .text("Canopy density")
+                                .step_by(0.01),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut foliage_variation, 0.0..=1.0)
+                                .text("Tree variation")
+                                .step_by(0.01),
+                        );
+                    });
 
                 // Fluid menu
-                egui::containers::menu::MenuButton::new("Fluid").config(keep_open.clone()).ui(ui, |ui| {
-                    let mut fluid_spd = self.fluid_speed;
-                    ui.add(egui::Slider::new(&mut fluid_spd, 0.0..=5.0).text("Fluid speed").step_by(0.1));
-                    self.fluid_speed = fluid_spd;
-                    ui.horizontal(|ui| {
-                        ui.label("Wind:");
-                        let mut wx = self.fluid_params.wind_x;
-                        let mut wy = self.fluid_params.wind_y;
-                        ui.add(egui::Slider::new(&mut wx, -20.0..=20.0).text("X").step_by(0.5));
-                        ui.add(egui::Slider::new(&mut wy, -20.0..=20.0).text("Y").step_by(0.5));
-                        self.fluid_params.wind_x = wx;
-                        self.fluid_params.wind_y = wy;
+                egui::containers::menu::MenuButton::new("Fluid")
+                    .config(keep_open.clone())
+                    .ui(ui, |ui| {
+                        let mut fluid_spd = self.fluid_speed;
+                        ui.add(
+                            egui::Slider::new(&mut fluid_spd, 0.0..=5.0)
+                                .text("Fluid speed")
+                                .step_by(0.1),
+                        );
+                        self.fluid_speed = fluid_spd;
+                        ui.horizontal(|ui| {
+                            ui.label("Wind:");
+                            let mut wx = self.fluid_params.wind_x;
+                            let mut wy = self.fluid_params.wind_y;
+                            ui.add(
+                                egui::Slider::new(&mut wx, -20.0..=20.0)
+                                    .text("X")
+                                    .step_by(0.5),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut wy, -20.0..=20.0)
+                                    .text("Y")
+                                    .step_by(0.5),
+                            );
+                            self.fluid_params.wind_x = wx;
+                            self.fluid_params.wind_y = wy;
+                        });
+                        let mut sr = self.fluid_params.smoke_rate;
+                        ui.add(
+                            egui::Slider::new(&mut sr, 0.0..=1.0)
+                                .text("Smoke rate")
+                                .step_by(0.05),
+                        );
+                        self.fluid_params.smoke_rate = sr;
+                        let mut fs = self.fluid_params.fan_speed;
+                        ui.add(
+                            egui::Slider::new(&mut fs, 0.0..=50.0)
+                                .text("Fan speed")
+                                .step_by(1.0),
+                        );
+                        self.fluid_params.fan_speed = fs;
+                        ui.add(
+                            egui::Slider::new(&mut self.pipe_width, 1.0..=20.0)
+                                .text("Pipe width")
+                                .step_by(0.5),
+                        );
                     });
-                    let mut sr = self.fluid_params.smoke_rate;
-                    ui.add(egui::Slider::new(&mut sr, 0.0..=1.0).text("Smoke rate").step_by(0.05));
-                    self.fluid_params.smoke_rate = sr;
-                    let mut fs = self.fluid_params.fan_speed;
-                    ui.add(egui::Slider::new(&mut fs, 0.0..=50.0).text("Fan speed").step_by(1.0));
-                    self.fluid_params.fan_speed = fs;
-                    ui.add(egui::Slider::new(&mut self.pipe_width, 1.0..=20.0).text("Pipe width").step_by(0.5));
-                });
 
                 // Sound menu
-                egui::containers::menu::MenuButton::new("Sound").config(keep_open.clone()).ui(ui, |ui| {
-                    ui.checkbox(&mut self.sound_enabled, "Enabled");
-                    if self.sound_enabled {
-                        ui.add(egui::Slider::new(&mut self.sound_speed, 0.1..=2.0).text("Wave speed").step_by(0.05));
-                        ui.add(egui::Slider::new(&mut self.sound_damping, 0.0..=0.05).text("Damping").step_by(0.001));
-                        ui.add(egui::Slider::new(&mut self.sound_coupling, 0.0..=1.0).text("Gas coupling").step_by(0.01));
-                        let mut iters = self.sound_iters_per_frame as i32;
-                        ui.add(egui::Slider::new(&mut iters, 2..=16).text("Iterations"));
-                        self.sound_iters_per_frame = iters as u32;
-                        if !self.sound_sources.is_empty() {
-                            ui.separator();
-                            if ui.button("Clear all sounds").clicked() {
-                                self.sound_sources.clear();
+                egui::containers::menu::MenuButton::new("Sound")
+                    .config(keep_open.clone())
+                    .ui(ui, |ui| {
+                        ui.checkbox(&mut self.sound_enabled, "Enabled");
+                        if self.sound_enabled {
+                            ui.add(
+                                egui::Slider::new(&mut self.sound_speed, 0.1..=2.0)
+                                    .text("Wave speed")
+                                    .step_by(0.05),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut self.sound_damping, 0.0..=0.05)
+                                    .text("Damping")
+                                    .step_by(0.001),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut self.sound_coupling, 0.0..=1.0)
+                                    .text("Gas coupling")
+                                    .step_by(0.01),
+                            );
+                            let mut iters = self.sound_iters_per_frame as i32;
+                            ui.add(egui::Slider::new(&mut iters, 2..=16).text("Iterations"));
+                            self.sound_iters_per_frame = iters as u32;
+                            if !self.sound_sources.is_empty() {
+                                ui.separator();
+                                if ui.button("Clear all sounds").clicked() {
+                                    self.sound_sources.clear();
+                                }
                             }
                         }
-                    }
-                });
+                    });
 
                 // Camera menu
-                egui::containers::menu::MenuButton::new("Camera").config(keep_open.clone()).ui(ui, |ui| {
-                    let zoom_pct = zoom / base_zoom * 100.0;
-                    ui.label(format!("Zoom: {:.0}%", zoom_pct));
-                    ui.add(egui::Slider::new(&mut zoom, base_zoom * 0.2..=base_zoom * 8.0)
-                        .text("Zoom").show_value(false).logarithmic(true));
-                    if ui.button("Reset zoom").clicked() { zoom = base_zoom; }
-                    ui.separator();
-                    ui.add(egui::Slider::new(&mut oblique, 0.0..=0.3).text("Wall face tilt").step_by(0.005));
-                    ui.separator();
-                    ui.add(egui::Slider::new(&mut self.camera_pan_speed, 100.0..=1000.0).text("Pan speed").step_by(25.0));
-                });
+                egui::containers::menu::MenuButton::new("Camera")
+                    .config(keep_open.clone())
+                    .ui(ui, |ui| {
+                        let zoom_pct = zoom / base_zoom * 100.0;
+                        ui.label(format!("Zoom: {:.0}%", zoom_pct));
+                        ui.add(
+                            egui::Slider::new(&mut zoom, base_zoom * 0.2..=base_zoom * 8.0)
+                                .text("Zoom")
+                                .show_value(false)
+                                .logarithmic(true),
+                        );
+                        if ui.button("Reset zoom").clicked() {
+                            zoom = base_zoom;
+                        }
+                        ui.separator();
+                        ui.add(
+                            egui::Slider::new(&mut oblique, 0.0..=0.3)
+                                .text("Wall face tilt")
+                                .step_by(0.005),
+                        );
+                        ui.separator();
+                        ui.add(
+                            egui::Slider::new(&mut self.camera_pan_speed, 100.0..=1000.0)
+                                .text("Pan speed")
+                                .step_by(25.0),
+                        );
+                    });
 
                 // Admin menu (colonist placement)
                 ui.separator();
                 // Render menu — performance vs quality controls
-                egui::containers::menu::MenuButton::new("Render").config(keep_open.clone()).ui(ui, |ui| {
-                    ui.set_min_width(220.0);
+                egui::containers::menu::MenuButton::new("Render")
+                    .config(keep_open.clone())
+                    .ui(ui, |ui| {
+                        ui.set_min_width(220.0);
 
-                    // --- Resolution ---
-                    ui.label(egui::RichText::new("Resolution").strong().size(11.0));
-                    let mut rs = self.render_scale;
-                    ui.add(egui::Slider::new(&mut rs, 0.15..=1.0).text("Render scale").step_by(0.05));
-                    self.render_scale = rs;
+                        // --- Resolution ---
+                        ui.label(egui::RichText::new("Resolution").strong().size(11.0));
+                        let mut rs = self.render_scale;
+                        ui.add(
+                            egui::Slider::new(&mut rs, 0.15..=1.0)
+                                .text("Render scale")
+                                .step_by(0.05),
+                        );
+                        self.render_scale = rs;
 
-                    ui.separator();
+                        ui.separator();
 
-                    // --- Shadows ---
-                    ui.label(egui::RichText::new("Shadows").strong().size(11.0));
-                    let mut use_sm = self.shadow_map_scale > 0;
-                    ui.checkbox(&mut use_sm, "Shadow Map");
-                    if use_sm {
-                        if self.shadow_map_scale == 0 { self.shadow_map_scale = 8; }
-                        let mut sm = self.shadow_map_scale as i32;
-                        ui.add(egui::Slider::new(&mut sm, 1..=8).text("Scale"));
-                        self.shadow_map_scale = sm as u32;
-                    } else {
-                        self.shadow_map_scale = 0;
-                    }
+                        // --- Shadows ---
+                        ui.label(egui::RichText::new("Shadows").strong().size(11.0));
+                        let mut use_sm = self.shadow_map_scale > 0;
+                        ui.checkbox(&mut use_sm, "Shadow Map");
+                        if use_sm {
+                            if self.shadow_map_scale == 0 {
+                                self.shadow_map_scale = 8;
+                            }
+                            let mut sm = self.shadow_map_scale as i32;
+                            ui.add(egui::Slider::new(&mut sm, 1..=8).text("Scale"));
+                            self.shadow_map_scale = sm as u32;
+                        } else {
+                            self.shadow_map_scale = 0;
+                        }
 
-                    ui.separator();
+                        ui.separator();
 
-                    // --- Raytrace ---
-                    ui.label(egui::RichText::new("Raytrace").strong().size(11.0));
-                    if ui.selectable_label(self.enable_terrain_detail, "Terrain Detail").clicked() {
-                        self.enable_terrain_detail = !self.enable_terrain_detail;
-                    }
-                    ui.add(egui::Slider::new(&mut self.terrain_ao_strength, 0.0..=5.0).text("Terrain AO").step_by(0.1));
-                    if ui.selectable_label(self.enable_prox_glow, "Proximity Glow").clicked() {
-                        self.enable_prox_glow = !self.enable_prox_glow;
-                    }
-                    if ui.selectable_label(self.enable_dir_bleed, "Light Bleed").clicked() {
-                        self.enable_dir_bleed = !self.enable_dir_bleed;
-                    }
-                    if ui.selectable_label(self.enable_temporal, "Temporal AA").clicked() {
-                        self.enable_temporal = !self.enable_temporal;
-                        self.camera.force_refresh = 10.0;
-                    }
+                        // --- Raytrace ---
+                        ui.label(egui::RichText::new("Raytrace").strong().size(11.0));
+                        if ui
+                            .selectable_label(self.enable_terrain_detail, "Terrain Detail")
+                            .clicked()
+                        {
+                            self.enable_terrain_detail = !self.enable_terrain_detail;
+                        }
+                        ui.add(
+                            egui::Slider::new(&mut self.terrain_ao_strength, 0.0..=5.0)
+                                .text("Terrain AO")
+                                .step_by(0.1),
+                        );
+                        if ui
+                            .selectable_label(self.enable_prox_glow, "Proximity Glow")
+                            .clicked()
+                        {
+                            self.enable_prox_glow = !self.enable_prox_glow;
+                        }
+                        if ui
+                            .selectable_label(self.enable_dir_bleed, "Light Bleed")
+                            .clicked()
+                        {
+                            self.enable_dir_bleed = !self.enable_dir_bleed;
+                        }
+                        if ui
+                            .selectable_label(self.enable_temporal, "Temporal AA")
+                            .clicked()
+                        {
+                            self.enable_temporal = !self.enable_temporal;
+                            self.camera.force_refresh = 10.0;
+                        }
 
-                    ui.separator();
+                        ui.separator();
 
-                    // --- Lightmap ---
-                    ui.label(egui::RichText::new("Lightmap").strong().size(11.0));
-                    let mut lm_int = self.lightmap_interval as i32;
-                    ui.add(egui::Slider::new(&mut lm_int, 1..=10).text("Update interval"));
-                    self.lightmap_interval = lm_int as u32;
-                    let mut lm_iter = self.lightmap_iterations as i32;
-                    ui.add(egui::Slider::new(&mut lm_iter, 4..=40).text("Propagation steps"));
-                    self.lightmap_iterations = lm_iter as u32;
-                    // Keep odd to ensure correct ping-pong final output
-                    if self.lightmap_iterations % 2 == 0 { self.lightmap_iterations += 1; }
+                        // --- Lightmap ---
+                        ui.label(egui::RichText::new("Lightmap").strong().size(11.0));
+                        let mut lm_int = self.lightmap_interval as i32;
+                        ui.add(egui::Slider::new(&mut lm_int, 1..=10).text("Update interval"));
+                        self.lightmap_interval = lm_int as u32;
+                        let mut lm_iter = self.lightmap_iterations as i32;
+                        ui.add(egui::Slider::new(&mut lm_iter, 4..=40).text("Propagation steps"));
+                        self.lightmap_iterations = lm_iter as u32;
+                        // Keep odd to ensure correct ping-pong final output
+                        if self.lightmap_iterations % 2 == 0 {
+                            self.lightmap_iterations += 1;
+                        }
 
-                    ui.separator();
+                        ui.separator();
 
-                    // --- Fluid Sim ---
-                    ui.label(egui::RichText::new("Fluid Sim").strong().size(11.0));
-                    if ui.selectable_label(self.hires_fluid, "HiRes (512x512)").clicked() {
-                        self.hires_fluid = !self.hires_fluid;
-                    }
-                    let mut fp = self.fluid_pressure_iters as i32;
-                    ui.add(egui::Slider::new(&mut fp, 5..=50).text("Pressure iterations"));
-                    self.fluid_pressure_iters = fp as u32;
-                    // Keep odd for correct ping-pong output
-                    if self.fluid_pressure_iters % 2 == 0 { self.fluid_pressure_iters += 1; }
-                });
+                        // --- Fluid Sim ---
+                        ui.label(egui::RichText::new("Fluid Sim").strong().size(11.0));
+                        if ui
+                            .selectable_label(self.hires_fluid, "HiRes (512x512)")
+                            .clicked()
+                        {
+                            self.hires_fluid = !self.hires_fluid;
+                        }
+                        let mut fp = self.fluid_pressure_iters as i32;
+                        ui.add(egui::Slider::new(&mut fp, 5..=50).text("Pressure iterations"));
+                        self.fluid_pressure_iters = fp as u32;
+                        // Keep odd for correct ping-pong output
+                        if self.fluid_pressure_iters % 2 == 0 {
+                            self.fluid_pressure_iters += 1;
+                        }
+                    });
 
                 if ui.button("Schedule").clicked() {
                     self.show_schedule = !self.show_schedule;
@@ -763,23 +1253,34 @@ impl App {
                 }
 
                 // Debug menu
-                egui::containers::menu::MenuButton::new("Debug").config(keep_open.clone()).ui(ui, |ui| {
-                    if ui.selectable_label(self.enable_ricochets, "Bullet Ricochets").clicked() {
-                        self.enable_ricochets = !self.enable_ricochets;
-                    }
-                    ui.separator();
-                    if ui.selectable_label(self.sandbox_mode, "Sandbox Mode").clicked() {
-                        self.sandbox_mode = !self.sandbox_mode;
-                        if !self.sandbox_mode {
-                            self.sandbox_tool = SandboxTool::None;
-                            self.build_category = None;
+                egui::containers::menu::MenuButton::new("Debug")
+                    .config(keep_open.clone())
+                    .ui(ui, |ui| {
+                        if ui
+                            .selectable_label(self.enable_ricochets, "Bullet Ricochets")
+                            .clicked()
+                        {
+                            self.enable_ricochets = !self.enable_ricochets;
                         }
-                    }
-                });
+                        ui.separator();
+                        if ui
+                            .selectable_label(self.sandbox_mode, "Sandbox Mode")
+                            .clicked()
+                        {
+                            self.sandbox_mode = !self.sandbox_mode;
+                            if !self.sandbox_mode {
+                                self.sandbox_tool = SandboxTool::None;
+                                self.build_category = None;
+                            }
+                        }
+                    });
 
                 ui.separator();
                 ui.menu_button("Admin", |ui| {
-                    if ui.selectable_label(self.fog_enabled, "Fog of War").clicked() {
+                    if ui
+                        .selectable_label(self.fog_enabled, "Fog of War")
+                        .clicked()
+                    {
                         self.fog_enabled = !self.fog_enabled;
                         self.fog_dirty = true;
                         if !self.fog_enabled {
@@ -788,7 +1289,10 @@ impl App {
                         }
                     }
                     if self.fog_enabled {
-                        if ui.selectable_label(self.fog_start_explored, "Pre-revealed Map").clicked() {
+                        if ui
+                            .selectable_label(self.fog_start_explored, "Pre-revealed Map")
+                            .clicked()
+                        {
                             self.fog_start_explored = !self.fog_start_explored;
                             if self.fog_start_explored {
                                 self.fog_explored.iter_mut().for_each(|v| *v = 255);
@@ -802,7 +1306,9 @@ impl App {
                     let pleb_label = format!("Add Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
                     if ui.button(pleb_label).clicked() {
                         self.placing_pleb = !self.placing_pleb;
-                        if self.placing_pleb { self.build_tool = BuildTool::None; }
+                        if self.placing_pleb {
+                            self.build_tool = BuildTool::None;
+                        }
                         ui.close();
                     }
                     if self.placing_pleb {
@@ -841,7 +1347,6 @@ impl App {
                     }
                 });
         }
-
     }
 
     fn draw_inventory_window(&mut self, ctx: &egui::Context) {
@@ -1148,16 +1653,21 @@ impl App {
                 self.show_inventory = false;
             }
         }
-
     }
 
     fn draw_build_bar(&mut self, ctx: &egui::Context) {
         // --- Build categories (bottom-left, vertical 2-column grid, flows upward) ---
         let cat_s = 14.0;
         let mut categories: Vec<(&str, &str)> = vec![
-            ("Walls", "\u{1f9f1}"), ("Floor", "\u{2b1c}"), ("Roof", "\u{1f3e0}"),
-            ("Build", "\u{1f528}"), ("Craft", "\u{2692}"), ("Light", "\u{1f4a1}"),
-            ("Power", "\u{26a1}"), ("Gas", "\u{1f4a8}"), ("Liquid", "\u{1f4a7}"),
+            ("Walls", "\u{1f9f1}"),
+            ("Floor", "\u{2b1c}"),
+            ("Roof", "\u{1f3e0}"),
+            ("Build", "\u{1f528}"),
+            ("Craft", "\u{2692}"),
+            ("Light", "\u{1f4a1}"),
+            ("Power", "\u{26a1}"),
+            ("Gas", "\u{1f4a8}"),
+            ("Liquid", "\u{1f4a7}"),
             ("Zones", "\u{1f33e}"),
         ];
         if self.sandbox_mode {
@@ -1170,42 +1680,71 @@ impl App {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
                     // Tool buttons at top
                     ui.horizontal(|ui| {
-                        if ui.selectable_label(self.build_tool == BuildTool::Destroy,
-                            egui::RichText::new("\u{274c} Destroy").size(cat_s)).clicked() {
-                            self.build_tool = if self.build_tool == BuildTool::Destroy { BuildTool::None } else { BuildTool::Destroy };
+                        if ui
+                            .selectable_label(
+                                self.build_tool == BuildTool::Destroy,
+                                egui::RichText::new("\u{274c} Destroy").size(cat_s),
+                            )
+                            .clicked()
+                        {
+                            self.build_tool = if self.build_tool == BuildTool::Destroy {
+                                BuildTool::None
+                            } else {
+                                BuildTool::Destroy
+                            };
                             self.build_category = None;
                         }
-                        if ui.selectable_label(self.build_tool == BuildTool::Dig,
-                            egui::RichText::new("\u{26cf} Dig").size(cat_s)).clicked() {
-                            self.build_tool = if self.build_tool == BuildTool::Dig { BuildTool::None } else { BuildTool::Dig };
+                        if ui
+                            .selectable_label(
+                                self.build_tool == BuildTool::Dig,
+                                egui::RichText::new("\u{26cf} Dig").size(cat_s),
+                            )
+                            .clicked()
+                        {
+                            self.build_tool = if self.build_tool == BuildTool::Dig {
+                                BuildTool::None
+                            } else {
+                                BuildTool::Dig
+                            };
                             self.build_category = None;
                         }
                     });
                     ui.separator();
                     // 2-column category grid
-                    egui::Grid::new("build_cat_grid").num_columns(2).spacing([4.0, 2.0]).show(ui, |ui| {
-                        for (i, &(name, icon)) in categories.iter().enumerate() {
-                            let selected = self.build_category == Some(name);
-                            let label = format!("{} {}", icon, name);
-                            if ui.selectable_label(selected, egui::RichText::new(label).size(cat_s)).clicked() {
-                                if selected {
-                                    self.build_category = None;
-                                    self.build_tool = BuildTool::None;
-                                    self.sandbox_tool = SandboxTool::None;
-                                } else {
-                                    self.build_category = Some(name);
-                                    self.world_sel = WorldSelection::none();
-                                    self.selected_pleb = None;
-                                    if name == "Sandbox" {
+                    egui::Grid::new("build_cat_grid")
+                        .num_columns(2)
+                        .spacing([4.0, 2.0])
+                        .show(ui, |ui| {
+                            for (i, &(name, icon)) in categories.iter().enumerate() {
+                                let selected = self.build_category == Some(name);
+                                let label = format!("{} {}", icon, name);
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        egui::RichText::new(label).size(cat_s),
+                                    )
+                                    .clicked()
+                                {
+                                    if selected {
+                                        self.build_category = None;
                                         self.build_tool = BuildTool::None;
-                                    } else {
                                         self.sandbox_tool = SandboxTool::None;
+                                    } else {
+                                        self.build_category = Some(name);
+                                        self.world_sel = WorldSelection::none();
+                                        self.selected_pleb = None;
+                                        if name == "Sandbox" {
+                                            self.build_tool = BuildTool::None;
+                                        } else {
+                                            self.sandbox_tool = SandboxTool::None;
+                                        }
                                     }
                                 }
+                                if i % 2 == 1 {
+                                    ui.end_row();
+                                }
                             }
-                            if i % 2 == 1 { ui.end_row(); }
-                        }
-                    });
+                        });
                 });
             });
 
@@ -1221,289 +1760,655 @@ impl App {
                 .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -10.0])
                 .show(ctx, |ui| {
                     egui::Frame::window(ui.style()).show(ui, |ui| {
+                        if has_selection {
+                            // --- Selection action buttons ---
+                            self.draw_selection_actions_inner(ui);
+                        } else if let Some(cat) = cat {
+                            // --- Build tool items ---
+                            let tile_size = 60.0;
+                            let icon_s = 24.0;
+                            let label_s = 11.0;
 
-                    if has_selection {
-                        // --- Selection action buttons ---
-                        self.draw_selection_actions_inner(ui);
-                    } else if let Some(cat) = cat {
-                        // --- Build tool items ---
-                        let tile_size = 60.0;
-                        let icon_s = 24.0;
-                        let label_s = 11.0;
-
-                        // Count items per category for 1 vs 2 column layout
-                        let item_count: usize = match cat {
-                            "Walls" => 7, "Floor" => 4, "Roof" => 2,
-                            "Build" => 8, "Craft" => 2, "Light" => 6,
-                            "Power" => 10, "Gas" => 9, "Liquid" => 5,
-                            "Zones" => 2, _ => 5,
-                        };
-                        let items_per_row = if item_count > 10 { (item_count + 1) / 2 } else { item_count };
-                        // Horizontal rows, left-to-right, wrapping to 2nd row if >10
-                        egui::Grid::new("build_items_grid").num_columns(items_per_row)
-                            .spacing([4.0, 4.0]).show(ui, |ui| {
-                            // Rebind icon_btn to add end_row tracking
-                            let col_counter = std::cell::Cell::new(0usize);
-                            let mut icon_btn = |ui: &mut egui::Ui, t: BuildTool, icon: &str, label: &str| {
-                                let selected = self.build_tool == t;
-                                let (rect, response) = ui.allocate_exact_size(
-                                    egui::Vec2::splat(tile_size), egui::Sense::click(),
-                                );
-                                let painter = ui.painter_at(rect);
-                                let bg = if selected {
-                                    egui::Color32::from_rgb(60, 80, 110)
-                                } else if response.hovered() {
-                                    egui::Color32::from_rgb(55, 58, 65)
-                                } else {
-                                    egui::Color32::from_rgb(40, 42, 48)
-                                };
-                                painter.rect_filled(rect, 4.0, bg);
-                                painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
-                                painter.text(rect.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
-                                    icon, egui::FontId::proportional(icon_s), egui::Color32::WHITE);
-                                painter.text(rect.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
-                                    label, egui::FontId::proportional(label_s), egui::Color32::from_gray(190));
-                                if response.clicked() {
-                                    self.build_tool = if self.build_tool == t { BuildTool::None } else { t };
-                                }
-                                let c = col_counter.get() + 1;
-                                col_counter.set(c);
-                                if c % items_per_row == 0 { ui.end_row(); }
+                            // Count items per category for 1 vs 2 column layout
+                            let item_count: usize = match cat {
+                                "Walls" => 7,
+                                "Floor" => 4,
+                                "Roof" => 2,
+                                "Build" => 8,
+                                "Craft" => 2,
+                                "Light" => 6,
+                                "Power" => 10,
+                                "Gas" => 9,
+                                "Liquid" => 5,
+                                "Zones" => 2,
+                                _ => 5,
                             };
-                            match cat {
-                                "Walls" => {
-                                    icon_btn(ui, BuildTool::Place(21), "\u{1fab5}", "Wood");
-                                    icon_btn(ui, BuildTool::Place(22), "\u{2699}", "Steel");
-                                    icon_btn(ui, BuildTool::Place(23), "\u{1faa8}", "Sandstone");
-                                    icon_btn(ui, BuildTool::Place(24), "\u{26f0}", "Granite");
-                                    icon_btn(ui, BuildTool::Place(25), "\u{1f532}", "Limestone");
-                                    icon_btn(ui, BuildTool::Place(35), "\u{1f3da}", "Mud");
-                                    icon_btn(ui, BuildTool::Place(44), "\u{25e3}", "Diagonal");
-                                }
-                                "Floor" => {
-                                    icon_btn(ui, BuildTool::Place(26), "\u{1fab5}", "Wood");
-                                    icon_btn(ui, BuildTool::Place(27), "\u{2b1b}", "Stone");
-                                    icon_btn(ui, BuildTool::Place(28), "\u{2b1c}", "Flagstone");
-                                    icon_btn(ui, BuildTool::RemoveFloor, "\u{274c}", "Remove");
-                                }
-                                "Roof" => {
-                                    icon_btn(ui, BuildTool::Roof, "\u{1f3da}", "Thatch");
-                                    icon_btn(ui, BuildTool::RemoveRoof, "\u{274c}", "Remove");
-                                }
-                                "Build" => {
-                                    icon_btn(ui, BuildTool::Place(6), "\u{1f525}", "Fireplace");
-                                    icon_btn(ui, BuildTool::Place(9), "\u{1fa91}", "Bench");
-                                    icon_btn(ui, BuildTool::Place(30), "\u{1f6cf}", "Bed");
-                                    icon_btn(ui, BuildTool::Place(33), "\u{1f4e6}", "Crate");
-                                    icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Window");
-                                    icon_btn(ui, BuildTool::Door, "\u{1f6aa}", "Door");
-                                    icon_btn(ui, BuildTool::Place(29), "\u{1f4a5}", "Cannon");
-                                    icon_btn(ui, BuildTool::Place(59), "\u{1fa63}", "Well");
-                                }
-                                "Craft" => {
-                                    icon_btn(ui, BuildTool::Place(57), "\u{1f528}", "Workbench");
-                                    icon_btn(ui, BuildTool::Place(58), "\u{1f3ed}", "Kiln");
-                                }
-                                "Light" => {
-                                    icon_btn(ui, BuildTool::Place(7), "\u{1f4a1}", "Ceiling");
-                                    icon_btn(ui, BuildTool::Place(10), "\u{1f9f4}", "Floor Lamp");
-                                    icon_btn(ui, BuildTool::Place(11), "\u{1f4a1}", "Table Lamp");
-                                    icon_btn(ui, BuildTool::Place(55), "\u{1f525}", "Wall Torch");
-                                    icon_btn(ui, BuildTool::Place(56), "\u{1f4a1}", "Wall Lamp");
-                                    icon_btn(ui, BuildTool::Place(48), "\u{1f526}", "Floodlight");
-                                }
-                                "Power" => {
-                                    icon_btn(ui, BuildTool::Place(36), "\u{26a1}", "Wire");
-                                    icon_btn(ui, BuildTool::Place(37), "\u{2600}", "Solar");
-                                    icon_btn(ui, BuildTool::Place(38), "\u{1f50b}", "Bat S");
-                                    icon_btn(ui, BuildTool::Place(39), "\u{1f50b}", "Bat M");
-                                    icon_btn(ui, BuildTool::Place(40), "\u{1f50b}", "Bat L");
-                                    icon_btn(ui, BuildTool::Place(41), "\u{1f300}", "Wind");
-                                    icon_btn(ui, BuildTool::Place(42), "\u{1f518}", "Switch");
-                                    icon_btn(ui, BuildTool::Place(43), "\u{1f39a}", "Dimmer");
-                                    icon_btn(ui, BuildTool::Place(45), "\u{1f6d1}", "Breaker");
-                                    icon_btn(ui, BuildTool::Place(51), "\u{2a2f}", "Bridge");
-                                }
-                                "Gas" => {
-                                    icon_btn(ui, BuildTool::Place(15), "\u{1f4a8}", "Pipe");
-                                    icon_btn(ui, BuildTool::Place(46), "\u{2298}", "Restrictor");
-                                    icon_btn(ui, BuildTool::Place(16), "\u{2699}", "Pump");
-                                    icon_btn(ui, BuildTool::Place(17), "\u{1f6e2}", "Tank");
-                                    icon_btn(ui, BuildTool::Place(18), "\u{1f504}", "Valve");
-                                    icon_btn(ui, BuildTool::Place(19), "\u{27a1}", "Outlet");
-                                    icon_btn(ui, BuildTool::Place(20), "\u{2b05}", "Inlet");
-                                    icon_btn(ui, BuildTool::Place(12), "\u{1f32c}", "Fan");
-                                    icon_btn(ui, BuildTool::Place(50), "\u{2a2f}", "Bridge");
-                                }
-                                "Liquid" => {
-                                    icon_btn(ui, BuildTool::Place(49), "\u{1f4a7}", "Pipe");
-                                    icon_btn(ui, BuildTool::Place(52), "\u{1f6b0}", "Intake");
-                                    icon_btn(ui, BuildTool::Place(53), "\u{2699}", "Pump");
-                                    icon_btn(ui, BuildTool::Place(54), "\u{1f4a6}", "Output");
-                                    icon_btn(ui, BuildTool::Place(50), "\u{2a2f}", "Bridge");
-                                }
-                                "Zones" => {
-                                    icon_btn(ui, BuildTool::GrowingZone, "\u{1f33f}", "Farm");
-                                    icon_btn(ui, BuildTool::StorageZone, "\u{1f4e6}", "Storage");
-                                }
-                                "Sandbox" if self.sandbox_mode => {
-                                    // handled below (outside icon_btn scope)
-                                }
-                                _ => {}
-                            }
-                        });
-                        // Zone work priority toggle (outside grid)
-                        if self.build_category == Some("Zones") {
-                            ui.separator();
-                            let prio_label = match self.work_priority {
-                                zones::WorkPriority::PlantFirst => "Plant 1st",
-                                zones::WorkPriority::HarvestFirst => "Harvest 1st",
+                            let items_per_row = if item_count > 10 {
+                                (item_count + 1) / 2
+                            } else {
+                                item_count
                             };
-                            if ui.small_button(prio_label).clicked() {
-                                self.work_priority = match self.work_priority {
-                                    zones::WorkPriority::PlantFirst => zones::WorkPriority::HarvestFirst,
-                                    zones::WorkPriority::HarvestFirst => zones::WorkPriority::PlantFirst,
-                                };
-                            }
-                        }
-                        // Sandbox tools (outside icon_btn scope)
-                        if self.build_category == Some("Sandbox") && self.sandbox_mode {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = egui::Vec2::new(4.0, 4.0);
-                                let sel = self.sandbox_tool == SandboxTool::Lightning;
-                                let (rect, response) = ui.allocate_exact_size(
-                                    egui::Vec2::splat(60.0), egui::Sense::click(),
-                                );
-                                let painter = ui.painter_at(rect);
-                                let bg = if sel { egui::Color32::from_rgb(60, 80, 110) }
-                                    else if response.hovered() { egui::Color32::from_rgb(55, 58, 65) }
-                                    else { egui::Color32::from_rgb(40, 42, 48) };
-                                painter.rect_filled(rect, 4.0, bg);
-                                painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
-                                painter.text(rect.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
-                                    "\u{26a1}", egui::FontId::proportional(24.0), egui::Color32::YELLOW);
-                                painter.text(rect.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
-                                    "Lightning", egui::FontId::proportional(11.0), egui::Color32::from_gray(190));
-                                if response.clicked() {
-                                    self.sandbox_tool = if sel { SandboxTool::None } else { SandboxTool::Lightning };
-                                    if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
-                                }
-                                // Water inject button
-                                let sel_w = self.sandbox_tool == SandboxTool::InjectWater;
-                                let (rect_w, resp_w) = ui.allocate_exact_size(
-                                    egui::Vec2::splat(60.0), egui::Sense::click(),
-                                );
-                                let pw = ui.painter_at(rect_w);
-                                let bg_w = if sel_w { egui::Color32::from_rgb(40, 70, 110) }
-                                    else if resp_w.hovered() { egui::Color32::from_rgb(55, 58, 65) }
-                                    else { egui::Color32::from_rgb(40, 42, 48) };
-                                pw.rect_filled(rect_w, 4.0, bg_w);
-                                pw.rect_stroke(rect_w, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
-                                pw.text(rect_w.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
-                                    "\u{1f4a7}", egui::FontId::proportional(24.0), egui::Color32::from_rgb(80, 150, 255));
-                                pw.text(rect_w.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
-                                    "Water", egui::FontId::proportional(11.0), egui::Color32::from_gray(190));
-                                if resp_w.clicked() {
-                                    self.sandbox_tool = if sel_w { SandboxTool::None } else { SandboxTool::InjectWater };
-                                    if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
-                                }
-                                // Drought button (click to trigger, not a click-on-map tool)
-                                let drought_active = self.has_condition("Drought");
-                                let drought_label = if drought_active { "End Drought" } else { "Drought" };
-                                let (rect_d, resp_d) = ui.allocate_exact_size(
-                                    egui::Vec2::splat(60.0), egui::Sense::click(),
-                                );
-                                let pd = ui.painter_at(rect_d);
-                                let bg_d = if drought_active { egui::Color32::from_rgb(120, 60, 30) }
-                                    else if resp_d.hovered() { egui::Color32::from_rgb(55, 58, 65) }
-                                    else { egui::Color32::from_rgb(40, 42, 48) };
-                                pd.rect_filled(rect_d, 4.0, bg_d);
-                                pd.rect_stroke(rect_d, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
-                                pd.text(rect_d.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
-                                    "\u{2600}", egui::FontId::proportional(24.0), egui::Color32::from_rgb(255, 200, 50));
-                                pd.text(rect_d.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
-                                    drought_label, egui::FontId::proportional(11.0), egui::Color32::from_gray(190));
-                                if resp_d.clicked() {
-                                    if drought_active {
-                                        self.conditions.retain(|c| c.name != "Drought");
-                                        self.log_event(EventCategory::Weather, "Drought ended (sandbox)".to_string());
-                                    } else {
-                                        self.add_condition("Drought", "\u{2600}", NotifCategory::Threat, 90.0);
-                                        self.notify(NotifCategory::Threat, "\u{2600}", "Drought", "Sandbox: Drought triggered!");
-                                        self.log_event(EventCategory::Weather, "Drought triggered (sandbox)".to_string());
+                            // Horizontal rows, left-to-right, wrapping to 2nd row if >10
+                            egui::Grid::new("build_items_grid")
+                                .num_columns(items_per_row)
+                                .spacing([4.0, 4.0])
+                                .show(ui, |ui| {
+                                    // Rebind icon_btn to add end_row tracking
+                                    let col_counter = std::cell::Cell::new(0usize);
+                                    let mut icon_btn =
+                                        |ui: &mut egui::Ui,
+                                         t: BuildTool,
+                                         icon: &str,
+                                         label: &str| {
+                                            let selected = self.build_tool == t;
+                                            let (rect, response) = ui.allocate_exact_size(
+                                                egui::Vec2::splat(tile_size),
+                                                egui::Sense::click(),
+                                            );
+                                            let painter = ui.painter_at(rect);
+                                            let bg = if selected {
+                                                egui::Color32::from_rgb(60, 80, 110)
+                                            } else if response.hovered() {
+                                                egui::Color32::from_rgb(55, 58, 65)
+                                            } else {
+                                                egui::Color32::from_rgb(40, 42, 48)
+                                            };
+                                            painter.rect_filled(rect, 4.0, bg);
+                                            painter.rect_stroke(
+                                                rect,
+                                                4.0,
+                                                egui::Stroke::new(
+                                                    1.0,
+                                                    egui::Color32::from_gray(70),
+                                                ),
+                                                egui::StrokeKind::Outside,
+                                            );
+                                            painter.text(
+                                                rect.center() + egui::Vec2::new(0.0, -6.0),
+                                                egui::Align2::CENTER_CENTER,
+                                                icon,
+                                                egui::FontId::proportional(icon_s),
+                                                egui::Color32::WHITE,
+                                            );
+                                            painter.text(
+                                                rect.center() + egui::Vec2::new(0.0, 14.0),
+                                                egui::Align2::CENTER_CENTER,
+                                                label,
+                                                egui::FontId::proportional(label_s),
+                                                egui::Color32::from_gray(190),
+                                            );
+                                            if response.clicked() {
+                                                self.build_tool = if self.build_tool == t {
+                                                    BuildTool::None
+                                                } else {
+                                                    t
+                                                };
+                                            }
+                                            let c = col_counter.get() + 1;
+                                            col_counter.set(c);
+                                            if c % items_per_row == 0 {
+                                                ui.end_row();
+                                            }
+                                        };
+                                    match cat {
+                                        "Walls" => {
+                                            icon_btn(ui, BuildTool::Place(21), "\u{1fab5}", "Wood");
+                                            icon_btn(ui, BuildTool::Place(22), "\u{2699}", "Steel");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(23),
+                                                "\u{1faa8}",
+                                                "Sandstone",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(24),
+                                                "\u{26f0}",
+                                                "Granite",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(25),
+                                                "\u{1f532}",
+                                                "Limestone",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(35), "\u{1f3da}", "Mud");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(44),
+                                                "\u{25e3}",
+                                                "Diagonal",
+                                            );
+                                        }
+                                        "Floor" => {
+                                            icon_btn(ui, BuildTool::Place(26), "\u{1fab5}", "Wood");
+                                            icon_btn(ui, BuildTool::Place(27), "\u{2b1b}", "Stone");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(28),
+                                                "\u{2b1c}",
+                                                "Flagstone",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::RemoveFloor,
+                                                "\u{274c}",
+                                                "Remove",
+                                            );
+                                        }
+                                        "Roof" => {
+                                            icon_btn(ui, BuildTool::Roof, "\u{1f3da}", "Thatch");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::RemoveRoof,
+                                                "\u{274c}",
+                                                "Remove",
+                                            );
+                                        }
+                                        "Build" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(6),
+                                                "\u{1f525}",
+                                                "Fireplace",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(9), "\u{1fa91}", "Bench");
+                                            icon_btn(ui, BuildTool::Place(30), "\u{1f6cf}", "Bed");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(33),
+                                                "\u{1f4e6}",
+                                                "Crate",
+                                            );
+                                            icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Window");
+                                            icon_btn(ui, BuildTool::Door, "\u{1f6aa}", "Door");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(29),
+                                                "\u{1f4a5}",
+                                                "Cannon",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(59), "\u{1fa63}", "Well");
+                                        }
+                                        "Craft" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(57),
+                                                "\u{1f528}",
+                                                "Workbench",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(58), "\u{1f3ed}", "Kiln");
+                                        }
+                                        "Light" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(7),
+                                                "\u{1f4a1}",
+                                                "Ceiling",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(10),
+                                                "\u{1f9f4}",
+                                                "Floor Lamp",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(11),
+                                                "\u{1f4a1}",
+                                                "Table Lamp",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(55),
+                                                "\u{1f525}",
+                                                "Wall Torch",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(56),
+                                                "\u{1f4a1}",
+                                                "Wall Lamp",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(48),
+                                                "\u{1f526}",
+                                                "Floodlight",
+                                            );
+                                        }
+                                        "Power" => {
+                                            icon_btn(ui, BuildTool::Place(36), "\u{26a1}", "Wire");
+                                            icon_btn(ui, BuildTool::Place(37), "\u{2600}", "Solar");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(38),
+                                                "\u{1f50b}",
+                                                "Bat S",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(39),
+                                                "\u{1f50b}",
+                                                "Bat M",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(40),
+                                                "\u{1f50b}",
+                                                "Bat L",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(41), "\u{1f300}", "Wind");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(42),
+                                                "\u{1f518}",
+                                                "Switch",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(43),
+                                                "\u{1f39a}",
+                                                "Dimmer",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(45),
+                                                "\u{1f6d1}",
+                                                "Breaker",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(51),
+                                                "\u{2a2f}",
+                                                "Bridge",
+                                            );
+                                        }
+                                        "Gas" => {
+                                            icon_btn(ui, BuildTool::Place(15), "\u{1f4a8}", "Pipe");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(46),
+                                                "\u{2298}",
+                                                "Restrictor",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(16), "\u{2699}", "Pump");
+                                            icon_btn(ui, BuildTool::Place(17), "\u{1f6e2}", "Tank");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(18),
+                                                "\u{1f504}",
+                                                "Valve",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(19),
+                                                "\u{27a1}",
+                                                "Outlet",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(20), "\u{2b05}", "Inlet");
+                                            icon_btn(ui, BuildTool::Place(12), "\u{1f32c}", "Fan");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(50),
+                                                "\u{2a2f}",
+                                                "Bridge",
+                                            );
+                                        }
+                                        "Liquid" => {
+                                            icon_btn(ui, BuildTool::Place(49), "\u{1f4a7}", "Pipe");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(52),
+                                                "\u{1f6b0}",
+                                                "Intake",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(53), "\u{2699}", "Pump");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(54),
+                                                "\u{1f4a6}",
+                                                "Output",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(50),
+                                                "\u{2a2f}",
+                                                "Bridge",
+                                            );
+                                        }
+                                        "Zones" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::GrowingZone,
+                                                "\u{1f33f}",
+                                                "Farm",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::StorageZone,
+                                                "\u{1f4e6}",
+                                                "Storage",
+                                            );
+                                        }
+                                        "Sandbox" if self.sandbox_mode => {
+                                            // handled below (outside icon_btn scope)
+                                        }
+                                        _ => {}
                                     }
+                                });
+                            // Zone work priority toggle (outside grid)
+                            if self.build_category == Some("Zones") {
+                                ui.separator();
+                                let prio_label = match self.work_priority {
+                                    zones::WorkPriority::PlantFirst => "Plant 1st",
+                                    zones::WorkPriority::HarvestFirst => "Harvest 1st",
+                                };
+                                if ui.small_button(prio_label).clicked() {
+                                    self.work_priority = match self.work_priority {
+                                        zones::WorkPriority::PlantFirst => {
+                                            zones::WorkPriority::HarvestFirst
+                                        }
+                                        zones::WorkPriority::HarvestFirst => {
+                                            zones::WorkPriority::PlantFirst
+                                        }
+                                    };
                                 }
-
-                                // Ignite tool (click flammable block to set on fire)
-                                let sel_ign = self.sandbox_tool == SandboxTool::Ignite;
-                                let (rect_ign, resp_ign) = ui.allocate_exact_size(
-                                    egui::Vec2::splat(60.0), egui::Sense::click(),
-                                );
-                                let pi = ui.painter_at(rect_ign);
-                                let bg_ign = if sel_ign { egui::Color32::from_rgb(140, 60, 20) }
-                                    else if resp_ign.hovered() { egui::Color32::from_rgb(55, 58, 65) }
-                                    else { egui::Color32::from_rgb(40, 42, 48) };
-                                pi.rect_filled(rect_ign, 4.0, bg_ign);
-                                pi.rect_stroke(rect_ign, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
-                                pi.text(rect_ign.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
-                                    "\u{1f525}", egui::FontId::proportional(24.0), egui::Color32::from_rgb(255, 120, 30));
-                                pi.text(rect_ign.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
-                                    "Ignite", egui::FontId::proportional(11.0), egui::Color32::from_gray(190));
-                                if resp_ign.clicked() {
-                                    self.sandbox_tool = if sel_ign { SandboxTool::None } else { SandboxTool::Ignite };
-                                    if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
-                                }
-                                if sel_ign {
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("Intensity").size(10.0).color(egui::Color32::from_gray(160)));
-                                        let slider = egui::Slider::new(&mut self.fire_intensity, 0.2..=3.0)
-                                            .step_by(0.1)
-                                            .show_value(true);
-                                        ui.add(slider);
-                                    });
-                                }
-
-                                // Sound placement tools (only when sound system is enabled)
-                                if self.sound_enabled {
-                                    ui.separator();
-                                    for (i, &(name, db, _, _, _)) in SANDBOX_SOUNDS.iter().enumerate() {
-                                        let sel = self.sandbox_tool == SandboxTool::SoundPlace(i);
-                                        let label = format!("{:.0}dB {}", db, name);
-                                        if ui.selectable_label(sel, &label).clicked() {
-                                            self.sandbox_tool = if sel { SandboxTool::None } else { SandboxTool::SoundPlace(i) };
-                                            if self.sandbox_tool != SandboxTool::None { self.build_tool = BuildTool::None; }
+                            }
+                            // Sandbox tools (outside icon_btn scope)
+                            if self.build_category == Some("Sandbox") && self.sandbox_mode {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.spacing_mut().item_spacing = egui::Vec2::new(4.0, 4.0);
+                                    let sel = self.sandbox_tool == SandboxTool::Lightning;
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::Vec2::splat(60.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let painter = ui.painter_at(rect);
+                                    let bg = if sel {
+                                        egui::Color32::from_rgb(60, 80, 110)
+                                    } else if response.hovered() {
+                                        egui::Color32::from_rgb(55, 58, 65)
+                                    } else {
+                                        egui::Color32::from_rgb(40, 42, 48)
+                                    };
+                                    painter.rect_filled(rect, 4.0, bg);
+                                    painter.rect_stroke(
+                                        rect,
+                                        4.0,
+                                        egui::Stroke::new(1.0, egui::Color32::from_gray(70)),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                    painter.text(
+                                        rect.center() + egui::Vec2::new(0.0, -6.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "\u{26a1}",
+                                        egui::FontId::proportional(24.0),
+                                        egui::Color32::YELLOW,
+                                    );
+                                    painter.text(
+                                        rect.center() + egui::Vec2::new(0.0, 14.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "Lightning",
+                                        egui::FontId::proportional(11.0),
+                                        egui::Color32::from_gray(190),
+                                    );
+                                    if response.clicked() {
+                                        self.sandbox_tool = if sel {
+                                            SandboxTool::None
+                                        } else {
+                                            SandboxTool::Lightning
+                                        };
+                                        if self.sandbox_tool != SandboxTool::None {
+                                            self.build_tool = BuildTool::None;
                                         }
                                     }
-                                }
-                            });
-                        }
+                                    // Water inject button
+                                    let sel_w = self.sandbox_tool == SandboxTool::InjectWater;
+                                    let (rect_w, resp_w) = ui.allocate_exact_size(
+                                        egui::Vec2::splat(60.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let pw = ui.painter_at(rect_w);
+                                    let bg_w = if sel_w {
+                                        egui::Color32::from_rgb(40, 70, 110)
+                                    } else if resp_w.hovered() {
+                                        egui::Color32::from_rgb(55, 58, 65)
+                                    } else {
+                                        egui::Color32::from_rgb(40, 42, 48)
+                                    };
+                                    pw.rect_filled(rect_w, 4.0, bg_w);
+                                    pw.rect_stroke(
+                                        rect_w,
+                                        4.0,
+                                        egui::Stroke::new(1.0, egui::Color32::from_gray(70)),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                    pw.text(
+                                        rect_w.center() + egui::Vec2::new(0.0, -6.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "\u{1f4a7}",
+                                        egui::FontId::proportional(24.0),
+                                        egui::Color32::from_rgb(80, 150, 255),
+                                    );
+                                    pw.text(
+                                        rect_w.center() + egui::Vec2::new(0.0, 14.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "Water",
+                                        egui::FontId::proportional(11.0),
+                                        egui::Color32::from_gray(190),
+                                    );
+                                    if resp_w.clicked() {
+                                        self.sandbox_tool = if sel_w {
+                                            SandboxTool::None
+                                        } else {
+                                            SandboxTool::InjectWater
+                                        };
+                                        if self.sandbox_tool != SandboxTool::None {
+                                            self.build_tool = BuildTool::None;
+                                        }
+                                    }
+                                    // Drought button (click to trigger, not a click-on-map tool)
+                                    let drought_active = self.has_condition("Drought");
+                                    let drought_label = if drought_active {
+                                        "End Drought"
+                                    } else {
+                                        "Drought"
+                                    };
+                                    let (rect_d, resp_d) = ui.allocate_exact_size(
+                                        egui::Vec2::splat(60.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let pd = ui.painter_at(rect_d);
+                                    let bg_d = if drought_active {
+                                        egui::Color32::from_rgb(120, 60, 30)
+                                    } else if resp_d.hovered() {
+                                        egui::Color32::from_rgb(55, 58, 65)
+                                    } else {
+                                        egui::Color32::from_rgb(40, 42, 48)
+                                    };
+                                    pd.rect_filled(rect_d, 4.0, bg_d);
+                                    pd.rect_stroke(
+                                        rect_d,
+                                        4.0,
+                                        egui::Stroke::new(1.0, egui::Color32::from_gray(70)),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                    pd.text(
+                                        rect_d.center() + egui::Vec2::new(0.0, -6.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "\u{2600}",
+                                        egui::FontId::proportional(24.0),
+                                        egui::Color32::from_rgb(255, 200, 50),
+                                    );
+                                    pd.text(
+                                        rect_d.center() + egui::Vec2::new(0.0, 14.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        drought_label,
+                                        egui::FontId::proportional(11.0),
+                                        egui::Color32::from_gray(190),
+                                    );
+                                    if resp_d.clicked() {
+                                        if drought_active {
+                                            self.conditions.retain(|c| c.name != "Drought");
+                                            self.log_event(
+                                                EventCategory::Weather,
+                                                "Drought ended (sandbox)".to_string(),
+                                            );
+                                        } else {
+                                            self.add_condition(
+                                                "Drought",
+                                                "\u{2600}",
+                                                NotifCategory::Threat,
+                                                90.0,
+                                            );
+                                            self.notify(
+                                                NotifCategory::Threat,
+                                                "\u{2600}",
+                                                "Drought",
+                                                "Sandbox: Drought triggered!",
+                                            );
+                                            self.log_event(
+                                                EventCategory::Weather,
+                                                "Drought triggered (sandbox)".to_string(),
+                                            );
+                                        }
+                                    }
 
-                        // Hint bar below icons
-                        let tool = &self.build_tool;
-                        if *tool != BuildTool::None {
-                            ui.separator();
-                            let hint = match tool {
-                                BuildTool::Place(9) | BuildTool::Place(30) | BuildTool::Place(39) => { let r = if self.build_rotation == 0 { "H" } else { "V" }; format!("Q/E [{}]", r) }
-                                BuildTool::Place(41) => { let d = if self.build_rotation % 2 == 0 { "N↔S wind" } else { "E↔W wind" }; format!("Q/E [{}]", d) }
-                                BuildTool::Place(11) => "On bench".to_string(),
-                                BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19) | BuildTool::Place(29) => {
-                                    let d = match self.build_rotation { 0=>"N", 1=>"E", 2=>"S", _=>"W" };
-                                    format!("Q/E [{}]", d)
-                                }
-                                BuildTool::Destroy | BuildTool::RemoveFloor | BuildTool::RemoveRoof => "Click/drag".to_string(),
-                                BuildTool::WoodBox => "Click to drop".to_string(),
-                                BuildTool::Window | BuildTool::Door => "Click wall".to_string(),
-                                BuildTool::Roof => "Drag (needs support)".to_string(),
-                                BuildTool::Dig => "Click to dig 20%".to_string(),
-                                _ => "Click/drag".to_string(),
-                            };
-                            ui.label(egui::RichText::new(hint).weak().size(13.0));
-                        }
-                    } // end else (build tools)
+                                    // Ignite tool (click flammable block to set on fire)
+                                    let sel_ign = self.sandbox_tool == SandboxTool::Ignite;
+                                    let (rect_ign, resp_ign) = ui.allocate_exact_size(
+                                        egui::Vec2::splat(60.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let pi = ui.painter_at(rect_ign);
+                                    let bg_ign = if sel_ign {
+                                        egui::Color32::from_rgb(140, 60, 20)
+                                    } else if resp_ign.hovered() {
+                                        egui::Color32::from_rgb(55, 58, 65)
+                                    } else {
+                                        egui::Color32::from_rgb(40, 42, 48)
+                                    };
+                                    pi.rect_filled(rect_ign, 4.0, bg_ign);
+                                    pi.rect_stroke(
+                                        rect_ign,
+                                        4.0,
+                                        egui::Stroke::new(1.0, egui::Color32::from_gray(70)),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                    pi.text(
+                                        rect_ign.center() + egui::Vec2::new(0.0, -6.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "\u{1f525}",
+                                        egui::FontId::proportional(24.0),
+                                        egui::Color32::from_rgb(255, 120, 30),
+                                    );
+                                    pi.text(
+                                        rect_ign.center() + egui::Vec2::new(0.0, 14.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "Ignite",
+                                        egui::FontId::proportional(11.0),
+                                        egui::Color32::from_gray(190),
+                                    );
+                                    if resp_ign.clicked() {
+                                        self.sandbox_tool = if sel_ign {
+                                            SandboxTool::None
+                                        } else {
+                                            SandboxTool::Ignite
+                                        };
+                                        if self.sandbox_tool != SandboxTool::None {
+                                            self.build_tool = BuildTool::None;
+                                        }
+                                    }
+                                    if sel_ign {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new("Intensity")
+                                                    .size(10.0)
+                                                    .color(egui::Color32::from_gray(160)),
+                                            );
+                                            let slider = egui::Slider::new(
+                                                &mut self.fire_intensity,
+                                                0.2..=3.0,
+                                            )
+                                            .step_by(0.1)
+                                            .show_value(true);
+                                            ui.add(slider);
+                                        });
+                                    }
+
+                                    // Sound placement tools (only when sound system is enabled)
+                                    if self.sound_enabled {
+                                        ui.separator();
+                                        for (i, &(name, db, _, _, _)) in
+                                            SANDBOX_SOUNDS.iter().enumerate()
+                                        {
+                                            let sel =
+                                                self.sandbox_tool == SandboxTool::SoundPlace(i);
+                                            let label = format!("{:.0}dB {}", db, name);
+                                            if ui.selectable_label(sel, &label).clicked() {
+                                                self.sandbox_tool = if sel {
+                                                    SandboxTool::None
+                                                } else {
+                                                    SandboxTool::SoundPlace(i)
+                                                };
+                                                if self.sandbox_tool != SandboxTool::None {
+                                                    self.build_tool = BuildTool::None;
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+
+                            // Hint bar below icons
+                            let tool = &self.build_tool;
+                            if *tool != BuildTool::None {
+                                ui.separator();
+                                let hint = match tool {
+                                    BuildTool::Place(9)
+                                    | BuildTool::Place(30)
+                                    | BuildTool::Place(39) => {
+                                        let r = if self.build_rotation == 0 { "H" } else { "V" };
+                                        format!("Q/E [{}]", r)
+                                    }
+                                    BuildTool::Place(41) => {
+                                        let d = if self.build_rotation % 2 == 0 {
+                                            "N↔S wind"
+                                        } else {
+                                            "E↔W wind"
+                                        };
+                                        format!("Q/E [{}]", d)
+                                    }
+                                    BuildTool::Place(11) => "On bench".to_string(),
+                                    BuildTool::Place(12)
+                                    | BuildTool::Place(16)
+                                    | BuildTool::Place(20)
+                                    | BuildTool::Place(19)
+                                    | BuildTool::Place(29) => {
+                                        let d = match self.build_rotation {
+                                            0 => "N",
+                                            1 => "E",
+                                            2 => "S",
+                                            _ => "W",
+                                        };
+                                        format!("Q/E [{}]", d)
+                                    }
+                                    BuildTool::Destroy
+                                    | BuildTool::RemoveFloor
+                                    | BuildTool::RemoveRoof => "Click/drag".to_string(),
+                                    BuildTool::WoodBox => "Click to drop".to_string(),
+                                    BuildTool::Window | BuildTool::Door => "Click wall".to_string(),
+                                    BuildTool::Roof => "Drag (needs support)".to_string(),
+                                    BuildTool::Dig => "Click to dig 20%".to_string(),
+                                    _ => "Click/drag".to_string(),
+                                };
+                                ui.label(egui::RichText::new(hint).weak().size(13.0));
+                            }
+                        } // end else (build tools)
                     }); // Frame
                 }); // Area
         }
-
     }
 
     fn draw_colonist_bar(&mut self, ctx: &egui::Context) {
@@ -1524,7 +2429,7 @@ impl App {
                 oxygen: f32,
                 mood: f32,
                 mood_label: &'static str,
-                breath_pct: f32,            // 0-1, breath remaining
+                breath_pct: f32, // 0-1, breath remaining
                 breathing_label: &'static str,
                 breathing_state: BreathingState,
                 air_o2: f32,
@@ -1535,94 +2440,116 @@ impl App {
                 crisis_reason: Option<&'static str>,
                 shift_label: &'static str,
             }
-            let pleb_display: Vec<PlebDisplay> = self.plebs.iter().enumerate().filter(|(_, p)| !p.is_enemy).map(|(i, p)| {
-                let a = &p.appearance;
-                PlebDisplay {
-                    idx: i,
-                    name: p.name.clone(),
-                    shirt: [a.shirt_r, a.shirt_g, a.shirt_b],
-                    skin: [a.skin_r, a.skin_g, a.skin_b],
-                    hair: [a.hair_r, a.hair_g, a.hair_b],
-                    health: p.needs.health,
-                    hunger: p.needs.hunger,
-                    thirst: p.needs.thirst,
-                    rest: p.needs.rest,
-                    warmth: p.needs.warmth,
-                    oxygen: p.needs.oxygen,
-                    mood: p.needs.mood,
-                    mood_label: mood_label(p.needs.mood),
-                    breath_pct: p.needs.breath_remaining / 30.0,
-                    breathing_label: breathing_label(&p.needs.breathing_state),
-                    breathing_state: p.needs.breathing_state.clone(),
-                    air_o2: p.needs.air_o2,
-                    air_co2: p.needs.air_co2,
-                    activity: {
-                        let inner = p.activity.inner();
-                        let act_str = match inner {
-                            PlebActivity::Idle => "Idle".to_string(),
-                            PlebActivity::Walking => {
-                                if p.work_target.is_some() {
-                                    "Walking to task".to_string()
-                                } else if !p.path.is_empty() {
-                                    "Walking".to_string()
-                                } else {
-                                    "Walking".to_string()
+            let pleb_display: Vec<PlebDisplay> = self
+                .plebs
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !p.is_enemy)
+                .map(|(i, p)| {
+                    let a = &p.appearance;
+                    PlebDisplay {
+                        idx: i,
+                        name: p.name.clone(),
+                        shirt: [a.shirt_r, a.shirt_g, a.shirt_b],
+                        skin: [a.skin_r, a.skin_g, a.skin_b],
+                        hair: [a.hair_r, a.hair_g, a.hair_b],
+                        health: p.needs.health,
+                        hunger: p.needs.hunger,
+                        thirst: p.needs.thirst,
+                        rest: p.needs.rest,
+                        warmth: p.needs.warmth,
+                        oxygen: p.needs.oxygen,
+                        mood: p.needs.mood,
+                        mood_label: mood_label(p.needs.mood),
+                        breath_pct: p.needs.breath_remaining / 30.0,
+                        breathing_label: breathing_label(&p.needs.breathing_state),
+                        breathing_state: p.needs.breathing_state.clone(),
+                        air_o2: p.needs.air_o2,
+                        air_co2: p.needs.air_co2,
+                        activity: {
+                            let inner = p.activity.inner();
+                            let act_str = match inner {
+                                PlebActivity::Idle => "Idle".to_string(),
+                                PlebActivity::Walking => {
+                                    if p.work_target.is_some() {
+                                        "Walking to task".to_string()
+                                    } else if !p.path.is_empty() {
+                                        "Walking".to_string()
+                                    } else {
+                                        "Walking".to_string()
+                                    }
                                 }
-                            }
-                            PlebActivity::Sleeping => "Sleeping".to_string(),
-                            PlebActivity::Harvesting(pr) => format!("Harvesting {:.0}%", pr * 100.0),
-                            PlebActivity::Eating => "Eating".to_string(),
-                            PlebActivity::Hauling => {
-                                if p.haul_target.is_some() {
-                                    "Hauling to crate".to_string()
-                                } else {
-                                    "Hauling".to_string()
+                                PlebActivity::Sleeping => "Sleeping".to_string(),
+                                PlebActivity::Harvesting(pr) => {
+                                    format!("Harvesting {:.0}%", pr * 100.0)
                                 }
+                                PlebActivity::Eating => "Eating".to_string(),
+                                PlebActivity::Hauling => {
+                                    if p.haul_target.is_some() {
+                                        "Hauling to crate".to_string()
+                                    } else {
+                                        "Hauling".to_string()
+                                    }
+                                }
+                                PlebActivity::Farming(pr) => {
+                                    // Determine if planting or harvesting from work target block type
+                                    let action = if let Some((tx, ty)) = p.work_target {
+                                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                                        if tidx < self.grid_data.len() {
+                                            let tbt = self.grid_data[tidx] & 0xFF;
+                                            if tbt == BT_CROP || tbt == BT_BERRY_BUSH {
+                                                "Harvesting"
+                                            } else if tbt == BT_TREE {
+                                                "Chopping"
+                                            } else {
+                                                "Planting"
+                                            }
+                                        } else {
+                                            "Farming"
+                                        }
+                                    } else {
+                                        "Farming"
+                                    };
+                                    format!("{} {:.0}%", action, pr * 100.0)
+                                }
+                                PlebActivity::Building(pr) => {
+                                    format!("Building {:.0}%", pr * 100.0)
+                                }
+                                PlebActivity::Crafting(rid, pr) => {
+                                    let rname = recipe_defs::RecipeRegistry::cached()
+                                        .get(*rid)
+                                        .map(|r| r.name.as_str())
+                                        .unwrap_or("item");
+                                    format!("Crafting {} {:.0}%", rname, pr * 100.0)
+                                }
+                                PlebActivity::Drinking(pr) => {
+                                    format!("Drinking {:.0}%", pr * 100.0)
+                                }
+                                PlebActivity::MentalBreak(k, _) => {
+                                    let kind = match k {
+                                        MentalBreakKind::Daze => "Daze",
+                                        MentalBreakKind::Binge => "Binge eating",
+                                        MentalBreakKind::Tantrum => "Tantrum",
+                                        MentalBreakKind::Collapse => "Collapsed",
+                                    };
+                                    format!("Mental break: {}", kind)
+                                }
+                                PlebActivity::Staggering(_) => "Staggering!".to_string(),
+                                PlebActivity::Crisis(_, _) => "Crisis".to_string(),
+                            };
+                            if let Some(reason) = p.activity.crisis_reason() {
+                                format!("{} ({})", act_str, reason)
+                            } else {
+                                act_str
                             }
-                            PlebActivity::Farming(pr) => {
-                                // Determine if planting or harvesting from work target block type
-                                let action = if let Some((tx, ty)) = p.work_target {
-                                    let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                                    if tidx < self.grid_data.len() {
-                                        let tbt = self.grid_data[tidx] & 0xFF;
-                                        if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" }
-                                        else if tbt == BT_TREE { "Chopping" }
-                                        else { "Planting" }
-                                    } else { "Farming" }
-                                } else { "Farming" };
-                                format!("{} {:.0}%", action, pr * 100.0)
-                            }
-                            PlebActivity::Building(pr) => format!("Building {:.0}%", pr * 100.0),
-                            PlebActivity::Crafting(rid, pr) => {
-                                let rname = recipe_defs::RecipeRegistry::cached().get(*rid)
-                                    .map(|r| r.name.as_str()).unwrap_or("item");
-                                format!("Crafting {} {:.0}%", rname, pr * 100.0)
-                            }
-                            PlebActivity::Drinking(pr) => format!("Drinking {:.0}%", pr * 100.0),
-                            PlebActivity::MentalBreak(k, _) => {
-                                let kind = match k {
-                                    MentalBreakKind::Daze => "Daze",
-                                    MentalBreakKind::Binge => "Binge eating",
-                                    MentalBreakKind::Tantrum => "Tantrum",
-                                    MentalBreakKind::Collapse => "Collapsed",
-                                };
-                                format!("Mental break: {}", kind)
-                            }
-                            PlebActivity::Staggering(_) => "Staggering!".to_string(),
-                            PlebActivity::Crisis(_, _) => "Crisis".to_string(),
-                        };
-                        if let Some(reason) = p.activity.crisis_reason() {
-                            format!("{} ({})", act_str, reason)
-                        } else {
-                            act_str
-                        }
-                    },
-                    inventory_label: p.inventory.carrying_label(),
-                    is_crisis: p.activity.is_crisis(),
-                    crisis_reason: p.activity.crisis_reason(),
-                    shift_label: p.schedule.preset.label(),
-                }
-            }).collect();
+                        },
+                        inventory_label: p.inventory.carrying_label(),
+                        is_crisis: p.activity.is_crisis(),
+                        crisis_reason: p.activity.crisis_reason(),
+                        shift_label: p.schedule.preset.label(),
+                    }
+                })
+                .collect();
 
             egui::Area::new(egui::Id::new("colonist_bar"))
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 10.0])
@@ -1633,7 +2560,10 @@ impl App {
                                 let is_sel = self.selected_pleb == Some(pd.idx);
                                 let card_w = 48.0;
                                 let card_h = 56.0;
-                                let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(card_w, card_h), egui::Sense::click());
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::new(card_w, card_h),
+                                    egui::Sense::click(),
+                                );
                                 let painter = ui.painter_at(rect);
 
                                 // Background (red tint during crisis)
@@ -1649,13 +2579,25 @@ impl App {
                                 // Crisis border: thin red frame
                                 if pd.is_crisis {
                                     let inset = rect.shrink(1.5);
-                                    painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(180, 30, 30));
+                                    painter.rect_filled(
+                                        rect,
+                                        4.0,
+                                        egui::Color32::from_rgb(180, 30, 30),
+                                    );
                                     painter.rect_filled(inset, 3.0, bg);
                                 }
 
                                 // Selection border
                                 if is_sel {
-                                    painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 200, 100)), egui::StrokeKind::Outside);
+                                    painter.rect_stroke(
+                                        rect,
+                                        4.0,
+                                        egui::Stroke::new(
+                                            1.5,
+                                            egui::Color32::from_rgb(100, 200, 100),
+                                        ),
+                                        egui::StrokeKind::Outside,
+                                    );
                                 }
 
                                 // Portrait area
@@ -1663,18 +2605,39 @@ impl App {
 
                                 // Body (shirt color)
                                 let shirt_c = egui::Color32::from_rgb(
-                                    (pd.shirt[0] * 255.0) as u8, (pd.shirt[1] * 255.0) as u8, (pd.shirt[2] * 255.0) as u8);
-                                painter.circle_filled(portrait_center + egui::Vec2::new(0.0, 8.0), 10.0, shirt_c);
+                                    (pd.shirt[0] * 255.0) as u8,
+                                    (pd.shirt[1] * 255.0) as u8,
+                                    (pd.shirt[2] * 255.0) as u8,
+                                );
+                                painter.circle_filled(
+                                    portrait_center + egui::Vec2::new(0.0, 8.0),
+                                    10.0,
+                                    shirt_c,
+                                );
 
                                 // Head (skin color)
                                 let skin_c = egui::Color32::from_rgb(
-                                    (pd.skin[0] * 255.0) as u8, (pd.skin[1] * 255.0) as u8, (pd.skin[2] * 255.0) as u8);
-                                painter.circle_filled(portrait_center + egui::Vec2::new(0.0, -2.0), 6.0, skin_c);
+                                    (pd.skin[0] * 255.0) as u8,
+                                    (pd.skin[1] * 255.0) as u8,
+                                    (pd.skin[2] * 255.0) as u8,
+                                );
+                                painter.circle_filled(
+                                    portrait_center + egui::Vec2::new(0.0, -2.0),
+                                    6.0,
+                                    skin_c,
+                                );
 
                                 // Hair
                                 let hair_c = egui::Color32::from_rgb(
-                                    (pd.hair[0] * 255.0) as u8, (pd.hair[1] * 255.0) as u8, (pd.hair[2] * 255.0) as u8);
-                                painter.circle_filled(portrait_center + egui::Vec2::new(0.0, -6.0), 4.0, hair_c);
+                                    (pd.hair[0] * 255.0) as u8,
+                                    (pd.hair[1] * 255.0) as u8,
+                                    (pd.hair[2] * 255.0) as u8,
+                                );
+                                painter.circle_filled(
+                                    portrait_center + egui::Vec2::new(0.0, -6.0),
+                                    4.0,
+                                    hair_c,
+                                );
 
                                 // Name
                                 let name_pos = rect.center_bottom() + egui::Vec2::new(0.0, -2.0);
@@ -1694,7 +2657,11 @@ impl App {
                                     egui::Pos2::new(bar_x, bar_y),
                                     egui::Vec2::new(bar_w, 2.0),
                                 );
-                                painter.rect_filled(bar_rect, 1.0, egui::Color32::from_rgb(40, 40, 40));
+                                painter.rect_filled(
+                                    bar_rect,
+                                    1.0,
+                                    egui::Color32::from_rgb(40, 40, 40),
+                                );
                                 let health_color = if pd.health > 0.5 {
                                     egui::Color32::from_rgb(80, 200, 80)
                                 } else if pd.health > 0.25 {
@@ -1703,8 +2670,12 @@ impl App {
                                     egui::Color32::from_rgb(200, 40, 40)
                                 };
                                 painter.rect_filled(
-                                    egui::Rect::from_min_size(bar_rect.min, egui::Vec2::new(bar_w * pd.health, 2.0)),
-                                    1.0, health_color,
+                                    egui::Rect::from_min_size(
+                                        bar_rect.min,
+                                        egui::Vec2::new(bar_w * pd.health, 2.0),
+                                    ),
+                                    1.0,
+                                    health_color,
                                 );
 
                                 if response.clicked() {
@@ -1739,20 +2710,29 @@ impl App {
                     // Hour labels header
                     ui.horizontal(|ui| {
                         ui.add_space(120.0); // name + dropdown width
-                        let (header_rect, _) = ui.allocate_exact_size(egui::Vec2::new(bar_w, 12.0), egui::Sense::hover());
+                        let (header_rect, _) = ui.allocate_exact_size(
+                            egui::Vec2::new(bar_w, 12.0),
+                            egui::Sense::hover(),
+                        );
                         let hp = ui.painter_at(header_rect);
                         for h in 0..24 {
                             let x = header_rect.min.x + (h as f32 + 0.5) * cell_w;
                             if h % 3 == 0 {
-                                hp.text(egui::pos2(x, header_rect.center().y), egui::Align2::CENTER_CENTER,
-                                    format!("{:02}", h), egui::FontId::proportional(7.0),
-                                    egui::Color32::from_gray(160));
+                                hp.text(
+                                    egui::pos2(x, header_rect.center().y),
+                                    egui::Align2::CENTER_CENTER,
+                                    format!("{:02}", h),
+                                    egui::FontId::proportional(7.0),
+                                    egui::Color32::from_gray(160),
+                                );
                             }
                         }
                     });
                     ui.separator();
                     // Per-pleb rows
-                    let friendly: Vec<usize> = (0..self.plebs.len()).filter(|&i| !self.plebs[i].is_enemy).collect();
+                    let friendly: Vec<usize> = (0..self.plebs.len())
+                        .filter(|&i| !self.plebs[i].is_enemy)
+                        .collect();
                     for &pi in &friendly {
                         ui.horizontal(|ui| {
                             // Name
@@ -1764,16 +2744,24 @@ impl App {
                                 .selected_text(preset.label())
                                 .width(55.0)
                                 .show_ui(ui, |ui| {
-                                    if ui.selectable_label(preset == PlebShift::Day, "Day").clicked() {
+                                    if ui
+                                        .selectable_label(preset == PlebShift::Day, "Day")
+                                        .clicked()
+                                    {
                                         self.plebs[pi].schedule.apply_preset(PlebShift::Day);
                                     }
-                                    if ui.selectable_label(preset == PlebShift::Night, "Night").clicked() {
+                                    if ui
+                                        .selectable_label(preset == PlebShift::Night, "Night")
+                                        .clicked()
+                                    {
                                         self.plebs[pi].schedule.apply_preset(PlebShift::Night);
                                     }
                                 });
                             // 24-hour bar with clickable cells
                             let (bar_rect, bar_response) = ui.allocate_exact_size(
-                                egui::Vec2::new(bar_w, bar_h), egui::Sense::click());
+                                egui::Vec2::new(bar_w, bar_h),
+                                egui::Sense::click(),
+                            );
                             let bp = ui.painter_at(bar_rect);
                             bp.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(25, 25, 25));
                             for h in 0..24usize {
@@ -1785,16 +2773,22 @@ impl App {
                                 } else {
                                     egui::Color32::from_rgb(35, 45, 95) // blue = sleep
                                 };
-                                bp.rect_filled(egui::Rect::from_min_max(
-                                    egui::pos2(x0 + 0.5, bar_rect.min.y + 0.5),
-                                    egui::pos2(x1 - 0.5, bar_rect.max.y - 0.5)), 1.0, col);
+                                bp.rect_filled(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(x0 + 0.5, bar_rect.min.y + 0.5),
+                                        egui::pos2(x1 - 0.5, bar_rect.max.y - 0.5),
+                                    ),
+                                    1.0,
+                                    col,
+                                );
                             }
                             // Click to toggle individual hours
                             if bar_response.clicked() {
                                 if let Some(pos) = bar_response.interact_pointer_pos() {
                                     let h = ((pos.x - bar_rect.min.x) / cell_w) as usize;
                                     if h < 24 {
-                                        self.plebs[pi].schedule.hours[h] = !self.plebs[pi].schedule.hours[h];
+                                        self.plebs[pi].schedule.hours[h] =
+                                            !self.plebs[pi].schedule.hours[h];
                                         self.plebs[pi].schedule.preset = PlebShift::Custom;
                                     }
                                 }
@@ -1803,19 +2797,28 @@ impl App {
                             let hour_frac = self.time_of_day / DAY_DURATION;
                             let mx = bar_rect.min.x + hour_frac * bar_w;
                             bp.line_segment(
-                                [egui::pos2(mx, bar_rect.min.y), egui::pos2(mx, bar_rect.max.y)],
-                                egui::Stroke::new(1.5, egui::Color32::WHITE));
+                                [
+                                    egui::pos2(mx, bar_rect.min.y),
+                                    egui::pos2(mx, bar_rect.max.y),
+                                ],
+                                egui::Stroke::new(1.5, egui::Color32::WHITE),
+                            );
                         });
                     }
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Click hours to toggle.").weak().size(9.0));
+                        ui.label(
+                            egui::RichText::new("Click hours to toggle.")
+                                .weak()
+                                .size(9.0),
+                        );
                         ui.colored_label(egui::Color32::from_rgb(55, 115, 55), "\u{25a0} Work");
                         ui.colored_label(egui::Color32::from_rgb(35, 45, 95), "\u{25a0} Sleep");
                     });
-
                 });
-            if !open { self.show_schedule = false; }
+            if !open {
+                self.show_schedule = false;
+            }
         }
 
         // Work Priorities window
@@ -1826,50 +2829,71 @@ impl App {
                 .default_pos(egui::pos2(400.0, 200.0))
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new("Click to cycle: 1 (high) → 2 → 3 → off → 1").weak().size(9.0));
+                    ui.label(
+                        egui::RichText::new("Click to cycle: 1 (high) → 2 → 3 → off → 1")
+                            .weak()
+                            .size(9.0),
+                    );
                     ui.separator();
 
-                    egui::Grid::new("work_prio_grid").num_columns(1 + zones::WORK_TYPE_COUNT)
-                        .spacing([2.0, 2.0]).show(ui, |ui| {
-                        // Header row
-                        ui.label(egui::RichText::new("Name").size(10.0).strong());
-                        for name in &zones::WORK_TYPE_NAMES {
-                            ui.label(egui::RichText::new(*name).size(10.0).strong());
-                        }
-                        ui.end_row();
-
-                        let friendly_indices: Vec<usize> = (0..self.plebs.len())
-                            .filter(|&i| !self.plebs[i].is_enemy && !self.plebs[i].is_dead)
-                            .collect();
-                        for pi in friendly_indices {
-                            let name = self.plebs[pi].name.clone();
-                            ui.label(egui::RichText::new(&name).size(10.0));
-                            for wt in 0..zones::WORK_TYPE_COUNT {
-                                let prio = self.plebs[pi].work_priorities[wt];
-                                let (label, color) = match prio {
-                                    1 => ("1", egui::Color32::from_rgb(80, 200, 80)),
-                                    2 => ("2", egui::Color32::from_rgb(200, 200, 60)),
-                                    3 => ("3", egui::Color32::from_rgb(160, 120, 60)),
-                                    _ => ("-", egui::Color32::from_gray(80)),
-                                };
-                                if ui.add(egui::Button::new(
-                                    egui::RichText::new(label).size(11.0).color(color)
-                                ).min_size(egui::Vec2::new(28.0, 18.0))).clicked() {
-                                    self.plebs[pi].work_priorities[wt] = match prio {
-                                        1 => 2, 2 => 3, 3 => 0, _ => 1,
-                                    };
-                                }
+                    egui::Grid::new("work_prio_grid")
+                        .num_columns(1 + zones::WORK_TYPE_COUNT)
+                        .spacing([2.0, 2.0])
+                        .show(ui, |ui| {
+                            // Header row
+                            ui.label(egui::RichText::new("Name").size(10.0).strong());
+                            for name in &zones::WORK_TYPE_NAMES {
+                                ui.label(egui::RichText::new(*name).size(10.0).strong());
                             }
                             ui.end_row();
-                        }
-                    });
-                });
-            if !open { self.show_priorities = false; }
-        }
 
+                            let friendly_indices: Vec<usize> = (0..self.plebs.len())
+                                .filter(|&i| !self.plebs[i].is_enemy && !self.plebs[i].is_dead)
+                                .collect();
+                            for pi in friendly_indices {
+                                let name = self.plebs[pi].name.clone();
+                                ui.label(egui::RichText::new(&name).size(10.0));
+                                for wt in 0..zones::WORK_TYPE_COUNT {
+                                    let prio = self.plebs[pi].work_priorities[wt];
+                                    let (label, color) = match prio {
+                                        1 => ("1", egui::Color32::from_rgb(80, 200, 80)),
+                                        2 => ("2", egui::Color32::from_rgb(200, 200, 60)),
+                                        3 => ("3", egui::Color32::from_rgb(160, 120, 60)),
+                                        _ => ("-", egui::Color32::from_gray(80)),
+                                    };
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(label).size(11.0).color(color),
+                                            )
+                                            .min_size(egui::Vec2::new(28.0, 18.0)),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.plebs[pi].work_priorities[wt] = match prio {
+                                            1 => 2,
+                                            2 => 3,
+                                            3 => 0,
+                                            _ => 1,
+                                        };
+                                    }
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
+            if !open {
+                self.show_priorities = false;
+            }
+        }
     }
 
-    fn draw_context_menus(&mut self, ctx: &egui::Context, bp_ppp: f32, _bp_cam: (f32,f32,f32,f32,f32)) {
+    fn draw_context_menus(
+        &mut self,
+        ctx: &egui::Context,
+        bp_ppp: f32,
+        _bp_cam: (f32, f32, f32, f32, f32),
+    ) {
         self.draw_context_menu_popup(ctx, bp_ppp);
     }
 
@@ -1883,7 +2907,10 @@ impl App {
 
         egui::Area::new(egui::Id::new("context_menu"))
             .order(egui::Order::Tooltip) // render on top of everything
-            .fixed_pos(egui::Pos2::new(menu.screen_x / bp_ppp, menu.screen_y / bp_ppp))
+            .fixed_pos(egui::Pos2::new(
+                menu.screen_x / bp_ppp,
+                menu.screen_y / bp_ppp,
+            ))
             .show(ctx, |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
                     for (label, action, enabled) in &menu.actions {
@@ -1906,8 +2933,10 @@ impl App {
                         let pleb = &mut self.plebs[sel_idx];
                         if !pleb.is_enemy && !pleb.activity.is_crisis() {
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let adj = adjacent_walkable(&self.grid_data, hx, hy).unwrap_or((hx, hy));
-                            let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
+                            let adj =
+                                adjacent_walkable(&self.grid_data, hx, hy).unwrap_or((hx, hy));
+                            let path =
+                                astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
                             if !path.is_empty() {
                                 pleb.path = path;
                                 pleb.path_idx = 0;
@@ -1925,9 +2954,20 @@ impl App {
                     if best_pleb.is_none() {
                         let mut best_dist = f32::MAX;
                         for (i, p) in self.plebs.iter().enumerate() {
-                            if p.activity.is_crisis() || p.inventory.is_carrying() || p.is_enemy || p.is_dead { continue; }
-                            let dist = ((p.x - hx as f32 - 0.5).powi(2) + (p.y - hy as f32 - 0.5).powi(2)).sqrt();
-                            if dist < best_dist { best_pleb = Some(i); best_dist = dist; }
+                            if p.activity.is_crisis()
+                                || p.inventory.is_carrying()
+                                || p.is_enemy
+                                || p.is_dead
+                            {
+                                continue;
+                            }
+                            let dist = ((p.x - hx as f32 - 0.5).powi(2)
+                                + (p.y - hy as f32 - 0.5).powi(2))
+                            .sqrt();
+                            if dist < best_dist {
+                                best_pleb = Some(i);
+                                best_dist = dist;
+                            }
                         }
                     }
                     if let Some(pi) = best_pleb {
@@ -1935,7 +2975,12 @@ impl App {
                         if let Some((cx, cy)) = nearest_crate {
                             let pleb = &mut self.plebs[pi];
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (hx, hy));
+                            let path = astar_path_terrain(
+                                &self.grid_data,
+                                &self.terrain_data,
+                                start,
+                                (hx, hy),
+                            );
                             if !path.is_empty() {
                                 pleb.path = path;
                                 pleb.path_idx = 0;
@@ -1956,7 +3001,9 @@ impl App {
                             let pleb = &mut self.plebs[sel_idx];
                             if !pleb.is_enemy && !pleb.activity.is_crisis() {
                                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                let dist = ((pleb.x - ix as f32 - 0.5).powi(2) + (pleb.y - iy as f32 - 0.5).powi(2)).sqrt();
+                                let dist = ((pleb.x - ix as f32 - 0.5).powi(2)
+                                    + (pleb.y - iy as f32 - 0.5).powi(2))
+                                .sqrt();
                                 if dist < 1.5 {
                                     // Close enough — eat directly
                                     pleb.harvest_target = Some((ix, iy));
@@ -1966,7 +3013,12 @@ impl App {
                                     pleb.path.clear();
                                 } else {
                                     // Walk there first, eat on arrival
-                                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (ix, iy));
+                                    let path = astar_path_terrain(
+                                        &self.grid_data,
+                                        &self.terrain_data,
+                                        start,
+                                        (ix, iy),
+                                    );
                                     if !path.is_empty() {
                                         pleb.path = path;
                                         pleb.path_idx = 0;
@@ -1985,7 +3037,8 @@ impl App {
                         let pleb = &mut self.plebs[sel_idx];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                         let goal = (wx.floor() as i32, wy.floor() as i32);
-                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, goal);
+                        let path =
+                            astar_path_terrain(&self.grid_data, &self.terrain_data, start, goal);
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 1;
@@ -2002,7 +3055,12 @@ impl App {
                     if let Some(sel_idx) = self.selected_pleb {
                         let pleb = &mut self.plebs[sel_idx];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (dx, dy));
+                        let path = astar_path_terrain(
+                            &self.grid_data,
+                            &self.terrain_data,
+                            start,
+                            (dx, dy),
+                        );
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 0;
@@ -2020,12 +3078,22 @@ impl App {
         if !close && self.context_menu.is_some() {
             let pointer_over_ui = ctx.is_pointer_over_area();
             let any_click = ctx.input(|i| i.pointer.any_pressed());
-            if any_click && !pointer_over_ui { close = true; }
+            if any_click && !pointer_over_ui {
+                close = true;
+            }
         }
-        if close { self.context_menu = None; }
+        if close {
+            self.context_menu = None;
+        }
     }
 
-    fn draw_overlays_and_popups(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), _bp_ppp: f32, _dt: f32) {
+    fn draw_overlays_and_popups(
+        &mut self,
+        ctx: &egui::Context,
+        bp_cam: (f32, f32, f32, f32, f32),
+        _bp_ppp: f32,
+        _dt: f32,
+    ) {
         // Wind compass (upper-left, below top menu bar)
         {
             let wx = self.fluid_params.wind_x;
@@ -2036,20 +3104,53 @@ impl App {
                 .interactable(false)
                 .show(ctx, |ui| {
                     let size = 56.0;
-                    let (resp, painter) = ui.allocate_painter(egui::Vec2::splat(size), egui::Sense::hover());
+                    let (resp, painter) =
+                        ui.allocate_painter(egui::Vec2::splat(size), egui::Sense::hover());
                     let center = resp.rect.center();
                     let radius = size * 0.45;
                     // Circle background
-                    painter.circle_filled(center, radius, egui::Color32::from_rgba_unmultiplied(30, 30, 40, 200));
-                    painter.circle_stroke(center, radius, egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
+                    painter.circle_filled(
+                        center,
+                        radius,
+                        egui::Color32::from_rgba_unmultiplied(30, 30, 40, 200),
+                    );
+                    painter.circle_stroke(
+                        center,
+                        radius,
+                        egui::Stroke::new(1.0, egui::Color32::from_gray(100)),
+                    );
                     // NSEW labels
                     let label_color = egui::Color32::from_gray(130);
                     let label_font = egui::FontId::proportional(9.0);
                     let label_r = radius + 1.0;
-                    painter.text(center + egui::Vec2::new(0.0, -label_r), egui::Align2::CENTER_BOTTOM, "N", label_font.clone(), label_color);
-                    painter.text(center + egui::Vec2::new(0.0, label_r), egui::Align2::CENTER_TOP, "S", label_font.clone(), label_color);
-                    painter.text(center + egui::Vec2::new(label_r, 0.0), egui::Align2::LEFT_CENTER, "E", label_font.clone(), label_color);
-                    painter.text(center + egui::Vec2::new(-label_r, 0.0), egui::Align2::RIGHT_CENTER, "W", label_font, label_color);
+                    painter.text(
+                        center + egui::Vec2::new(0.0, -label_r),
+                        egui::Align2::CENTER_BOTTOM,
+                        "N",
+                        label_font.clone(),
+                        label_color,
+                    );
+                    painter.text(
+                        center + egui::Vec2::new(0.0, label_r),
+                        egui::Align2::CENTER_TOP,
+                        "S",
+                        label_font.clone(),
+                        label_color,
+                    );
+                    painter.text(
+                        center + egui::Vec2::new(label_r, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        "E",
+                        label_font.clone(),
+                        label_color,
+                    );
+                    painter.text(
+                        center + egui::Vec2::new(-label_r, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        "W",
+                        label_font,
+                        label_color,
+                    );
                     // Tick marks at cardinal directions
                     let tick_color = egui::Color32::from_gray(80);
                     for &(dx, dy) in &[(0.0f32, -1.0f32), (0.0, 1.0), (1.0, 0.0), (-1.0, 0.0)] {
@@ -2063,18 +3164,29 @@ impl App {
                         let dir_y = wy / wind_mag;
                         let arrow_len = (radius - 6.0) * (wind_mag / 20.0).min(1.0).max(0.3);
                         let tip = center + egui::Vec2::new(dir_x * arrow_len, dir_y * arrow_len);
-                        let tail = center - egui::Vec2::new(dir_x * arrow_len * 0.3, dir_y * arrow_len * 0.3);
-                        painter.line_segment([tail, tip], egui::Stroke::new(2.0, egui::Color32::from_rgb(200, 220, 255)));
+                        let tail = center
+                            - egui::Vec2::new(dir_x * arrow_len * 0.3, dir_y * arrow_len * 0.3);
+                        painter.line_segment(
+                            [tail, tip],
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(200, 220, 255)),
+                        );
                         // Arrowhead
                         let perp = egui::Vec2::new(-dir_y, dir_x) * arrow_len * 0.25;
-                        let head_base = center + egui::Vec2::new(dir_x * arrow_len * 0.55, dir_y * arrow_len * 0.55);
+                        let head_base = center
+                            + egui::Vec2::new(dir_x * arrow_len * 0.55, dir_y * arrow_len * 0.55);
                         painter.add(egui::Shape::convex_polygon(
                             vec![tip, head_base + perp, head_base - perp],
                             egui::Color32::from_rgb(200, 220, 255),
                             egui::Stroke::NONE,
                         ));
                     } else {
-                        painter.text(center, egui::Align2::CENTER_CENTER, "·", egui::FontId::proportional(14.0), egui::Color32::from_gray(150));
+                        painter.text(
+                            center,
+                            egui::Align2::CENTER_CENTER,
+                            "·",
+                            egui::FontId::proportional(14.0),
+                            egui::Color32::from_gray(150),
+                        );
                     }
                     // Wind speed label below compass
                     painter.text(
@@ -2090,7 +3202,7 @@ impl App {
         self.draw_popups(ctx, bp_cam);
     }
 
-    fn draw_popups(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32)) {
+    fn draw_popups(&mut self, ctx: &egui::Context, bp_cam: (f32, f32, f32, f32, f32)) {
         let bp_ppp = self.ppp();
 
         // Info tool: hold Shift to inspect any block
@@ -2111,7 +3223,11 @@ impl App {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_max_width(260.0);
                         let heading = |ui: &mut egui::Ui, icon: &str, text: &str| {
-                            ui.label(egui::RichText::new(format!("{} {}", icon, text)).strong().size(11.0));
+                            ui.label(
+                                egui::RichText::new(format!("{} {}", icon, text))
+                                    .strong()
+                                    .size(11.0),
+                            );
                         };
                         let row = |ui: &mut egui::Ui, label: &str, value: String| {
                             ui.horizontal(|ui| {
@@ -2119,16 +3235,30 @@ impl App {
                                 ui.label(egui::RichText::new(value).monospace().size(10.0));
                             });
                         };
-                        let row_color = |ui: &mut egui::Ui, label: &str, value: String, color: egui::Color32| {
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(label).weak().size(10.0));
-                                ui.label(egui::RichText::new(value).monospace().size(10.0).color(color));
-                            });
-                        };
+                        let row_color =
+                            |ui: &mut egui::Ui,
+                             label: &str,
+                             value: String,
+                             color: egui::Color32| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(label).weak().size(10.0));
+                                    ui.label(
+                                        egui::RichText::new(value)
+                                            .monospace()
+                                            .size(10.0)
+                                            .color(color),
+                                    );
+                                });
+                            };
 
                         // --- Header: position + block type ---
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(format!("({:.0}, {:.0})", wx, wy)).monospace().size(10.0).weak());
+                            ui.label(
+                                egui::RichText::new(format!("({:.0}, {:.0})", wx, wy))
+                                    .monospace()
+                                    .size(10.0)
+                                    .weak(),
+                            );
                             if in_bounds {
                                 let idx = (by as u32 * GRID_W + bx as u32) as usize;
                                 let block = self.grid_data[idx];
@@ -2138,21 +3268,37 @@ impl App {
                                 let reg = block_defs::BlockRegistry::cached();
                                 let type_name = reg.name(bt);
                                 let mut label = type_name.to_string();
-                                if bh > 0 { label += &format!(" h:{}", bh); }
-                                if flags & 2 != 0 { label += " \u{1f3e0}"; } // roofed
-                                if flags & 1 != 0 { label += if flags & 4 != 0 { " \u{1f6aa}\u{2705}" } else { " \u{1f6aa}\u{274c}" }; }
+                                if bh > 0 {
+                                    label += &format!(" h:{}", bh);
+                                }
+                                if flags & 2 != 0 {
+                                    label += " \u{1f3e0}";
+                                } // roofed
+                                if flags & 1 != 0 {
+                                    label += if flags & 4 != 0 {
+                                        " \u{1f6aa}\u{2705}"
+                                    } else {
+                                        " \u{1f6aa}\u{274c}"
+                                    };
+                                }
                                 ui.label(egui::RichText::new(label).strong().size(11.0));
                             }
                         });
 
-                        if !in_bounds { return; }
+                        if !in_bounds {
+                            return;
+                        }
                         let idx = (by as u32 * GRID_W + bx as u32) as usize;
                         let block = self.grid_data[idx];
                         let bt = block & 0xFF;
                         let bh = (block >> 8) & 0xFF;
 
                         // --- Elevation + Terrain ---
-                        let elev = if idx < self.elevation_data.len() { self.elevation_data[idx] } else { 0.0 };
+                        let elev = if idx < self.elevation_data.len() {
+                            self.elevation_data[idx]
+                        } else {
+                            0.0
+                        };
                         if elev > 0.05 || idx < self.terrain_data.len() {
                             ui.separator();
                             heading(ui, "\u{26f0}", "Terrain");
@@ -2163,8 +3309,14 @@ impl App {
                                 let td = self.terrain_data[idx];
                                 let tt = terrain_type(td);
                                 let tt_name = match tt {
-                                    0 => "Grass", 1 => "Chalky", 2 => "Rocky", 3 => "Clay",
-                                    4 => "Gravel", 5 => "Peat", 6 => "Marsh", 7 => "Loam",
+                                    0 => "Grass",
+                                    1 => "Chalky",
+                                    2 => "Rocky",
+                                    3 => "Clay",
+                                    4 => "Gravel",
+                                    5 => "Peat",
+                                    6 => "Marsh",
+                                    7 => "Loam",
                                     _ => "?",
                                 };
                                 let tr = terrain_richness(td);
@@ -2179,24 +3331,49 @@ impl App {
                         #[cfg(not(target_arch = "wasm32"))]
                         {
                             let [smoke_r, o2, co2, temp] = self.debug.fluid_density;
-                            let is_solid = bh > 0 && (bt == 1 || bt == 4 || bt == 5 || bt == 14 || (bt >= 21 && bt <= 25) || bt == 35);
+                            let is_solid = bh > 0
+                                && (bt == 1
+                                    || bt == 4
+                                    || bt == 5
+                                    || bt == 14
+                                    || (bt >= 21 && bt <= 25)
+                                    || bt == 35);
                             let is_pipe = pipes::is_pipe_component(bt);
                             ui.separator();
                             heading(ui, "\u{1f32b}", "Atmosphere");
                             if is_solid {
-                                row(ui, "Wall temp", format!("{:.1}\u{b0}C", self.debug.block_temp));
+                                row(
+                                    ui,
+                                    "Wall temp",
+                                    format!("{:.1}\u{b0}C", self.debug.block_temp),
+                                );
                             } else if is_pipe {
-                                row(ui, "Pipe temp", format!("{:.1}\u{b0}C", self.debug.block_temp));
+                                row(
+                                    ui,
+                                    "Pipe temp",
+                                    format!("{:.1}\u{b0}C", self.debug.block_temp),
+                                );
                             } else {
-                                let temp_col = if temp > 40.0 { egui::Color32::from_rgb(255, 120, 50) }
-                                    else if temp < 5.0 { egui::Color32::from_rgb(100, 150, 255) }
-                                    else { egui::Color32::from_rgb(180, 220, 180) };
-                                let o2_col = if o2 < 0.7 { egui::Color32::from_rgb(255, 80, 80) }
-                                    else { egui::Color32::from_rgb(150, 200, 150) };
+                                let temp_col = if temp > 40.0 {
+                                    egui::Color32::from_rgb(255, 120, 50)
+                                } else if temp < 5.0 {
+                                    egui::Color32::from_rgb(100, 150, 255)
+                                } else {
+                                    egui::Color32::from_rgb(180, 220, 180)
+                                };
+                                let o2_col = if o2 < 0.7 {
+                                    egui::Color32::from_rgb(255, 80, 80)
+                                } else {
+                                    egui::Color32::from_rgb(150, 200, 150)
+                                };
                                 row_color(ui, "Temp", format!("{:.1}\u{b0}C", temp), temp_col);
                                 row_color(ui, "O\u{2082}", format!("{:.2}", o2), o2_col);
-                                if smoke_r > 0.01 { row(ui, "Smoke", format!("{:.3}", smoke_r)); }
-                                if co2 > 0.01 { row(ui, "CO\u{2082}", format!("{:.3}", co2)); }
+                                if smoke_r > 0.01 {
+                                    row(ui, "Smoke", format!("{:.3}", smoke_r));
+                                }
+                                if co2 > 0.01 {
+                                    row(ui, "CO\u{2082}", format!("{:.3}", co2));
+                                }
                             }
                         }
 
@@ -2205,9 +3382,13 @@ impl App {
                             ui.separator();
                             heading(ui, "\u{26a1}", "Power");
                             let v = self.debug.voltage;
-                            let v_col = if v > 15.0 { egui::Color32::from_rgb(255, 80, 80) }
-                                else if v > 1.0 { egui::Color32::from_rgb(120, 255, 120) }
-                                else { egui::Color32::from_rgb(150, 150, 150) };
+                            let v_col = if v > 15.0 {
+                                egui::Color32::from_rgb(255, 80, 80)
+                            } else if v > 1.0 {
+                                egui::Color32::from_rgb(120, 255, 120)
+                            } else {
+                                egui::Color32::from_rgb(150, 150, 150)
+                            };
                             row_color(ui, "Voltage", format!("{:.1}V", v), v_col);
                             let amps = v / 10.0;
                             row(ui, "Current", format!("{:.2}A", amps));
@@ -2225,9 +3406,13 @@ impl App {
                                     heading(ui, "\u{1f4a8}", "Gas Pipe");
                                     row(ui, "Pressure", format!("{:.2}", cell.pressure));
                                     row(ui, "Temp", format!("{:.1}\u{b0}C", cell.gas[3]));
-                                    if cell.gas[0] > 0.01 { row(ui, "Smoke", format!("{:.3}", cell.gas[0])); }
+                                    if cell.gas[0] > 0.01 {
+                                        row(ui, "Smoke", format!("{:.3}", cell.gas[0]));
+                                    }
                                     row(ui, "O\u{2082}", format!("{:.3}", cell.gas[1]));
-                                    if cell.gas[2] > 0.01 { row(ui, "CO\u{2082}", format!("{:.3}", cell.gas[2])); }
+                                    if cell.gas[2] > 0.01 {
+                                        row(ui, "CO\u{2082}", format!("{:.3}", cell.gas[2]));
+                                    }
                                 }
                             } else if is_liq {
                                 if let Some(cell) = self.liquid_network.cells.get(&pidx) {
@@ -2241,23 +3426,41 @@ impl App {
 
                         // --- Water ---
                         {
-                            let wt = if idx < self.water_table.len() { self.water_table[idx] } else { -2.0 };
+                            let wt = if idx < self.water_table.len() {
+                                self.water_table[idx]
+                            } else {
+                                -2.0
+                            };
                             let sw = self.debug.water_level;
                             if sw > 0.005 || wt > -1.0 {
                                 ui.separator();
                                 heading(ui, "\u{1f4a7}", "Water");
                                 if sw > 0.005 {
-                                    let label = if sw > 0.5 { "flooded" } else if sw > 0.15 { "puddle" } else { "moist" };
+                                    let label = if sw > 0.5 {
+                                        "flooded"
+                                    } else if sw > 0.15 {
+                                        "puddle"
+                                    } else {
+                                        "moist"
+                                    };
                                     row(ui, "Surface", format!("{:.2} ({})", sw, label));
                                 }
-                                let wt_label = if wt > 0.0 { "spring" } else if wt > -0.5 { "wet" } else { "moderate" };
+                                let wt_label = if wt > 0.0 {
+                                    "spring"
+                                } else if wt > -0.5 {
+                                    "wet"
+                                } else {
+                                    "moderate"
+                                };
                                 row(ui, "Table", format!("{:.1} ({})", wt, wt_label));
                             }
                         }
 
                         // --- Zone ---
                         {
-                            let in_growing = self.zones.iter().any(|z| z.kind == zones::ZoneKind::Growing && z.tiles.contains(&(bx, by)));
+                            let in_growing = self.zones.iter().any(|z| {
+                                z.kind == zones::ZoneKind::Growing && z.tiles.contains(&(bx, by))
+                            });
                             if in_growing {
                                 ui.separator();
                                 heading(ui, "\u{1f33e}", "Growing Zone");
@@ -2267,20 +3470,66 @@ impl App {
                         // --- Crop ---
                         {
                             let cb = self.grid_data[idx];
-                            let wt = if idx < self.water_table.len() { self.water_table[idx] } else { -3.0 };
+                            let wt = if idx < self.water_table.len() {
+                                self.water_table[idx]
+                            } else {
+                                -3.0
+                            };
                             let timer = self.crop_timers.get(&(idx as u32)).copied().unwrap_or(0.0);
-                            if let Some(cs) = zones::crop_status(cb, idx as u32, timer,
-                                self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt, self.debug.water_level) {
+                            if let Some(cs) = zones::crop_status(
+                                cb,
+                                idx as u32,
+                                timer,
+                                self.time_of_day,
+                                self.camera.sun_intensity,
+                                self.camera.rain_intensity,
+                                wt,
+                                self.debug.water_level,
+                            ) {
                                 ui.separator();
-                                heading(ui, "\u{1f331}", &format!("{} ({:.0}%)", cs.stage_name, cs.progress * 100.0));
-                                let rate_col = if cs.growth_rate > 0.7 { egui::Color32::from_rgb(120, 255, 120) }
-                                    else if cs.growth_rate > 0.3 { egui::Color32::from_rgb(255, 220, 80) }
-                                    else { egui::Color32::from_rgb(255, 80, 80) };
-                                row_color(ui, "Growth", format!("{:.0}%  {}", cs.growth_rate * 100.0, cs.limiting), rate_col);
+                                heading(
+                                    ui,
+                                    "\u{1f331}",
+                                    &format!("{} ({:.0}%)", cs.stage_name, cs.progress * 100.0),
+                                );
+                                let rate_col = if cs.growth_rate > 0.7 {
+                                    egui::Color32::from_rgb(120, 255, 120)
+                                } else if cs.growth_rate > 0.3 {
+                                    egui::Color32::from_rgb(255, 220, 80)
+                                } else {
+                                    egui::Color32::from_rgb(255, 80, 80)
+                                };
+                                row_color(
+                                    ui,
+                                    "Growth",
+                                    format!("{:.0}%  {}", cs.growth_rate * 100.0, cs.limiting),
+                                    rate_col,
+                                );
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("T:{:.0}%", cs.temp_factor * 100.0)).size(9.0).weak());
-                                    ui.label(egui::RichText::new(format!("S:{:.0}%", cs.sun_factor * 100.0)).size(9.0).weak());
-                                    ui.label(egui::RichText::new(format!("W:{:.0}%", cs.water_factor * 100.0)).size(9.0).weak());
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "T:{:.0}%",
+                                            cs.temp_factor * 100.0
+                                        ))
+                                        .size(9.0)
+                                        .weak(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "S:{:.0}%",
+                                            cs.sun_factor * 100.0
+                                        ))
+                                        .size(9.0)
+                                        .weak(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "W:{:.0}%",
+                                            cs.water_factor * 100.0
+                                        ))
+                                        .size(9.0)
+                                        .weak(),
+                                    );
                                 });
                             }
                         }
@@ -2308,16 +3557,26 @@ impl App {
                 let (hwx, hwy) = self.hover_world;
                 let (ex, ey) = (hwx.floor() as i32, hwy.floor() as i32);
                 let tiles = match self.build_tool {
-                    BuildTool::Destroy | BuildTool::Roof | BuildTool::RemoveFloor | BuildTool::RemoveRoof => {
-                        Self::filled_rect_tiles(sx, sy, ex, ey)
-                    }
+                    BuildTool::Destroy
+                    | BuildTool::Roof
+                    | BuildTool::RemoveFloor
+                    | BuildTool::RemoveRoof => Self::filled_rect_tiles(sx, sy, ex, ey),
                     BuildTool::Place(id) => {
                         let reg = crate::block_defs::BlockRegistry::cached();
-                        let shape = reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref());
+                        let shape = reg
+                            .get(id)
+                            .and_then(|d| d.placement.as_ref())
+                            .and_then(|p| p.drag.as_ref());
                         match shape {
-                            Some(crate::block_defs::DragShape::Line) => Self::line_tiles(sx, sy, ex, ey),
-                            Some(crate::block_defs::DragShape::FilledRect) => Self::filled_rect_tiles(sx, sy, ex, ey),
-                            Some(crate::block_defs::DragShape::HollowRect) => Self::hollow_rect_tiles(sx, sy, ex, ey),
+                            Some(crate::block_defs::DragShape::Line) => {
+                                Self::line_tiles(sx, sy, ex, ey)
+                            }
+                            Some(crate::block_defs::DragShape::FilledRect) => {
+                                Self::filled_rect_tiles(sx, sy, ex, ey)
+                            }
+                            Some(crate::block_defs::DragShape::HollowRect) => {
+                                Self::hollow_rect_tiles(sx, sy, ex, ey)
+                            }
                             _ => Vec::new(),
                         }
                     }
@@ -2326,7 +3585,8 @@ impl App {
                 if !tiles.is_empty() {
                     let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
                     let painter = ctx.layer_painter(egui::LayerId::new(
-                        egui::Order::Background, egui::Id::new("drag_preview"),
+                        egui::Order::Background,
+                        egui::Id::new("drag_preview"),
                     ));
                     let is_destroy = self.build_tool == BuildTool::Destroy;
                     let is_remove_floor = self.build_tool == BuildTool::RemoveFloor;
@@ -2336,7 +3596,11 @@ impl App {
                         let color = if is_destroy {
                             egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
                         } else if is_remove_floor {
-                            let valid = if *tx < 0 || *ty < 0 || *tx >= GRID_W as i32 || *ty >= GRID_H as i32 {
+                            let valid = if *tx < 0
+                                || *ty < 0
+                                || *tx >= GRID_W as i32
+                                || *ty >= GRID_H as i32
+                            {
                                 false
                             } else {
                                 let tidx = (*ty as u32 * GRID_W + *tx as u32) as usize;
@@ -2350,7 +3614,11 @@ impl App {
                                 egui::Color32::from_rgba_unmultiplied(255, 60, 60, 40)
                             }
                         } else if is_remove_roof {
-                            let valid = if *tx < 0 || *ty < 0 || *tx >= GRID_W as i32 || *ty >= GRID_H as i32 {
+                            let valid = if *tx < 0
+                                || *ty < 0
+                                || *tx >= GRID_W as i32
+                                || *ty >= GRID_H as i32
+                            {
                                 false
                             } else {
                                 let tidx = (*ty as u32 * GRID_W + *tx as u32) as usize;
@@ -2373,7 +3641,11 @@ impl App {
                             // Validate each tile individually
                             let is_wire_tool = matches!(self.build_tool, BuildTool::Place(36));
                             let is_pipe_tool = matches!(self.build_tool, BuildTool::Place(15));
-                            let valid = if *tx < 0 || *ty < 0 || *tx >= GRID_W as i32 || *ty >= GRID_H as i32 {
+                            let valid = if *tx < 0
+                                || *ty < 0
+                                || *tx >= GRID_W as i32
+                                || *ty >= GRID_H as i32
+                            {
                                 false
                             } else if is_wire_tool {
                                 true // wire can go anywhere
@@ -2383,8 +3655,7 @@ impl App {
                                 let tbt = tb & 0xFF;
                                 let tbh = (tb >> 8) & 0xFF;
                                 // Allow placement on empty ground OR on existing same-type block
-                                ((tbt == 0 || tbt == 2) && tbh == 0)
-                                    || (is_pipe_tool && tbt == 15) // pipe on pipe = merge connections
+                                ((tbt == 0 || tbt == 2) && tbh == 0) || (is_pipe_tool && tbt == 15) // pipe on pipe = merge connections
                             };
                             if valid {
                                 egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80)
@@ -2394,27 +3665,43 @@ impl App {
                         };
                         let wx0 = *tx as f32;
                         let wy0 = *ty as f32;
-                        let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                        let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                        let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                        let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                        let sx0 =
+                            ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                        let sy0 =
+                            ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                        let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                            / self.render_scale
+                            / bp_ppp;
+                        let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                            / self.render_scale
+                            / bp_ppp;
                         painter.rect_filled(
                             egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
-                            0.0, color,
+                            0.0,
+                            color,
                         );
                     }
                     // Draw direction arrows on pipe/wire line tiles
-                    let is_line = matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(36));
+                    let is_line =
+                        matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(36));
                     if is_line && tiles.len() > 1 {
                         let arrow_col = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 160);
                         for ti in 0..tiles.len() {
                             let (tx, ty) = tiles[ti];
                             let wx0 = tx as f32;
                             let wy0 = ty as f32;
-                            let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                            let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                            let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                            let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                            let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                                / self.render_scale
+                                / bp_ppp;
+                            let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                                / self.render_scale
+                                / bp_ppp;
+                            let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                                / self.render_scale
+                                / bp_ppp;
+                            let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                                / self.render_scale
+                                / bp_ppp;
                             let center = egui::pos2((sx0 + sx1) * 0.5, (sy0 + sy1) * 0.5);
                             let tile_sz = (sx1 - sx0).max(1.0);
                             // Arrow: toward next tile, or same direction as previous for last tile
@@ -2433,10 +3720,12 @@ impl App {
                                 let alen = tile_sz * 0.3;
                                 let tip = center + egui::Vec2::new(adx * alen, ady * alen);
                                 let perp = egui::Vec2::new(-ady, adx) * alen * 0.4;
-                                let base = center + egui::Vec2::new(adx * alen * 0.2, ady * alen * 0.2);
+                                let base =
+                                    center + egui::Vec2::new(adx * alen * 0.2, ady * alen * 0.2);
                                 painter.add(egui::Shape::convex_polygon(
                                     vec![tip, base + perp, base - perp],
-                                    arrow_col, egui::Stroke::NONE,
+                                    arrow_col,
+                                    egui::Stroke::NONE,
                                 ));
                             }
                         }
@@ -2444,10 +3733,14 @@ impl App {
                 }
             }
         }
-
     }
 
-    fn draw_world_overlays(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32), blueprint_tiles: &[((i32,i32), bool)]) {
+    fn draw_world_overlays(
+        &mut self,
+        ctx: &egui::Context,
+        bp_cam: (f32, f32, f32, f32, f32),
+        blueprint_tiles: &[((i32, i32), bool)],
+    ) {
         let bp_ppp = self.ppp();
 
         // Selection drag rectangle (while dragging to multi-select)
@@ -2456,22 +3749,31 @@ impl App {
             let p0 = self.world_to_screen_ui(sx.min(ex), sy.min(ey), bp_cam);
             let p1 = self.world_to_screen_ui(sx.max(ex), sy.max(ey), bp_cam);
             let sel_drag_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Background, egui::Id::new("select_drag"),
+                egui::Order::Background,
+                egui::Id::new("select_drag"),
             ));
             sel_drag_painter.rect_filled(
-                egui::Rect::from_min_max(p0, p1), 0.0,
+                egui::Rect::from_min_max(p0, p1),
+                0.0,
                 egui::Color32::from_rgba_unmultiplied(100, 180, 255, 30),
             );
             sel_drag_painter.rect_filled(
-                egui::Rect::from_min_max(p0, p1), 0.0,
+                egui::Rect::from_min_max(p0, p1),
+                0.0,
                 egui::Color32::TRANSPARENT,
             );
             // Border
             let r = egui::Rect::from_min_max(p0, p1);
-            let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            let pts = [
+                r.left_top(),
+                r.right_top(),
+                r.right_bottom(),
+                r.left_bottom(),
+                r.left_top(),
+            ];
             for i in 0..4 {
                 sel_drag_painter.line_segment(
-                    [pts[i], pts[i+1]],
+                    [pts[i], pts[i + 1]],
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 180, 255)),
                 );
             }
@@ -2480,7 +3782,8 @@ impl App {
         // World selection brackets (Rimworld-style corner markers per item)
         if !self.world_sel.is_empty() {
             let sel_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Background, egui::Id::new("world_selection"),
+                egui::Order::Background,
+                egui::Id::new("world_selection"),
             ));
             let stroke = egui::Stroke::new(2.0, egui::Color32::WHITE);
             for item in &self.world_sel.items {
@@ -2488,22 +3791,71 @@ impl App {
                 let (wx0, wy0, wx1, wy1) = if let Some(pi) = item.pleb_idx {
                     if let Some(pleb) = self.plebs.get(pi) {
                         (pleb.x - 0.4, pleb.y - 0.4, pleb.x + 0.4, pleb.y + 0.4)
-                    } else { continue; }
+                    } else {
+                        continue;
+                    }
                 } else {
-                    (item.x as f32, item.y as f32, (item.x + item.w) as f32, (item.y + item.h) as f32)
+                    (
+                        item.x as f32,
+                        item.y as f32,
+                        (item.x + item.w) as f32,
+                        (item.y + item.h) as f32,
+                    )
                 };
                 let p0 = self.world_to_screen_ui(wx0, wy0, bp_cam);
                 let p1 = self.world_to_screen_ui(wx1, wy1, bp_cam);
                 let rect = egui::Rect::from_min_max(p0, p1);
                 let bl = (rect.width().min(rect.height()) * 0.3).max(3.0);
-                sel_painter.line_segment([rect.left_top(), rect.left_top() + egui::Vec2::new(bl, 0.0)], stroke);
-                sel_painter.line_segment([rect.left_top(), rect.left_top() + egui::Vec2::new(0.0, bl)], stroke);
-                sel_painter.line_segment([rect.right_top(), rect.right_top() + egui::Vec2::new(-bl, 0.0)], stroke);
-                sel_painter.line_segment([rect.right_top(), rect.right_top() + egui::Vec2::new(0.0, bl)], stroke);
-                sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(bl, 0.0)], stroke);
-                sel_painter.line_segment([rect.left_bottom(), rect.left_bottom() + egui::Vec2::new(0.0, -bl)], stroke);
-                sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(-bl, 0.0)], stroke);
-                sel_painter.line_segment([rect.right_bottom(), rect.right_bottom() + egui::Vec2::new(0.0, -bl)], stroke);
+                sel_painter.line_segment(
+                    [rect.left_top(), rect.left_top() + egui::Vec2::new(bl, 0.0)],
+                    stroke,
+                );
+                sel_painter.line_segment(
+                    [rect.left_top(), rect.left_top() + egui::Vec2::new(0.0, bl)],
+                    stroke,
+                );
+                sel_painter.line_segment(
+                    [
+                        rect.right_top(),
+                        rect.right_top() + egui::Vec2::new(-bl, 0.0),
+                    ],
+                    stroke,
+                );
+                sel_painter.line_segment(
+                    [
+                        rect.right_top(),
+                        rect.right_top() + egui::Vec2::new(0.0, bl),
+                    ],
+                    stroke,
+                );
+                sel_painter.line_segment(
+                    [
+                        rect.left_bottom(),
+                        rect.left_bottom() + egui::Vec2::new(bl, 0.0),
+                    ],
+                    stroke,
+                );
+                sel_painter.line_segment(
+                    [
+                        rect.left_bottom(),
+                        rect.left_bottom() + egui::Vec2::new(0.0, -bl),
+                    ],
+                    stroke,
+                );
+                sel_painter.line_segment(
+                    [
+                        rect.right_bottom(),
+                        rect.right_bottom() + egui::Vec2::new(-bl, 0.0),
+                    ],
+                    stroke,
+                );
+                sel_painter.line_segment(
+                    [
+                        rect.right_bottom(),
+                        rect.right_bottom() + egui::Vec2::new(0.0, -bl),
+                    ],
+                    stroke,
+                );
             }
         }
 
@@ -2511,21 +3863,35 @@ impl App {
         if !self.zones.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let zone_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Background, egui::Id::new("zones"),
+                egui::Order::Background,
+                egui::Id::new("zones"),
             ));
             for zone in &self.zones {
                 let color = match zone.kind {
-                    zones::ZoneKind::Growing => egui::Color32::from_rgba_unmultiplied(40, 160, 40, 35),
-                    zones::ZoneKind::Storage => egui::Color32::from_rgba_unmultiplied(200, 80, 140, 35),
+                    zones::ZoneKind::Growing => {
+                        egui::Color32::from_rgba_unmultiplied(40, 160, 40, 35)
+                    }
+                    zones::ZoneKind::Storage => {
+                        egui::Color32::from_rgba_unmultiplied(200, 80, 140, 35)
+                    }
                 };
                 for &(tx, ty) in &zone.tiles {
-                    let sx0 = ((tx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                    let sy0 = ((ty as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                    let sx1 = ((tx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                    let sy1 = ((ty as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    let sx0 = ((tx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                        / self.render_scale
+                        / bp_ppp;
+                    let sy0 = ((ty as f32 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                        / self.render_scale
+                        / bp_ppp;
+                    let sx1 = ((tx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                        / self.render_scale
+                        / bp_ppp;
+                    let sy1 = ((ty as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                        / self.render_scale
+                        / bp_ppp;
                     zone_painter.rect_filled(
                         egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
-                        0.0, color,
+                        0.0,
+                        color,
                     );
                 }
             }
@@ -2536,17 +3902,29 @@ impl App {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
             let bp_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Background, egui::Id::new("construction_blueprints"),
+                egui::Order::Background,
+                egui::Id::new("construction_blueprints"),
             ));
             let screen_rect = ctx.content_rect();
             for (&(bx, by), bp) in &self.blueprints {
-                let sx0 = ((bx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                let sy0 = ((by as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                let sx1 = ((bx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                let sy1 = ((by as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let sx0 =
+                    ((bx as f32 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy0 =
+                    ((by as f32 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let sx1 = ((bx as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                    / self.render_scale
+                    / bp_ppp;
+                let sy1 = ((by as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                    / self.render_scale
+                    / bp_ppp;
                 // Cull off-screen blueprints
-                if sx1 < screen_rect.min.x || sx0 > screen_rect.max.x
-                    || sy1 < screen_rect.min.y || sy0 > screen_rect.max.y { continue; }
+                if sx1 < screen_rect.min.x
+                    || sx0 > screen_rect.max.x
+                    || sy1 < screen_rect.min.y
+                    || sy0 > screen_rect.max.y
+                {
+                    continue;
+                }
                 let rect = egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1));
                 // Tint: blue if waiting for resources, green-blue if ready to build
                 let tint = if bp.resources_met() {
@@ -2576,17 +3954,30 @@ impl App {
                         } else {
                             egui::Color32::from_rgb(255, 160, 60) // orange = needs resources
                         };
-                        Some((format!("{}/{} wood", bp.wood_delivered, bp.wood_needed), color))
-                    } else { None };
-                    Self::world_label(&bp_painter,
+                        Some((
+                            format!("{}/{} wood", bp.wood_delivered, bp.wood_needed),
+                            color,
+                        ))
+                    } else {
+                        None
+                    };
+                    Self::world_label(
+                        &bp_painter,
                         egui::pos2(rect.center().x, rect.center().y - 3.0),
                         egui::Align2::CENTER_CENTER,
-                        name, 9.0, egui::Color32::from_rgba_unmultiplied(180, 200, 255, 220));
+                        name,
+                        9.0,
+                        egui::Color32::from_rgba_unmultiplied(180, 200, 255, 220),
+                    );
                     if let Some((res_label, res_color)) = res_text {
-                        Self::world_label(&bp_painter,
+                        Self::world_label(
+                            &bp_painter,
                             egui::pos2(rect.center().x, rect.center().y + 6.0),
                             egui::Align2::CENTER_CENTER,
-                            &res_label, 8.0, res_color);
+                            &res_label,
+                            8.0,
+                            res_color,
+                        );
                     }
                 }
             }
@@ -2613,13 +4004,17 @@ impl App {
                 // World → physical pixels → logical points (egui coords)
                 let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
                 let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let sx1 =
+                    ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy1 =
+                    ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
 
                 // Diagonal wall: draw triangle showing which half is solid
                 if self.build_tool == BuildTool::Place(44) {
                     // During drag, use per-tile variant from diag_preview
-                    let variant = self.diag_preview.iter()
+                    let variant = self
+                        .diag_preview
+                        .iter()
                         .find(|&&(dx, dy, _)| dx == tx && dy == ty)
                         .map(|&(_, _, v)| v as u32)
                         .unwrap_or(self.build_rotation % 4);
@@ -2643,7 +4038,10 @@ impl App {
                 }
 
                 // Wind turbine: show wind direction arrows across the 2x2 area (first tile only)
-                if self.build_tool == BuildTool::Place(41) && tx == blueprint_tiles[0].0.0 && ty == blueprint_tiles[0].0.1 {
+                if self.build_tool == BuildTool::Place(41)
+                    && tx == blueprint_tiles[0].0.0
+                    && ty == blueprint_tiles[0].0.1
+                {
                     // Draw arrows showing wind direction through the turbine
                     let center = egui::pos2(
                         (sx0 + sx1) / 2.0 + (sx1 - sx0) * 0.5,
@@ -2657,23 +4055,42 @@ impl App {
                     };
                     // Two arrows flanking the turbine
                     for &offset in &[-0.3f32, 0.3] {
-                        let perp_off = egui::Vec2::new(-ady * offset * tile_size * 2.0, adx * offset * tile_size * 2.0);
+                        let perp_off = egui::Vec2::new(
+                            -ady * offset * tile_size * 2.0,
+                            adx * offset * tile_size * 2.0,
+                        );
                         let arrow_center = center + perp_off;
                         let arrow_len = tile_size * 1.5;
-                        let tip = arrow_center + egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
-                        let tail = arrow_center - egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
-                        painter.line_segment([tail, tip], egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(100, 200, 255, 180)));
+                        let tip = arrow_center
+                            + egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
+                        let tail = arrow_center
+                            - egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
+                        painter.line_segment(
+                            [tail, tip],
+                            egui::Stroke::new(
+                                2.0,
+                                egui::Color32::from_rgba_unmultiplied(100, 200, 255, 180),
+                            ),
+                        );
                         let perp = egui::Vec2::new(-ady, adx) * arrow_len * 0.15;
-                        let head_base = arrow_center + egui::Vec2::new(adx * arrow_len * 0.25, ady * arrow_len * 0.25);
+                        let head_base = arrow_center
+                            + egui::Vec2::new(adx * arrow_len * 0.25, ady * arrow_len * 0.25);
                         painter.add(egui::Shape::convex_polygon(
                             vec![tip, head_base + perp, head_base - perp],
-                            egui::Color32::from_rgba_unmultiplied(100, 200, 255, 180), egui::Stroke::NONE,
+                            egui::Color32::from_rgba_unmultiplied(100, 200, 255, 180),
+                            egui::Stroke::NONE,
                         ));
                     }
                 }
 
                 // Direction arrow for fan, pump, inlet, outlet
-                if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19)) {
+                if matches!(
+                    self.build_tool,
+                    BuildTool::Place(12)
+                        | BuildTool::Place(16)
+                        | BuildTool::Place(20)
+                        | BuildTool::Place(19)
+                ) {
                     let center = egui::pos2((sx0 + sx1) / 2.0, (sy0 + sy1) / 2.0);
                     let tile_size = (sx1 - sx0).max(1.0);
                     let (adx, ady) = match self.build_rotation {
@@ -2683,14 +4100,18 @@ impl App {
                         _ => (-1.0, 0.0),
                     };
                     let arrow_len = tile_size * 0.8;
-                    let tip = center + egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
-                    let tail = center - egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
+                    let tip =
+                        center + egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
+                    let tail =
+                        center - egui::Vec2::new(adx * arrow_len * 0.5, ady * arrow_len * 0.5);
                     painter.line_segment([tail, tip], egui::Stroke::new(2.0, egui::Color32::WHITE));
                     let perp = egui::Vec2::new(-ady, adx) * arrow_len * 0.2;
-                    let head_base = center + egui::Vec2::new(adx * arrow_len * 0.2, ady * arrow_len * 0.2);
+                    let head_base =
+                        center + egui::Vec2::new(adx * arrow_len * 0.2, ady * arrow_len * 0.2);
                     painter.add(egui::Shape::convex_polygon(
                         vec![tip, head_base + perp, head_base - perp],
-                        egui::Color32::WHITE, egui::Stroke::NONE,
+                        egui::Color32::WHITE,
+                        egui::Stroke::NONE,
                     ));
                 }
             }
@@ -2741,19 +4162,31 @@ impl App {
                     let seg_color = if !self.elevation_data.is_empty() {
                         let prev_idx = (prev_pos.1 as u32 * GRID_W + prev_pos.0 as u32) as usize;
                         let next_idx = (py as u32 * GRID_W + px as u32) as usize;
-                        let elev_diff = if prev_idx < self.elevation_data.len() && next_idx < self.elevation_data.len() {
+                        let elev_diff = if prev_idx < self.elevation_data.len()
+                            && next_idx < self.elevation_data.len()
+                        {
                             self.elevation_data[next_idx] - self.elevation_data[prev_idx]
-                        } else { 0.0 };
+                        } else {
+                            0.0
+                        };
                         if elev_diff > 0.3 {
                             // Uphill: yellow → red
                             let t = ((elev_diff - 0.3) / 1.5).min(1.0);
                             egui::Color32::from_rgba_unmultiplied(
-                                (255.0) as u8, (255.0 - t * 200.0) as u8, (100.0 - t * 100.0) as u8, 180)
+                                (255.0) as u8,
+                                (255.0 - t * 200.0) as u8,
+                                (100.0 - t * 100.0) as u8,
+                                180,
+                            )
                         } else if elev_diff < -0.3 {
                             // Downhill: cyan
                             let t = ((-elev_diff - 0.3) / 1.5).min(1.0);
                             egui::Color32::from_rgba_unmultiplied(
-                                (100.0 - t * 50.0) as u8, (200.0 + t * 55.0) as u8, 255, 180)
+                                (100.0 - t * 50.0) as u8,
+                                (200.0 + t * 55.0) as u8,
+                                255,
+                                180,
+                            )
                         } else {
                             // Flat: green
                             egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)
@@ -2761,17 +4194,21 @@ impl App {
                     } else {
                         egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)
                     };
-                    painter.line_segment(
-                        [prev, next],
-                        egui::Stroke::new(2.0, seg_color),
-                    );
+                    painter.line_segment([prev, next], egui::Stroke::new(2.0, seg_color));
                     prev = next;
                     prev_pos = (px, py);
                 }
                 // Draw target marker at end
                 let last = pleb.path.last().unwrap();
                 let end = to_screen(last.0 as f32 + 0.5, last.1 as f32 + 0.5);
-                painter.circle_stroke(end, 4.0, egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(100, 255, 100, 200)));
+                painter.circle_stroke(
+                    end,
+                    4.0,
+                    egui::Stroke::new(
+                        2.0,
+                        egui::Color32::from_rgba_unmultiplied(100, 255, 100, 200),
+                    ),
+                );
             }
         }
 
@@ -2794,8 +4231,13 @@ impl App {
                 let p0 = to_screen(x + 0.15, y + 0.15);
                 let p1 = to_screen(x + 0.85, y + 0.85);
                 // Cull off-screen cells
-                if p1.x < screen_rect.min.x || p0.x > screen_rect.max.x
-                    || p1.y < screen_rect.min.y || p0.y > screen_rect.max.y { continue; }
+                if p1.x < screen_rect.min.x
+                    || p0.x > screen_rect.max.x
+                    || p1.y < screen_rect.min.y
+                    || p0.y > screen_rect.max.y
+                {
+                    continue;
+                }
                 // Color by gas content: smoke=gray, O2=blue, CO2=yellow, temp=red
                 let smoke = cell.gas[0].min(1.0);
                 let o2 = cell.gas[1].min(1.0);
@@ -2808,18 +4250,24 @@ impl App {
                 let b = (o2 * 0.9 + smoke * 0.3).min(1.0);
                 let alpha = (0.3 + pres * 0.4).min(0.7);
                 let color = egui::Color32::from_rgba_unmultiplied(
-                    (r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, (alpha * 255.0) as u8,
+                    (r * 255.0) as u8,
+                    (g * 255.0) as u8,
+                    (b * 255.0) as u8,
+                    (alpha * 255.0) as u8,
                 );
-                painter.rect_filled(
-                    egui::Rect::from_min_max(p0, p1),
-                    2.0,
-                    color,
-                );
+                painter.rect_filled(egui::Rect::from_min_max(p0, p1), 2.0, color);
                 // Pressure indicator: small text
-                if cam_zoom > 10.0 { // only show text when zoomed in enough
+                if cam_zoom > 10.0 {
+                    // only show text when zoomed in enough
                     let center = egui::pos2((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
-                    Self::world_label(&painter, center, egui::Align2::CENTER_CENTER,
-                        &format!("{:.1}", cell.pressure), 10.0, egui::Color32::WHITE);
+                    Self::world_label(
+                        &painter,
+                        center,
+                        egui::Align2::CENTER_CENTER,
+                        &format!("{:.1}", cell.pressure),
+                        10.0,
+                        egui::Color32::WHITE,
+                    );
                 }
             }
         }
@@ -2838,13 +4286,20 @@ impl App {
             };
             let screen_rect = ctx.content_rect();
             for (&idx, cell) in &self.liquid_network.cells {
-                if idx >= GRID_W * GRID_H { continue; }
+                if idx >= GRID_W * GRID_H {
+                    continue;
+                }
                 let x = (idx % GRID_W) as f32;
                 let y = (idx / GRID_W) as f32;
                 let p0 = to_screen(x + 0.15, y + 0.15);
                 let p1 = to_screen(x + 0.85, y + 0.85);
-                if p1.x < screen_rect.min.x || p0.x > screen_rect.max.x
-                    || p1.y < screen_rect.min.y || p0.y > screen_rect.max.y { continue; }
+                if p1.x < screen_rect.min.x
+                    || p0.x > screen_rect.max.x
+                    || p1.y < screen_rect.min.y
+                    || p0.y > screen_rect.max.y
+                {
+                    continue;
+                }
                 let pres = (cell.pressure / 2.0).clamp(0.0, 1.0);
                 let r = (50.0 + pres * 50.0) as u8;
                 let g = (100.0 + pres * 80.0) as u8;
@@ -2854,8 +4309,14 @@ impl App {
                 painter.rect_filled(egui::Rect::from_min_max(p0, p1), 2.0, color);
                 if cam_zoom > 10.0 {
                     let center = egui::pos2((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
-                    Self::world_label(&painter, center, egui::Align2::CENTER_CENTER,
-                        &format!("{:.1}", cell.pressure), 10.0, egui::Color32::WHITE);
+                    Self::world_label(
+                        &painter,
+                        center,
+                        egui::Align2::CENTER_CENTER,
+                        &format!("{:.1}", cell.pressure),
+                        10.0,
+                        egui::Color32::WHITE,
+                    );
                 }
             }
         }
@@ -2875,83 +4336,144 @@ impl App {
             };
 
             // Helper: draw a flow arrow at screen center with given direction, normalized magnitude, and tile_px
-            let draw_arrow = |painter: &egui::Painter, center: egui::Pos2, dir_x: f32, dir_y: f32,
-                              norm_mag: f32, tile_px: f32, label: Option<String>, is_wire: bool| {
+            let draw_arrow = |painter: &egui::Painter,
+                              center: egui::Pos2,
+                              dir_x: f32,
+                              dir_y: f32,
+                              norm_mag: f32,
+                              tile_px: f32,
+                              label: Option<String>,
+                              is_wire: bool| {
                 let arrow_len = norm_mag * 0.4 * tile_px;
-                if arrow_len < 1.0 { return; }
+                if arrow_len < 1.0 {
+                    return;
+                }
                 // Color ramp: pipe=blue→cyan→yellow→red, wire=purple→cyan→yellow→white
                 let color = if is_wire {
                     if norm_mag < 0.33 {
                         let t = norm_mag / 0.33;
                         egui::Color32::from_rgba_unmultiplied(
-                            (120.0 + t * 40.0) as u8, (60.0 + t * 140.0) as u8, (200.0 + t * 55.0) as u8, 210,
+                            (120.0 + t * 40.0) as u8,
+                            (60.0 + t * 140.0) as u8,
+                            (200.0 + t * 55.0) as u8,
+                            210,
                         )
                     } else if norm_mag < 0.66 {
                         let t = (norm_mag - 0.33) / 0.33;
                         egui::Color32::from_rgba_unmultiplied(
-                            (160.0 + t * 95.0) as u8, 255, (255.0 - t * 100.0) as u8, 210,
+                            (160.0 + t * 95.0) as u8,
+                            255,
+                            (255.0 - t * 100.0) as u8,
+                            210,
                         )
                     } else {
                         let t = (norm_mag - 0.66) / 0.34;
                         egui::Color32::from_rgba_unmultiplied(
-                            255, (255.0 - t * 55.0) as u8, (155.0 + t * 100.0) as u8, 210,
+                            255,
+                            (255.0 - t * 55.0) as u8,
+                            (155.0 + t * 100.0) as u8,
+                            210,
                         )
                     }
                 } else {
                     if norm_mag < 0.33 {
                         let t = norm_mag / 0.33;
                         egui::Color32::from_rgba_unmultiplied(
-                            (30.0 + t * 50.0) as u8, (100.0 + t * 155.0) as u8, 255, 200,
+                            (30.0 + t * 50.0) as u8,
+                            (100.0 + t * 155.0) as u8,
+                            255,
+                            200,
                         )
                     } else if norm_mag < 0.66 {
                         let t = (norm_mag - 0.33) / 0.33;
                         egui::Color32::from_rgba_unmultiplied(
-                            (80.0 + t * 175.0) as u8, 255, (255.0 - t * 155.0) as u8, 200,
+                            (80.0 + t * 175.0) as u8,
+                            255,
+                            (255.0 - t * 155.0) as u8,
+                            200,
                         )
                     } else {
                         let t = (norm_mag - 0.66) / 0.34;
                         egui::Color32::from_rgba_unmultiplied(
-                            255, (255.0 - t * 155.0) as u8, (100.0 - t * 100.0) as u8, 200,
+                            255,
+                            (255.0 - t * 155.0) as u8,
+                            (100.0 - t * 100.0) as u8,
+                            200,
                         )
                     }
                 };
                 let tip = egui::pos2(center.x + dir_x * arrow_len, center.y + dir_y * arrow_len);
-                let tail = egui::pos2(center.x - dir_x * arrow_len * 0.3, center.y - dir_y * arrow_len * 0.3);
+                let tail = egui::pos2(
+                    center.x - dir_x * arrow_len * 0.3,
+                    center.y - dir_y * arrow_len * 0.3,
+                );
                 let stroke_w = (1.0 + norm_mag * 2.0).min(3.0);
                 painter.line_segment([tail, tip], egui::Stroke::new(stroke_w, color));
                 let head_len = arrow_len * 0.35;
-                let px = -dir_y; let py = dir_x;
-                let h1 = egui::pos2(tip.x - dir_x * head_len + px * head_len * 0.5,
-                                    tip.y - dir_y * head_len + py * head_len * 0.5);
-                let h2 = egui::pos2(tip.x - dir_x * head_len - px * head_len * 0.5,
-                                    tip.y - dir_y * head_len - py * head_len * 0.5);
+                let px = -dir_y;
+                let py = dir_x;
+                let h1 = egui::pos2(
+                    tip.x - dir_x * head_len + px * head_len * 0.5,
+                    tip.y - dir_y * head_len + py * head_len * 0.5,
+                );
+                let h2 = egui::pos2(
+                    tip.x - dir_x * head_len - px * head_len * 0.5,
+                    tip.y - dir_y * head_len - py * head_len * 0.5,
+                );
                 painter.line_segment([tip, h1], egui::Stroke::new(stroke_w, color));
                 painter.line_segment([tip, h2], egui::Stroke::new(stroke_w, color));
                 if let Some(lbl) = label {
-                    Self::world_label(&painter, egui::pos2(center.x, center.y + tile_px * 0.3),
-                        egui::Align2::CENTER_TOP, &lbl, 9.0,
-                        egui::Color32::from_rgba_unmultiplied(200, 200, 200, 180));
+                    Self::world_label(
+                        &painter,
+                        egui::pos2(center.x, center.y + tile_px * 0.3),
+                        egui::Align2::CENTER_TOP,
+                        &lbl,
+                        9.0,
+                        egui::Color32::from_rgba_unmultiplied(200, 200, 200, 180),
+                    );
                 }
             };
 
             // --- Pipe flow arrows ---
             if !self.pipe_network.cells.is_empty() {
-                let max_flow = self.pipe_network.cells.values()
+                let max_flow = self
+                    .pipe_network
+                    .cells
+                    .values()
                     .map(|c| (c.flow_x * c.flow_x + c.flow_y * c.flow_y).sqrt())
                     .fold(0.001f32, f32::max);
                 let screen_rect = ctx.content_rect();
                 for (&idx, cell) in &self.pipe_network.cells {
                     let mag = (cell.flow_x * cell.flow_x + cell.flow_y * cell.flow_y).sqrt();
-                    if mag < 0.001 { continue; }
+                    if mag < 0.001 {
+                        continue;
+                    }
                     let x = (idx % GRID_W) as f32;
                     let y = (idx / GRID_W) as f32;
                     let center = to_screen(x + 0.5, y + 0.5);
-                    if center.x < screen_rect.min.x - tile_px || center.x > screen_rect.max.x + tile_px
-                        || center.y < screen_rect.min.y - tile_px || center.y > screen_rect.max.y + tile_px { continue; }
+                    if center.x < screen_rect.min.x - tile_px
+                        || center.x > screen_rect.max.x + tile_px
+                        || center.y < screen_rect.min.y - tile_px
+                        || center.y > screen_rect.max.y + tile_px
+                    {
+                        continue;
+                    }
                     let norm_mag = (mag / max_flow).clamp(0.0, 1.0);
-                    let label = if tile_px > 8.0 { Some(format!("{:.2}", mag)) } else { None };
-                    draw_arrow(&flow_painter, center, cell.flow_x / mag, cell.flow_y / mag,
-                               norm_mag, tile_px, label, false);
+                    let label = if tile_px > 8.0 {
+                        Some(format!("{:.2}", mag))
+                    } else {
+                        None
+                    };
+                    draw_arrow(
+                        &flow_painter,
+                        center,
+                        cell.flow_x / mag,
+                        cell.flow_y / mag,
+                        norm_mag,
+                        tile_px,
+                        label,
+                        false,
+                    );
                 }
             }
 
@@ -2973,16 +4495,22 @@ impl App {
                         let bt = b & 0xFF;
                         let fl = (b >> 16) & 0xFF;
                         let is_cond = is_conductor_rs(bt, fl as u8);
-                        if !is_cond { continue; }
+                        if !is_cond {
+                            continue;
+                        }
                         let v = self.voltage_data[idx];
-                        if v < 0.01 { continue; }
+                        if v < 0.01 {
+                            continue;
+                        }
                         // Compute current vector: flows from high to low voltage
                         let mut cx_f = 0.0f32;
                         let mut cy_f = 0.0f32;
-                        for &(dx, dy) in &[(1i32,0i32),(-1,0),(0,1),(0,-1)] {
+                        for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
                             let nx = tx + dx;
                             let ny = ty + dy;
-                            if nx < 0 || ny < 0 || nx >= gw || ny >= gh { continue; }
+                            if nx < 0 || ny < 0 || nx >= gw || ny >= gh {
+                                continue;
+                            }
                             let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                             let nv = self.voltage_data[nidx];
                             let dv = v - nv; // positive = current flows toward neighbor
@@ -2990,7 +4518,9 @@ impl App {
                             cy_f += dy as f32 * dv;
                         }
                         let cmag = (cx_f * cx_f + cy_f * cy_f).sqrt();
-                        if cmag > max_current { max_current = cmag; }
+                        if cmag > max_current {
+                            max_current = cmag;
+                        }
                     }
                 }
                 // Draw arrows
@@ -3001,17 +4531,25 @@ impl App {
                         let bt = b & 0xFF;
                         let fl = (b >> 16) & 0xFF;
                         // Skip pipe tiles (already drawn above)
-                        if bt >= 15 && bt <= 20 { continue; }
+                        if bt >= 15 && bt <= 20 {
+                            continue;
+                        }
                         let is_cond = is_conductor_rs(bt, fl as u8);
-                        if !is_cond { continue; }
+                        if !is_cond {
+                            continue;
+                        }
                         let v = self.voltage_data[idx];
-                        if v < 0.01 { continue; }
+                        if v < 0.01 {
+                            continue;
+                        }
                         let mut cx_f = 0.0f32;
                         let mut cy_f = 0.0f32;
-                        for &(dx, dy) in &[(1i32,0i32),(-1,0),(0,1),(0,-1)] {
+                        for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
                             let nx = tx + dx;
                             let ny = ty + dy;
-                            if nx < 0 || ny < 0 || nx >= gw || ny >= gh { continue; }
+                            if nx < 0 || ny < 0 || nx >= gw || ny >= gh {
+                                continue;
+                            }
                             let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                             let nv = self.voltage_data[nidx];
                             let dv = v - nv;
@@ -3019,12 +4557,26 @@ impl App {
                             cy_f += dy as f32 * dv;
                         }
                         let cmag = (cx_f * cx_f + cy_f * cy_f).sqrt();
-                        if cmag < 0.01 { continue; }
+                        if cmag < 0.01 {
+                            continue;
+                        }
                         let center = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
                         let norm_mag = (cmag / max_current).clamp(0.0, 1.0);
-                        let label = if tile_px > 8.0 { Some(format!("{:.1}A", cmag)) } else { None };
-                        draw_arrow(&flow_painter, center, cx_f / cmag, cy_f / cmag,
-                                   norm_mag, tile_px, label, true);
+                        let label = if tile_px > 8.0 {
+                            Some(format!("{:.1}A", cmag))
+                        } else {
+                            None
+                        };
+                        draw_arrow(
+                            &flow_painter,
+                            center,
+                            cx_f / cmag,
+                            cy_f / cmag,
+                            norm_mag,
+                            tile_px,
+                            label,
+                            true,
+                        );
                     }
                 }
             }
@@ -3035,7 +4587,8 @@ impl App {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
             let cannon_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Background, egui::Id::new("cannons"),
+                egui::Order::Background,
+                egui::Id::new("cannons"),
             ));
             for (&cannon_idx, &angle) in &self.cannon_angles {
                 let cx = (cannon_idx % GRID_W) as f32 + 0.5;
@@ -3056,11 +4609,25 @@ impl App {
                     [egui::pos2(sx, sy), egui::pos2(end_x, end_y)],
                     egui::Stroke::new(barrel_w, barrel_color),
                 );
-                cannon_painter.circle_filled(egui::pos2(end_x, end_y), barrel_w * 0.5, egui::Color32::from_rgb(40, 38, 35));
-                cannon_painter.circle_filled(egui::pos2(sx, sy), barrel_w * 0.7, egui::Color32::from_rgb(50, 48, 42));
+                cannon_painter.circle_filled(
+                    egui::pos2(end_x, end_y),
+                    barrel_w * 0.5,
+                    egui::Color32::from_rgb(40, 38, 35),
+                );
+                cannon_painter.circle_filled(
+                    egui::pos2(sx, sy),
+                    barrel_w * 0.7,
+                    egui::Color32::from_rgb(50, 48, 42),
+                );
                 if is_selected {
-                    cannon_painter.circle_stroke(egui::pos2(sx, sy), barrel_len * 1.1,
-                        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)));
+                    cannon_painter.circle_stroke(
+                        egui::pos2(sx, sy),
+                        barrel_len * 1.1,
+                        egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150),
+                        ),
+                    );
                 }
             }
         }
@@ -3069,22 +4636,26 @@ impl App {
         if self.lightning_flash > 0.01 {
             let flash_alpha = (self.lightning_flash * 180.0).min(255.0) as u8;
             let flash_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Background, egui::Id::new("lightning_flash"),
+                egui::Order::Background,
+                egui::Id::new("lightning_flash"),
             ));
             let screen_rect = egui::Rect::from_min_max(
                 egui::pos2(0.0, 0.0),
                 egui::pos2(ctx.content_rect().width(), ctx.content_rect().height()),
             );
             flash_painter.rect_filled(
-                screen_rect, 0.0,
+                screen_rect,
+                0.0,
                 egui::Color32::from_rgba_unmultiplied(220, 225, 255, flash_alpha),
             );
 
             // Draw lightning bolt at strike location
             if let Some((lx, ly)) = self.lightning_strike {
                 let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
-                let strike_sx = ((lx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                let strike_sy = ((ly - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let strike_sx =
+                    ((lx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let strike_sy =
+                    ((ly - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
                 let bolt_alpha = (self.lightning_flash * 255.0).min(255.0) as u8;
                 let bolt_col = egui::Color32::from_rgba_unmultiplied(220, 230, 255, bolt_alpha);
                 let glow_col = egui::Color32::from_rgba_unmultiplied(150, 170, 255, bolt_alpha / 3);
@@ -3097,7 +4668,8 @@ impl App {
                     let next = egui::pos2(strike_sx + jitter, strike_sy * t);
                     let width = 4.0 * (1.0 - t * 0.5) * self.lightning_flash;
                     // Glow (wider, dimmer)
-                    flash_painter.line_segment([prev, next], egui::Stroke::new(width * 3.0, glow_col));
+                    flash_painter
+                        .line_segment([prev, next], egui::Stroke::new(width * 3.0, glow_col));
                     // Core (bright)
                     flash_painter.line_segment([prev, next], egui::Stroke::new(width, bolt_col));
                     prev = next;
@@ -3107,35 +4679,45 @@ impl App {
                 for i in 1..=5 {
                     let t = i as f32 / 5.0;
                     let jitter = (t * 31.3 + ly * 2.7).sin() * 12.0;
-                    let next2 = egui::pos2(
-                        strike_sx + jitter * (1.0 - t),
-                        strike_sy * (0.3 + t * 0.7),
+                    let next2 =
+                        egui::pos2(strike_sx + jitter * (1.0 - t), strike_sy * (0.3 + t * 0.7));
+                    flash_painter.line_segment(
+                        [prev2, next2],
+                        egui::Stroke::new(2.0 * self.lightning_flash, bolt_col),
                     );
-                    flash_painter.line_segment([prev2, next2], egui::Stroke::new(2.0 * self.lightning_flash, bolt_col));
                     prev2 = next2;
                 }
                 // Impact circle
                 let impact_r = 15.0 * self.lightning_flash;
                 flash_painter.circle_filled(
-                    egui::pos2(strike_sx, strike_sy), impact_r,
+                    egui::pos2(strike_sx, strike_sy),
+                    impact_r,
                     egui::Color32::from_rgba_unmultiplied(255, 255, 240, bolt_alpha),
                 );
                 flash_painter.circle_stroke(
-                    egui::pos2(strike_sx, strike_sy), impact_r * 2.0,
-                    egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(180, 190, 255, bolt_alpha / 2)),
+                    egui::pos2(strike_sx, strike_sy),
+                    impact_r * 2.0,
+                    egui::Stroke::new(
+                        2.0,
+                        egui::Color32::from_rgba_unmultiplied(180, 190, 255, bolt_alpha / 2),
+                    ),
                 );
             }
         }
 
         // Per-tile voltage labels when power overlay is active
-        if matches!(self.fluid_overlay, FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts)
-            && !self.voltage_data.is_empty()
+        if matches!(
+            self.fluid_overlay,
+            FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts
+        ) && !self.voltage_data.is_empty()
         {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
-            if tile_px > 6.0 { // only show labels when zoomed in enough
+            if tile_px > 6.0 {
+                // only show labels when zoomed in enough
                 let label_painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Background, egui::Id::new("voltage_labels"),
+                    egui::Order::Background,
+                    egui::Id::new("voltage_labels"),
                 ));
                 let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
                     let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
@@ -3150,14 +4732,20 @@ impl App {
                 for ty in min_y..max_y {
                     for tx in min_x..max_x {
                         let idx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        if idx >= self.voltage_data.len() { continue; }
+                        if idx >= self.voltage_data.len() {
+                            continue;
+                        }
                         let v = self.voltage_data[idx];
-                        if v < 0.05 { continue; }
+                        if v < 0.05 {
+                            continue;
+                        }
                         let b = self.grid_data[idx];
                         let bt = b & 0xFF;
                         let flags = (b >> 16) & 0xFF;
                         let is_cond = is_conductor_rs(bt, flags as u8);
-                        if !is_cond { continue; }
+                        if !is_cond {
+                            continue;
+                        }
                         let center = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
                         let text = if v >= 10.0 {
                             format!("{:.0}V", v)
@@ -3171,8 +4759,14 @@ impl App {
                         } else {
                             egui::Color32::from_rgb(150, 150, 150) // dim for trace
                         };
-                        Self::world_label(&label_painter, center, egui::Align2::CENTER_CENTER,
-                            &text, 10.0, color);
+                        Self::world_label(
+                            &label_painter,
+                            center,
+                            egui::Align2::CENTER_CENTER,
+                            &text,
+                            10.0,
+                            color,
+                        );
                     }
                 }
             }
@@ -3182,9 +4776,11 @@ impl App {
         {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
-            if tile_px > 3.0 { // only draw when zoomed in enough
+            if tile_px > 3.0 {
+                // only draw when zoomed in enough
                 let cable_painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Background, egui::Id::new("power_cables"),
+                    egui::Order::Background,
+                    egui::Id::new("power_cables"),
                 ));
                 let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
                     let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
@@ -3201,14 +4797,18 @@ impl App {
                         let idx = (y as u32 * GRID_W + x as u32) as usize;
                         let bt = self.grid_data[idx] & 0xFF;
                         // Consumer blocks that auto-connect: electric light (7), floor lamp (10), fan (12)
-                        if bt != 7 && bt != 10 && bt != 12 { continue; }
+                        if bt != 7 && bt != 10 && bt != 12 {
+                            continue;
+                        }
                         // Search for nearest wire within 3 tiles
                         let mut best_wire: Option<(i32, i32, f32)> = None;
                         for dy in -3i32..=3 {
                             for dx in -3i32..=3 {
                                 let wx = x + dx;
                                 let wy = y + dy;
-                                if wx < 0 || wy < 0 || wx >= GRID_W as i32 || wy >= GRID_H as i32 { continue; }
+                                if wx < 0 || wy < 0 || wx >= GRID_W as i32 || wy >= GRID_H as i32 {
+                                    continue;
+                                }
                                 let widx = (wy as u32 * GRID_W + wx as u32) as usize;
                                 if (self.grid_data[widx] & 0xFF) == 36 {
                                     let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
@@ -3227,11 +4827,16 @@ impl App {
                             let perp_y = to.x - from.x;
                             let perp_len = (perp_x * perp_x + perp_y * perp_y).sqrt().max(1.0);
                             let sag = tile_px * 0.15; // cable sag amount
-                            let sag_mid = egui::pos2(mid.x + perp_x / perp_len * sag, mid.y + perp_y / perp_len * sag + sag * 0.5);
+                            let sag_mid = egui::pos2(
+                                mid.x + perp_x / perp_len * sag,
+                                mid.y + perp_y / perp_len * sag + sag * 0.5,
+                            );
                             // Draw as segmented line through sag point
                             let cable_color = egui::Color32::from_rgb(70, 60, 45);
-                            cable_painter.line_segment([from, sag_mid], egui::Stroke::new(1.5, cable_color));
-                            cable_painter.line_segment([sag_mid, to], egui::Stroke::new(1.5, cable_color));
+                            cable_painter
+                                .line_segment([from, sag_mid], egui::Stroke::new(1.5, cable_color));
+                            cable_painter
+                                .line_segment([sag_mid, to], egui::Stroke::new(1.5, cable_color));
                             // Small connector dots at endpoints
                             cable_painter.circle_filled(from, 2.0, cable_color);
                             cable_painter.circle_filled(to, 2.0, cable_color);
@@ -3246,7 +4851,8 @@ impl App {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
             let item_painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Background, egui::Id::new("ground_items"),
+                egui::Order::Background,
+                egui::Id::new("ground_items"),
             ));
             let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
                 let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
@@ -3257,8 +4863,13 @@ impl App {
             for item in &self.ground_items {
                 let center = to_screen(item.x, item.y);
                 // Cull off-screen items
-                if center.x < screen_rect.min.x - 20.0 || center.x > screen_rect.max.x + 20.0
-                    || center.y < screen_rect.min.y - 20.0 || center.y > screen_rect.max.y + 20.0 { continue; }
+                if center.x < screen_rect.min.x - 20.0
+                    || center.x > screen_rect.max.x + 20.0
+                    || center.y < screen_rect.min.y - 20.0
+                    || center.y > screen_rect.max.y + 20.0
+                {
+                    continue;
+                }
                 let r = (tile_px * 0.18).max(3.0);
                 let n = item.stack.count;
                 let iid = item.stack.item_id;
@@ -3285,8 +4896,12 @@ impl App {
                     for i in 0..(n as u32).min(3) {
                         let ly = center.y - log_h * 0.8 + i as f32 * log_h * 0.8;
                         item_painter.rect_filled(
-                            egui::Rect::from_center_size(egui::pos2(center.x, ly), egui::vec2(log_w, log_h)),
-                            log_h * 0.3, wood_col,
+                            egui::Rect::from_center_size(
+                                egui::pos2(center.x, ly),
+                                egui::vec2(log_w, log_h),
+                            ),
+                            log_h * 0.3,
+                            wood_col,
                         );
                     }
                 } else if iid == item_defs::ITEM_STONE_AXE || iid == item_defs::ITEM_STONE_PICK {
@@ -3299,17 +4914,27 @@ impl App {
                     item_painter.rect_filled(
                         egui::Rect::from_center_size(
                             egui::pos2(center.x - h_len * 0.15, center.y + h_len * 0.15),
-                            egui::vec2(h_len, h_w)),
-                        h_w * 0.3, handle_col);
+                            egui::vec2(h_len, h_w),
+                        ),
+                        h_w * 0.3,
+                        handle_col,
+                    );
                     // Head: wider stone piece at top
                     let head_w = r * 0.7;
                     let head_h = r * 0.5;
-                    let head_off = if iid == item_defs::ITEM_STONE_AXE { -0.35 } else { -0.25 };
+                    let head_off = if iid == item_defs::ITEM_STONE_AXE {
+                        -0.35
+                    } else {
+                        -0.25
+                    };
                     item_painter.rect_filled(
                         egui::Rect::from_center_size(
                             egui::pos2(center.x + r * 0.3, center.y + r * head_off),
-                            egui::vec2(head_w, head_h)),
-                        2.0, head_col);
+                            egui::vec2(head_w, head_h),
+                        ),
+                        2.0,
+                        head_col,
+                    );
                 } else if iid == item_defs::ITEM_WOODEN_SHOVEL {
                     // Shovel: brown handle + darker scoop
                     let handle_col = egui::Color32::from_rgb(110, 75, 35);
@@ -3319,11 +4944,15 @@ impl App {
                     let h_w = r * 0.2;
                     item_painter.rect_filled(
                         egui::Rect::from_center_size(center, egui::vec2(h_w, h_len)),
-                        h_w * 0.3, handle_col);
+                        h_w * 0.3,
+                        handle_col,
+                    );
                     // Scoop at bottom
                     item_painter.circle_filled(
                         egui::pos2(center.x, center.y + r * 0.5),
-                        r * 0.4, scoop_col);
+                        r * 0.4,
+                        scoop_col,
+                    );
                 } else if iid == item_defs::ITEM_FIBER {
                     // Fiber: green wispy strands
                     let fiber_col = egui::Color32::from_rgb(80, 140, 50);
@@ -3335,7 +4964,8 @@ impl App {
                         let y2 = center.y - r * 0.5;
                         item_painter.line_segment(
                             [egui::pos2(x1, y1), egui::pos2(x2, y2)],
-                            egui::Stroke::new(r * 0.15, fiber_col));
+                            egui::Stroke::new(r * 0.15, fiber_col),
+                        );
                     }
                 } else if iid == item_defs::ITEM_SCRAP_WOOD {
                     // Scrap wood: small jagged wood pieces
@@ -3349,8 +4979,11 @@ impl App {
                         item_painter.rect_filled(
                             egui::Rect::from_center_size(
                                 egui::pos2(center.x + ox, center.y + oy),
-                                egui::vec2(piece_w, piece_h)),
-                            piece_h * 0.2, scrap_col);
+                                egui::vec2(piece_w, piece_h),
+                            ),
+                            piece_h * 0.2,
+                            scrap_col,
+                        );
                         let _ = angle; // rotation would need transform, keep simple
                     }
                 } else if iid == item_defs::ITEM_CLAY {
@@ -3360,12 +4993,17 @@ impl App {
                     // Darker wet streak
                     item_painter.circle_filled(
                         egui::pos2(center.x - r * 0.15, center.y - r * 0.1),
-                        r * 0.35, egui::Color32::from_rgb(120, 75, 45));
+                        r * 0.35,
+                        egui::Color32::from_rgb(120, 75, 45),
+                    );
                 } else if iid == item_defs::ITEM_ROPE {
                     // Rope: coiled tan circle
                     let rope_col = egui::Color32::from_rgb(160, 140, 90);
-                    item_painter.circle_stroke(center, r * 0.6,
-                        egui::Stroke::new(r * 0.25, rope_col));
+                    item_painter.circle_stroke(
+                        center,
+                        r * 0.6,
+                        egui::Stroke::new(r * 0.25, rope_col),
+                    );
                 } else {
                     // Generic item: colored circle
                     let col = if item.stack.is_container() {
@@ -3380,7 +5018,11 @@ impl App {
                         if cap > 0 {
                             let fill = amt as f32 / cap as f32;
                             let fill_r = r * fill;
-                            item_painter.circle_filled(center, fill_r, egui::Color32::from_rgb(60, 120, 200));
+                            item_painter.circle_filled(
+                                center,
+                                fill_r,
+                                egui::Color32::from_rgb(60, 120, 200),
+                            );
                         }
                     }
                 }
@@ -3390,10 +5032,14 @@ impl App {
                     } else {
                         format!("{}x", n)
                     };
-                    Self::world_label(&item_painter,
+                    Self::world_label(
+                        &item_painter,
                         egui::pos2(center.x, center.y + r + 2.0),
                         egui::Align2::CENTER_TOP,
-                        &label, 9.0, egui::Color32::WHITE);
+                        &label,
+                        9.0,
+                        egui::Color32::WHITE,
+                    );
                 }
             }
         }
@@ -3433,14 +5079,21 @@ impl App {
                             let ball_screen = egui::pos2(gx, gy - z_offset);
                             painter.line_segment(
                                 [egui::pos2(gx, gy), ball_screen],
-                                egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(100, 100, 100, 80)),
+                                egui::Stroke::new(
+                                    0.5,
+                                    egui::Color32::from_rgba_unmultiplied(100, 100, 100, 80),
+                                ),
                             );
                         }
 
                         // --- Cannonball (dark sphere with highlight) ---
                         let ball_r = 0.10 * tile_px;
                         let ball_pos = egui::pos2(gx, gy - z_offset);
-                        painter.circle_filled(ball_pos, ball_r, egui::Color32::from_rgb(40, 38, 35));
+                        painter.circle_filled(
+                            ball_pos,
+                            ball_r,
+                            egui::Color32::from_rgb(40, 38, 35),
+                        );
                         // Specular highlight
                         painter.circle_filled(
                             ball_pos + egui::Vec2::new(-ball_r * 0.3, -ball_r * 0.3),
@@ -3457,7 +5110,10 @@ impl App {
                             let (gx1, gy1) = to_screen(body.x + ss, body.y + ss * 0.6);
                             let shadow_alpha = (150.0 * (1.0 - body.z * 0.08).max(0.2)) as u8;
                             painter.rect_filled(
-                                egui::Rect::from_min_max(egui::pos2(gx0, gy0), egui::pos2(gx1, gy1)),
+                                egui::Rect::from_min_max(
+                                    egui::pos2(gx0, gy0),
+                                    egui::pos2(gx1, gy1),
+                                ),
                                 tile_px * 0.1,
                                 egui::Color32::from_rgba_unmultiplied(20, 20, 20, shadow_alpha),
                             );
@@ -3472,19 +5128,24 @@ impl App {
                         let scale_x = 1.0 - body.rot_y.sin().abs() * 0.3;
                         let scale_y = 1.0 - body.rot_x.sin().abs() * 0.3;
                         let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
-                        let rotated: Vec<egui::Pos2> = corners.iter().map(|&(cx, cy)| {
-                            let sx = cx * half * scale_x;
-                            let sy = cy * half * scale_y;
-                            let rx = sx * cos_z - sy * sin_z;
-                            let ry = sx * sin_z + sy * cos_z;
-                            center_s + egui::Vec2::new(rx, ry)
-                        }).collect();
+                        let rotated: Vec<egui::Pos2> = corners
+                            .iter()
+                            .map(|&(cx, cy)| {
+                                let sx = cx * half * scale_x;
+                                let sy = cy * half * scale_y;
+                                let rx = sx * cos_z - sy * sin_z;
+                                let ry = sx * sin_z + sy * cos_z;
+                                center_s + egui::Vec2::new(rx, ry)
+                            })
+                            .collect();
                         let brightness = (160.0 + body.z * 15.0).min(200.0) as u8;
                         let gb = (120.0 + body.z * 10.0).min(160.0) as u8;
                         let fill_color = egui::Color32::from_rgb(brightness, gb, 60);
                         let stroke_color = egui::Color32::from_rgb(100, 75, 35);
                         painter.add(egui::Shape::convex_polygon(
-                            rotated.clone(), fill_color, egui::Stroke::new(1.5, stroke_color),
+                            rotated.clone(),
+                            fill_color,
+                            egui::Stroke::new(1.5, stroke_color),
                         ));
                         for i in 0..3 {
                             let t = 0.25 + i as f32 * 0.25;
@@ -3494,7 +5155,10 @@ impl App {
                             let ry = rotated[1].y + (rotated[2].y - rotated[1].y) * t;
                             painter.line_segment(
                                 [egui::pos2(lx, ly), egui::pos2(rx, ry)],
-                                egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(90, 65, 30, 100)),
+                                egui::Stroke::new(
+                                    0.5,
+                                    egui::Color32::from_rgba_unmultiplied(90, 65, 30, 100),
+                                ),
                             );
                         }
                     }
@@ -3506,7 +5170,10 @@ impl App {
                         let dx = -body.vx / speed * trail_len;
                         let dy = -body.vy / speed * trail_len;
                         painter.line_segment(
-                            [egui::pos2(gx, gy - z_offset), egui::pos2(gx + dx, gy - z_offset + dy)],
+                            [
+                                egui::pos2(gx, gy - z_offset),
+                                egui::pos2(gx + dx, gy - z_offset + dy),
+                            ],
                             egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 240, 150)),
                         );
                     }
@@ -3516,15 +5183,21 @@ impl App {
                         let (gx, gy) = to_screen(body.x, body.y);
                         let shadow_alpha = (150.0 * (1.0 - body.z * 0.06).max(0.15)) as u8;
                         painter.circle_filled(
-                            egui::pos2(gx, gy), shadow_r,
+                            egui::pos2(gx, gy),
+                            shadow_r,
                             egui::Color32::from_rgba_unmultiplied(15, 15, 15, shadow_alpha),
                         );
                         let ball_r = 0.07 * tile_px;
                         let ball_pos = egui::pos2(gx, gy - z_offset);
-                        painter.circle_filled(ball_pos, ball_r, egui::Color32::from_rgb(40, 60, 30));
+                        painter.circle_filled(
+                            ball_pos,
+                            ball_r,
+                            egui::Color32::from_rgb(40, 60, 30),
+                        );
                         painter.circle_filled(
                             ball_pos + egui::Vec2::new(-ball_r * 0.2, -ball_r * 0.2),
-                            ball_r * 0.3, egui::Color32::from_rgb(70, 90, 50),
+                            ball_r * 0.3,
+                            egui::Color32::from_rgb(70, 90, 50),
                         );
                     }
                 }
@@ -3544,10 +5217,16 @@ impl App {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         if let Some(cell) = self.pipe_network.cells.get_mut(&pump_idx) {
                             ui.label(egui::RichText::new("Pump").strong().size(11.0));
-                            ui.add(egui::Slider::new(&mut cell.pump_rate, 0.0..=20.0)
-                                .text("Rate")
-                                .step_by(0.5));
-                            ui.label(egui::RichText::new(format!("P: {:.1}", cell.pressure)).size(9.0).weak());
+                            ui.add(
+                                egui::Slider::new(&mut cell.pump_rate, 0.0..=20.0)
+                                    .text("Rate")
+                                    .step_by(0.5),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("P: {:.1}", cell.pressure))
+                                    .size(9.0)
+                                    .weak(),
+                            );
                             still_valid = true;
                         }
                         if ui.small_button("Close").clicked() {
@@ -3572,9 +5251,11 @@ impl App {
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.label(egui::RichText::new("Fan").strong().size(11.0));
-                        ui.add(egui::Slider::new(&mut self.fluid_params.fan_speed, 0.0..=80.0)
-                            .text("Speed")
-                            .step_by(1.0));
+                        ui.add(
+                            egui::Slider::new(&mut self.fluid_params.fan_speed, 0.0..=80.0)
+                                .text("Speed")
+                                .step_by(1.0),
+                        );
                         if ui.small_button("Close").clicked() {
                             still_valid = false;
                         }
@@ -3593,15 +5274,21 @@ impl App {
             let sy = ((dwy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp - 10.0;
             let mut still_valid = true;
             let didx = dimmer_idx as usize;
-            let dblock = if didx < self.grid_data.len() { self.grid_data[didx] } else { 0 };
+            let dblock = if didx < self.grid_data.len() {
+                self.grid_data[didx]
+            } else {
+                0
+            };
             let dbt = dblock & 0xFF;
-            if dbt != 43 && dbt != 46 && dbt != 6 { still_valid = false; }
+            if dbt != 43 && dbt != 46 && dbt != 6 {
+                still_valid = false;
+            }
             if still_valid {
                 let (title, max_val, mask) = match dbt {
                     43 => ("Dimmer", 10i32, 0xFFu32),
                     46 => ("Restrictor", 10i32, 0x0Fu32),
-                    6  => ("Fireplace", 10i32, 0xFFu32),
-                    _  => ("", 10i32, 0xFFu32),
+                    6 => ("Fireplace", 10i32, 0xFFu32),
+                    _ => ("", 10i32, 0xFFu32),
                 };
                 let mut level = (((dblock >> 8) & mask) as i32).min(max_val);
                 egui::Area::new(egui::Id::new("dimmer_slider"))
@@ -3618,9 +5305,11 @@ impl App {
                                 format!("{:.0}%", level as f32 * 10.0)
                             };
                             ui.label(egui::RichText::new(display).size(10.0));
-                            ui.add(egui::Slider::new(&mut level, 0..=max_val)
-                                .text("Level")
-                                .step_by(1.0));
+                            ui.add(
+                                egui::Slider::new(&mut level, 0..=max_val)
+                                    .text("Level")
+                                    .step_by(1.0),
+                            );
                             // Write back: for restrictor preserve upper nibble (conn mask)
                             let new_h = if dbt == 46 {
                                 let existing_upper = (dblock >> 8) & 0xF0;
@@ -3654,7 +5343,9 @@ impl App {
             // Check the crate still exists
             if (crate_idx as usize) < self.grid_data.len() {
                 let cb = self.grid_data[crate_idx as usize];
-                if (cb & 0xFF) != 33 { still_valid = false; }
+                if (cb & 0xFF) != 33 {
+                    still_valid = false;
+                }
             } else {
                 still_valid = false;
             }
@@ -3665,7 +5356,14 @@ impl App {
                     .show(ctx, |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                             let total = inv.map(|i| i.total()).unwrap_or(0);
-                            ui.label(egui::RichText::new(format!("Storage Crate ({}/{})", total, CRATE_MAX_ITEMS)).strong().size(12.0));
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Storage Crate ({}/{})",
+                                    total, CRATE_MAX_ITEMS
+                                ))
+                                .strong()
+                                .size(12.0),
+                            );
                             ui.separator();
                             if let Some(inv) = inv {
                                 if !inv.stacks.is_empty() {
@@ -3701,12 +5399,30 @@ impl App {
                 let didx = wb_idx as usize;
                 if didx < self.grid_data.len() {
                     let bt = block_type_rs(self.grid_data[didx]);
-                    if bt == BT_WORKBENCH || bt == BT_KILN { bt } else { still_valid = false; 0 }
-                } else { still_valid = false; 0 }
-            } else { 0 };
+                    if bt == BT_WORKBENCH || bt == BT_KILN {
+                        bt
+                    } else {
+                        still_valid = false;
+                        0
+                    }
+                } else {
+                    still_valid = false;
+                    0
+                }
+            } else {
+                0
+            };
             if still_valid {
-                let station_name = if station_bt == BT_KILN { "kiln" } else { "workbench" };
-                let station_label = if station_bt == BT_KILN { "Kiln" } else { "Workbench" };
+                let station_name = if station_bt == BT_KILN {
+                    "kiln"
+                } else {
+                    "workbench"
+                };
+                let station_label = if station_bt == BT_KILN {
+                    "Kiln"
+                } else {
+                    "Workbench"
+                };
                 let recipe_reg = recipe_defs::RecipeRegistry::cached();
                 let item_reg = item_defs::ItemRegistry::cached();
                 let recipes = recipe_reg.for_station(station_name);
@@ -3723,12 +5439,18 @@ impl App {
                             if !queue.orders.is_empty() {
                                 ui.label(egui::RichText::new("Queue:").size(10.0).strong());
                                 for (qi, order) in queue.orders.iter().enumerate() {
-                                    let rname = recipe_reg.get(order.recipe_id)
-                                        .map(|r| r.name.as_str()).unwrap_or("?");
+                                    let rname = recipe_reg
+                                        .get(order.recipe_id)
+                                        .map(|r| r.name.as_str())
+                                        .unwrap_or("?");
                                     ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(
-                                            format!("  {} — {}/{}", rname, order.completed, order.count)
-                                        ).size(10.0));
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "  {} — {}/{}",
+                                                rname, order.completed, order.count
+                                            ))
+                                            .size(10.0),
+                                        );
                                         if ui.small_button("x").clicked() {
                                             remove_idx = Some(qi);
                                         }
@@ -3743,16 +5465,22 @@ impl App {
                             // Add new orders
                             for recipe in &recipes {
                                 let out_name = item_reg.name(recipe.output.item);
-                                let ingredients = recipe_defs::RecipeRegistry::ingredients_label(recipe);
+                                let ingredients =
+                                    recipe_defs::RecipeRegistry::ingredients_label(recipe);
                                 ui.horizontal(|ui| {
                                     let label = format!("{} ({})", recipe.name, ingredients);
                                     ui.label(egui::RichText::new(&label).size(10.0));
-                                    ui.label(egui::RichText::new(format!("→ {}", out_name)).size(10.0));
+                                    ui.label(
+                                        egui::RichText::new(format!("→ {}", out_name)).size(10.0),
+                                    );
                                     for &n in &[1u16, 5, 10] {
                                         if ui.small_button(format!("+{}", n)).clicked() {
                                             // Add to queue (merge if same recipe)
-                                            if let Some(existing) = queue.orders.iter_mut()
-                                                .find(|o| o.recipe_id == recipe.id && o.completed < o.count)
+                                            if let Some(existing) =
+                                                queue.orders.iter_mut().find(|o| {
+                                                    o.recipe_id == recipe.id
+                                                        && o.completed < o.count
+                                                })
                                             {
                                                 existing.count += n;
                                             } else {
@@ -3777,25 +5505,50 @@ impl App {
                 self.block_sel.workbench = None;
             }
         }
-
     }
 
     /// Draw text with a dark shadow for readability on bright backgrounds.
-    fn shadow_text(painter: &egui::Painter, pos: egui::Pos2, anchor: egui::Align2, text: &str, font: egui::FontId, color: egui::Color32) {
+    fn shadow_text(
+        painter: &egui::Painter,
+        pos: egui::Pos2,
+        anchor: egui::Align2,
+        text: &str,
+        font: egui::FontId,
+        color: egui::Color32,
+    ) {
         let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200);
-        painter.text(pos + egui::Vec2::new(1.0, 1.0), anchor, text, font.clone(), shadow);
+        painter.text(
+            pos + egui::Vec2::new(1.0, 1.0),
+            anchor,
+            text,
+            font.clone(),
+            shadow,
+        );
         painter.text(pos, anchor, text, font, color);
     }
 
     /// Draw a world-space label with shadow. Size is in points (scaled up from old defaults).
-    fn world_label(painter: &egui::Painter, pos: egui::Pos2, anchor: egui::Align2, text: &str, size: f32, color: egui::Color32) {
+    fn world_label(
+        painter: &egui::Painter,
+        pos: egui::Pos2,
+        anchor: egui::Align2,
+        text: &str,
+        size: f32,
+        color: egui::Color32,
+    ) {
         let font = egui::FontId::proportional(size);
         let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200);
-        painter.text(pos + egui::Vec2::new(1.0, 1.0), anchor, text, font.clone(), shadow);
+        painter.text(
+            pos + egui::Vec2::new(1.0, 1.0),
+            anchor,
+            text,
+            font.clone(),
+            shadow,
+        );
         painter.text(pos, anchor, text, font, color);
     }
 
-    fn draw_world_labels(&mut self, ctx: &egui::Context, bp_cam: (f32,f32,f32,f32,f32)) {
+    fn draw_world_labels(&mut self, ctx: &egui::Context, bp_cam: (f32, f32, f32, f32, f32)) {
         // --- World labels: pleb names, activity, key items ---
         {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
@@ -3811,7 +5564,8 @@ impl App {
                 };
 
                 let label_painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Background, egui::Id::new("world_labels"),
+                    egui::Order::Background,
+                    egui::Id::new("world_labels"),
                 ));
 
                 // Pleb name + activity labels
@@ -3819,8 +5573,13 @@ impl App {
                 for pleb in &self.plebs {
                     let pos = to_screen(pleb.x, pleb.y + 0.7);
                     // Cull off-screen plebs
-                    if pos.x < screen_rect.min.x - 60.0 || pos.x > screen_rect.max.x + 60.0
-                        || pos.y < screen_rect.min.y - 60.0 || pos.y > screen_rect.max.y + 60.0 { continue; }
+                    if pos.x < screen_rect.min.x - 60.0
+                        || pos.x > screen_rect.max.x + 60.0
+                        || pos.y < screen_rect.min.y - 60.0
+                        || pos.y > screen_rect.max.y + 60.0
+                    {
+                        continue;
+                    }
 
                     // Name label (always visible)
                     let name_color = if pleb.is_enemy {
@@ -3830,8 +5589,14 @@ impl App {
                     } else {
                         egui::Color32::from_rgb(220, 220, 220)
                     };
-                    Self::shadow_text(&label_painter, pos, egui::Align2::CENTER_TOP,
-                        &pleb.name, egui::FontId::proportional(11.0), name_color);
+                    Self::shadow_text(
+                        &label_painter,
+                        pos,
+                        egui::Align2::CENTER_TOP,
+                        &pleb.name,
+                        egui::FontId::proportional(11.0),
+                        name_color,
+                    );
 
                     // Activity label + intent (when not idle)
                     if tile_px > 10.0 {
@@ -3841,13 +5606,23 @@ impl App {
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                             if tidx < self.grid_data.len() {
                                 let tbt = self.grid_data[tidx] & 0xFF;
-                                if tbt as u32 == BT_WORKBENCH || tbt as u32 == BT_KILN { "Crafting" }
-                                else if tbt as u32 == BT_WELL { "Drinking" }
-                                else if tbt == BT_CROP || tbt == BT_BERRY_BUSH { "Harvesting" }
-                                else if tbt == BT_TREE { "Chopping" }
-                                else { "Planting" }
-                            } else { "Working" }
-                        } else { "Working" };
+                                if tbt as u32 == BT_WORKBENCH || tbt as u32 == BT_KILN {
+                                    "Crafting"
+                                } else if tbt as u32 == BT_WELL {
+                                    "Drinking"
+                                } else if tbt == BT_CROP || tbt == BT_BERRY_BUSH {
+                                    "Harvesting"
+                                } else if tbt == BT_TREE {
+                                    "Chopping"
+                                } else {
+                                    "Planting"
+                                }
+                            } else {
+                                "Working"
+                            }
+                        } else {
+                            "Working"
+                        };
                         let (act_text, act_color) = match inner {
                             PlebActivity::Idle => {
                                 if pleb.work_target.is_some() {
@@ -3866,29 +5641,58 @@ impl App {
                                     };
                                     (Some(label), egui::Color32::from_rgb(120, 200, 80))
                                 } else if pleb.harvest_target.is_some() {
-                                    (Some("Walking to harvest"), egui::Color32::from_rgb(200, 180, 60))
+                                    (
+                                        Some("Walking to harvest"),
+                                        egui::Color32::from_rgb(200, 180, 60),
+                                    )
                                 } else if pleb.haul_target.is_some() {
                                     (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80))
                                 } else {
                                     (None, egui::Color32::GRAY)
                                 }
                             }
-                            PlebActivity::Sleeping => (Some("Zzz..."), egui::Color32::from_rgb(120, 140, 200)),
-                            PlebActivity::Harvesting(_) => (Some("Harvesting"), egui::Color32::from_rgb(200, 180, 60)),
-                            PlebActivity::Eating => (Some("Eating"), egui::Color32::from_rgb(200, 160, 80)),
-                            PlebActivity::Hauling => (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80)),
-                            PlebActivity::Farming(_) => (Some(work_action), egui::Color32::from_rgb(80, 200, 80)),
-                            PlebActivity::Building(_) => (Some("Building"), egui::Color32::from_rgb(100, 160, 220)),
-                            PlebActivity::Crafting(_, _) => (Some("Crafting"), egui::Color32::from_rgb(200, 160, 60)),
-                            PlebActivity::Drinking(_) => (Some("Drinking"), egui::Color32::from_rgb(80, 160, 220)),
-                            PlebActivity::MentalBreak(_, _) => (Some("Mental break!"), egui::Color32::from_rgb(200, 60, 200)),
-                            PlebActivity::Staggering(_) => (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40)),
+                            PlebActivity::Sleeping => {
+                                (Some("Zzz..."), egui::Color32::from_rgb(120, 140, 200))
+                            }
+                            PlebActivity::Harvesting(_) => {
+                                (Some("Harvesting"), egui::Color32::from_rgb(200, 180, 60))
+                            }
+                            PlebActivity::Eating => {
+                                (Some("Eating"), egui::Color32::from_rgb(200, 160, 80))
+                            }
+                            PlebActivity::Hauling => {
+                                (Some("Hauling"), egui::Color32::from_rgb(180, 140, 80))
+                            }
+                            PlebActivity::Farming(_) => {
+                                (Some(work_action), egui::Color32::from_rgb(80, 200, 80))
+                            }
+                            PlebActivity::Building(_) => {
+                                (Some("Building"), egui::Color32::from_rgb(100, 160, 220))
+                            }
+                            PlebActivity::Crafting(_, _) => {
+                                (Some("Crafting"), egui::Color32::from_rgb(200, 160, 60))
+                            }
+                            PlebActivity::Drinking(_) => {
+                                (Some("Drinking"), egui::Color32::from_rgb(80, 160, 220))
+                            }
+                            PlebActivity::MentalBreak(_, _) => {
+                                (Some("Mental break!"), egui::Color32::from_rgb(200, 60, 200))
+                            }
+                            PlebActivity::Staggering(_) => {
+                                (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40))
+                            }
                             PlebActivity::Crisis(_, _) => (None, egui::Color32::GRAY),
                         };
                         if let Some(text) = act_text {
                             let act_pos = to_screen(pleb.x, pleb.y + 0.95);
-                            Self::world_label(&label_painter, act_pos, egui::Align2::CENTER_TOP,
-                                text, 9.0, act_color);
+                            Self::world_label(
+                                &label_painter,
+                                act_pos,
+                                egui::Align2::CENTER_TOP,
+                                text,
+                                9.0,
+                                act_color,
+                            );
                         }
 
                         // Progress bar for farming/harvesting
@@ -3903,31 +5707,47 @@ impl App {
                             let bar_h = tile_px * 0.06;
                             label_painter.rect_filled(
                                 egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w, bar_h)),
-                                1.0, egui::Color32::from_rgb(30, 30, 30),
+                                1.0,
+                                egui::Color32::from_rgb(30, 30, 30),
                             );
                             label_painter.rect_filled(
-                                egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w * prog, bar_h)),
-                                1.0, egui::Color32::from_rgb(80, 200, 80),
+                                egui::Rect::from_min_size(
+                                    bar_pos,
+                                    egui::Vec2::new(bar_w * prog, bar_h),
+                                ),
+                                1.0,
+                                egui::Color32::from_rgb(80, 200, 80),
                             );
                         }
 
                         // Work target line: show where pleb is heading (selected pleb only)
-                        let is_selected = self.selected_pleb.map_or(false, |si| si < self.plebs.len() && std::ptr::eq(&self.plebs[si], pleb));
+                        let is_selected = self.selected_pleb.map_or(false, |si| {
+                            si < self.plebs.len() && std::ptr::eq(&self.plebs[si], pleb)
+                        });
                         if is_selected {
-                        if let Some((tx, ty)) = pleb.work_target {
-                            let target_pos = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
-                            let pleb_pos = to_screen(pleb.x, pleb.y);
-                            label_painter.line_segment(
-                                [pleb_pos, target_pos],
-                                egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(80, 200, 80, 100)),
-                            );
-                        }
+                            if let Some((tx, ty)) = pleb.work_target {
+                                let target_pos = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
+                                let pleb_pos = to_screen(pleb.x, pleb.y);
+                                label_painter.line_segment(
+                                    [pleb_pos, target_pos],
+                                    egui::Stroke::new(
+                                        1.0,
+                                        egui::Color32::from_rgba_unmultiplied(80, 200, 80, 100),
+                                    ),
+                                );
+                            }
                         } // is_selected
                         // Crisis reason
                         if let Some(reason) = pleb.activity.crisis_reason() {
                             let crisis_pos = to_screen(pleb.x, pleb.y + 0.95);
-                            Self::world_label(&label_painter, crisis_pos, egui::Align2::CENTER_TOP,
-                                reason, 10.0, egui::Color32::from_rgb(255, 60, 60));
+                            Self::world_label(
+                                &label_painter,
+                                crisis_pos,
+                                egui::Align2::CENTER_TOP,
+                                reason,
+                                10.0,
+                                egui::Color32::from_rgb(255, 60, 60),
+                            );
                         }
                     }
                 }
@@ -3937,8 +5757,14 @@ impl App {
                     if !pleb.is_enemy {
                         let mode_pos = to_screen(pleb.x, pleb.y - 0.8);
                         let mode_text = if self.burst_mode { "BURST" } else { "SINGLE" };
-                        Self::world_label(&label_painter, mode_pos, egui::Align2::CENTER_BOTTOM,
-                            mode_text, 9.0, egui::Color32::from_rgb(180, 180, 100));
+                        Self::world_label(
+                            &label_painter,
+                            mode_pos,
+                            egui::Align2::CENTER_BOTTOM,
+                            mode_text,
+                            9.0,
+                            egui::Color32::from_rgb(180, 180, 100),
+                        );
                     }
                 }
 
@@ -3952,14 +5778,19 @@ impl App {
                         // Background
                         label_painter.rect_filled(
                             egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w, bar_h)),
-                            1.0, egui::Color32::from_rgb(30, 30, 30),
+                            1.0,
+                            egui::Color32::from_rgb(30, 30, 30),
                         );
                         // Fill (green to red as charge increases)
                         let r = (charge * 255.0) as u8;
                         let g = ((1.0 - charge) * 200.0) as u8;
                         label_painter.rect_filled(
-                            egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w * charge, bar_h)),
-                            1.0, egui::Color32::from_rgb(r, g, 40),
+                            egui::Rect::from_min_size(
+                                bar_pos,
+                                egui::Vec2::new(bar_w * charge, bar_h),
+                            ),
+                            1.0,
+                            egui::Color32::from_rgb(r, g, 40),
                         );
                     }
                 }
@@ -3969,18 +5800,24 @@ impl App {
 
     /// Draw selection action buttons inline (called from draw_build_bar when items are selected).
     fn draw_selection_actions_inner(&mut self, ui: &mut egui::Ui) {
-        if self.world_sel.is_empty() { return; }
+        if self.world_sel.is_empty() {
+            return;
+        }
 
         let reg = block_defs::BlockRegistry::cached();
         let items: Vec<SelectedItem> = self.world_sel.items.clone();
         let count = items.len();
-        if count == 0 { return; }
+        if count == 0 {
+            return;
+        }
 
         // Determine common properties
-        let all_removable = items.iter().all(|item| {
-            reg.get(item.block_type).map_or(false, |d| d.is_removable)
-        });
-        let all_same_type = items.iter().all(|item| item.block_type == items[0].block_type);
+        let all_removable = items
+            .iter()
+            .all(|item| reg.get(item.block_type).map_or(false, |d| d.is_removable));
+        let all_same_type = items
+            .iter()
+            .all(|item| item.block_type == items[0].block_type);
 
         let pleb_count = items.iter().filter(|i| i.pleb_idx.is_some()).count();
         let block_count = count - pleb_count;
@@ -3988,15 +5825,29 @@ impl App {
         // Label
         let label = if count == 1 && items[0].pleb_idx.is_some() {
             let pi = items[0].pleb_idx.unwrap();
-            self.plebs.get(pi).map_or("Pleb".to_string(), |p| p.name.clone())
+            self.plebs
+                .get(pi)
+                .map_or("Pleb".to_string(), |p| p.name.clone())
         } else if count == 1 {
             reg.name(items[0].block_type).to_string()
         } else if all_same_type && items[0].pleb_idx.is_none() {
             format!("{}x {}", count, reg.name(items[0].block_type))
         } else {
             let mut parts = Vec::new();
-            if pleb_count > 0 { parts.push(format!("{} pleb{}", pleb_count, if pleb_count > 1 { "s" } else { "" })); }
-            if block_count > 0 { parts.push(format!("{} block{}", block_count, if block_count > 1 { "s" } else { "" })); }
+            if pleb_count > 0 {
+                parts.push(format!(
+                    "{} pleb{}",
+                    pleb_count,
+                    if pleb_count > 1 { "s" } else { "" }
+                ));
+            }
+            if block_count > 0 {
+                parts.push(format!(
+                    "{} block{}",
+                    block_count,
+                    if block_count > 1 { "s" } else { "" }
+                ));
+            }
             parts.join(", ")
         };
 
@@ -4012,7 +5863,8 @@ impl App {
         if any_harvestable {
             actions.push(("\u{1f33e}", "Harvest", 1));
         }
-        let bp_items: Vec<(i32, i32)> = items.iter()
+        let bp_items: Vec<(i32, i32)> = items
+            .iter()
             .filter(|i| self.blueprints.contains_key(&(i.x, i.y)))
             .map(|i| (i.x, i.y))
             .collect();
@@ -4034,147 +5886,231 @@ impl App {
         let icon_s = 20.0;
         let label_s = 9.0;
         for &(icon, act_label, id) in &actions {
-                        let (rect, response) = ui.allocate_exact_size(
-                            egui::Vec2::new(tile_size, tile_size), egui::Sense::click(),
-                        );
-                        let painter = ui.painter_at(rect);
-                        let bg = if response.hovered() {
-                            egui::Color32::from_rgb(60, 65, 75)
-                        } else {
-                            egui::Color32::from_rgb(42, 44, 50)
-                        };
-                        painter.rect_filled(rect, 4.0, bg);
-                        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(70)), egui::StrokeKind::Outside);
-                        painter.text(rect.center() + egui::Vec2::new(0.0, -6.0), egui::Align2::CENTER_CENTER,
-                            icon, egui::FontId::proportional(icon_s), egui::Color32::WHITE);
-                        painter.text(rect.center() + egui::Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER,
-                            act_label, egui::FontId::proportional(label_s), egui::Color32::from_gray(190));
+            let (rect, response) =
+                ui.allocate_exact_size(egui::Vec2::new(tile_size, tile_size), egui::Sense::click());
+            let painter = ui.painter_at(rect);
+            let bg = if response.hovered() {
+                egui::Color32::from_rgb(60, 65, 75)
+            } else {
+                egui::Color32::from_rgb(42, 44, 50)
+            };
+            painter.rect_filled(rect, 4.0, bg);
+            painter.rect_stroke(
+                rect,
+                4.0,
+                egui::Stroke::new(1.0, egui::Color32::from_gray(70)),
+                egui::StrokeKind::Outside,
+            );
+            painter.text(
+                rect.center() + egui::Vec2::new(0.0, -6.0),
+                egui::Align2::CENTER_CENTER,
+                icon,
+                egui::FontId::proportional(icon_s),
+                egui::Color32::WHITE,
+            );
+            painter.text(
+                rect.center() + egui::Vec2::new(0.0, 14.0),
+                egui::Align2::CENTER_CENTER,
+                act_label,
+                egui::FontId::proportional(label_s),
+                egui::Color32::from_gray(190),
+            );
 
-                        if response.clicked() {
-                            match id {
-                                0 => {
-                                    let positions: Vec<(i32, i32)> = items.iter().map(|i| (i.x, i.y)).collect();
-                                    for (x, y) in positions { self.destroy_block_at(x, y); }
-                                    self.world_sel = WorldSelection::none();
-                                }
-                                1 => {
-                                    for item in &items {
-                                        if item.pleb_idx.is_some() { continue; }
-                                        if reg.get(item.block_type).map_or(false, |d| d.is_harvestable) {
-                                            self.manual_tasks.push(zones::WorkTask::Harvest(item.x, item.y));
-                                        }
-                                    }
-                                }
-                                2 => {
-                                    for (x, y) in &bp_items { self.cancel_blueprint(*x, *y); }
-                                    self.world_sel = WorldSelection::none();
-                                }
-                                3 => {
-                                    if count == 1 {
-                                        let item = &items[0];
-                                        let cidx = item.y as u32 * GRID_W + item.x as u32;
-                                        self.block_sel.crate_idx = Some(cidx);
-                                        self.block_sel.crate_world = (item.x as f32 + 0.5, item.y as f32 + 0.5);
-                                    }
-                                }
-                                _ => {}
+            if response.clicked() {
+                match id {
+                    0 => {
+                        let positions: Vec<(i32, i32)> = items.iter().map(|i| (i.x, i.y)).collect();
+                        for (x, y) in positions {
+                            self.destroy_block_at(x, y);
+                        }
+                        self.world_sel = WorldSelection::none();
+                    }
+                    1 => {
+                        for item in &items {
+                            if item.pleb_idx.is_some() {
+                                continue;
+                            }
+                            if reg.get(item.block_type).map_or(false, |d| d.is_harvestable) {
+                                self.manual_tasks
+                                    .push(zones::WorkTask::Harvest(item.x, item.y));
                             }
                         }
                     }
+                    2 => {
+                        for (x, y) in &bp_items {
+                            self.cancel_blueprint(*x, *y);
+                        }
+                        self.world_sel = WorldSelection::none();
+                    }
+                    3 => {
+                        if count == 1 {
+                            let item = &items[0];
+                            let cidx = item.y as u32 * GRID_W + item.x as u32;
+                            self.block_sel.crate_idx = Some(cidx);
+                            self.block_sel.crate_world = (item.x as f32 + 0.5, item.y as f32 + 0.5);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
 
-                    // Detail section below actions (for plants, plebs, etc.)
-                    if count == 1 && items[0].pleb_idx.is_none() {
-                        let item = &items[0];
-                        let tidx = (item.y as u32 * GRID_W + item.x as u32) as usize;
-                        if tidx < self.grid_data.len() {
-                            let tblock = self.grid_data[tidx];
-                            let wt = if tidx < self.water_table.len() { self.water_table[tidx] } else { -3.0 };
-                            let timer = self.crop_timers.get(&(tidx as u32)).copied().unwrap_or(0.0);
-                            if let Some(cs) = zones::crop_status(tblock, tidx as u32, timer,
-                                self.time_of_day, self.camera.sun_intensity, self.camera.rain_intensity, wt, self.debug.water_level) {
-                                ui.separator();
-                                // Growth progress bar
-                                let total_progress = (cs.stage as f32 + cs.progress) / 4.0;
-                                let bar_w = 190.0;
-                                let bar_h = 8.0;
-                                let (bar_rect, _) = ui.allocate_exact_size(egui::Vec2::new(bar_w, bar_h), egui::Sense::hover());
-                                let bp = ui.painter_at(bar_rect);
-                                bp.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
-                                bp.rect_filled(
-                                    egui::Rect::from_min_size(bar_rect.min, egui::Vec2::new(bar_w * total_progress, bar_h)),
-                                    2.0, egui::Color32::from_rgb(60, 180, 60),
-                                );
-                                bp.text(bar_rect.center(), egui::Align2::CENTER_CENTER,
-                                    &format!("{} {:.0}%", cs.stage_name, total_progress * 100.0),
-                                    egui::FontId::proportional(7.0), egui::Color32::WHITE);
+        // Detail section below actions (for plants, plebs, etc.)
+        if count == 1 && items[0].pleb_idx.is_none() {
+            let item = &items[0];
+            let tidx = (item.y as u32 * GRID_W + item.x as u32) as usize;
+            if tidx < self.grid_data.len() {
+                let tblock = self.grid_data[tidx];
+                let wt = if tidx < self.water_table.len() {
+                    self.water_table[tidx]
+                } else {
+                    -3.0
+                };
+                let timer = self.crop_timers.get(&(tidx as u32)).copied().unwrap_or(0.0);
+                if let Some(cs) = zones::crop_status(
+                    tblock,
+                    tidx as u32,
+                    timer,
+                    self.time_of_day,
+                    self.camera.sun_intensity,
+                    self.camera.rain_intensity,
+                    wt,
+                    self.debug.water_level,
+                ) {
+                    ui.separator();
+                    // Growth progress bar
+                    let total_progress = (cs.stage as f32 + cs.progress) / 4.0;
+                    let bar_w = 190.0;
+                    let bar_h = 8.0;
+                    let (bar_rect, _) =
+                        ui.allocate_exact_size(egui::Vec2::new(bar_w, bar_h), egui::Sense::hover());
+                    let bp = ui.painter_at(bar_rect);
+                    bp.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
+                    bp.rect_filled(
+                        egui::Rect::from_min_size(
+                            bar_rect.min,
+                            egui::Vec2::new(bar_w * total_progress, bar_h),
+                        ),
+                        2.0,
+                        egui::Color32::from_rgb(60, 180, 60),
+                    );
+                    bp.text(
+                        bar_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        &format!("{} {:.0}%", cs.stage_name, total_progress * 100.0),
+                        egui::FontId::proportional(7.0),
+                        egui::Color32::WHITE,
+                    );
 
-                                // Factor bars
-                                ui.horizontal(|ui| {
-                                    let factor_bar = |ui: &mut egui::Ui, label: &str, val: f32, col: egui::Color32| {
-                                        ui.vertical(|ui| {
-                                            ui.label(egui::RichText::new(label).size(8.0).color(egui::Color32::GRAY));
-                                            let (r, _) = ui.allocate_exact_size(egui::Vec2::new(50.0, 4.0), egui::Sense::hover());
-                                            let p = ui.painter_at(r);
-                                            p.rect_filled(r, 1.0, egui::Color32::from_rgb(30, 30, 30));
-                                            let fill_col = if val < 0.15 { egui::Color32::from_rgb(200, 50, 50) } else { col };
-                                            p.rect_filled(
-                                                egui::Rect::from_min_size(r.min, egui::Vec2::new(50.0 * val, 4.0)),
-                                                1.0, fill_col,
-                                            );
-                                        });
+                    // Factor bars
+                    ui.horizontal(|ui| {
+                        let factor_bar =
+                            |ui: &mut egui::Ui, label: &str, val: f32, col: egui::Color32| {
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(label)
+                                            .size(8.0)
+                                            .color(egui::Color32::GRAY),
+                                    );
+                                    let (r, _) = ui.allocate_exact_size(
+                                        egui::Vec2::new(50.0, 4.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    let p = ui.painter_at(r);
+                                    p.rect_filled(r, 1.0, egui::Color32::from_rgb(30, 30, 30));
+                                    let fill_col = if val < 0.15 {
+                                        egui::Color32::from_rgb(200, 50, 50)
+                                    } else {
+                                        col
                                     };
-                                    factor_bar(ui, "Temp", cs.temp_factor, egui::Color32::from_rgb(200, 120, 40));
-                                    factor_bar(ui, "Sun", cs.sun_factor, egui::Color32::from_rgb(220, 200, 60));
-                                    factor_bar(ui, "Water", cs.water_factor, egui::Color32::from_rgb(60, 140, 220));
+                                    p.rect_filled(
+                                        egui::Rect::from_min_size(
+                                            r.min,
+                                            egui::Vec2::new(50.0 * val, 4.0),
+                                        ),
+                                        1.0,
+                                        fill_col,
+                                    );
                                 });
-
-                                if cs.growth_rate < 0.01 {
-                                    ui.label(egui::RichText::new(format!("\u{26a0} {}", cs.limiting))
-                                        .size(9.0).color(egui::Color32::from_rgb(255, 80, 80)));
-                                }
-                            }
-                        }
-
-                        // Blueprint detail
-                        if let Some(bp) = self.blueprints.get(&(item.x, item.y)) {
-                            ui.separator();
-                            let status = if bp.resources_met() {
-                                if bp.progress > 0.01 { format!("Building {:.0}%", bp.progress * 100.0) }
-                                else { "Ready to build".to_string() }
-                            } else {
-                                format!("Needs: {}/{} wood", bp.wood_delivered, bp.wood_needed)
                             };
-                            ui.label(egui::RichText::new(format!("Blueprint: {}", status)).size(9.0));
-                        }
+                        factor_bar(
+                            ui,
+                            "Temp",
+                            cs.temp_factor,
+                            egui::Color32::from_rgb(200, 120, 40),
+                        );
+                        factor_bar(
+                            ui,
+                            "Sun",
+                            cs.sun_factor,
+                            egui::Color32::from_rgb(220, 200, 60),
+                        );
+                        factor_bar(
+                            ui,
+                            "Water",
+                            cs.water_factor,
+                            egui::Color32::from_rgb(60, 140, 220),
+                        );
+                    });
 
-                        // Pipe/liquid network pressure detail
-                        let pidx = item.y as u32 * GRID_W + item.x as u32;
-                        let pbt = item.block_type & 0xFF;
-                        if pipes::is_gas_pipe_component(pbt) {
-                            if let Some(cell) = self.pipe_network.cells.get(&pidx) {
-                                ui.separator();
-                                ui.label(egui::RichText::new(format!(
+                    if cs.growth_rate < 0.01 {
+                        ui.label(
+                            egui::RichText::new(format!("\u{26a0} {}", cs.limiting))
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(255, 80, 80)),
+                        );
+                    }
+                }
+            }
+
+            // Blueprint detail
+            if let Some(bp) = self.blueprints.get(&(item.x, item.y)) {
+                ui.separator();
+                let status = if bp.resources_met() {
+                    if bp.progress > 0.01 {
+                        format!("Building {:.0}%", bp.progress * 100.0)
+                    } else {
+                        "Ready to build".to_string()
+                    }
+                } else {
+                    format!("Needs: {}/{} wood", bp.wood_delivered, bp.wood_needed)
+                };
+                ui.label(egui::RichText::new(format!("Blueprint: {}", status)).size(9.0));
+            }
+
+            // Pipe/liquid network pressure detail
+            let pidx = item.y as u32 * GRID_W + item.x as u32;
+            let pbt = item.block_type & 0xFF;
+            if pipes::is_gas_pipe_component(pbt) {
+                if let Some(cell) = self.pipe_network.cells.get(&pidx) {
+                    ui.separator();
+                    ui.label(egui::RichText::new(format!(
                                     "Gas: P={:.2}  Smoke={:.2}  O\u{2082}={:.2}  CO\u{2082}={:.2}  T={:.1}°C",
                                     cell.pressure, cell.gas[0], cell.gas[1], cell.gas[2], cell.gas[3]
                                 )).size(9.0));
-                            }
-                        }
-                        if pipes::is_liquid_pipe_component(pbt) {
-                            if let Some(cell) = self.liquid_network.cells.get(&pidx) {
-                                ui.separator();
-                                ui.label(egui::RichText::new(format!(
-                                    "Liquid: P={:.2}  T={:.1}°C",
-                                    cell.pressure, cell.gas[3]
-                                )).size(9.0));
-                            }
-                        }
-                    }
+                }
+            }
+            if pipes::is_liquid_pipe_component(pbt) {
+                if let Some(cell) = self.liquid_network.cells.get(&pidx) {
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Liquid: P={:.2}  T={:.1}°C",
+                            cell.pressure, cell.gas[3]
+                        ))
+                        .size(9.0),
+                    );
+                }
+            }
+        }
     }
 
     /// Draw the in-game event log (bottom-right, scrolling).
     /// Draw event notification cards (right side, Rimworld-style).
     fn draw_notifications(&mut self, ctx: &egui::Context) {
-        if self.notifications.is_empty() { return; }
+        if self.notifications.is_empty() {
+            return;
+        }
         // Auto-expire after 10 seconds, remove dismissed
         let now = self.time_of_day;
         self.notifications.retain(|n| {
@@ -4187,8 +6123,19 @@ impl App {
         let mut dismiss_id = None;
         // Stack from top-right, below the layers bar
         let start = self.notifications.len().saturating_sub(8);
-        let notifs: Vec<(u32, &'static str, String, String, egui::Color32)> = self.notifications[start..]
-            .iter().map(|n| (n.id, n.icon, n.title.clone(), n.description.clone(), n.category.color())).collect();
+        let notifs: Vec<(u32, &'static str, String, String, egui::Color32)> = self.notifications
+            [start..]
+            .iter()
+            .map(|n| {
+                (
+                    n.id,
+                    n.icon,
+                    n.title.clone(),
+                    n.description.clone(),
+                    n.category.color(),
+                )
+            })
+            .collect();
         for (i, (id, icon, title, desc, color)) in notifs.iter().enumerate() {
             let y_offset = 60.0 + i as f32 * 52.0;
             egui::Area::new(egui::Id::new(("notif_card", *id)))
@@ -4196,7 +6143,12 @@ impl App {
                 .interactable(true)
                 .show(ctx, |ui| {
                     let resp = egui::Frame::NONE
-                        .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 210))
+                        .fill(egui::Color32::from_rgba_unmultiplied(
+                            color.r(),
+                            color.g(),
+                            color.b(),
+                            210,
+                        ))
                         .corner_radius(4.0)
                         .inner_margin(6.0)
                         .show(ui, |ui| {
@@ -4204,8 +6156,17 @@ impl App {
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(*icon).size(14.0));
                                 ui.vertical(|ui| {
-                                    ui.label(egui::RichText::new(title).strong().size(10.0).color(egui::Color32::WHITE));
-                                    ui.label(egui::RichText::new(desc).size(9.0).color(egui::Color32::from_gray(215)));
+                                    ui.label(
+                                        egui::RichText::new(title)
+                                            .strong()
+                                            .size(10.0)
+                                            .color(egui::Color32::WHITE),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(desc)
+                                            .size(9.0)
+                                            .color(egui::Color32::from_gray(215)),
+                                    );
                                 });
                             });
                         });
@@ -4223,7 +6184,9 @@ impl App {
 
     /// Draw active conditions bar (below menu bar, persistent labels).
     fn draw_conditions_bar(&self, ctx: &egui::Context) {
-        if self.conditions.is_empty() { return; }
+        if self.conditions.is_empty() {
+            return;
+        }
         egui::Area::new(egui::Id::new("conditions_bar"))
             .anchor(egui::Align2::CENTER_TOP, [0.0, 30.0])
             .show(ctx, |ui| {
@@ -4232,16 +6195,30 @@ impl App {
                     for cond in &self.conditions {
                         let color = cond.category.color();
                         egui::Frame::NONE
-                            .fill(egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 220))
+                            .fill(egui::Color32::from_rgba_unmultiplied(
+                                color.r(),
+                                color.g(),
+                                color.b(),
+                                220,
+                            ))
                             .corner_radius(3.0)
                             .inner_margin(6.0)
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(cond.icon).size(12.0));
-                                    ui.label(egui::RichText::new(&cond.name).strong().size(10.0).color(egui::Color32::WHITE));
+                                    ui.label(
+                                        egui::RichText::new(&cond.name)
+                                            .strong()
+                                            .size(10.0)
+                                            .color(egui::Color32::WHITE),
+                                    );
                                     if cond.duration > 0.0 {
                                         let pct = (cond.remaining / cond.duration * 100.0) as u32;
-                                        ui.label(egui::RichText::new(format!("{}%", pct)).size(9.0).color(egui::Color32::from_gray(200)));
+                                        ui.label(
+                                            egui::RichText::new(format!("{}%", pct))
+                                                .size(9.0)
+                                                .color(egui::Color32::from_gray(200)),
+                                        );
                                     }
                                 });
                             });
@@ -4251,7 +6228,9 @@ impl App {
     }
 
     fn draw_game_log(&self, ctx: &egui::Context) {
-        if self.game_log.is_empty() { return; }
+        if self.game_log.is_empty() {
+            return;
+        }
 
         egui::Area::new(egui::Id::new("game_log"))
             .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -10.0])
@@ -4271,11 +6250,18 @@ impl App {
                                     let time_frac = event.time / DAY_DURATION;
                                     let hours = (time_frac * 24.0) as u32;
                                     let minutes = ((time_frac * 24.0 - hours as f32) * 60.0) as u32;
-                                    let text = format!("{:02}:{:02} {} {}", hours, minutes,
-                                        event.category.icon(), event.message);
-                                    ui.label(egui::RichText::new(text)
-                                        .size(9.0)
-                                        .color(egui::Color32::from_rgb(r, g, b)));
+                                    let text = format!(
+                                        "{:02}:{:02} {} {}",
+                                        hours,
+                                        minutes,
+                                        event.category.icon(),
+                                        event.message
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(text)
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(r, g, b)),
+                                    );
                                 }
                             });
                     });
@@ -4301,7 +6287,11 @@ impl App {
                 }
             }
         }
-        let pleb_count = self.plebs.iter().filter(|p| !p.is_enemy && !p.is_dead).count();
+        let pleb_count = self
+            .plebs
+            .iter()
+            .filter(|p| !p.is_enemy && !p.is_dead)
+            .count();
         let bp_count = self.blueprints.len();
 
         // Sort by item ID for stable display order
@@ -4314,7 +6304,10 @@ impl App {
             .interactable(false)
             .show(ctx, |ui| {
                 let (rect, _) = ui.allocate_exact_size(
-                    egui::Vec2::new(240.0, (2 + sorted.len() + if bp_count > 0 { 1 } else { 0 }) as f32 * 16.0),
+                    egui::Vec2::new(
+                        240.0,
+                        (2 + sorted.len() + if bp_count > 0 { 1 } else { 0 }) as f32 * 16.0,
+                    ),
                     egui::Sense::hover(),
                 );
                 let painter = ui.painter_at(rect);
@@ -4324,31 +6317,52 @@ impl App {
                 let x = rect.min.x;
                 let line_h = 16.0;
 
-                Self::shadow_text(&painter, egui::pos2(x, y), egui::Align2::LEFT_TOP,
-                    &format!("\u{1f464} {} colonists", pleb_count), font.clone(), white);
+                Self::shadow_text(
+                    &painter,
+                    egui::pos2(x, y),
+                    egui::Align2::LEFT_TOP,
+                    &format!("\u{1f464} {} colonists", pleb_count),
+                    font.clone(),
+                    white,
+                );
                 y += line_h;
 
                 for (item_id, count) in &sorted {
                     let def = item_reg.get(*item_id);
                     let icon = def.map(|d| d.icon.as_str()).unwrap_or("?");
                     let name = def.map(|d| d.name.as_str()).unwrap_or("Unknown");
-                    Self::shadow_text(&painter, egui::pos2(x, y), egui::Align2::LEFT_TOP,
-                        &format!("{} {} {}", icon, count, name), font.clone(), white);
+                    Self::shadow_text(
+                        &painter,
+                        egui::pos2(x, y),
+                        egui::Align2::LEFT_TOP,
+                        &format!("{} {} {}", icon, count, name),
+                        font.clone(),
+                        white,
+                    );
                     y += line_h;
                 }
                 if bp_count > 0 {
-                    Self::shadow_text(&painter, egui::pos2(x, y), egui::Align2::LEFT_TOP,
-                        &format!("\u{1f3d7} {} pending", bp_count), font.clone(),
-                        egui::Color32::from_gray(160));
+                    Self::shadow_text(
+                        &painter,
+                        egui::pos2(x, y),
+                        egui::Align2::LEFT_TOP,
+                        &format!("\u{1f3d7} {} pending", bp_count),
+                        font.clone(),
+                        egui::Color32::from_gray(160),
+                    );
                 }
             });
     }
 
     // --- Selection info panel: details about selected block ---
     fn draw_selection_info(&mut self, ctx: &egui::Context) {
-        if self.world_sel.is_empty() { return; }
+        if self.world_sel.is_empty() {
+            return;
+        }
         let items = &self.world_sel.items;
-        if items.len() != 1 { return; } // only single selection
+        if items.len() != 1 {
+            return;
+        } // only single selection
         let item = &items[0];
 
         // Pleb selection: show needs
@@ -4379,33 +6393,84 @@ impl App {
                             ui.label(egui::RichText::new(act_str).size(10.0).weak());
                             ui.separator();
 
-                            let bar = |ui: &mut egui::Ui, label: &str, val: f32, color: egui::Color32| {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(label).size(10.0).monospace());
-                                    let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(100.0, 8.0), egui::Sense::hover());
-                                    let painter = ui.painter_at(rect);
-                                    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
-                                    painter.rect_filled(
-                                        egui::Rect::from_min_size(rect.min, egui::Vec2::new(100.0 * val.clamp(0.0, 1.0), 8.0)),
-                                        2.0, color,
-                                    );
-                                    ui.label(egui::RichText::new(format!("{:.0}%", val * 100.0)).size(9.0).weak());
-                                });
-                            };
-                            bar(ui, "HP  ", pleb.needs.health, egui::Color32::from_rgb(80, 200, 80));
-                            bar(ui, "HUN ", pleb.needs.hunger, egui::Color32::from_rgb(200, 160, 40));
-                            bar(ui, "H2O ", pleb.needs.thirst, egui::Color32::from_rgb(60, 140, 220));
-                            bar(ui, "RST ", pleb.needs.rest, egui::Color32::from_rgb(80, 120, 200));
-                            bar(ui, "WRM ", pleb.needs.warmth, egui::Color32::from_rgb(200, 100, 40));
-                            bar(ui, "O2  ", pleb.needs.oxygen, egui::Color32::from_rgb(100, 200, 220));
+                            let bar =
+                                |ui: &mut egui::Ui, label: &str, val: f32, color: egui::Color32| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(label).size(10.0).monospace());
+                                        let (rect, _) = ui.allocate_exact_size(
+                                            egui::Vec2::new(100.0, 8.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        let painter = ui.painter_at(rect);
+                                        painter.rect_filled(
+                                            rect,
+                                            2.0,
+                                            egui::Color32::from_rgb(30, 30, 30),
+                                        );
+                                        painter.rect_filled(
+                                            egui::Rect::from_min_size(
+                                                rect.min,
+                                                egui::Vec2::new(100.0 * val.clamp(0.0, 1.0), 8.0),
+                                            ),
+                                            2.0,
+                                            color,
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format!("{:.0}%", val * 100.0))
+                                                .size(9.0)
+                                                .weak(),
+                                        );
+                                    });
+                                };
+                            bar(
+                                ui,
+                                "HP  ",
+                                pleb.needs.health,
+                                egui::Color32::from_rgb(80, 200, 80),
+                            );
+                            bar(
+                                ui,
+                                "HUN ",
+                                pleb.needs.hunger,
+                                egui::Color32::from_rgb(200, 160, 40),
+                            );
+                            bar(
+                                ui,
+                                "H2O ",
+                                pleb.needs.thirst,
+                                egui::Color32::from_rgb(60, 140, 220),
+                            );
+                            bar(
+                                ui,
+                                "RST ",
+                                pleb.needs.rest,
+                                egui::Color32::from_rgb(80, 120, 200),
+                            );
+                            bar(
+                                ui,
+                                "WRM ",
+                                pleb.needs.warmth,
+                                egui::Color32::from_rgb(200, 100, 40),
+                            );
+                            bar(
+                                ui,
+                                "O2  ",
+                                pleb.needs.oxygen,
+                                egui::Color32::from_rgb(100, 200, 220),
+                            );
 
                             ui.separator();
                             if pleb.inventory.is_carrying() {
-                                let inv_str: Vec<String> = pleb.inventory.stacks.iter()
+                                let inv_str: Vec<String> = pleb
+                                    .inventory
+                                    .stacks
+                                    .iter()
                                     .filter(|s| s.count > 0)
                                     .map(|s| s.label())
                                     .collect();
-                                ui.label(egui::RichText::new(inv_str.join(" | ")).size(10.0).weak());
+                                ui.label(
+                                    egui::RichText::new(inv_str.join(" | ")).size(10.0).weak(),
+                                );
                             }
                             if ui.small_button("Inventory (I)").clicked() {
                                 self.show_inventory = !self.show_inventory;
@@ -4420,7 +6485,9 @@ impl App {
         // Block selection: show block info
         let bx = item.x;
         let by = item.y;
-        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return; }
+        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
+            return;
+        }
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
         let block = self.grid_data[idx];
         let bt = block & 0xFF;
@@ -4437,10 +6504,21 @@ impl App {
                     ui.label(egui::RichText::new(type_name).strong().size(13.0));
 
                     let mut details = Vec::new();
-                    if bh > 0 { details.push(format!("Height: {}", bh)); }
-                    if flags & 2 != 0 { details.push("Roofed".to_string()); }
+                    if bh > 0 {
+                        details.push(format!("Height: {}", bh));
+                    }
+                    if flags & 2 != 0 {
+                        details.push("Roofed".to_string());
+                    }
                     if flags & 1 != 0 {
-                        details.push(if flags & 4 != 0 { "Door: Open" } else { "Door: Closed" }.to_string());
+                        details.push(
+                            if flags & 4 != 0 {
+                                "Door: Open"
+                            } else {
+                                "Door: Closed"
+                            }
+                            .to_string(),
+                        );
                     }
                     // Elevation
                     if idx < self.elevation_data.len() {
@@ -4463,7 +6541,9 @@ impl App {
                             if gi.stack.is_container() {
                                 let cap = gi.stack.liquid_capacity();
                                 if let Some((liq, amt)) = gi.stack.liquid {
-                                    let liq_name = match liq { item_defs::LiquidType::Water => "Water" };
+                                    let liq_name = match liq {
+                                        item_defs::LiquidType::Water => "Water",
+                                    };
                                     details.push(format!("{}: {}/{}", liq_name, amt, cap));
                                 } else {
                                     details.push(format!("Empty (capacity: {})", cap));
@@ -4501,14 +6581,18 @@ impl App {
             .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -180.0])
             .interactable(false)
             .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::Vec2::splat(map_size), egui::Sense::hover(),
-                );
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::Vec2::splat(map_size), egui::Sense::hover());
                 let painter = ui.painter_at(rect);
 
                 // Background
                 painter.rect_filled(rect, 3.0, egui::Color32::from_rgb(20, 20, 25));
-                painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)), egui::StrokeKind::Outside);
+                painter.rect_stroke(
+                    rect,
+                    3.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_gray(60)),
+                    egui::StrokeKind::Outside,
+                );
 
                 let to_map = |wx: f32, wy: f32| -> egui::Pos2 {
                     egui::pos2(
@@ -4526,7 +6610,11 @@ impl App {
                         let block = self.grid_data[idx];
                         let bt = block & 0xFF;
                         let bh = (block >> 8) & 0xFF;
-                        let elev = if idx < self.elevation_data.len() { self.elevation_data[idx] } else { 0.0 };
+                        let elev = if idx < self.elevation_data.len() {
+                            self.elevation_data[idx]
+                        } else {
+                            0.0
+                        };
 
                         let color = if bt == 3 {
                             egui::Color32::from_rgb(30, 60, 120) // water
@@ -4543,7 +6631,8 @@ impl App {
                         let pos = to_map(tx as f32, ty as f32);
                         painter.rect_filled(
                             egui::Rect::from_min_size(pos, egui::Vec2::splat(px_size + 0.5)),
-                            0.0, color,
+                            0.0,
+                            color,
                         );
                     }
                 }
@@ -4566,7 +6655,11 @@ impl App {
                 let vp_max = to_map(self.camera.center_x + half_w, self.camera.center_y + half_h);
                 painter.rect_stroke(
                     egui::Rect::from_min_max(vp_min, vp_max),
-                    1.0, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150)),
+                    1.0,
+                    egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150),
+                    ),
                     egui::StrokeKind::Outside,
                 );
             });

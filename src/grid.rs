@@ -70,32 +70,66 @@ pub const BT_WELL: u32 = 59;
 pub fn wgsl_block_constants() -> String {
     let mut s = String::from("// --- Block type constants (generated from grid.rs) ---\n");
     let consts: &[(&str, u32)] = &[
-        ("BT_AIR", BT_AIR), ("BT_STONE", BT_STONE), ("BT_DIRT", BT_DIRT),
-        ("BT_WATER", BT_WATER), ("BT_WALL", BT_WALL), ("BT_GLASS", BT_GLASS),
-        ("BT_FIREPLACE", BT_FIREPLACE), ("BT_CEILING_LIGHT", BT_CEILING_LIGHT),
-        ("BT_TREE", BT_TREE), ("BT_BENCH", BT_BENCH), ("BT_FLOOR_LAMP", BT_FLOOR_LAMP),
-        ("BT_TABLE_LAMP", BT_TABLE_LAMP), ("BT_FAN", BT_FAN), ("BT_COMPOST", BT_COMPOST),
-        ("BT_INSULATED", BT_INSULATED), ("BT_PIPE", BT_PIPE), ("BT_PUMP", BT_PUMP),
-        ("BT_TANK", BT_TANK), ("BT_VALVE", BT_VALVE), ("BT_OUTLET", BT_OUTLET),
-        ("BT_INLET", BT_INLET), ("BT_WOOD_WALL", BT_WOOD_WALL),
-        ("BT_STEEL_WALL", BT_STEEL_WALL), ("BT_SANDSTONE", BT_SANDSTONE),
-        ("BT_GRANITE", BT_GRANITE), ("BT_LIMESTONE", BT_LIMESTONE),
-        ("BT_WOOD_FLOOR", BT_WOOD_FLOOR), ("BT_STONE_FLOOR", BT_STONE_FLOOR),
-        ("BT_CONCRETE_FLOOR", BT_CONCRETE_FLOOR), ("BT_CANNON", BT_CANNON),
-        ("BT_BED", BT_BED), ("BT_BERRY_BUSH", BT_BERRY_BUSH),
-        ("BT_DUG_GROUND", BT_DUG_GROUND), ("BT_CRATE", BT_CRATE),
-        ("BT_ROCK", BT_ROCK), ("BT_MUD_WALL", BT_MUD_WALL), ("BT_WIRE", BT_WIRE),
-        ("BT_SOLAR", BT_SOLAR), ("BT_BATTERY_S", BT_BATTERY_S),
-        ("BT_BATTERY_M", BT_BATTERY_M), ("BT_BATTERY_L", BT_BATTERY_L),
-        ("BT_WIND_TURBINE", BT_WIND_TURBINE), ("BT_SWITCH", BT_SWITCH),
-        ("BT_DIMMER", BT_DIMMER), ("BT_DIAGONAL", BT_DIAGONAL),
-        ("BT_BREAKER", BT_BREAKER), ("BT_RESTRICTOR", BT_RESTRICTOR),
-        ("BT_CROP", BT_CROP), ("BT_FLOODLIGHT", BT_FLOODLIGHT),
-        ("BT_LIQUID_PIPE", BT_LIQUID_PIPE), ("BT_PIPE_BRIDGE", BT_PIPE_BRIDGE),
-        ("BT_WIRE_BRIDGE", BT_WIRE_BRIDGE), ("BT_LIQUID_INTAKE", BT_LIQUID_INTAKE),
-        ("BT_LIQUID_PUMP", BT_LIQUID_PUMP), ("BT_LIQUID_OUTPUT", BT_LIQUID_OUTPUT),
-        ("BT_WALL_TORCH", BT_WALL_TORCH), ("BT_WALL_LAMP", BT_WALL_LAMP),
-        ("BT_WORKBENCH", BT_WORKBENCH), ("BT_KILN", BT_KILN), ("BT_WELL", BT_WELL),
+        ("BT_AIR", BT_AIR),
+        ("BT_STONE", BT_STONE),
+        ("BT_DIRT", BT_DIRT),
+        ("BT_WATER", BT_WATER),
+        ("BT_WALL", BT_WALL),
+        ("BT_GLASS", BT_GLASS),
+        ("BT_FIREPLACE", BT_FIREPLACE),
+        ("BT_CEILING_LIGHT", BT_CEILING_LIGHT),
+        ("BT_TREE", BT_TREE),
+        ("BT_BENCH", BT_BENCH),
+        ("BT_FLOOR_LAMP", BT_FLOOR_LAMP),
+        ("BT_TABLE_LAMP", BT_TABLE_LAMP),
+        ("BT_FAN", BT_FAN),
+        ("BT_COMPOST", BT_COMPOST),
+        ("BT_INSULATED", BT_INSULATED),
+        ("BT_PIPE", BT_PIPE),
+        ("BT_PUMP", BT_PUMP),
+        ("BT_TANK", BT_TANK),
+        ("BT_VALVE", BT_VALVE),
+        ("BT_OUTLET", BT_OUTLET),
+        ("BT_INLET", BT_INLET),
+        ("BT_WOOD_WALL", BT_WOOD_WALL),
+        ("BT_STEEL_WALL", BT_STEEL_WALL),
+        ("BT_SANDSTONE", BT_SANDSTONE),
+        ("BT_GRANITE", BT_GRANITE),
+        ("BT_LIMESTONE", BT_LIMESTONE),
+        ("BT_WOOD_FLOOR", BT_WOOD_FLOOR),
+        ("BT_STONE_FLOOR", BT_STONE_FLOOR),
+        ("BT_CONCRETE_FLOOR", BT_CONCRETE_FLOOR),
+        ("BT_CANNON", BT_CANNON),
+        ("BT_BED", BT_BED),
+        ("BT_BERRY_BUSH", BT_BERRY_BUSH),
+        ("BT_DUG_GROUND", BT_DUG_GROUND),
+        ("BT_CRATE", BT_CRATE),
+        ("BT_ROCK", BT_ROCK),
+        ("BT_MUD_WALL", BT_MUD_WALL),
+        ("BT_WIRE", BT_WIRE),
+        ("BT_SOLAR", BT_SOLAR),
+        ("BT_BATTERY_S", BT_BATTERY_S),
+        ("BT_BATTERY_M", BT_BATTERY_M),
+        ("BT_BATTERY_L", BT_BATTERY_L),
+        ("BT_WIND_TURBINE", BT_WIND_TURBINE),
+        ("BT_SWITCH", BT_SWITCH),
+        ("BT_DIMMER", BT_DIMMER),
+        ("BT_DIAGONAL", BT_DIAGONAL),
+        ("BT_BREAKER", BT_BREAKER),
+        ("BT_RESTRICTOR", BT_RESTRICTOR),
+        ("BT_CROP", BT_CROP),
+        ("BT_FLOODLIGHT", BT_FLOODLIGHT),
+        ("BT_LIQUID_PIPE", BT_LIQUID_PIPE),
+        ("BT_PIPE_BRIDGE", BT_PIPE_BRIDGE),
+        ("BT_WIRE_BRIDGE", BT_WIRE_BRIDGE),
+        ("BT_LIQUID_INTAKE", BT_LIQUID_INTAKE),
+        ("BT_LIQUID_PUMP", BT_LIQUID_PUMP),
+        ("BT_LIQUID_OUTPUT", BT_LIQUID_OUTPUT),
+        ("BT_WALL_TORCH", BT_WALL_TORCH),
+        ("BT_WALL_LAMP", BT_WALL_LAMP),
+        ("BT_WORKBENCH", BT_WORKBENCH),
+        ("BT_KILN", BT_KILN),
+        ("BT_WELL", BT_WELL),
     ];
     for &(name, val) in consts {
         s.push_str(&format!("const {}: u32 = {}u;\n", name, val));
@@ -136,27 +170,70 @@ pub fn extract_roof_data(block: u32) -> (u8, u32) {
 /// Is this block type part of the electrical power network?
 /// Checks block type and wire overlay flag. Matches the GPU-side is_conductor() in power.wgsl.
 pub fn is_conductor_rs(bt: u32, flags: u8) -> bool {
-    bt_is!(bt, BT_WIRE, BT_SOLAR, BT_BATTERY_S, BT_BATTERY_M, BT_BATTERY_L,
-        BT_WIND_TURBINE, BT_SWITCH, BT_DIMMER, BT_BREAKER, BT_FLOODLIGHT,
-        BT_WIRE_BRIDGE, BT_WALL_LAMP,
-        BT_CEILING_LIGHT, BT_FLOOR_LAMP, BT_TABLE_LAMP, BT_FAN, BT_PUMP)
-        || (flags & 0x80) != 0
+    bt_is!(
+        bt,
+        BT_WIRE,
+        BT_SOLAR,
+        BT_BATTERY_S,
+        BT_BATTERY_M,
+        BT_BATTERY_L,
+        BT_WIND_TURBINE,
+        BT_SWITCH,
+        BT_DIMMER,
+        BT_BREAKER,
+        BT_FLOODLIGHT,
+        BT_WIRE_BRIDGE,
+        BT_WALL_LAMP,
+        BT_CEILING_LIGHT,
+        BT_FLOOR_LAMP,
+        BT_TABLE_LAMP,
+        BT_FAN,
+        BT_PUMP
+    ) || (flags & 0x80) != 0
 }
 
 /// Is this block type a ground/floor tile (walkable base, not a placed object)?
 pub fn is_ground_block(bt: u32) -> bool {
-    bt_is!(bt, BT_AIR, BT_DIRT, BT_WATER, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR, BT_DUG_GROUND)
+    bt_is!(
+        bt,
+        BT_AIR,
+        BT_DIRT,
+        BT_WATER,
+        BT_WOOD_FLOOR,
+        BT_STONE_FLOOR,
+        BT_CONCRETE_FLOOR,
+        BT_DUG_GROUND
+    )
 }
 
 /// Is this block type a structural wall?
 pub fn is_wall_block(bt: u32) -> bool {
-    bt_is!(bt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED,
-        BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE, BT_MUD_WALL, BT_DIAGONAL)
+    bt_is!(
+        bt,
+        BT_STONE,
+        BT_WALL,
+        BT_GLASS,
+        BT_INSULATED,
+        BT_WOOD_WALL,
+        BT_STEEL_WALL,
+        BT_SANDSTONE,
+        BT_GRANITE,
+        BT_LIMESTONE,
+        BT_MUD_WALL,
+        BT_DIAGONAL
+    )
 }
 
 /// Is this block type a wire/power equipment (height byte = connection mask, not visual)?
 pub fn is_wire_block(bt: u32) -> bool {
-    bt_is!(bt, BT_WIRE, BT_DIMMER, BT_SWITCH, BT_BREAKER, BT_WIRE_BRIDGE)
+    bt_is!(
+        bt,
+        BT_WIRE,
+        BT_DIMMER,
+        BT_SWITCH,
+        BT_BREAKER,
+        BT_WIRE_BRIDGE
+    )
 }
 
 /// Direction mask constants for pipe/wire connections.
@@ -223,7 +300,9 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
                 for dist in 1..=max_search {
                     let nx = x + ddx * dist;
                     let ny = y + ddy * dist;
-                    if nx < 0 || ny < 0 || nx >= w || ny >= h { break; }
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                        break;
+                    }
                     let nidx = (ny * w + nx) as usize;
                     let nb = grid[nidx];
                     let nbh = ((nb >> 8) & 0xFF) as u8;
@@ -232,12 +311,23 @@ pub fn compute_roof_heights(grid: &mut Vec<u32>) {
                     // Wall: has height, not roofed floor, not tree/fire/light/wire/dimmer/crate
                     // Wire(36), dimmer(43), varistor(47), restrictor(46) use height for level, not visual
                     // Crate(33) uses height for item count
-                    let skip = bt_is!(nbt as u32, BT_TREE, BT_FIREPLACE, BT_CEILING_LIGHT,
-                        BT_CRATE, BT_WIRE, BT_DIMMER, BT_RESTRICTOR,
-                        BT_LIQUID_PIPE, BT_PIPE_BRIDGE, BT_WIRE_BRIDGE,
-                        BT_LIQUID_INTAKE, BT_LIQUID_PUMP, BT_LIQUID_OUTPUT);
-                    if nbh > 0 && (nb_flags & 2) == 0 && !skip
-                    {
+                    let skip = bt_is!(
+                        nbt as u32,
+                        BT_TREE,
+                        BT_FIREPLACE,
+                        BT_CEILING_LIGHT,
+                        BT_CRATE,
+                        BT_WIRE,
+                        BT_DIMMER,
+                        BT_RESTRICTOR,
+                        BT_LIQUID_PIPE,
+                        BT_PIPE_BRIDGE,
+                        BT_WIRE_BRIDGE,
+                        BT_LIQUID_INTAKE,
+                        BT_LIQUID_PUMP,
+                        BT_LIQUID_OUTPUT
+                    );
+                    if nbh > 0 && (nb_flags & 2) == 0 && !skip {
                         max_h = max_h.max(nbh);
                         break; // found nearest wall in this direction
                     }
@@ -265,7 +355,9 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
     let w = GRID_W;
 
     let set = |grid: &mut Vec<u32>, x: u32, y: u32, b: u32| {
-        if x < GRID_W && y < GRID_H { grid[(y * w + x) as usize] = b; }
+        if x < GRID_W && y < GRID_H {
+            grid[(y * w + x) as usize] = b;
+        }
     };
 
     // Trees and bushes — clustered in small forests with outliers
@@ -276,7 +368,8 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
         let fy = y - y.floor();
         let hash = |ix: i32, iy: i32| -> f32 {
             let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
-                .wrapping_add(1013904223).wrapping_add(seed);
+                .wrapping_add(1013904223)
+                .wrapping_add(seed);
             (h & 0xFFFF) as f32 / 65535.0
         };
         let a = hash(ix, iy);
@@ -289,40 +382,63 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
     };
 
     let is_bare = |grid: &Vec<u32>, x: u32, y: u32| -> bool {
-        if x >= GRID_W || y >= GRID_H { return false; }
+        if x >= GRID_W || y >= GRID_H {
+            return false;
+        }
         grid[(y * w + x) as usize] == make_block(2, 0, 0)
     };
 
     for y in 0..GRID_H {
         for x in 0..GRID_W {
             let idx = (y * w + x) as usize;
-            if grid[idx] != make_block(2, 0, 0) { continue; }
+            if grid[idx] != make_block(2, 0, 0) {
+                continue;
+            }
 
             // Forest density from multi-octave noise (scale creates ~30-tile clusters)
             let scale = 0.07;
             let n1 = noise(x as f32 * scale, y as f32 * scale);
-            let n2 = noise(x as f32 * scale * 2.3 + 100.0, y as f32 * scale * 2.3 + 200.0) * 0.5;
+            let n2 = noise(
+                x as f32 * scale * 2.3 + 100.0,
+                y as f32 * scale * 2.3 + 200.0,
+            ) * 0.5;
             let density = n1 + n2; // 0.0 - 1.5 range
 
             // Per-tile random hash
-            let h = ((x.wrapping_mul(374761393)) ^ (y.wrapping_mul(668265263))).wrapping_add(1013904223).wrapping_add(seed);
+            let h = ((x.wrapping_mul(374761393)) ^ (y.wrapping_mul(668265263)))
+                .wrapping_add(1013904223)
+                .wrapping_add(seed);
             let r = (h >> 16) & 0xFFF; // 0..4095
 
             // Threshold based on density: dense areas have many trees
-            let tree_threshold = if density > 0.9 { 400 }  // dense forest
-                else if density > 0.7 { 150 }  // moderate forest
-                else if density > 0.5 { 40 }   // sparse
-                else { 8 };                     // rare outlier
+            let tree_threshold = if density > 0.9 {
+                400
+            }
+            // dense forest
+            else if density > 0.7 {
+                150
+            }
+            // moderate forest
+            else if density > 0.5 {
+                40
+            }
+            // sparse
+            else {
+                8
+            }; // rare outlier
 
             if r < tree_threshold {
                 if r < tree_threshold / 5 {
                     // Large 2x2 tree
-                    if is_bare(&grid, x+1, y) && is_bare(&grid, x, y+1) && is_bare(&grid, x+1, y+1) {
+                    if is_bare(&grid, x + 1, y)
+                        && is_bare(&grid, x, y + 1)
+                        && is_bare(&grid, x + 1, y + 1)
+                    {
                         let tree_h = 4 + ((h >> 8) & 0x1) as u8;
                         set(&mut grid, x, y, make_block(8, tree_h, 32 | 0));
-                        set(&mut grid, x+1, y, make_block(8, tree_h, 32 | 8));
-                        set(&mut grid, x, y+1, make_block(8, tree_h, 32 | 16));
-                        set(&mut grid, x+1, y+1, make_block(8, tree_h, 32 | 24));
+                        set(&mut grid, x + 1, y, make_block(8, tree_h, 32 | 8));
+                        set(&mut grid, x, y + 1, make_block(8, tree_h, 32 | 16));
+                        set(&mut grid, x + 1, y + 1, make_block(8, tree_h, 32 | 24));
                     }
                 } else if r < tree_threshold * 3 / 4 {
                     // Medium tree
@@ -337,18 +453,26 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
 
             // Berry bushes: scattered in moderate-density areas, rarer than trees
             let berry_r = ((h >> 4) & 0xFFF) as u32;
-            let berry_threshold = if density > 0.6 && density < 1.0 { 15 }
-                else if density > 0.4 { 5 }
-                else { 1 };
+            let berry_threshold = if density > 0.6 && density < 1.0 {
+                15
+            } else if density > 0.4 {
+                5
+            } else {
+                1
+            };
             if grid[idx] == make_block(2, 0, 0) && berry_r < berry_threshold {
                 grid[idx] = make_block(31, 1, 0);
             }
 
             // Rocks: scattered on bare ground, more common in sparse/open areas
             let rock_r = ((h >> 6) & 0xFFF) as u32;
-            let rock_threshold = if density < 0.3 { 12 }
-                else if density < 0.5 { 6 }
-                else { 2 };
+            let rock_threshold = if density < 0.3 {
+                12
+            } else if density < 0.5 {
+                6
+            } else {
+                2
+            };
             if grid[idx] == make_block(2, 0, 0) && rock_r < rock_threshold {
                 grid[idx] = make_block(34, 0, 0);
             }
@@ -375,78 +499,145 @@ pub fn generate_sample_buildings(grid: &mut [u32]) {
 
     // === Main house (stone, 14x10 exterior) ===
     let h = 4u8;
-    for x in -7..=7 { set(grid, cx+x, cy-5, make_block(BT_STONE as u8, h, 0)); }
-    for x in -7..=7 { set(grid, cx+x, cy+5, make_block(BT_STONE as u8, h, 0)); }
-    for y in -5..=5 { set(grid, cx-7, cy+y, make_block(BT_STONE as u8, h, 0)); }
-    for y in -5..=5 { set(grid, cx+7, cy+y, make_block(BT_STONE as u8, h, 0)); }
+    for x in -7..=7 {
+        set(grid, cx + x, cy - 5, make_block(BT_STONE as u8, h, 0));
+    }
+    for x in -7..=7 {
+        set(grid, cx + x, cy + 5, make_block(BT_STONE as u8, h, 0));
+    }
+    for y in -5..=5 {
+        set(grid, cx - 7, cy + y, make_block(BT_STONE as u8, h, 0));
+    }
+    for y in -5..=5 {
+        set(grid, cx + 7, cy + y, make_block(BT_STONE as u8, h, 0));
+    }
     // Interior: wood floor + roof
     for y in -4..=4 {
         for x in -6..=6 {
-            set(grid, cx+x, cy+y, make_block(BT_WOOD_FLOOR as u8, 0, roof));
+            set(
+                grid,
+                cx + x,
+                cy + y,
+                make_block(BT_WOOD_FLOOR as u8, 0, roof),
+            );
         }
     }
     // Front door (south)
-    set(grid, cx, cy+5, make_block(BT_WALL as u8, 1, 1));
+    set(grid, cx, cy + 5, make_block(BT_WALL as u8, 1, 1));
     // Windows
-    for &wx in &[-4, -3, 3, 4] { set(grid, cx+wx, cy-5, make_block(BT_GLASS as u8, h, 0)); }
-    for &wx in &[-4, 4] { set(grid, cx+wx, cy+5, make_block(BT_GLASS as u8, h, 0)); }
+    for &wx in &[-4, -3, 3, 4] {
+        set(grid, cx + wx, cy - 5, make_block(BT_GLASS as u8, h, 0));
+    }
+    for &wx in &[-4, 4] {
+        set(grid, cx + wx, cy + 5, make_block(BT_GLASS as u8, h, 0));
+    }
     // Dividing wall (two rooms)
-    for y in -4..=1 { set(grid, cx, cy+y, make_block(BT_STONE as u8, h, 0)); }
-    set(grid, cx, cy+2, make_block(BT_WALL as u8, 1, 1)); // interior door
+    for y in -4..=1 {
+        set(grid, cx, cy + y, make_block(BT_STONE as u8, h, 0));
+    }
+    set(grid, cx, cy + 2, make_block(BT_WALL as u8, 1, 1)); // interior door
 
     // Furniture
-    set(grid, cx-4, cy, make_block(BT_FIREPLACE as u8, 5, roof));
-    set(grid, cx-5, cy-3, make_block(BT_BED as u8, 0, roof));
-    set(grid, cx-4, cy-3, make_block(BT_BED as u8, 0, roof | (1 << 3)));
-    set(grid, cx+4, cy-3, make_block(BT_BED as u8, 0, roof));
-    set(grid, cx+5, cy-3, make_block(BT_BED as u8, 0, roof | (1 << 3)));
-    set(grid, cx+3, cy+2, make_block(BT_BENCH as u8, 1, roof));
-    set(grid, cx+4, cy+2, make_block(BT_BENCH as u8, 1, roof | (1 << 3)));
-    set(grid, cx+5, cy+2, make_block(BT_BENCH as u8, 1, roof | (2 << 3)));
-    set(grid, cx-2, cy+3, make_block(BT_CRATE as u8, 0, roof));
+    set(grid, cx - 4, cy, make_block(BT_FIREPLACE as u8, 5, roof));
+    set(grid, cx - 5, cy - 3, make_block(BT_BED as u8, 0, roof));
+    set(
+        grid,
+        cx - 4,
+        cy - 3,
+        make_block(BT_BED as u8, 0, roof | (1 << 3)),
+    );
+    set(grid, cx + 4, cy - 3, make_block(BT_BED as u8, 0, roof));
+    set(
+        grid,
+        cx + 5,
+        cy - 3,
+        make_block(BT_BED as u8, 0, roof | (1 << 3)),
+    );
+    set(grid, cx + 3, cy + 2, make_block(BT_BENCH as u8, 1, roof));
+    set(
+        grid,
+        cx + 4,
+        cy + 2,
+        make_block(BT_BENCH as u8, 1, roof | (1 << 3)),
+    );
+    set(
+        grid,
+        cx + 5,
+        cy + 2,
+        make_block(BT_BENCH as u8, 1, roof | (2 << 3)),
+    );
+    set(grid, cx - 2, cy + 3, make_block(BT_CRATE as u8, 0, roof));
 
     // === Power: solar → wire → battery → wire (through wall) → ceiling light ===
     for sy in 0..3i32 {
         for sx in 0..3i32 {
             let flags = ((sx as u8) << 3) | ((sy as u8) << 5);
-            set(grid, cx+10+sx, cy-2+sy, make_block(BT_SOLAR as u8, 0, flags));
+            set(
+                grid,
+                cx + 10 + sx,
+                cy - 2 + sy,
+                make_block(BT_SOLAR as u8, 0, flags),
+            );
         }
     }
-    set(grid, cx+9, cy, make_block(BT_BATTERY_S as u8, 1, 0));
+    set(grid, cx + 9, cy, make_block(BT_BATTERY_S as u8, 1, 0));
     // Wire run: solar → battery → through wall → ceiling light
-    for x in [8, 9] { set(grid, cx+x, cy-1, make_block(BT_WIRE as u8, 0xF0, 0)); }
-    for x in [8, 9] { set(grid, cx+x, cy, make_block(BT_WIRE as u8, 0xF0, 0)); }
+    for x in [8, 9] {
+        set(grid, cx + x, cy - 1, make_block(BT_WIRE as u8, 0xF0, 0));
+    }
+    for x in [8, 9] {
+        set(grid, cx + x, cy, make_block(BT_WIRE as u8, 0xF0, 0));
+    }
     // Wire overlay on wall
-    set(grid, cx+7, cy, make_block(BT_STONE as u8, h, 0x80));
+    set(grid, cx + 7, cy, make_block(BT_STONE as u8, h, 0x80));
     // Interior wiring + light
-    for x in 1..=6 { set(grid, cx+x, cy, make_block(BT_WIRE as u8, 0xF0, roof)); }
-    set(grid, cx+3, cy-2, make_block(BT_CEILING_LIGHT as u8, 0, roof));
+    for x in 1..=6 {
+        set(grid, cx + x, cy, make_block(BT_WIRE as u8, 0xF0, roof));
+    }
+    set(
+        grid,
+        cx + 3,
+        cy - 2,
+        make_block(BT_CEILING_LIGHT as u8, 0, roof),
+    );
     // Wire branch to light
-    set(grid, cx+3, cy-1, make_block(BT_WIRE as u8, 0xF0, roof));
-    set(grid, cx+3, cy, make_block(BT_WIRE as u8, 0xF0, roof));
+    set(grid, cx + 3, cy - 1, make_block(BT_WIRE as u8, 0xF0, roof));
+    set(grid, cx + 3, cy, make_block(BT_WIRE as u8, 0xF0, roof));
 
     // === Pipe system: inlet (fireplace room) → pump → outlet (outside) ===
-    set(grid, cx-7, cy-1, make_block(BT_INLET as u8, h, 3 << 3)); // dir=west
-    for x in -11..-7 { set(grid, cx+x, cy-1, make_block(BT_PIPE as u8, 0xF0, 0)); }
-    set(grid, cx-9, cy-1, make_block(BT_PUMP as u8, 1, 3 << 3)); // dir=west
-    set(grid, cx-12, cy-1, make_block(BT_OUTLET as u8, 1, 3 << 3));
+    set(grid, cx - 7, cy - 1, make_block(BT_INLET as u8, h, 3 << 3)); // dir=west
+    for x in -11..-7 {
+        set(grid, cx + x, cy - 1, make_block(BT_PIPE as u8, 0xF0, 0));
+    }
+    set(grid, cx - 9, cy - 1, make_block(BT_PUMP as u8, 1, 3 << 3)); // dir=west
+    set(
+        grid,
+        cx - 12,
+        cy - 1,
+        make_block(BT_OUTLET as u8, 1, 3 << 3),
+    );
 
     // === Workshop area (south, outdoors) ===
-    set(grid, cx-3, cy+8, make_block(BT_WORKBENCH as u8, 1, 0));
-    set(grid, cx+3, cy+8, make_block(BT_KILN as u8, 2, 0));
+    set(grid, cx - 3, cy + 8, make_block(BT_WORKBENCH as u8, 1, 0));
+    set(grid, cx + 3, cy + 8, make_block(BT_KILN as u8, 2, 0));
 
     // === Well (on dug ground) ===
-    set(grid, cx+6, cy+8, make_block(BT_WELL as u8, 1, 0));
+    set(grid, cx + 6, cy + 8, make_block(BT_WELL as u8, 1, 0));
 
     // === Outdoor lighting ===
-    set(grid, cx-3, cy+6, make_block(BT_FLOOR_LAMP as u8, 1, 0));
-    set(grid, cx+3, cy+6, make_block(BT_FLOOR_LAMP as u8, 1, 0));
+    set(grid, cx - 3, cy + 6, make_block(BT_FLOOR_LAMP as u8, 1, 0));
+    set(grid, cx + 3, cy + 6, make_block(BT_FLOOR_LAMP as u8, 1, 0));
     // Wall torches
-    set(grid, cx-2, cy-6, make_block(BT_WALL_TORCH as u8, 0, 0)); // north
-    set(grid, cx+2, cy-6, make_block(BT_WALL_TORCH as u8, 0, 0));
+    set(grid, cx - 2, cy - 6, make_block(BT_WALL_TORCH as u8, 0, 0)); // north
+    set(grid, cx + 2, cy - 6, make_block(BT_WALL_TORCH as u8, 0, 0));
 
     // === Cannon (defense, east) ===
-    set(grid, cx+10, cy+5, make_block(BT_CANNON as u8, 2, 1 << 3)); // facing east
+    set(
+        grid,
+        cx + 10,
+        cy + 5,
+        make_block(BT_CANNON as u8, 2, 1 << 3),
+    ); // facing east
 }
 
 /// Generate the water table height map (256x256).
@@ -466,7 +657,8 @@ pub fn generate_water_table_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
         let fy = y - y.floor();
         let hash = |ix: i32, iy: i32| -> f32 {
             let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
-                .wrapping_add(1013904223).wrapping_add(seed.wrapping_mul(7919));
+                .wrapping_add(1013904223)
+                .wrapping_add(seed.wrapping_mul(7919));
             (h & 0xFFFF) as f32 / 65535.0
         };
         let a = hash(ix, iy);
@@ -525,8 +717,10 @@ pub fn compute_terrain_ao(elevation: &[f32]) -> Vec<f32> {
     let dawn_n = norm(dawn_dir);
     let dusk_n = norm(dusk_dir);
     let dirs: [(f32, f32); 6] = [
-        dawn_n, dusk_n,
-        (0.0, -1.0), (0.0, 1.0),
+        dawn_n,
+        dusk_n,
+        (0.0, -1.0),
+        (0.0, 1.0),
         norm((dawn_n.0 + dusk_n.0, dawn_n.1 - 0.5)),
         norm((dusk_n.0 + dawn_n.0, dusk_n.1 + 0.5)),
     ];
@@ -547,7 +741,9 @@ pub fn compute_terrain_ao(elevation: &[f32]) -> Vec<f32> {
                     let sy = y as f32 + dy * step as f32;
                     let sxi = sx as i32;
                     let syi = sy as i32;
-                    if sxi < 0 || syi < 0 || sxi >= w || syi >= h { break; }
+                    if sxi < 0 || syi < 0 || sxi >= w || syi >= h {
+                        break;
+                    }
                     let sidx = (syi * w + sxi) as usize;
                     let ray_h = e + sun_angle * step as f32;
                     let excess = elevation[sidx] - ray_h;
@@ -639,7 +835,8 @@ pub fn generate_elevation_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
         let fy = y - y.floor();
         let hash = |ix: i32, iy: i32| -> f32 {
             let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
-                .wrapping_add(1013904223).wrapping_add(seed.wrapping_mul(6271));
+                .wrapping_add(1013904223)
+                .wrapping_add(seed.wrapping_mul(6271));
             (h & 0xFFFF) as f32 / 65535.0
         };
         let a = hash(ix, iy);
@@ -660,7 +857,7 @@ pub fn generate_elevation_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
             let fy = y as f32;
 
             // Multi-octave noise for hill placement
-            let n1 = noise(fx * 0.025 + 300.0, fy * 0.025 + 700.0);   // broad features
+            let n1 = noise(fx * 0.025 + 300.0, fy * 0.025 + 700.0); // broad features
             let n2 = noise(fx * 0.06 + 500.0, fy * 0.06 + 100.0) * 0.4; // medium detail
             let n3 = noise(fx * 0.15 + 800.0, fy * 0.15 + 400.0) * 0.15; // fine bumps
             let raw = n1 + n2 + n3; // ~0.0–1.55 range
@@ -707,20 +904,35 @@ pub const TERRAIN_LOAM: u32 = 7;
 ///   bits 15-19: soil richness (0-31)
 ///   bits 20-23: moisture retention (0-15)
 ///   bits 24-28: compaction (0-31, foot traffic wear)
-pub fn pack_terrain(terrain_type: u32, vegetation: u32, grain: u32, roughness: u32, richness: u32, moisture_ret: u32) -> u32 {
+pub fn pack_terrain(
+    terrain_type: u32,
+    vegetation: u32,
+    grain: u32,
+    roughness: u32,
+    richness: u32,
+    moisture_ret: u32,
+) -> u32 {
     (terrain_type & 0xF)
-    | ((vegetation & 0x1F) << 4)
-    | ((grain & 0xF) << 9)
-    | ((roughness & 0x3) << 13)
-    | ((richness & 0x1F) << 15)
-    | ((moisture_ret & 0xF) << 20)
+        | ((vegetation & 0x1F) << 4)
+        | ((grain & 0xF) << 9)
+        | ((roughness & 0x3) << 13)
+        | ((richness & 0x1F) << 15)
+        | ((moisture_ret & 0xF) << 20)
     // bits 24-28: compaction, starts at 0
 }
 
-pub fn terrain_type(t: u32) -> u32 { t & 0xF }
-pub fn terrain_richness(t: u32) -> u32 { (t >> 15) & 0x1F }
-pub fn terrain_compaction(t: u32) -> u32 { (t >> 24) & 0x1F }
-pub fn terrain_roughness(t: u32) -> u32 { (t >> 13) & 0x3 }
+pub fn terrain_type(t: u32) -> u32 {
+    t & 0xF
+}
+pub fn terrain_richness(t: u32) -> u32 {
+    (t >> 15) & 0x1F
+}
+pub fn terrain_compaction(t: u32) -> u32 {
+    (t >> 24) & 0x1F
+}
+pub fn terrain_roughness(t: u32) -> u32 {
+    (t >> 13) & 0x3
+}
 
 /// Increment compaction on a terrain tile (clamped to 31).
 pub fn terrain_add_compaction(t: &mut u32, amount: u32) {
@@ -749,7 +961,7 @@ pub struct TerrainParams {
     pub gravel: f32,
     pub peat: f32,
     pub marsh: f32,
-    pub pond_density: f32,  // 0.0 = no ponds, 1.0 = many ponds
+    pub pond_density: f32, // 0.0 = no ponds, 1.0 = many ponds
     pub seed: u32,
 }
 
@@ -776,7 +988,11 @@ pub fn generate_terrain(elevation: &[f32], water_table: &[f32]) -> Vec<u32> {
 }
 
 /// Generate terrain data buffer with explicit parameters.
-pub fn generate_terrain_with_params(elevation: &[f32], water_table: &[f32], params: &TerrainParams) -> Vec<u32> {
+pub fn generate_terrain_with_params(
+    elevation: &[f32],
+    water_table: &[f32],
+    params: &TerrainParams,
+) -> Vec<u32> {
     let w = GRID_W;
     let h = GRID_H;
     let grid_size = (w * h) as usize;
@@ -790,7 +1006,9 @@ pub fn generate_terrain_with_params(elevation: &[f32], water_table: &[f32], para
         let fy = y - y.floor();
         let hash = |ix: i32, iy: i32| -> f32 {
             let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
-                .wrapping_add(1013904223).wrapping_add(s).wrapping_add(seed_extra);
+                .wrapping_add(1013904223)
+                .wrapping_add(s)
+                .wrapping_add(seed_extra);
             (h & 0xFFFF) as f32 / 65535.0
         };
         let a = hash(ix, iy);
@@ -809,8 +1027,16 @@ pub fn generate_terrain_with_params(elevation: &[f32], water_table: &[f32], para
             let fx = x as f32;
             let fy = y as f32;
 
-            let elev = if idx < elevation.len() { elevation[idx] } else { 0.0 };
-            let wt = if idx < water_table.len() { water_table[idx] } else { -2.0 };
+            let elev = if idx < elevation.len() {
+                elevation[idx]
+            } else {
+                0.0
+            };
+            let wt = if idx < water_table.len() {
+                water_table[idx]
+            } else {
+                -2.0
+            };
 
             // --- Biome noise layers ---
             // Moisture gradient (noise-driven)
@@ -834,29 +1060,63 @@ pub fn generate_terrain_with_params(elevation: &[f32], water_table: &[f32], para
             // --- Terrain type assignment (weighted scoring) ---
             // Each type gets a score: natural affinity * param weight + noise variation
             let terrain_type = if pond_factor > pond_thresh + 0.1 {
-                TERRAIN_MARSH  // pond center
+                TERRAIN_MARSH // pond center
             } else if pond_factor > pond_thresh {
-                TERRAIN_MARSH  // marsh ring
+                TERRAIN_MARSH // marsh ring
             } else if pond_factor > pond_thresh - 0.15 && params.clay > 0.01 {
-                TERRAIN_CLAY   // clay ring around ponds
+                TERRAIN_CLAY // clay ring around ponds
             } else {
                 // Score = weight * (noise_region + environmental_bias)
                 // Each type uses its own noise field for coherent regions.
                 // Environmental factors provide subtle bias (max ±0.15), noise dominates (0.0-1.0).
                 let scores: [(u32, f32); 8] = [
-                    (TERRAIN_GRASS,  params.grass  * (noise_seeded(fx * 0.06, fy * 0.06, 10) + (1.0 - rockiness) * 0.1)),
-                    (TERRAIN_LOAM,   params.loam   * (noise_seeded(fx * 0.06, fy * 0.06, 20) + (1.0 - aridity) * 0.15)),
-                    (TERRAIN_CLAY,   params.clay   * (noise_seeded(fx * 0.06, fy * 0.06, 30) + (1.0 - aridity) * 0.1)),
-                    (TERRAIN_CHALKY, params.chalky * (noise_seeded(fx * 0.06, fy * 0.06, 40) + aridity * 0.1 + rockiness * 0.05)),
-                    (TERRAIN_ROCKY,  params.rocky  * (noise_seeded(fx * 0.06, fy * 0.06, 50) + rockiness * 0.15)),
-                    (TERRAIN_GRAVEL, params.gravel * (noise_seeded(fx * 0.06, fy * 0.06, 60) + rockiness * 0.1)),
-                    (TERRAIN_PEAT,   params.peat   * (noise_seeded(fx * 0.06, fy * 0.06, 70) + moisture * 0.15)),
-                    (TERRAIN_MARSH,  params.marsh  * (noise_seeded(fx * 0.06, fy * 0.06, 80) + (wt + 2.0).max(0.0) * 0.1)),
+                    (
+                        TERRAIN_GRASS,
+                        params.grass
+                            * (noise_seeded(fx * 0.06, fy * 0.06, 10) + (1.0 - rockiness) * 0.1),
+                    ),
+                    (
+                        TERRAIN_LOAM,
+                        params.loam
+                            * (noise_seeded(fx * 0.06, fy * 0.06, 20) + (1.0 - aridity) * 0.15),
+                    ),
+                    (
+                        TERRAIN_CLAY,
+                        params.clay
+                            * (noise_seeded(fx * 0.06, fy * 0.06, 30) + (1.0 - aridity) * 0.1),
+                    ),
+                    (
+                        TERRAIN_CHALKY,
+                        params.chalky
+                            * (noise_seeded(fx * 0.06, fy * 0.06, 40)
+                                + aridity * 0.1
+                                + rockiness * 0.05),
+                    ),
+                    (
+                        TERRAIN_ROCKY,
+                        params.rocky * (noise_seeded(fx * 0.06, fy * 0.06, 50) + rockiness * 0.15),
+                    ),
+                    (
+                        TERRAIN_GRAVEL,
+                        params.gravel * (noise_seeded(fx * 0.06, fy * 0.06, 60) + rockiness * 0.1),
+                    ),
+                    (
+                        TERRAIN_PEAT,
+                        params.peat * (noise_seeded(fx * 0.06, fy * 0.06, 70) + moisture * 0.15),
+                    ),
+                    (
+                        TERRAIN_MARSH,
+                        params.marsh
+                            * (noise_seeded(fx * 0.06, fy * 0.06, 80) + (wt + 2.0).max(0.0) * 0.1),
+                    ),
                 ];
                 let mut best_type = TERRAIN_GRASS;
                 let mut best_score = -1.0f32;
                 for &(tt, score) in &scores {
-                    if score > best_score { best_score = score; best_type = tt; }
+                    if score > best_score {
+                        best_score = score;
+                        best_type = tt;
+                    }
                 }
                 best_type
             };
@@ -911,7 +1171,8 @@ pub fn generate_terrain_with_params(elevation: &[f32], water_table: &[f32], para
                 _ => 0.4,
             };
             let rich_noise = noise(fx * 0.08 + 5000.0, fy * 0.08 + 5000.0);
-            let richness = ((richness_base + (rich_noise - 0.5) * 0.3) * 31.0).clamp(0.0, 31.0) as u32;
+            let richness =
+                ((richness_base + (rich_noise - 0.5) * 0.3) * 31.0).clamp(0.0, 31.0) as u32;
 
             // --- Moisture retention ---
             let moist_ret = match terrain_type {
@@ -926,7 +1187,14 @@ pub fn generate_terrain_with_params(elevation: &[f32], water_table: &[f32], para
                 _ => 6,
             };
 
-            terrain[idx] = pack_terrain(terrain_type, vegetation, grain, roughness, richness, moist_ret);
+            terrain[idx] = pack_terrain(
+                terrain_type,
+                vegetation,
+                grain,
+                roughness,
+                richness,
+                moist_ret,
+            );
         }
     }
 
@@ -944,9 +1212,21 @@ mod tests {
             for h in [0u8, 1, 3, 5, 128, 255] {
                 for f in [0u8, 1, 2, 4, 7, 63] {
                     let block = make_block(bt, h, f);
-                    assert_eq!(block_type_rs(block), bt as u32, "type mismatch for ({bt},{h},{f})");
-                    assert_eq!(block_height_rs(block), h, "height mismatch for ({bt},{h},{f})");
-                    assert_eq!(block_flags_rs(block), f, "flags mismatch for ({bt},{h},{f})");
+                    assert_eq!(
+                        block_type_rs(block),
+                        bt as u32,
+                        "type mismatch for ({bt},{h},{f})"
+                    );
+                    assert_eq!(
+                        block_height_rs(block),
+                        h,
+                        "height mismatch for ({bt},{h},{f})"
+                    );
+                    assert_eq!(
+                        block_flags_rs(block),
+                        f,
+                        "flags mismatch for ({bt},{h},{f})"
+                    );
                 }
             }
         }
@@ -1010,7 +1290,11 @@ mod tests {
 
         // Interior tiles should have roof_height = 3 (from walls)
         let interior = grid[(11 * w + 11) as usize];
-        assert_eq!(roof_height_rs(interior), 3, "interior should have roof height 3");
+        assert_eq!(
+            roof_height_rs(interior),
+            3,
+            "interior should have roof height 3"
+        );
 
         // Wall tiles should also have roof_height = 3
         let wall = grid[(10 * w + 11) as usize];
@@ -1018,7 +1302,11 @@ mod tests {
 
         // Outdoor tile should have roof_height = 0
         let outdoor = grid[(5 * w + 5) as usize];
-        assert_eq!(roof_height_rs(outdoor), 0, "outdoor should have roof height 0");
+        assert_eq!(
+            roof_height_rs(outdoor),
+            0,
+            "outdoor should have roof height 0"
+        );
     }
 
     #[test]
@@ -1078,16 +1366,25 @@ mod tests {
     /// Helper: check if block type `place_id` can be placed on a tile containing `existing_bt`
     /// Must match the actual placement rules in main.rs handle_click and blueprint validation.
     fn can_place_on_block(place_id: u8, existing_bt: u32, existing_h: u8) -> bool {
-        let empty_ground = existing_h == 0 && (existing_bt == BT_AIR || existing_bt == BT_DIRT
-            || existing_bt == BT_WOOD_FLOOR || existing_bt == BT_STONE_FLOOR || existing_bt == BT_CONCRETE_FLOOR);
+        let empty_ground = existing_h == 0
+            && (existing_bt == BT_AIR
+                || existing_bt == BT_DIRT
+                || existing_bt == BT_WOOD_FLOOR
+                || existing_bt == BT_STONE_FLOOR
+                || existing_bt == BT_CONCRETE_FLOOR);
         let pid = place_id as u32;
         empty_ground
             || (pid == BT_WIRE && existing_bt != BT_WIRE)
             || (pid == BT_PIPE && (existing_bt == BT_PIPE || existing_bt == BT_PIPE_BRIDGE))
-            || (pid == BT_RESTRICTOR && (existing_bt == BT_PIPE || existing_bt == BT_RESTRICTOR || existing_bt == BT_PIPE_BRIDGE))
-            || (pid == BT_LIQUID_PIPE && (existing_bt == BT_LIQUID_PIPE || existing_bt == BT_PIPE_BRIDGE))
+            || (pid == BT_RESTRICTOR
+                && (existing_bt == BT_PIPE
+                    || existing_bt == BT_RESTRICTOR
+                    || existing_bt == BT_PIPE_BRIDGE))
+            || (pid == BT_LIQUID_PIPE
+                && (existing_bt == BT_LIQUID_PIPE || existing_bt == BT_PIPE_BRIDGE))
             || (pid == BT_PUMP && existing_bt == BT_PIPE)
-            || ((pid == BT_SWITCH || pid == BT_DIMMER || pid == BT_BREAKER) && (existing_bt == BT_WIRE || existing_bt == BT_AIR || existing_bt == BT_DIRT))
+            || ((pid == BT_SWITCH || pid == BT_DIMMER || pid == BT_BREAKER)
+                && (existing_bt == BT_WIRE || existing_bt == BT_AIR || existing_bt == BT_DIRT))
     }
 
     #[test]
@@ -1095,8 +1392,12 @@ mod tests {
         // Every defined block type ID should be < NUM_MATERIALS
         let max_id = 54u32; // BT_LIQUID_OUTPUT
         for id in 0..=max_id {
-            assert!(id < crate::materials::NUM_MATERIALS as u32,
-                "Block ID {} exceeds NUM_MATERIALS ({})", id, crate::materials::NUM_MATERIALS);
+            assert!(
+                id < crate::materials::NUM_MATERIALS as u32,
+                "Block ID {} exceeds NUM_MATERIALS ({})",
+                id,
+                crate::materials::NUM_MATERIALS
+            );
         }
     }
 
@@ -1125,15 +1426,23 @@ mod tests {
     fn test_wire_placeable_anywhere() {
         assert!(can_place_on_block(BT_WIRE as u8, BT_DIRT, 0));
         assert!(can_place_on_block(BT_WIRE as u8, BT_STONE, 3)); // on walls
-        assert!(can_place_on_block(BT_WIRE as u8, BT_PIPE, 1));  // on pipes
+        assert!(can_place_on_block(BT_WIRE as u8, BT_PIPE, 1)); // on pipes
         assert!(!can_place_on_block(BT_WIRE as u8, BT_WIRE, 0)); // NOT on existing wire
     }
 
     #[test]
     fn test_power_equipment_on_wire_or_ground() {
         for &id in &[BT_SWITCH, BT_DIMMER, BT_BREAKER] {
-            assert!(can_place_on_block(id as u8, BT_WIRE, 0), "ID {} should place on wire", id);
-            assert!(can_place_on_block(id as u8, BT_DIRT, 0), "ID {} should place on ground", id);
+            assert!(
+                can_place_on_block(id as u8, BT_WIRE, 0),
+                "ID {} should place on wire",
+                id
+            );
+            assert!(
+                can_place_on_block(id as u8, BT_DIRT, 0),
+                "ID {} should place on ground",
+                id
+            );
         }
     }
 
@@ -1158,12 +1467,21 @@ mod tests {
     #[test]
     fn test_is_conductor_includes_all_power_blocks() {
         // All power grid components should be recognized as conductors
-        let power_ids: &[u32] = &[36, 37, 38, 39, 40, 41, 42, 43, 45, 48, 51, 7, 10, 11, 12, 16];
+        let power_ids: &[u32] = &[
+            36, 37, 38, 39, 40, 41, 42, 43, 45, 48, 51, 7, 10, 11, 12, 16,
+        ];
         for &id in power_ids {
-            assert!(is_conductor_rs(id, 0), "Block type {} should be a conductor", id);
+            assert!(
+                is_conductor_rs(id, 0),
+                "Block type {} should be a conductor",
+                id
+            );
         }
         // Wire overlay flag
-        assert!(is_conductor_rs(1, 0x80), "Wall with wire overlay should be conductor");
+        assert!(
+            is_conductor_rs(1, 0x80),
+            "Wall with wire overlay should be conductor"
+        );
         // Non-conductors
         assert!(!is_conductor_rs(2, 0), "Dirt should not be conductor");
         assert!(!is_conductor_rs(15, 0), "Pipe should not be conductor");
@@ -1171,27 +1489,43 @@ mod tests {
 
     #[test]
     fn test_bridge_connects_to_gas_pipes() {
-        assert!(can_place_on_block(BT_PIPE as u8, BT_PIPE_BRIDGE, 1),
-            "Gas pipe should be placeable on bridge");
-        assert!(can_place_on_block(BT_RESTRICTOR as u8, BT_PIPE_BRIDGE, 1),
-            "Restrictor should be placeable on bridge");
+        assert!(
+            can_place_on_block(BT_PIPE as u8, BT_PIPE_BRIDGE, 1),
+            "Gas pipe should be placeable on bridge"
+        );
+        assert!(
+            can_place_on_block(BT_RESTRICTOR as u8, BT_PIPE_BRIDGE, 1),
+            "Restrictor should be placeable on bridge"
+        );
     }
 
     #[test]
     fn test_bridge_connects_to_liquid_pipes() {
-        assert!(can_place_on_block(BT_LIQUID_PIPE as u8, BT_PIPE_BRIDGE, 1),
-            "Liquid pipe should be placeable on bridge");
+        assert!(
+            can_place_on_block(BT_LIQUID_PIPE as u8, BT_PIPE_BRIDGE, 1),
+            "Liquid pipe should be placeable on bridge"
+        );
     }
 
     /// Simulate intake tile assignment: given two block types, determine if placement is valid.
     /// Returns (ground_idx, water_idx) or None if invalid.
     fn intake_valid(bt0: u32, bh0: u8, bt1: u32, bh1: u8) -> Option<(usize, usize)> {
-        let is_ground = |bt: u32, bh: u8| bh == 0 && (bt == BT_AIR || bt == BT_DIRT
-            || bt == BT_WOOD_FLOOR || bt == BT_STONE_FLOOR || bt == BT_CONCRETE_FLOOR);
+        let is_ground = |bt: u32, bh: u8| {
+            bh == 0
+                && (bt == BT_AIR
+                    || bt == BT_DIRT
+                    || bt == BT_WOOD_FLOOR
+                    || bt == BT_STONE_FLOOR
+                    || bt == BT_CONCRETE_FLOOR)
+        };
         let is_water = |bt: u32| bt == BT_WATER || bt == BT_DUG_GROUND;
-        if is_ground(bt0, bh0) && is_water(bt1) { Some((0, 1)) }
-        else if is_water(bt0) && is_ground(bt1, bh1) { Some((1, 0)) }
-        else { None }
+        if is_ground(bt0, bh0) && is_water(bt1) {
+            Some((0, 1))
+        } else if is_water(bt0) && is_ground(bt1, bh1) {
+            Some((1, 0))
+        } else {
+            None
+        }
     }
 
     #[test]
@@ -1206,7 +1540,11 @@ mod tests {
         // Water first, ground second (reversed click direction)
         let r = intake_valid(BT_WATER, 0, BT_DIRT, 0);
         assert!(r.is_some());
-        assert_eq!(r.unwrap(), (1, 0), "ground should be index 1, water index 0");
+        assert_eq!(
+            r.unwrap(),
+            (1, 0),
+            "ground should be index 1, water index 0"
+        );
     }
 
     #[test]
@@ -1229,7 +1567,7 @@ mod tests {
 
     #[test]
     fn test_liquid_components_in_network() {
-        use crate::pipes::{is_liquid_pipe_component, is_gas_pipe_component};
+        use crate::pipes::{is_gas_pipe_component, is_liquid_pipe_component};
         // Liquid network includes: liquid pipe, bridge, intake, pump, output
         assert!(is_liquid_pipe_component(49), "Liquid pipe");
         assert!(is_liquid_pipe_component(50), "Bridge in liquid network");
@@ -1240,39 +1578,74 @@ mod tests {
         assert!(is_gas_pipe_component(50), "Bridge in gas network");
         // Cross-isolation: liquid components not in gas network
         assert!(!is_gas_pipe_component(49), "Liquid pipe NOT in gas network");
-        assert!(!is_gas_pipe_component(52), "Liquid intake NOT in gas network");
+        assert!(
+            !is_gas_pipe_component(52),
+            "Liquid intake NOT in gas network"
+        );
     }
 
     #[test]
     fn test_liquid_pipes_walkable() {
         // All liquid pipe components should be recognized as walkable pipe blocks
         // (walkability is checked in pleb.rs using the same block type IDs)
-        let liquid_types: &[u32] = &[BT_LIQUID_PIPE, BT_LIQUID_INTAKE, BT_LIQUID_PUMP, BT_LIQUID_OUTPUT];
+        let liquid_types: &[u32] = &[
+            BT_LIQUID_PIPE,
+            BT_LIQUID_INTAKE,
+            BT_LIQUID_PUMP,
+            BT_LIQUID_OUTPUT,
+        ];
         for &bt in liquid_types {
             // The pipe walkability check: bt matches AND height <= 1
-            let is_any_pipe = (bt >= 15 && bt <= 20) || bt == BT_RESTRICTOR
-                || bt == BT_LIQUID_PIPE || bt == BT_PIPE_BRIDGE
-                || bt == BT_LIQUID_INTAKE || bt == BT_LIQUID_PUMP || bt == BT_LIQUID_OUTPUT;
-            assert!(is_any_pipe, "Block type {} should be walkable as a pipe", bt);
+            let is_any_pipe = (bt >= 15 && bt <= 20)
+                || bt == BT_RESTRICTOR
+                || bt == BT_LIQUID_PIPE
+                || bt == BT_PIPE_BRIDGE
+                || bt == BT_LIQUID_INTAKE
+                || bt == BT_LIQUID_PUMP
+                || bt == BT_LIQUID_OUTPUT;
+            assert!(
+                is_any_pipe,
+                "Block type {} should be walkable as a pipe",
+                bt
+            );
         }
     }
 
     #[test]
     fn test_gas_pipe_types_walkable() {
-        let gas_types: &[u32] = &[BT_PIPE, BT_PUMP, BT_TANK, BT_VALVE, BT_OUTLET, BT_INLET, BT_RESTRICTOR];
+        let gas_types: &[u32] = &[
+            BT_PIPE,
+            BT_PUMP,
+            BT_TANK,
+            BT_VALVE,
+            BT_OUTLET,
+            BT_INLET,
+            BT_RESTRICTOR,
+        ];
         for &bt in gas_types {
-            let is_any_pipe = (bt >= 15 && bt <= 20) || bt == BT_RESTRICTOR
-                || bt == BT_LIQUID_PIPE || bt == BT_PIPE_BRIDGE
-                || bt == BT_LIQUID_INTAKE || bt == BT_LIQUID_PUMP || bt == BT_LIQUID_OUTPUT;
-            assert!(is_any_pipe, "Block type {} should be walkable as a pipe", bt);
+            let is_any_pipe = (bt >= 15 && bt <= 20)
+                || bt == BT_RESTRICTOR
+                || bt == BT_LIQUID_PIPE
+                || bt == BT_PIPE_BRIDGE
+                || bt == BT_LIQUID_INTAKE
+                || bt == BT_LIQUID_PUMP
+                || bt == BT_LIQUID_OUTPUT;
+            assert!(
+                is_any_pipe,
+                "Block type {} should be walkable as a pipe",
+                bt
+            );
         }
     }
 
     #[test]
     fn test_num_materials_covers_all_blocks() {
         let highest = BT_LIQUID_OUTPUT; // 54
-        assert!(crate::materials::NUM_MATERIALS > highest as usize,
+        assert!(
+            crate::materials::NUM_MATERIALS > highest as usize,
             "NUM_MATERIALS ({}) must be > highest block ID ({})",
-            crate::materials::NUM_MATERIALS, highest);
+            crate::materials::NUM_MATERIALS,
+            highest
+        );
     }
 }

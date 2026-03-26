@@ -31,9 +31,15 @@ impl App {
     /// Get the 9 tiles a solar panel occupies at (bx, by) — 3×3 grid
     pub(crate) fn solar_tiles(&self, bx: i32, by: i32) -> [(i32, i32); 9] {
         [
-            (bx, by),     (bx + 1, by),     (bx + 2, by),
-            (bx, by + 1), (bx + 1, by + 1), (bx + 2, by + 1),
-            (bx, by + 2), (bx + 1, by + 2), (bx + 2, by + 2),
+            (bx, by),
+            (bx + 1, by),
+            (bx + 2, by),
+            (bx, by + 1),
+            (bx + 1, by + 1),
+            (bx + 2, by + 1),
+            (bx, by + 2),
+            (bx + 1, by + 2),
+            (bx + 2, by + 2),
         ]
     }
 
@@ -50,22 +56,26 @@ impl App {
     /// Bridge tiles: 3-tile line in the rotation direction.
     pub(crate) fn bridge_tiles(&self, bx: i32, by: i32, rotation: u32) -> [(i32, i32); 3] {
         match rotation {
-            0 => [(bx, by), (bx, by + 1), (bx, by + 2)],     // N: goes south
-            1 => [(bx, by), (bx + 1, by), (bx + 2, by)],     // E: goes east
-            2 => [(bx, by), (bx, by - 1), (bx, by - 2)],     // S: goes north
-            _ => [(bx, by), (bx - 1, by), (bx - 2, by)],     // W: goes west
+            0 => [(bx, by), (bx, by + 1), (bx, by + 2)], // N: goes south
+            1 => [(bx, by), (bx + 1, by), (bx + 2, by)], // E: goes east
+            2 => [(bx, by), (bx, by - 1), (bx, by - 2)], // S: goes north
+            _ => [(bx, by), (bx - 1, by), (bx - 2, by)], // W: goes west
         }
     }
 
     /// For liquid intake: determine which of the 2 tiles is ground (seg 0) and which is water (seg 1).
     /// Returns (Some(ground_index), Some(water_index)) or (None, None) if invalid.
-    pub(crate) fn intake_tile_assignment(&self, tiles: &[(i32, i32); 2]) -> (Option<usize>, Option<usize>) {
+    pub(crate) fn intake_tile_assignment(
+        &self,
+        tiles: &[(i32, i32); 2],
+    ) -> (Option<usize>, Option<usize>) {
         let in_bounds = |x: i32, y: i32| x >= 0 && y >= 0 && x < GRID_W as i32 && y < GRID_H as i32;
         if !in_bounds(tiles[0].0, tiles[0].1) || !in_bounds(tiles[1].0, tiles[1].1) {
             return (None, None);
         }
         let bt = |i: usize| -> u32 {
-            (self.grid_data[(tiles[i].1 as u32 * GRID_W + tiles[i].0 as u32) as usize] & 0xFF) as u32
+            (self.grid_data[(tiles[i].1 as u32 * GRID_W + tiles[i].0 as u32) as usize] & 0xFF)
+                as u32
         };
         let is_water = |b: u32| b == BT_WATER || b == BT_DUG_GROUND;
         let is_ground = |i: usize| self.can_place_at(tiles[i].0, tiles[i].1);
@@ -87,7 +97,9 @@ impl App {
         for &(dx, dy, dir) in &dirs {
             let nx = x + dx;
             let ny = y + dy;
-            if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+            if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+                continue;
+            }
             let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
             let nb = self.grid_data[nidx];
             let nbt = block_type_rs(nb);
@@ -103,11 +115,16 @@ impl App {
     /// `flags_fn(tile_index, roof_flag) -> combined_flags` computes the flags byte for each tile.
     /// Returns true if placement succeeded.
     pub(crate) fn place_multi_tiles(
-        &mut self, tiles: &[(i32, i32)], block_id: u8, height: u8,
+        &mut self,
+        tiles: &[(i32, i32)],
+        block_id: u8,
+        height: u8,
         flags_fn: impl Fn(usize, u8) -> u8,
     ) -> bool {
         let all_valid = tiles.iter().all(|&(tx, ty)| self.can_place_at(tx, ty));
-        if !all_valid { return false; }
+        if !all_valid {
+            return false;
+        }
         for (i, &(tx, ty)) in tiles.iter().enumerate() {
             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
             let (roof_flag, roof_h) = extract_roof_data(self.grid_data[tidx]);
@@ -122,7 +139,9 @@ impl App {
     /// If multiple walls, uses build_rotation to disambiguate.
     /// Returns None if no adjacent wall or tile isn't floor-level.
     pub(crate) fn wall_adjacent_direction(&self, x: i32, y: i32) -> Option<u32> {
-        if !self.can_place_at(x, y) { return None; }
+        if !self.can_place_at(x, y) {
+            return None;
+        }
         let walls = self.find_wall_neighbors(x, y);
         match walls.len() {
             0 => None,
@@ -170,7 +189,9 @@ impl App {
                     let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                     if nidx < self.elevation_data.len() {
                         let diff = (self.elevation_data[nidx] - elev).abs();
-                        if diff > 1.0 { return false; } // too steep
+                        if diff > 1.0 {
+                            return false;
+                        } // too steep
                     }
                 }
             }
@@ -260,16 +281,26 @@ impl App {
         let mut tiles = Vec::new();
         for x in min_x..=max_x {
             tiles.push((x, min_y));
-            if max_y != min_y { tiles.push((x, max_y)); }
+            if max_y != min_y {
+                tiles.push((x, max_y));
+            }
         }
         for y in (min_y + 1)..max_y {
             tiles.push((min_x, y));
-            if max_x != min_x { tiles.push((max_x, y)); }
+            if max_x != min_x {
+                tiles.push((max_x, y));
+            }
         }
         tiles
     }
 
-    pub(crate) fn diagonal_wall_tiles(x0: i32, y0: i32, x1: i32, y1: i32, rotation: u32) -> Vec<(i32, i32, u8)> {
+    pub(crate) fn diagonal_wall_tiles(
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+        rotation: u32,
+    ) -> Vec<(i32, i32, u8)> {
         compute_diagonal_wall_tiles(x0, y0, x1, y1, rotation)
     }
 
@@ -284,7 +315,9 @@ impl App {
             let mut x = x0;
             loop {
                 tiles.push((x, y0));
-                if x == x1 { break; }
+                if x == x1 {
+                    break;
+                }
                 x += step;
             }
         } else {
@@ -293,7 +326,9 @@ impl App {
             let mut y = y0;
             loop {
                 tiles.push((x0, y));
-                if y == y1 { break; }
+                if y == y1 {
+                    break;
+                }
                 y += step;
             }
         }
@@ -320,14 +355,31 @@ impl App {
         let max_dist = 6i32;
         for dy in -max_dist..=max_dist {
             for dx in -max_dist..=max_dist {
-                if dx.abs() + dy.abs() > max_dist { continue; }
+                if dx.abs() + dy.abs() > max_dist {
+                    continue;
+                }
                 let nx = x + dx;
                 let ny = y + dy;
-                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+                    continue;
+                }
                 let b = grid[(ny as u32 * GRID_W + nx as u32) as usize];
                 let bt = b & 0xFF;
                 let bh = (b >> 8) & 0xFF;
-                if bh > 0 && bt_is!(bt, BT_STONE, BT_WALL, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) {
+                if bh > 0
+                    && bt_is!(
+                        bt,
+                        BT_STONE,
+                        BT_WALL,
+                        BT_GLASS,
+                        BT_INSULATED,
+                        BT_WOOD_WALL,
+                        BT_STEEL_WALL,
+                        BT_SANDSTONE,
+                        BT_GRANITE,
+                        BT_LIMESTONE
+                    )
+                {
                     return true;
                 }
             }
@@ -341,11 +393,14 @@ impl App {
         if self.build_tool == BuildTool::GrowingZone {
             let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
             for (tx, ty) in tiles {
-                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
                 let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                 let bt = self.grid_data[idx] & 0xFF;
                 if bt == BT_DIRT {
-                    if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing) {
+                    if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing)
+                    {
                         zone.tiles.insert((tx, ty));
                     } else {
                         let mut zone = Zone::new(ZoneKind::Growing);
@@ -360,11 +415,15 @@ impl App {
         if self.build_tool == BuildTool::StorageZone {
             let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
             for (tx, ty) in tiles {
-                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
                 let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                 let bh = (self.grid_data[idx] >> 8) & 0xFF;
-                if bh == 0 { // only floor-level tiles
-                    if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Storage) {
+                if bh == 0 {
+                    // only floor-level tiles
+                    if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Storage)
+                    {
                         zone.tiles.insert((tx, ty));
                     } else {
                         let mut zone = Zone::new(ZoneKind::Storage);
@@ -380,12 +439,15 @@ impl App {
         if self.build_tool == BuildTool::Roof {
             let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
             for (tx, ty) in tiles {
-                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
                 if Self::can_support_roof(&self.grid_data, tx, ty) {
                     let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                     let block = self.grid_data[idx];
                     let bh = block_height_rs(block) as u32;
-                    if bh == 0 { // only floor-level tiles
+                    if bh == 0 {
+                        // only floor-level tiles
                         self.grid_data[idx] |= 2 << 16; // set roof flag (bit 1)
                         self.grid_dirty = true;
                     }
@@ -398,7 +460,9 @@ impl App {
         if self.build_tool == BuildTool::RemoveFloor {
             let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
             for (tx, ty) in tiles {
-                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
                 let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                 let block = self.grid_data[idx];
                 let bt = block & 0xFF;
@@ -416,7 +480,9 @@ impl App {
         if self.build_tool == BuildTool::RemoveRoof {
             let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
             for (tx, ty) in tiles {
-                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
                 let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                 let block = self.grid_data[idx];
                 let has_roof = (block >> 16) & 2 != 0;
@@ -433,7 +499,9 @@ impl App {
         if self.build_tool == BuildTool::Place(44) {
             let diag_tiles = Self::diagonal_wall_tiles(sx, sy, ex, ey, self.build_rotation);
             for (tx, ty, variant) in diag_tiles {
-                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
                 let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                 let block = self.grid_data[idx];
                 let bt = block_type_rs(block);
@@ -446,7 +514,9 @@ impl App {
                     self.grid_dirty = true;
                 }
             }
-            if self.grid_dirty { compute_roof_heights(&mut self.grid_data); }
+            if self.grid_dirty {
+                compute_roof_heights(&mut self.grid_data);
+            }
             return;
         }
 
@@ -454,11 +524,18 @@ impl App {
         let (block_type_id, tiles) = match self.build_tool {
             BuildTool::Destroy => (0u32, Self::filled_rect_tiles(sx, sy, ex, ey)),
             BuildTool::Place(id) => {
-                let shape = reg.get(id).and_then(|d| d.placement.as_ref()).and_then(|p| p.drag.as_ref());
+                let shape = reg
+                    .get(id)
+                    .and_then(|d| d.placement.as_ref())
+                    .and_then(|p| p.drag.as_ref());
                 let t = match shape {
                     Some(block_defs::DragShape::Line) => Self::line_tiles(sx, sy, ex, ey),
-                    Some(block_defs::DragShape::FilledRect) => Self::filled_rect_tiles(sx, sy, ex, ey),
-                    Some(block_defs::DragShape::HollowRect) => Self::hollow_rect_tiles(sx, sy, ex, ey),
+                    Some(block_defs::DragShape::FilledRect) => {
+                        Self::filled_rect_tiles(sx, sy, ex, ey)
+                    }
+                    Some(block_defs::DragShape::HollowRect) => {
+                        Self::hollow_rect_tiles(sx, sy, ex, ey)
+                    }
                     _ => return,
                 };
                 (id, t)
@@ -475,7 +552,9 @@ impl App {
         let is_line_type = bt_is!(bid, BT_PIPE, BT_WIRE, BT_RESTRICTOR, BT_LIQUID_PIPE);
 
         for (ti, &(tx, ty)) in tiles.iter().enumerate() {
-            if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { continue; }
+            if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                continue;
+            }
             if self.build_tool == BuildTool::Destroy {
                 self.destroy_block_at(tx, ty);
             } else {
@@ -485,39 +564,69 @@ impl App {
                 let bh = block_height_rs(block) as u32;
                 let wire_anywhere = bid == BT_WIRE;
                 let btu = bt as u32;
-                let gas_pipe_compat = bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(btu, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
-                let liquid_pipe_compat = bid == BT_LIQUID_PIPE && bt_is!(btu, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
+                let gas_pipe_compat = bt_is!(bid, BT_PIPE, BT_RESTRICTOR)
+                    && bt_is!(btu, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
+                let liquid_pipe_compat =
+                    bid == BT_LIQUID_PIPE && bt_is!(btu, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
                 let pipe_compat = gas_pipe_compat || liquid_pipe_compat;
                 let same_type = btu == bid || pipe_compat; // allow pipe↔restrictor
-                if ((btu == BT_AIR || btu == BT_DIRT) && bh == 0) || (wire_anywhere && btu != BT_WIRE) || (is_line_type && same_type) {
+                if ((btu == BT_AIR || btu == BT_DIRT) && bh == 0)
+                    || (wire_anywhere && btu != BT_WIRE)
+                    || (is_line_type && same_type)
+                {
                     // Compute connection mask from neighbors in the line
                     let mut conn: u8 = 0;
                     if is_line_type && tiles.len() > 1 {
                         // Connect to predecessor/successor in the drag line
                         if ti > 0 {
                             let (px, py) = tiles[ti - 1];
-                            if px < tx { conn |= CONN_W; }
-                            if px > tx { conn |= CONN_E; }
-                            if py < ty { conn |= CONN_N; }
-                            if py > ty { conn |= CONN_S; }
+                            if px < tx {
+                                conn |= CONN_W;
+                            }
+                            if px > tx {
+                                conn |= CONN_E;
+                            }
+                            if py < ty {
+                                conn |= CONN_N;
+                            }
+                            if py > ty {
+                                conn |= CONN_S;
+                            }
                         }
                         if ti + 1 < tiles.len() {
                             let (nx, ny) = tiles[ti + 1];
-                            if nx > tx { conn |= CONN_E; }
-                            if nx < tx { conn |= CONN_W; }
-                            if ny > ty { conn |= CONN_S; }
-                            if ny < ty { conn |= CONN_N; }
+                            if nx > tx {
+                                conn |= CONN_E;
+                            }
+                            if nx < tx {
+                                conn |= CONN_W;
+                            }
+                            if ny > ty {
+                                conn |= CONN_S;
+                            }
+                            if ny < ty {
+                                conn |= CONN_N;
+                            }
                         }
                         // Also connect to existing adjacent same-type pipes/wires outside the drag
-                        for &(ndx, ndy, mask) in &[(0i32,-1i32,CONN_N),(0,1,CONN_S),(1,0,CONN_E),(-1,0,CONN_W)] {
+                        for &(ndx, ndy, mask) in &[
+                            (0i32, -1i32, CONN_N),
+                            (0, 1, CONN_S),
+                            (1, 0, CONN_E),
+                            (-1, 0, CONN_W),
+                        ] {
                             let anx = tx + ndx;
                             let any = ty + ndy;
-                            if anx < 0 || any < 0 || anx >= GRID_W as i32 || any >= GRID_H as i32 { continue; }
+                            if anx < 0 || any < 0 || anx >= GRID_W as i32 || any >= GRID_H as i32 {
+                                continue;
+                            }
                             let aidx = (any as u32 * GRID_W + anx as u32) as usize;
                             let abt = block_type_rs(self.grid_data[aidx]);
                             let abt = abt as u32;
-                            let adj_gas_match = bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(abt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
-                            let adj_liq_match = bid == BT_LIQUID_PIPE && bt_is!(abt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
+                            let adj_gas_match = bt_is!(bid, BT_PIPE, BT_RESTRICTOR)
+                                && bt_is!(abt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
+                            let adj_liq_match = bid == BT_LIQUID_PIPE
+                                && bt_is!(abt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
                             if abt == bid || adj_gas_match || adj_liq_match {
                                 conn |= mask;
                             }
@@ -538,48 +647,68 @@ impl App {
                             let existing_conn = ((block >> 8) & 0xF0) as u8;
                             let roof_flag = block_flags_rs(block) & 2;
                             let roof_h = block & 0xFF000000;
-                            let base_h = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(1);
+                            let base_h = reg
+                                .get(block_type_id)
+                                .and_then(|d| d.placement.as_ref())
+                                .map(|p| p.place_height)
+                                .unwrap_or(1);
                             let height = base_h | existing_conn | conn;
-                            self.grid_data[idx] = make_block(block_type_id as u8, height, roof_flag) | roof_h;
+                            self.grid_data[idx] =
+                                make_block(block_type_id as u8, height, roof_flag) | roof_h;
                         }
                     } else if wire_anywhere && btu != BT_AIR && btu != BT_DIRT {
                         self.grid_data[idx] |= 0x80 << 16; // wire overlay flag
                     } else {
                         let roof_flag = block_flags_rs(block) & 2;
                         let roof_h = block & 0xFF000000;
-                        let base_h = reg.get(block_type_id).and_then(|d| d.placement.as_ref()).map(|p| p.place_height).unwrap_or(3);
+                        let base_h = reg
+                            .get(block_type_id)
+                            .and_then(|d| d.placement.as_ref())
+                            .map(|p| p.place_height)
+                            .unwrap_or(3);
                         let height = if is_line_type { base_h | conn } else { base_h };
-                        self.place_or_blueprint(tx, ty, make_block(block_type_id as u8, height, roof_flag) | roof_h);
+                        self.place_or_blueprint(
+                            tx,
+                            ty,
+                            make_block(block_type_id as u8, height, roof_flag) | roof_h,
+                        );
                     }
 
                     // Update adjacent existing pipes/wires with reciprocal connection
                     if is_line_type {
                         let neighbors: [(i32, i32, u8, u8); 4] = [
                             (0, -1, CONN_N, CONN_S), // if we connect N, neighbor to N gets S
-                            (0,  1, CONN_S, CONN_N),
-                            (1,  0, CONN_E, CONN_W),
+                            (0, 1, CONN_S, CONN_N),
+                            (1, 0, CONN_E, CONN_W),
                             (-1, 0, CONN_W, CONN_E),
                         ];
                         let final_h = ((self.grid_data[idx] >> 8) & 0xFF) as u8;
                         let final_mask = final_h & 0xF0;
                         for &(ndx, ndy, our_bit, their_bit) in &neighbors {
-                            if (final_mask & our_bit) == 0 { continue; }
+                            if (final_mask & our_bit) == 0 {
+                                continue;
+                            }
                             let nnx = tx + ndx;
                             let nny = ty + ndy;
-                            if nnx < 0 || nny < 0 || nnx >= GRID_W as i32 || nny >= GRID_H as i32 { continue; }
+                            if nnx < 0 || nny < 0 || nnx >= GRID_W as i32 || nny >= GRID_H as i32 {
+                                continue;
+                            }
                             let nidx = (nny as u32 * GRID_W + nnx as u32) as usize;
                             let nb = self.grid_data[nidx];
                             let nbt = block_type_rs(nb);
                             // Update same-type (or pipe↔restrictor↔bridge) neighbors with connection mask
                             let nbt = nbt as u32;
                             let recip_match = nbt == bid
-                                || (bt_is!(bid, BT_PIPE, BT_RESTRICTOR) && bt_is!(nbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
-                                || (bid == BT_LIQUID_PIPE && bt_is!(nbt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
+                                || (bt_is!(bid, BT_PIPE, BT_RESTRICTOR)
+                                    && bt_is!(nbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
+                                || (bid == BT_LIQUID_PIPE
+                                    && bt_is!(nbt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
                             if recip_match {
                                 let nh = ((nb >> 8) & 0xFF) as u8;
                                 if (nh & 0xF0) != 0 && (nh & their_bit) == 0 {
                                     let updated = nh | their_bit;
-                                    self.grid_data[nidx] = (nb & 0xFFFF00FF) | ((updated as u32) << 8);
+                                    self.grid_data[nidx] =
+                                        (nb & 0xFFFF00FF) | ((updated as u32) << 8);
                                 }
                             }
                         }
@@ -606,7 +735,10 @@ impl App {
                     pleb.work_target = None;
                     pleb.haul_target = None;
                     pleb.harvest_target = None;
-                    if matches!(pleb.activity, PlebActivity::Building(_) | PlebActivity::Hauling) {
+                    if matches!(
+                        pleb.activity,
+                        PlebActivity::Building(_) | PlebActivity::Hauling
+                    ) {
                         pleb.activity = PlebActivity::Idle;
                         pleb.path.clear();
                     }
@@ -616,7 +748,9 @@ impl App {
     }
 
     pub(crate) fn destroy_block_at(&mut self, bx: i32, by: i32) {
-        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return; }
+        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
+            return;
+        }
         // Also cancel any blueprint at this position
         self.cancel_blueprint(bx, by);
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
@@ -624,7 +758,9 @@ impl App {
         let bt = block_type_rs(block);
 
         // Air and bare dirt can't be destroyed
-        if bt == 0 || (bt == 2 && block == make_block(2, 0, 0)) { return; }
+        if bt == 0 || (bt == 2 && block == make_block(2, 0, 0)) {
+            return;
+        }
 
         // Wall-mounted items (fan, inlet, outlet with height > 1): revert to stone wall
         // Revert to bare dirt — no roof, no height, no flags
@@ -639,14 +775,32 @@ impl App {
     pub(crate) fn place_or_blueprint(&mut self, x: i32, y: i32, block_data: u32) {
         let bt = (block_data & 0xFF) as u32;
         // Structural blocks need construction in non-sandbox mode
-        let needs_construction = !self.sandbox_mode && matches!(bt,
-            BT_STONE | BT_WALL | BT_GLASS | BT_INSULATED |
-            BT_WOOD_WALL | BT_STEEL_WALL | BT_SANDSTONE | BT_GRANITE |
-            BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL |
-            BT_WOOD_FLOOR | BT_STONE_FLOOR | BT_CONCRETE_FLOOR |
-            BT_FIREPLACE | BT_BENCH | BT_BED | BT_CRATE | BT_CANNON |
-            BT_WORKBENCH | BT_KILN | BT_WELL
-        );
+        let needs_construction = !self.sandbox_mode
+            && matches!(
+                bt,
+                BT_STONE
+                    | BT_WALL
+                    | BT_GLASS
+                    | BT_INSULATED
+                    | BT_WOOD_WALL
+                    | BT_STEEL_WALL
+                    | BT_SANDSTONE
+                    | BT_GRANITE
+                    | BT_LIMESTONE
+                    | BT_MUD_WALL
+                    | BT_DIAGONAL
+                    | BT_WOOD_FLOOR
+                    | BT_STONE_FLOOR
+                    | BT_CONCRETE_FLOOR
+                    | BT_FIREPLACE
+                    | BT_BENCH
+                    | BT_BED
+                    | BT_CRATE
+                    | BT_CANNON
+                    | BT_WORKBENCH
+                    | BT_KILN
+                    | BT_WELL
+            );
         if needs_construction {
             self.blueprints.insert((x, y), Blueprint::new(block_data));
         } else {
@@ -661,9 +815,14 @@ impl App {
         let by = wy.floor() as i32;
         let bt = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
             (self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] & 0xFF) as u32
-        } else { 0 };
+        } else {
+            0
+        };
         let sel_pleb = self.selected_pleb;
-        let pleb_name = sel_pleb.and_then(|i| self.plebs.get(i)).map(|p| p.name.clone()).unwrap_or_default();
+        let pleb_name = sel_pleb
+            .and_then(|i| self.plebs.get(i))
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
 
         let mut menu = ContextMenu::new(screen_x, screen_y, "");
         let mut has_actions = false;
@@ -671,19 +830,34 @@ impl App {
         // Harvestable: berry bush or mature crop
         if sel_pleb.is_some() && (bt == BT_BERRY_BUSH || bt == BT_CROP) {
             let can_harvest = if bt == BT_CROP {
-                let crop_h = (self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF;
+                let crop_h =
+                    (self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF;
                 crop_h >= 3
-            } else { true };
+            } else {
+                true
+            };
             if can_harvest {
-                menu.title = if bt == BT_BERRY_BUSH { "Berry Bush".into() } else { "Crop".into() };
-                menu.actions.push((format!("Harvest ({})", pleb_name), ContextAction::Harvest(bx, by), true));
+                menu.title = if bt == BT_BERRY_BUSH {
+                    "Berry Bush".into()
+                } else {
+                    "Crop".into()
+                };
+                menu.actions.push((
+                    format!("Harvest ({})", pleb_name),
+                    ContextAction::Harvest(bx, by),
+                    true,
+                ));
                 has_actions = true;
             }
         }
 
         // Tree: chop down for wood
         if sel_pleb.is_some() && bt == BT_TREE {
-            menu.actions.push((format!("Chop down ({})", pleb_name), ContextAction::Harvest(bx, by), true));
+            menu.actions.push((
+                format!("Chop down ({})", pleb_name),
+                ContextAction::Harvest(bx, by),
+                true,
+            ));
             has_actions = true;
         }
 
@@ -693,25 +867,40 @@ impl App {
             // Find nearest available pleb
             let mut best_pleb: Option<(usize, f32)> = None;
             for (i, p) in self.plebs.iter().enumerate() {
-                if p.activity.is_crisis() || p.inventory.is_carrying() || p.is_enemy { continue; }
-                let dist = ((p.x - bx as f32 - 0.5).powi(2) + (p.y - by as f32 - 0.5).powi(2)).sqrt();
+                if p.activity.is_crisis() || p.inventory.is_carrying() || p.is_enemy {
+                    continue;
+                }
+                let dist =
+                    ((p.x - bx as f32 - 0.5).powi(2) + (p.y - by as f32 - 0.5).powi(2)).sqrt();
                 if best_pleb.map_or(true, |(_, bd)| dist < bd) {
                     best_pleb = Some((i, dist));
                 }
             }
             if let Some((pi, _)) = best_pleb {
                 let pn = self.plebs[pi].name.clone();
-                menu.actions.push((format!("Haul to storage ({})", pn), ContextAction::Haul(bx, by), true));
+                menu.actions.push((
+                    format!("Haul to storage ({})", pn),
+                    ContextAction::Haul(bx, by),
+                    true,
+                ));
                 has_actions = true;
             }
         }
 
         // Dig clay on clay terrain (fresh dirt or shallow dug ground)
-        if sel_pleb.is_some() && (bt == BT_DIRT || (bt == BT_DUG_GROUND && ((self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF) < 3)) {
+        if sel_pleb.is_some()
+            && (bt == BT_DIRT
+                || (bt == BT_DUG_GROUND
+                    && ((self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF)
+                        < 3))
+        {
             let tidx = (by as u32 * GRID_W + bx as u32) as usize;
-            if tidx < self.terrain_data.len() && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY {
+            if tidx < self.terrain_data.len()
+                && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY
+            {
                 menu.title = "Clay Deposit".into();
-                let has_shovel = sel_pleb.and_then(|pi| self.plebs.get(pi))
+                let has_shovel = sel_pleb
+                    .and_then(|pi| self.plebs.get(pi))
                     .map(|p| p.inventory.count_of(item_defs::ITEM_WOODEN_SHOVEL) > 0)
                     .unwrap_or(false);
                 let label = if has_shovel {
@@ -719,7 +908,8 @@ impl App {
                 } else {
                     format!("Dig clay ({})", pleb_name)
                 };
-                menu.actions.push((label, ContextAction::DigClay(bx, by), true));
+                menu.actions
+                    .push((label, ContextAction::DigClay(bx, by), true));
                 has_actions = true;
             }
         }
@@ -730,12 +920,22 @@ impl App {
                 let ix = item.x.floor() as i32;
                 let iy = item.y.floor() as i32;
                 if ix == bx && iy == by {
-                    if menu.title.is_empty() { menu.title = item.stack.label(); }
+                    if menu.title.is_empty() {
+                        menu.title = item.stack.label();
+                    }
                     if item.stack.item_id == item_defs::ITEM_BERRIES {
-                        menu.actions.push((format!("Eat 1 berry ({})", pleb_name), ContextAction::Eat(i), true));
+                        menu.actions.push((
+                            format!("Eat 1 berry ({})", pleb_name),
+                            ContextAction::Eat(i),
+                            true,
+                        ));
                     }
                     // Haul any ground item to nearest crate
-                    menu.actions.push((format!("Haul {} ({})", item.stack.label(), pleb_name), ContextAction::Haul(bx, by), true));
+                    menu.actions.push((
+                        format!("Haul {} ({})", item.stack.label(), pleb_name),
+                        ContextAction::Haul(bx, by),
+                        true,
+                    ));
                     has_actions = true;
                 }
             }
@@ -744,7 +944,11 @@ impl App {
         // Move to (fallback when pleb selected but no specific action)
         if sel_pleb.is_some() && !has_actions {
             menu.title = "Move".into();
-            menu.actions.push((format!("Move here ({})", pleb_name), ContextAction::MoveTo(wx, wy), true));
+            menu.actions.push((
+                format!("Move here ({})", pleb_name),
+                ContextAction::MoveTo(wx, wy),
+                true,
+            ));
             has_actions = true;
         }
 
@@ -753,17 +957,31 @@ impl App {
         }
     }
 
-    pub(crate) fn get_block_bounds(&self, bx: i32, by: i32, bt: u32, flags: u8) -> (i32, i32, i32, i32) {
+    pub(crate) fn get_block_bounds(
+        &self,
+        bx: i32,
+        by: i32,
+        bt: u32,
+        flags: u8,
+    ) -> (i32, i32, i32, i32) {
         let seg = (flags >> 3) & 3;
         let rot = (flags >> 5) & 3;
         if bt == BT_BENCH {
             let ox = if rot == 0 { bx - seg as i32 } else { bx };
             let oy = if rot == 0 { by } else { by - seg as i32 };
-            if rot == 0 { (ox, oy, 3, 1) } else { (ox, oy, 1, 3) }
+            if rot == 0 {
+                (ox, oy, 3, 1)
+            } else {
+                (ox, oy, 1, 3)
+            }
         } else if bt == BT_BED || bt == BT_BATTERY_M {
             let ox = if rot == 0 { bx - seg as i32 } else { bx };
             let oy = if rot == 0 { by } else { by - seg as i32 };
-            if rot == 0 { (ox, oy, 2, 1) } else { (ox, oy, 1, 2) }
+            if rot == 0 {
+                (ox, oy, 2, 1)
+            } else {
+                (ox, oy, 1, 2)
+            }
         } else if bt == BT_SOLAR {
             let row = (flags >> 5) & 3;
             let col = (flags >> 3) & 3;
@@ -777,8 +995,20 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_build_placement(&mut self, wx: f32, wy: f32, bx: i32, by: i32, idx: usize, block: u32, bt: u32, flags: u8) {
-        if self.build_tool == BuildTool::None { return; }
+    pub(crate) fn handle_build_placement(
+        &mut self,
+        wx: f32,
+        wy: f32,
+        bx: i32,
+        by: i32,
+        idx: usize,
+        block: u32,
+        bt: u32,
+        flags: u8,
+    ) {
+        if self.build_tool == BuildTool::None {
+            return;
+        }
         {
             match self.build_tool {
                 BuildTool::Place(37) => {
@@ -793,8 +1023,12 @@ impl App {
                 }
                 BuildTool::Place(41) => {
                     // Wind turbine: 2×2 placement with rotation stored in flags
-                    let tiles = [(bx, by), (bx+1, by), (bx, by+1), (bx+1, by+1)];
-                    let rot_bit = if self.build_rotation % 2 == 1 { 0x40u8 } else { 0u8 };
+                    let tiles = [(bx, by), (bx + 1, by), (bx, by + 1), (bx + 1, by + 1)];
+                    let rot_bit = if self.build_rotation % 2 == 1 {
+                        0x40u8
+                    } else {
+                        0u8
+                    };
                     if self.place_multi_tiles(&tiles, 41, 2, |i, rf| {
                         rf | (((i % 2) as u8) << 3) | (((i / 2) as u8) << 5) | rot_bit
                     }) {
@@ -811,23 +1045,30 @@ impl App {
                 }
                 BuildTool::Place(40) => {
                     // Large battery: 2×2 placement
-                    let tiles = [(bx, by), (bx+1, by), (bx, by+1), (bx+1, by+1)];
+                    let tiles = [(bx, by), (bx + 1, by), (bx, by + 1), (bx + 1, by + 1)];
                     self.place_multi_tiles(&tiles, 40, 1, |i, rf| {
                         rf | (((i % 2) as u8) << 3) | (((i / 2) as u8) << 5)
                     });
                 }
                 BuildTool::Place(50) | BuildTool::Place(51) => {
                     // Pipe bridge (50) or Wire bridge (51): 3-tile placement
-                    let bridge_id = match self.build_tool { BuildTool::Place(id) => id, _ => 50 };
+                    let bridge_id = match self.build_tool {
+                        BuildTool::Place(id) => id,
+                        _ => 50,
+                    };
                     let tiles = self.bridge_tiles(bx, by, self.build_rotation);
                     let all_valid = tiles.iter().all(|&(tx, ty)| {
-                        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 { return false; }
+                        if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                            return false;
+                        }
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                         let tbt = block_type_rs(self.grid_data[tidx]);
                         self.can_place_at(tx, ty)
                             || (bridge_id == 50 && pipes::is_gas_pipe_component(tbt))
                             || (bridge_id == 50 && pipes::is_liquid_pipe_component(tbt))
-                            || (bridge_id == 51 && (tbt == BT_WIRE || is_conductor_rs(tbt, block_flags_rs(self.grid_data[tidx]))))
+                            || (bridge_id == 51
+                                && (tbt == BT_WIRE
+                                    || is_conductor_rs(tbt, block_flags_rs(self.grid_data[tidx]))))
                     });
                     if all_valid {
                         let rot = self.build_rotation as u8;
@@ -835,7 +1076,8 @@ impl App {
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                             let (roof_flag, roof_h) = extract_roof_data(self.grid_data[tidx]);
                             let seg_flags = roof_flag | ((i as u8) << 3) | (rot << 5);
-                            self.grid_data[tidx] = make_block(bridge_id as u8, 1, seg_flags) | roof_h;
+                            self.grid_data[tidx] =
+                                make_block(bridge_id as u8, 1, seg_flags) | roof_h;
                         }
                         self.grid_dirty = true;
                         self.build_tool = BuildTool::None;
@@ -851,7 +1093,8 @@ impl App {
                             let (tx, ty) = tiles[ti];
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                             let (rf, rh) = extract_roof_data(self.grid_data[tidx]);
-                            self.grid_data[tidx] = make_block(52, 1, rf | (seg << 3) | (rot << 5)) | rh;
+                            self.grid_data[tidx] =
+                                make_block(52, 1, rf | (seg << 3) | (rot << 5)) | rh;
                         }
                         self.grid_dirty = true;
                         self.build_tool = BuildTool::None;
@@ -861,7 +1104,9 @@ impl App {
                     // Bench: 3-tile placement
                     let tiles = self.bench_tiles(bx, by, self.build_rotation);
                     let rot = self.build_rotation as u8;
-                    if self.place_multi_tiles(&tiles, 9, 1, |i, rf| rf | ((i as u8) << 3) | (rot << 5)) {
+                    if self
+                        .place_multi_tiles(&tiles, 9, 1, |i, rf| rf | ((i as u8) << 3) | (rot << 5))
+                    {
                         log::info!("Placed bench at ({}, {})", bx, by);
                     }
                 }
@@ -869,7 +1114,9 @@ impl App {
                     // Bed: 2-tile placement
                     let tiles = self.bed_tiles(bx, by, self.build_rotation);
                     let rot = self.build_rotation as u8;
-                    self.place_multi_tiles(&tiles, 30, 0, |i, rf| rf | ((i as u8) << 3) | (rot << 5));
+                    self.place_multi_tiles(&tiles, 30, 0, |i, rf| {
+                        rf | ((i as u8) << 3) | (rot << 5)
+                    });
                 }
                 BuildTool::Place(11) => {
                     // Table lamp: can only be placed on benches (type 9)
@@ -904,8 +1151,13 @@ impl App {
                         let height = if on_wall { block_height_rs(block) } else { 1 };
                         let (roof_flag, roof_h) = extract_roof_data(block);
                         let rot_flags = (self.build_rotation as u8) << 3;
-                        let bt_new = if self.build_tool == BuildTool::Place(19) { 19 } else { 20 };
-                        self.grid_data[idx] = make_block(bt_new, height, roof_flag | rot_flags) | roof_h;
+                        let bt_new = if self.build_tool == BuildTool::Place(19) {
+                            19
+                        } else {
+                            20
+                        };
+                        self.grid_data[idx] =
+                            make_block(bt_new, height, roof_flag | rot_flags) | roof_h;
                         self.grid_dirty = true;
                         log::info!("Placed {:?} at ({}, {})", self.build_tool, bx, by);
                         self.build_tool = BuildTool::None;
@@ -918,7 +1170,9 @@ impl App {
                     let place_height = placement.map(|p| p.place_height).unwrap_or(1);
                     let extra_flags = placement.map(|p| p.extra_flags).unwrap_or(0);
                     let stays_selected = placement.map(|p| p.stays_selected).unwrap_or(false);
-                    let click_mode = placement.map(|p| p.click.clone()).unwrap_or(block_defs::ClickMode::Simple);
+                    let click_mode = placement
+                        .map(|p| p.click.clone())
+                        .unwrap_or(block_defs::ClickMode::Simple);
 
                     // Wall-adjacent placement: auto-detect wall direction
                     if click_mode == block_defs::ClickMode::WallAdjacent {
@@ -926,10 +1180,20 @@ impl App {
                             let roof_flag = flags & 2;
                             let roof_h = block & 0xFF000000;
                             let dir_flags = roof_flag | ((dir as u8) << 3);
-                            self.place_or_blueprint(bx, by, make_block(id as u8, place_height, dir_flags) | roof_h);
+                            self.place_or_blueprint(
+                                bx,
+                                by,
+                                make_block(id as u8, place_height, dir_flags) | roof_h,
+                            );
                             self.grid_dirty = true;
                             compute_roof_heights(&mut self.grid_data);
-                            log::info!("Placed wall attachment {} at ({}, {}) facing dir={}", id, bx, by, dir);
+                            log::info!(
+                                "Placed wall attachment {} at ({}, {}) facing dir={}",
+                                id,
+                                bx,
+                                by,
+                                dir
+                            );
                             self.build_tool = BuildTool::None;
                         }
                         return;
@@ -940,7 +1204,11 @@ impl App {
                         let bt_here = bt as u32;
                         if bt_here == BT_DUG_GROUND {
                             let (roof_flag, roof_h) = extract_roof_data(block);
-                            self.place_or_blueprint(bx, by, make_block(id as u8, place_height, roof_flag) | roof_h);
+                            self.place_or_blueprint(
+                                bx,
+                                by,
+                                make_block(id as u8, place_height, roof_flag) | roof_h,
+                            );
                             self.grid_dirty = true;
                             compute_roof_heights(&mut self.grid_data);
                             log::info!("Placed well at ({}, {})", bx, by);
@@ -958,7 +1226,8 @@ impl App {
                         || (id == BT_PIPE && bt == BT_PIPE)
                         || (id == BT_RESTRICTOR && bt_is!(bt, BT_PIPE, BT_RESTRICTOR))
                         || (id == BT_LIQUID_PIPE && bt_is!(bt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE))
-                        || (bt_is!(id, BT_SWITCH, BT_DIMMER, BT_BREAKER) && bt_is!(bt, BT_WIRE, BT_AIR, BT_DIRT));
+                        || (bt_is!(id, BT_SWITCH, BT_DIMMER, BT_BREAKER)
+                            && bt_is!(bt, BT_WIRE, BT_AIR, BT_DIRT));
                     if can_place && click_mode != block_defs::ClickMode::None {
                         if id == BT_WIRE && bt != BT_AIR && bt != BT_DIRT {
                             // Wire on non-ground: add wire flag to existing block (bit 7)
@@ -969,46 +1238,81 @@ impl App {
                             let mut combined_flags = roof_flag | rot_flags | extra_flags;
                             let mut final_height = place_height;
                             // Switch starts ON (flag bit 2)
-                            if id == BT_SWITCH { combined_flags |= 4; }
+                            if id == BT_SWITCH {
+                                combined_flags |= 4;
+                            }
                             // Dimmer starts at 100% (height = 10)
-                            if id == BT_DIMMER { final_height = 10; }
+                            if id == BT_DIMMER {
+                                final_height = 10;
+                            }
                             // Fireplace starts at 50% intensity (height = 5)
-                            if id == BT_FIREPLACE { final_height = 5; }
+                            if id == BT_FIREPLACE {
+                                final_height = 5;
+                            }
                             // Circuit breaker starts ON (flag bit 2), threshold in height = 15V
-                            if id == BT_BREAKER { combined_flags |= 4; final_height = 15; }
+                            if id == BT_BREAKER {
+                                combined_flags |= 4;
+                                final_height = 15;
+                            }
                             // Restrictor starts at 50% opening (height lower nibble = 5)
-                            if id == BT_RESTRICTOR { final_height = 5; }
+                            if id == BT_RESTRICTOR {
+                                final_height = 5;
+                            }
                             // Single-click pipe/wire: auto-detect connections from adjacent matching blocks
                             if bt_is!(id, BT_PIPE, BT_WIRE, BT_RESTRICTOR, BT_LIQUID_PIPE) {
                                 let mut conn: u8 = 0;
-                                for &(ndx, ndy, mask) in &[(0i32,-1i32,0x10u8),(0,1,0x40),(1,0,0x20),(-1,0,0x80)] {
+                                for &(ndx, ndy, mask) in &[
+                                    (0i32, -1i32, 0x10u8),
+                                    (0, 1, 0x40),
+                                    (1, 0, 0x20),
+                                    (-1, 0, 0x80),
+                                ] {
                                     let nx = bx + ndx;
                                     let ny = by + ndy;
-                                    if nx >= 0 && ny >= 0 && nx < GRID_W as i32 && ny < GRID_H as i32 {
+                                    if nx >= 0
+                                        && ny >= 0
+                                        && nx < GRID_W as i32
+                                        && ny < GRID_H as i32
+                                    {
                                         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
                                         let nbt = block_type_rs(self.grid_data[nidx]);
                                         // Connect to same type, or pipes↔restrictors
 
-                                        let is_pipe_match = (bt_is!(id, BT_PIPE, BT_RESTRICTOR) && bt_is!(nbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
-                                            || (id == BT_LIQUID_PIPE && bt_is!(nbt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
+                                        let is_pipe_match = (bt_is!(id, BT_PIPE, BT_RESTRICTOR)
+                                            && bt_is!(nbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
+                                            || (id == BT_LIQUID_PIPE
+                                                && bt_is!(nbt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE));
                                         if nbt == id || is_pipe_match {
                                             conn |= mask;
                                             // Also update neighbor's connection toward us
                                             // Skip if neighbor has mask=0 (auto-detect mode — already connects all directions)
-                                            let opp_mask: u8 = match mask { 0x10 => 0x40, 0x40 => 0x10, 0x20 => 0x80, _ => 0x20 };
+                                            let opp_mask: u8 = match mask {
+                                                0x10 => 0x40,
+                                                0x40 => 0x10,
+                                                0x20 => 0x80,
+                                                _ => 0x20,
+                                            };
                                             let nb_h = ((self.grid_data[nidx] >> 8) & 0xFF) as u8;
                                             if (nb_h & 0xF0) != 0 {
-                                                self.grid_data[nidx] = (self.grid_data[nidx] & 0xFFFF00FF) | (((nb_h | opp_mask) as u32) << 8);
+                                                self.grid_data[nidx] = (self.grid_data[nidx]
+                                                    & 0xFFFF00FF)
+                                                    | (((nb_h | opp_mask) as u32) << 8);
                                             }
                                         }
                                     }
                                 }
                                 // If no neighbors found, connect all (standalone node)
-                                if conn == 0 { conn = 0xF0; }
+                                if conn == 0 {
+                                    conn = 0xF0;
+                                }
                                 final_height |= conn;
                             }
                             let roof_h = block & 0xFF000000;
-                            self.place_or_blueprint(bx, by, make_block(id as u8, final_height, combined_flags) | roof_h);
+                            self.place_or_blueprint(
+                                bx,
+                                by,
+                                make_block(id as u8, final_height, combined_flags) | roof_h,
+                            );
                         }
                         self.grid_dirty = true;
                         compute_roof_heights(&mut self.grid_data);
@@ -1016,9 +1320,9 @@ impl App {
                         if id == BT_CANNON {
                             let angle = match self.build_rotation {
                                 0 => -std::f32::consts::FRAC_PI_2, // north
-                                1 => 0.0,                           // east
+                                1 => 0.0,                          // east
                                 2 => std::f32::consts::FRAC_PI_2,  // south
-                                _ => std::f32::consts::PI,          // west
+                                _ => std::f32::consts::PI,         // west
                             };
                             self.cannon_angles.insert(idx as u32, angle);
                         }
@@ -1030,7 +1334,18 @@ impl App {
                 }
                 BuildTool::Window => {
                     // Window (glass): replaces wall blocks
-                    if bt_is!(bt, BT_STONE, BT_WALL, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && block_height_rs(block) as u32 > 0 {
+                    if bt_is!(
+                        bt,
+                        BT_STONE,
+                        BT_WALL,
+                        BT_INSULATED,
+                        BT_WOOD_WALL,
+                        BT_STEEL_WALL,
+                        BT_SANDSTONE,
+                        BT_GRANITE,
+                        BT_LIMESTONE
+                    ) && block_height_rs(block) as u32 > 0
+                    {
                         let height = (block_height_rs(block) as u32) as u8;
                         let roof_flag = flags & 2;
                         let roof_h = block & 0xFF000000;
@@ -1042,7 +1357,18 @@ impl App {
                 }
                 BuildTool::Door => {
                     // Door: replaces wall blocks with door
-                    if bt_is!(bt, BT_STONE, BT_GLASS, BT_INSULATED, BT_WOOD_WALL, BT_STEEL_WALL, BT_SANDSTONE, BT_GRANITE, BT_LIMESTONE) && block_height_rs(block) as u32 > 0 {
+                    if bt_is!(
+                        bt,
+                        BT_STONE,
+                        BT_GLASS,
+                        BT_INSULATED,
+                        BT_WOOD_WALL,
+                        BT_STEEL_WALL,
+                        BT_SANDSTONE,
+                        BT_GRANITE,
+                        BT_LIMESTONE
+                    ) && block_height_rs(block) as u32 > 0
+                    {
                         let roof_h = block & 0xFF000000;
                         // Door: height 1, flag bit0=is_door, starts closed (bit2=0)
                         self.grid_data[idx] = make_block(4, 1, 1) | roof_h;
@@ -1080,26 +1406,37 @@ impl App {
                     if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                         let bt_dig = block_type_rs(block);
                         let roof_h = block & 0xFF000000;
-                        if bt_dig == BT_DIRT || bt_is!(bt_dig, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR) {
+                        if bt_dig == BT_DIRT
+                            || bt_is!(bt_dig, BT_WOOD_FLOOR, BT_STONE_FLOOR, BT_CONCRETE_FLOOR)
+                        {
                             self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
                             self.grid_dirty = true;
                             // Clay terrain yields clay items when dug
-                            if idx < self.terrain_data.len() && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY {
+                            if idx < self.terrain_data.len()
+                                && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY
+                            {
                                 self.ground_items.push(resources::GroundItem::new(
-                                    bx as f32 + 0.5, by as f32 + 0.5,
-                                    item_defs::ITEM_CLAY, 2,
+                                    bx as f32 + 0.5,
+                                    by as f32 + 0.5,
+                                    item_defs::ITEM_CLAY,
+                                    2,
                                 ));
                             }
                         } else if bt_dig == BT_DUG_GROUND {
                             let depth = block_height_rs(block) as u32;
                             if depth < 5 {
-                                self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, (depth + 1) as u8, 0) | roof_h;
+                                self.grid_data[idx] =
+                                    make_block(BT_DUG_GROUND as u8, (depth + 1) as u8, 0) | roof_h;
                                 self.grid_dirty = true;
                                 // More clay on deeper digs
-                                if idx < self.terrain_data.len() && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY {
+                                if idx < self.terrain_data.len()
+                                    && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY
+                                {
                                     self.ground_items.push(resources::GroundItem::new(
-                                        bx as f32 + 0.5, by as f32 + 0.5,
-                                        item_defs::ITEM_CLAY, 1,
+                                        bx as f32 + 0.5,
+                                        by as f32 + 0.5,
+                                        item_defs::ITEM_CLAY,
+                                        1,
                                     ));
                                 }
                             }
@@ -1108,7 +1445,9 @@ impl App {
                 }
                 BuildTool::GrowingZone => {
                     if bt == BT_DIRT {
-                        if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing) {
+                        if let Some(zone) =
+                            self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing)
+                        {
                             zone.tiles.insert((bx, by));
                         } else {
                             let mut zone = Zone::new(ZoneKind::Growing);
@@ -1120,8 +1459,11 @@ impl App {
                 }
                 BuildTool::StorageZone => {
                     let bh = block_height_rs(block) as u32;
-                    if bh == 0 { // floor-level tiles only
-                        if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Storage) {
+                    if bh == 0 {
+                        // floor-level tiles only
+                        if let Some(zone) =
+                            self.zones.iter_mut().find(|z| z.kind == ZoneKind::Storage)
+                        {
                             zone.tiles.insert((bx, by));
                         } else {
                             let mut zone = Zone::new(ZoneKind::Storage);
@@ -1131,15 +1473,22 @@ impl App {
                     }
                     return;
                 }
-                BuildTool::None | BuildTool::Destroy
-                | BuildTool::Roof => {}
+                BuildTool::None | BuildTool::Destroy | BuildTool::Roof => {}
             }
             return;
         }
     }
 
     /// Handle click interactions with specific block types (toggles, popups).
-    pub(crate) fn handle_block_click(&mut self, bx: i32, by: i32, idx: usize, block: u32, bt: u32, flags: u8) {
+    pub(crate) fn handle_block_click(
+        &mut self,
+        bx: i32,
+        by: i32,
+        idx: usize,
+        block: u32,
+        bt: u32,
+        flags: u8,
+    ) {
         // Toggle door
         if is_door_rs(block) {
             let new_flags = flags ^ 4; // toggle bit2 (is_open)
@@ -1182,7 +1531,12 @@ impl App {
                 }
             }
 
-            log::info!("Door at ({}, {}): {}", bx, by, if open { "opened" } else { "closed" });
+            log::info!(
+                "Door at ({}, {}): {}",
+                bx,
+                by,
+                if open { "opened" } else { "closed" }
+            );
             return;
         }
 
@@ -1193,7 +1547,12 @@ impl App {
             self.grid_data[idx] = new_block;
             self.grid_dirty = true;
             let open = (new_flags & 4) != 0;
-            log::info!("Valve at ({}, {}): {}", bx, by, if open { "open" } else { "closed" });
+            log::info!(
+                "Valve at ({}, {}): {}",
+                bx,
+                by,
+                if open { "open" } else { "closed" }
+            );
             return;
         }
 
@@ -1204,14 +1563,25 @@ impl App {
             self.grid_data[idx] = new_block;
             self.grid_dirty = true;
             let on = (new_flags & 4) != 0;
-            log::info!("Switch at ({}, {}): {}", bx, by, if on { "ON" } else { "OFF" });
+            log::info!(
+                "Switch at ({}, {}): {}",
+                bx,
+                by,
+                if on { "ON" } else { "OFF" }
+            );
             return;
         }
 
         // Click dimmer, restrictor, or fireplace: show slider popup (shared UI)
-        if (bt == BT_DIMMER || bt == BT_RESTRICTOR || bt == BT_FIREPLACE) && self.build_tool != BuildTool::Destroy {
+        if (bt == BT_DIMMER || bt == BT_RESTRICTOR || bt == BT_FIREPLACE)
+            && self.build_tool != BuildTool::Destroy
+        {
             let didx = by as u32 * GRID_W + bx as u32;
-            self.block_sel.dimmer = if self.block_sel.dimmer == Some(didx) { None } else { Some(didx) };
+            self.block_sel.dimmer = if self.block_sel.dimmer == Some(didx) {
+                None
+            } else {
+                Some(didx)
+            };
             self.block_sel.dimmer_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
@@ -1232,7 +1602,11 @@ impl App {
         // Click fan: show speed popup (similar to pump)
         if bt == BT_FAN && self.build_tool != BuildTool::Destroy {
             let fidx = by as u32 * GRID_W + bx as u32;
-            self.block_sel.fan = if self.block_sel.fan == Some(fidx) { None } else { Some(fidx) };
+            self.block_sel.fan = if self.block_sel.fan == Some(fidx) {
+                None
+            } else {
+                Some(fidx)
+            };
             self.block_sel.fan_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
@@ -1240,7 +1614,11 @@ impl App {
         // Click pump: toggle pump speed popup
         if bt == BT_PUMP {
             let pidx = by as u32 * GRID_W + bx as u32;
-            self.block_sel.pump = if self.block_sel.pump == Some(pidx) { None } else { Some(pidx) };
+            self.block_sel.pump = if self.block_sel.pump == Some(pidx) {
+                None
+            } else {
+                Some(pidx)
+            };
             self.block_sel.pump_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
@@ -1248,7 +1626,11 @@ impl App {
         // Click crafting station (workbench or kiln): show recipe popup
         if (bt == BT_WORKBENCH || bt == BT_KILN) && self.build_tool != BuildTool::Destroy {
             let widx = by as u32 * GRID_W + bx as u32;
-            self.block_sel.workbench = if self.block_sel.workbench == Some(widx) { None } else { Some(widx) };
+            self.block_sel.workbench = if self.block_sel.workbench == Some(widx) {
+                None
+            } else {
+                Some(widx)
+            };
             self.block_sel.workbench_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
@@ -1261,57 +1643,65 @@ impl App {
 /// Returns (x, y, variant) for each tile — main diagonal tiles + fill tiles
 /// that tessellate into a solid wall strip.
 /// `rotation` determines which side of the wall is solid (0-3).
-pub(crate) fn compute_diagonal_wall_tiles(x0: i32, y0: i32, x1: i32, y1: i32, rotation: u32) -> Vec<(i32, i32, u8)> {
-        let dx = x1 - x0;
-        let dy = y1 - y0;
-        if dx == 0 && dy == 0 { return vec![(x0, y0, rotation as u8)]; }
-        // Force true 45° diagonal: use the shorter axis as step count
-        let steps = dx.abs().min(dy.abs()).max(1);
-        let sx = dx.signum();
-        let sy = dy.signum();
-        // If either axis is zero, pick a default diagonal direction
-        let sx = if sx == 0 { 1 } else { sx };
-        let sy = if sy == 0 { 1 } else { sy };
+pub(crate) fn compute_diagonal_wall_tiles(
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    rotation: u32,
+) -> Vec<(i32, i32, u8)> {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    if dx == 0 && dy == 0 {
+        return vec![(x0, y0, rotation as u8)];
+    }
+    // Force true 45° diagonal: use the shorter axis as step count
+    let steps = dx.abs().min(dy.abs()).max(1);
+    let sx = dx.signum();
+    let sy = dy.signum();
+    // If either axis is zero, pick a default diagonal direction
+    let sx = if sx == 0 { 1 } else { sx };
+    let sy = if sy == 0 { 1 } else { sy };
 
-        // Determine drag direction: \ (same sign) or / (opposite sign)
-        let is_backslash = (sx > 0) == (sy > 0);
+    // Determine drag direction: \ (same sign) or / (opposite sign)
+    let is_backslash = (sx > 0) == (sy > 0);
 
-        // Auto-adapt rotation to match drag direction.
-        // "below" side = variants 0,1; "above" side = variants 2,3
-        let is_below = rotation < 2;
-        let main_var: u8 = if is_backslash {
-            if is_below { 1 } else { 3 } // \ variants
-        } else {
-            if is_below { 0 } else { 2 } // / variants
-        };
-        let fill_var: u8 = main_var ^ 2; // flip side: 0↔2, 1↔3
+    // Auto-adapt rotation to match drag direction.
+    // "below" side = variants 0,1; "above" side = variants 2,3
+    let is_below = rotation < 2;
+    let main_var: u8 = if is_backslash {
+        if is_below { 1 } else { 3 } // \ variants
+    } else {
+        if is_below { 0 } else { 2 } // / variants
+    };
+    let fill_var: u8 = main_var ^ 2; // flip side: 0↔2, 1↔3
 
-        let mut tiles = Vec::new();
-        let mut x = x0;
-        let mut y = y0;
+    let mut tiles = Vec::new();
+    let mut x = x0;
+    let mut y = y0;
 
-        for i in 0..=steps {
-            tiles.push((x, y, main_var));
+    for i in 0..=steps {
+        tiles.push((x, y, main_var));
 
-            // Fill tile between this step and the previous (closes the gap).
-            // The fill must go toward the solid side of the main variant.
-            // Which of the two candidate positions (x-sx,y) or (x,y-sy) is correct
-            // depends on both the variant and the drag direction.
-            if i > 0 {
-                let use_horizontal = match main_var {
-                    0 | 3 => sx < 0, // right-facing: fill right when going left
-                    _     => sx > 0, // left-facing: fill left when going right
-                };
-                let (fx, fy) = if use_horizontal {
-                    (x - sx, y)
-                } else {
-                    (x, y - sy)
-                };
-                tiles.push((fx, fy, fill_var));
-            }
-
-            x += sx;
-            y += sy;
+        // Fill tile between this step and the previous (closes the gap).
+        // The fill must go toward the solid side of the main variant.
+        // Which of the two candidate positions (x-sx,y) or (x,y-sy) is correct
+        // depends on both the variant and the drag direction.
+        if i > 0 {
+            let use_horizontal = match main_var {
+                0 | 3 => sx < 0, // right-facing: fill right when going left
+                _ => sx > 0,     // left-facing: fill left when going right
+            };
+            let (fx, fy) = if use_horizontal {
+                (x - sx, y)
+            } else {
+                (x, y - sy)
+            };
+            tiles.push((fx, fy, fill_var));
         }
-        tiles
+
+        x += sx;
+        y += sy;
+    }
+    tiles
 }

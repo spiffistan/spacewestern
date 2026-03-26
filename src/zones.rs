@@ -1,8 +1,8 @@
 //! Zone system — designated areas for farming, storage, etc.
 //! Zones are overlays on the grid, not block types.
 
-use std::collections::HashSet;
 use crate::grid::*;
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ZoneKind {
@@ -18,15 +18,18 @@ pub struct Zone {
 
 impl Zone {
     pub fn new(kind: ZoneKind) -> Self {
-        Zone { kind, tiles: HashSet::new() }
+        Zone {
+            kind,
+            tiles: HashSet::new(),
+        }
     }
 }
 
 /// Global work task that a pleb can claim.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WorkTask {
-    Plant(i32, i32),    // plant a crop at this position
-    Harvest(i32, i32),  // harvest any plant (crop, berry bush, etc.)
+    Plant(i32, i32),   // plant a crop at this position
+    Harvest(i32, i32), // harvest any plant (crop, berry bush, etc.)
 }
 
 /// Work priority ordering (legacy, used for plant/harvest preference).
@@ -84,8 +87,8 @@ pub const CROP_TEMP_MAX: f32 = 40.0;
 pub struct CropStatus {
     pub stage_name: &'static str,
     pub stage: u32,
-    pub progress: f32,        // 0-1 within current stage
-    pub growth_rate: f32,     // 0-1 combined growth multiplier
+    pub progress: f32,    // 0-1 within current stage
+    pub growth_rate: f32, // 0-1 combined growth multiplier
     pub temp_factor: f32,
     pub sun_factor: f32,
     pub water_factor: f32,
@@ -94,12 +97,19 @@ pub struct CropStatus {
 
 /// Compute crop growth status for a tile. Returns None if not a crop.
 pub fn crop_status(
-    block: u32, grid_idx: u32, timer: f32,
-    time_of_day: f32, sun_intensity: f32, rain_intensity: f32,
-    water_table: f32, surface_water: f32,
+    block: u32,
+    grid_idx: u32,
+    timer: f32,
+    time_of_day: f32,
+    sun_intensity: f32,
+    rain_intensity: f32,
+    water_table: f32,
+    surface_water: f32,
 ) -> Option<CropStatus> {
     let bt = block_type_rs(block);
-    if bt != BT_CROP { return None; }
+    if bt != BT_CROP {
+        return None;
+    }
     let stage = block_height_rs(block) as u32;
     let stage_name = match stage {
         0 => "Planted",
@@ -110,8 +120,14 @@ pub fn crop_status(
     };
     if stage >= CROP_MATURE {
         return Some(CropStatus {
-            stage_name, stage, progress: 1.0, growth_rate: 0.0,
-            temp_factor: 0.0, sun_factor: 0.0, water_factor: 0.0, limiting: "Ready to harvest",
+            stage_name,
+            stage,
+            progress: 1.0,
+            growth_rate: 0.0,
+            temp_factor: 0.0,
+            sun_factor: 0.0,
+            water_factor: 0.0,
+            limiting: "Ready to harvest",
         });
     }
 
@@ -151,21 +167,39 @@ pub fn crop_status(
         1.0 - (water_avail - 0.7) * 0.3
     };
 
-    let hash = (grid_idx.wrapping_mul(2654435761).wrapping_add(stage * 1013904223)) & 0xFFFF;
+    let hash = (grid_idx
+        .wrapping_mul(2654435761)
+        .wrapping_add(stage * 1013904223))
+        & 0xFFFF;
     let random_factor = 0.7 + (hash as f32 / 65535.0) * 0.6;
 
     let growth_rate = temp_factor * sun_factor * water_factor * random_factor;
 
-    let limiting = if stage >= CROP_MATURE { "Mature" }
-        else if temp_factor < 0.01 { "Too cold/hot" }
-        else if sun_factor < 0.01 { "No sunlight" }
-        else if water_factor < 0.1 { "Needs water" }
-        else if temp_factor < sun_factor && temp_factor < water_factor { "Temperature" }
-        else if sun_factor < water_factor { "Sunlight" }
-        else { "Water" };
+    let limiting = if stage >= CROP_MATURE {
+        "Mature"
+    } else if temp_factor < 0.01 {
+        "Too cold/hot"
+    } else if sun_factor < 0.01 {
+        "No sunlight"
+    } else if water_factor < 0.1 {
+        "Needs water"
+    } else if temp_factor < sun_factor && temp_factor < water_factor {
+        "Temperature"
+    } else if sun_factor < water_factor {
+        "Sunlight"
+    } else {
+        "Water"
+    };
 
     Some(CropStatus {
-        stage_name, stage, progress, growth_rate, temp_factor, sun_factor, water_factor, limiting,
+        stage_name,
+        stage,
+        progress,
+        growth_rate,
+        temp_factor,
+        sun_factor,
+        water_factor,
+        limiting,
     })
 }
 
@@ -183,10 +217,16 @@ pub fn generate_work_tasks(
         match zone.kind {
             ZoneKind::Growing => {
                 for &(x, y) in &zone.tiles {
-                    if x < 0 || y < 0 || x >= grid_w as i32 || y >= (grid.len() as u32 / grid_w) as i32 {
+                    if x < 0
+                        || y < 0
+                        || x >= grid_w as i32
+                        || y >= (grid.len() as u32 / grid_w) as i32
+                    {
                         continue;
                     }
-                    if active_tasks.contains(&(x, y)) { continue; }
+                    if active_tasks.contains(&(x, y)) {
+                        continue;
+                    }
 
                     let idx = (y as u32 * grid_w + x as u32) as usize;
                     let block = grid[idx];

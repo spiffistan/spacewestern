@@ -51,12 +51,12 @@ pub struct CameraUniform {
     pub rain_intensity: f32,
     pub cloud_cover: f32,
     pub wind_magnitude: f32,
-    pub wind_angle: f32,   // wind direction in radians
-    pub use_shadow_map: f32,    // 1.0 = sample shadow map, 0.0 = per-pixel ray trace
-    pub shadow_map_scale: f32,  // shadow map texels per grid cell (for UV mapping)
-    pub sound_speed: f32,       // wave equation propagation speed (c)
-    pub sound_damping: f32,     // wave equation energy loss per step
-    pub sound_coupling: f32,    // strength of sound→gas velocity coupling
+    pub wind_angle: f32,            // wind direction in radians
+    pub use_shadow_map: f32,        // 1.0 = sample shadow map, 0.0 = per-pixel ray trace
+    pub shadow_map_scale: f32,      // shadow map texels per grid cell (for UV mapping)
+    pub sound_speed: f32,           // wave equation propagation speed (c)
+    pub sound_damping: f32,         // wave equation energy loss per step
+    pub sound_coupling: f32,        // strength of sound→gas velocity coupling
     pub enable_terrain_detail: f32, // 1.0 = procedural terrain, 0.0 = flat colors
     pub terrain_ao_strength: f32,   // 0.0 = no AO, 1.0 = full structural shadow
     pub fog_enabled: f32,           // 1.0 = fog of war active, 0.0 = full map visible

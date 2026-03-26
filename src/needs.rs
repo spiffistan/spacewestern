@@ -32,21 +32,21 @@ const NEAR_FIRE_RADIUS: f32 = 4.0;
 const NEAR_HEATER_RADIUS: f32 = 3.0;
 const NEAR_FURNITURE_RADIUS: f32 = 3.0;
 const NEAR_BED_RADIUS: f32 = 2.0;
-const NEAR_INTERACT_RADIUS: f32 = 2.0;  // berry bush, crate
+const NEAR_INTERACT_RADIUS: f32 = 2.0; // berry bush, crate
 const CRATE_SCAN_RADIUS: i32 = 60;
 
 // --- Temperature comfort range (°C) ---
 const TEMP_COMFORTABLE_LOW: f32 = 18.0;
 const TEMP_COMFORTABLE_HIGH: f32 = 28.0;
 const TEMP_COOL_MIN: f32 = 5.0;
-const TEMP_HOT_RANGE: f32 = 50.0;        // degrees above comfortable before warmth hits 0.2
+const TEMP_HOT_RANGE: f32 = 50.0; // degrees above comfortable before warmth hits 0.2
 
 // --- Warmth fallback (no fluid sim) ---
 const WARMTH_INDOORS: f32 = 0.7;
-const WARMTH_INDOORS_FIRE: f32 = 1.0;   // near fireplace indoors
+const WARMTH_INDOORS_FIRE: f32 = 1.0; // near fireplace indoors
 const WARMTH_NIGHT_OUTDOORS: f32 = 0.05; // dangerous — below freeze threshold
 const WARMTH_DAY_OUTDOORS: f32 = 0.5;
-const WARMTH_DUSK_OUTDOORS: f32 = 0.25;  // transition period
+const WARMTH_DUSK_OUTDOORS: f32 = 0.25; // transition period
 
 // --- Night/day boundary ---
 const NIGHT_START_FRAC: f32 = 0.85;
@@ -93,27 +93,27 @@ pub enum BreathingState {
 /// All needs for a single pleb.
 #[derive(Clone, Debug)]
 pub struct PlebNeeds {
-    pub hunger: f32,     // 1.0 = full, decays over time
-    pub thirst: f32,     // 1.0 = hydrated, decays over time
-    pub rest: f32,       // 1.0 = rested, decays faster when moving
-    pub warmth: f32,     // 1.0 = comfortable temp, driven by environment
-    pub oxygen: f32,     // 1.0 = fresh air, driven by actual O2/CO2 levels
-    pub safety: f32,     // 1.0 = safe, drops near fire/outdoors at night
-    pub comfort: f32,    // 1.0 = comfy, indoors + furniture
-    pub health: f32,     // 1.0 = full health, damaged by unmet needs
-    pub mood: f32,       // -100 to +100, aggregate of all needs
-    pub stress: f32,     // 0-100, cumulative stress level
+    pub hunger: f32,  // 1.0 = full, decays over time
+    pub thirst: f32,  // 1.0 = hydrated, decays over time
+    pub rest: f32,    // 1.0 = rested, decays faster when moving
+    pub warmth: f32,  // 1.0 = comfortable temp, driven by environment
+    pub oxygen: f32,  // 1.0 = fresh air, driven by actual O2/CO2 levels
+    pub safety: f32,  // 1.0 = safe, drops near fire/outdoors at night
+    pub comfort: f32, // 1.0 = comfy, indoors + furniture
+    pub health: f32,  // 1.0 = full health, damaged by unmet needs
+    pub mood: f32,    // -100 to +100, aggregate of all needs
+    pub stress: f32,  // 0-100, cumulative stress level
 
     // Stress tracking
-    pub last_task_type: u8,   // for monotony detection (zones::WORK_*)
-    pub task_duration: f32,   // seconds on current task type
+    pub last_task_type: u8, // for monotony detection (zones::WORK_*)
+    pub task_duration: f32, // seconds on current task type
 
     // Breathing system
-    pub breath_remaining: f32,   // seconds of breath left (0..BREATH_HOLD_MAX)
+    pub breath_remaining: f32, // seconds of breath left (0..BREATH_HOLD_MAX)
     pub breathing_state: BreathingState,
-    pub air_o2: f32,             // last sampled O2 at position (0-1, from fluid sim)
-    pub air_co2: f32,            // last sampled CO2 at position (0-1.5, from fluid sim)
-    pub air_temp: f32,           // last sampled temperature at position (°C, from fluid sim)
+    pub air_o2: f32,   // last sampled O2 at position (0-1, from fluid sim)
+    pub air_co2: f32,  // last sampled CO2 at position (0-1.5, from fluid sim)
+    pub air_temp: f32, // last sampled temperature at position (°C, from fluid sim)
     pub flee_target: Option<(i32, i32)>, // crisis pathfind target (nearest good air)
 }
 
@@ -146,19 +146,19 @@ impl Default for PlebNeeds {
 #[allow(dead_code)]
 pub struct EnvSample {
     pub is_indoors: bool,
-    pub near_fire: bool,      // within 3 blocks of fireplace/campfire
-    pub near_heater: bool,    // within 3 blocks of electric heater
-    pub near_bed: bool,       // within 2 blocks of bed (type 30)
-    pub near_furniture: bool, // within 3 blocks of bench/table/chair
+    pub near_fire: bool,       // within 3 blocks of fireplace/campfire
+    pub near_heater: bool,     // within 3 blocks of electric heater
+    pub near_bed: bool,        // within 2 blocks of bed (type 30)
+    pub near_furniture: bool,  // within 3 blocks of bench/table/chair
     pub near_berry_bush: bool, // within 2 blocks of berry bush (type 31)
     #[allow(dead_code)]
-    pub near_crate: bool,      // within 2 blocks of storage crate (type 33)
-    pub nearest_bed: Option<(i32, i32)>,       // coords of nearest bed
+    pub near_crate: bool, // within 2 blocks of storage crate (type 33)
+    pub nearest_bed: Option<(i32, i32)>, // coords of nearest bed
     pub nearest_berry_bush: Option<(i32, i32)>, // coords of nearest berry bush
-    pub nearest_crate: Option<(i32, i32)>,     // coords of nearest storage crate
+    pub nearest_crate: Option<(i32, i32)>, // coords of nearest storage crate
     pub is_night: bool,
-    pub is_dusk: bool,        // transition period (getting cold)
-    pub fire_dist: f32,       // distance to nearest fire (for danger)
+    pub is_dusk: bool,  // transition period (getting cold)
+    pub fire_dist: f32, // distance to nearest fire (for danger)
 }
 
 /// Sample the environment around a pleb position from the CPU grid.
@@ -196,34 +196,52 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
         for dx in -scan_r..=scan_r {
             let sx = bx + dx;
             let sy = by + dy;
-            if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+            if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 {
+                continue;
+            }
 
             let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
             let bt = block_type_rs(b);
             let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
 
             if bt == BT_FIREPLACE {
-                if dist < NEAR_FIRE_RADIUS { near_fire = true; }
-                if dist < fire_dist { fire_dist = dist; }
+                if dist < NEAR_FIRE_RADIUS {
+                    near_fire = true;
+                }
+                if dist < fire_dist {
+                    fire_dist = dist;
+                }
             } else if bt == BT_CEILING_LIGHT {
-                if dist < NEAR_HEATER_RADIUS { near_heater = true; }
+                if dist < NEAR_HEATER_RADIUS {
+                    near_heater = true;
+                }
             } else if bt_is!(bt, BT_BENCH, BT_COMPOST) {
-                if dist < NEAR_FURNITURE_RADIUS { near_furniture = true; }
+                if dist < NEAR_FURNITURE_RADIUS {
+                    near_furniture = true;
+                }
             } else if bt == BT_BED {
-                if dist < NEAR_BED_RADIUS { near_bed = true; }
-                if dist < NEAR_FURNITURE_RADIUS { near_furniture = true; }
+                if dist < NEAR_BED_RADIUS {
+                    near_bed = true;
+                }
+                if dist < NEAR_FURNITURE_RADIUS {
+                    near_furniture = true;
+                }
                 if dist < bed_dist {
                     bed_dist = dist;
                     nearest_bed = Some((sx, sy));
                 }
             } else if bt == BT_BERRY_BUSH {
-                if dist < NEAR_INTERACT_RADIUS { near_berry_bush = true; }
+                if dist < NEAR_INTERACT_RADIUS {
+                    near_berry_bush = true;
+                }
                 if dist < bush_dist {
                     bush_dist = dist;
                     nearest_berry_bush = Some((sx, sy));
                 }
             } else if bt == BT_CRATE {
-                if dist < NEAR_INTERACT_RADIUS { near_crate = true; }
+                if dist < NEAR_INTERACT_RADIUS {
+                    near_crate = true;
+                }
                 if dist < crate_dist {
                     crate_dist = dist;
                     nearest_crate = Some((sx, sy));
@@ -260,11 +278,11 @@ pub struct AirReadback {
 }
 
 // --- Need decay rates (per real second at 1x speed) ---
-const HUNGER_DECAY: f32 = 0.003;       // ~5.5 min to starve from full
-const THIRST_DECAY: f32 = 0.004;       // ~4 min to dehydrate from full (faster than hunger)
-const REST_DECAY_IDLE: f32 = 0.002;    // ~8 min to exhaust while idle
-const REST_DECAY_MOVING: f32 = 0.005;  // ~3.3 min while moving
-const REST_RECOVER_BED: f32 = 0.02;    // ~50s to fully rest in bed
+const HUNGER_DECAY: f32 = 0.003; // ~5.5 min to starve from full
+const THIRST_DECAY: f32 = 0.004; // ~4 min to dehydrate from full (faster than hunger)
+const REST_DECAY_IDLE: f32 = 0.002; // ~8 min to exhaust while idle
+const REST_DECAY_MOVING: f32 = 0.005; // ~3.3 min while moving
+const REST_RECOVER_BED: f32 = 0.02; // ~50s to fully rest in bed
 const REST_RECOVER_BENCH: f32 = 0.008; // ~2 min to fully rest on bench/ground
 /// How much hunger one berry restores
 pub const BERRY_HUNGER_RESTORE: f32 = 0.20;
@@ -274,18 +292,18 @@ pub const WELL_THIRST_RESTORE: f32 = 0.50;
 pub const WELL_DRINK_TIME: f32 = 4.0;
 
 // --- Stress rates (per real second at 1x speed) ---
-const STRESS_HUNGER: f32 = 2.0;        // per min when hunger < 0.3
-const STRESS_THIRST: f32 = 3.0;        // per min when thirst < 0.3
-const STRESS_FREEZING: f32 = 4.0;      // per min when warmth < 0.15
-const STRESS_EXHAUSTION: f32 = 2.0;    // per min when rest < 0.2
-const STRESS_GROUND_SLEEP: f32 = 1.0;  // per min when sleeping without bed
-const STRESS_UGLY: f32 = 0.5;          // per min, no furniture/floor/roof
-const STRESS_MONOTONY: f32 = 0.3;      // per min, same task > 5 min
+const STRESS_HUNGER: f32 = 2.0; // per min when hunger < 0.3
+const STRESS_THIRST: f32 = 3.0; // per min when thirst < 0.3
+const STRESS_FREEZING: f32 = 4.0; // per min when warmth < 0.15
+const STRESS_EXHAUSTION: f32 = 2.0; // per min when rest < 0.2
+const STRESS_GROUND_SLEEP: f32 = 1.0; // per min when sleeping without bed
+const STRESS_UGLY: f32 = 0.5; // per min, no furniture/floor/roof
+const STRESS_MONOTONY: f32 = 0.3; // per min, same task > 5 min
 
-const STRESS_RELIEF_BED: f32 = 3.0;     // per min, sleeping in bed
-const STRESS_RELIEF_BENCH: f32 = 2.0;   // per min, near furniture
-const STRESS_RELIEF_FIRE: f32 = 1.0;    // per min, near fireplace
-const STRESS_RELIEF_VARIED: f32 = 0.5;  // per min, changed task recently
+const STRESS_RELIEF_BED: f32 = 3.0; // per min, sleeping in bed
+const STRESS_RELIEF_BENCH: f32 = 2.0; // per min, near furniture
+const STRESS_RELIEF_FIRE: f32 = 1.0; // per min, near fireplace
+const STRESS_RELIEF_VARIED: f32 = 0.5; // per min, changed task recently
 
 pub const STRESS_BREAK_THRESHOLD: f32 = 85.0;
 pub const STRESS_POST_BREAK: f32 = 50.0; // stress after a mental break
@@ -293,32 +311,52 @@ pub const STRESS_POST_BREAK: f32 = 50.0; // stress after a mental break
 /// Stress level label for UI.
 #[allow(dead_code)]
 pub fn stress_label(stress: f32) -> &'static str {
-    if stress < 25.0 { "Calm" }
-    else if stress < 50.0 { "Normal" }
-    else if stress < 70.0 { "Stressed" }
-    else if stress < 85.0 { "Distressed" }
-    else { "Breaking" }
+    if stress < 25.0 {
+        "Calm"
+    } else if stress < 50.0 {
+        "Normal"
+    } else if stress < 70.0 {
+        "Stressed"
+    } else if stress < 85.0 {
+        "Distressed"
+    } else {
+        "Breaking"
+    }
 }
 
 /// Work speed multiplier from stress level.
 #[allow(dead_code)]
 pub fn stress_work_speed(stress: f32) -> f32 {
-    if stress < 25.0 { 1.1 }       // calm: bonus
-    else if stress < 50.0 { 1.0 }  // normal
-    else if stress < 70.0 { 0.85 } // stressed: penalty
-    else if stress < 85.0 { 0.7 }  // distressed: major penalty
-    else { 0.5 }                    // breaking: barely functioning
+    if stress < 25.0 {
+        1.1
+    }
+    // calm: bonus
+    else if stress < 50.0 {
+        1.0
+    }
+    // normal
+    else if stress < 70.0 {
+        0.85
+    }
+    // stressed: penalty
+    else if stress < 85.0 {
+        0.7
+    }
+    // distressed: major penalty
+    else {
+        0.5
+    } // breaking: barely functioning
 }
 
 // --- Health damage rates (per real second) ---
-const STARVE_DAMAGE: f32 = 0.008;      // ~2 min to die from starvation
-const DEHYDRATE_DAMAGE: f32 = 0.010;  // ~1.7 min to die from dehydration
+const STARVE_DAMAGE: f32 = 0.008; // ~2 min to die from starvation
+const DEHYDRATE_DAMAGE: f32 = 0.010; // ~1.7 min to die from dehydration
 const DEHYDRATION_THRESHOLD: f32 = 0.05;
-const FREEZE_DAMAGE: f32 = 0.012;      // ~1.3 min to die from cold
-const FIRE_DAMAGE: f32 = 0.04;         // ~25s to die in fire
-const HEAT_DAMAGE: f32 = 0.05;         // ~20s to die from extreme heat (was 0.015)
+const FREEZE_DAMAGE: f32 = 0.012; // ~1.3 min to die from cold
+const FIRE_DAMAGE: f32 = 0.04; // ~25s to die in fire
+const HEAT_DAMAGE: f32 = 0.05; // ~20s to die from extreme heat (was 0.015)
 /// Temperature above which colonists take heat damage
-const HEAT_DANGER_TEMP: f32 = 45.0;   // lowered from 50
+const HEAT_DANGER_TEMP: f32 = 45.0; // lowered from 50
 /// Temperature above which colonists flee (crisis)
 pub const HEAT_CRISIS_TEMP: f32 = 40.0; // lowered from 45 — flee earlier
 
@@ -331,7 +369,15 @@ fn air_breathable(o2: f32, co2: f32) -> bool {
 /// `dt` = frame delta time, `time_speed` = game speed multiplier.
 /// `is_moving` = true if pleb moved this frame.
 /// `air` = fluid sim readback (None if readback not available, e.g. WASM).
-pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f32, is_moving: bool, is_sleeping: bool, air: Option<&AirReadback>) {
+pub fn tick_needs(
+    needs: &mut PlebNeeds,
+    env: &EnvSample,
+    dt: f32,
+    time_speed: f32,
+    is_moving: bool,
+    is_sleeping: bool,
+    air: Option<&AirReadback>,
+) {
     let t = dt * time_speed;
 
     // --- Store air readings ---
@@ -376,19 +422,27 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
     } else {
         // Fallback: grid-based approximation
         if env.near_fire || env.near_heater {
-            if env.is_indoors { WARMTH_INDOORS_FIRE } else { 0.6 } // fire outdoors helps but not as much
+            if env.is_indoors {
+                WARMTH_INDOORS_FIRE
+            } else {
+                0.6
+            } // fire outdoors helps but not as much
         } else if env.is_indoors {
             WARMTH_INDOORS
         } else if env.is_night {
             WARMTH_NIGHT_OUTDOORS // dangerous cold
         } else if env.is_dusk {
-            WARMTH_DUSK_OUTDOORS  // getting cold
+            WARMTH_DUSK_OUTDOORS // getting cold
         } else {
             WARMTH_DAY_OUTDOORS
         }
     };
     // Warming is slow, cooling is fast (hypothermia sets in quickly)
-    let rate = if target_warmth > needs.warmth { 0.2 } else { 0.6 };
+    let rate = if target_warmth > needs.warmth {
+        0.2
+    } else {
+        0.6
+    };
     needs.warmth += (target_warmth - needs.warmth) * rate * t;
     needs.warmth = needs.warmth.clamp(0.0, 1.0);
 
@@ -397,10 +451,18 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
         (needs.air_o2, needs.air_co2)
     } else {
         // Fallback: estimate from grid
-        let o2 = if !env.is_indoors { 1.0 }
-            else if env.near_fire { 0.6 }
-            else { 0.9 };
-        let co2 = if env.is_indoors && env.near_fire { 0.15 } else { 0.0 };
+        let o2 = if !env.is_indoors {
+            1.0
+        } else if env.near_fire {
+            0.6
+        } else {
+            0.9
+        };
+        let co2 = if env.is_indoors && env.near_fire {
+            0.15
+        } else {
+            0.0
+        };
         (o2, co2)
     };
 
@@ -410,15 +472,18 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
         BreathingState::Normal => {
             if can_breathe {
                 // Good air — recover breath, replenish O2 need
-                needs.breath_remaining = (needs.breath_remaining + BREATH_RECOVERY_RATE * t).min(BREATH_HOLD_MAX);
+                needs.breath_remaining =
+                    (needs.breath_remaining + BREATH_RECOVERY_RATE * t).min(BREATH_HOLD_MAX);
 
                 // O2 need based on air quality
                 let o2_quality = if o2 > O2_LABORED && co2 < CO2_IRRITANT {
                     1.0 // perfect air
                 } else {
                     // Labored breathing — partial benefit
-                    let o2_factor = ((o2 - O2_UNBREATHABLE) / (O2_LABORED - O2_UNBREATHABLE)).clamp(0.0, 1.0);
-                    let co2_factor = (1.0 - (co2 - CO2_IRRITANT) / (CO2_TOXIC - CO2_IRRITANT)).clamp(0.0, 1.0);
+                    let o2_factor =
+                        ((o2 - O2_UNBREATHABLE) / (O2_LABORED - O2_UNBREATHABLE)).clamp(0.0, 1.0);
+                    let co2_factor =
+                        (1.0 - (co2 - CO2_IRRITANT) / (CO2_TOXIC - CO2_IRRITANT)).clamp(0.0, 1.0);
                     o2_factor * co2_factor * 0.7
                 };
                 needs.oxygen = (needs.oxygen + o2_quality * 0.5 * t).min(1.0);
@@ -545,7 +610,11 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
         needs.health = (needs.health - damage * t).max(0.0);
     } else {
         // Slow natural healing when all needs met above 0.5
-        if needs.hunger > NATURAL_HEAL_THRESHOLD && needs.rest > NATURAL_HEAL_THRESHOLD && needs.warmth > NATURAL_HEAL_THRESHOLD && needs.oxygen > NATURAL_HEAL_THRESHOLD {
+        if needs.hunger > NATURAL_HEAL_THRESHOLD
+            && needs.rest > NATURAL_HEAL_THRESHOLD
+            && needs.warmth > NATURAL_HEAL_THRESHOLD
+            && needs.oxygen > NATURAL_HEAL_THRESHOLD
+        {
             needs.health = (needs.health + NATURAL_HEAL_RATE * t).min(1.0);
         }
     }
@@ -567,19 +636,41 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
     let mut stress_delta: f32 = 0.0;
 
     // Stress sources
-    if needs.hunger < 0.3 { stress_delta += STRESS_HUNGER * t_min; }
-    if needs.thirst < 0.3 { stress_delta += STRESS_THIRST * t_min; }
-    if needs.warmth < FREEZE_THRESHOLD { stress_delta += STRESS_FREEZING * t_min; }
-    if needs.rest < 0.2 { stress_delta += STRESS_EXHAUSTION * t_min; }
-    if is_sleeping && !env.near_bed { stress_delta += STRESS_GROUND_SLEEP * t_min; }
-    if !env.is_indoors && !env.near_furniture { stress_delta += STRESS_UGLY * t_min; }
-    if needs.task_duration > 300.0 { stress_delta += STRESS_MONOTONY * t_min; } // 5+ min same task
+    if needs.hunger < 0.3 {
+        stress_delta += STRESS_HUNGER * t_min;
+    }
+    if needs.thirst < 0.3 {
+        stress_delta += STRESS_THIRST * t_min;
+    }
+    if needs.warmth < FREEZE_THRESHOLD {
+        stress_delta += STRESS_FREEZING * t_min;
+    }
+    if needs.rest < 0.2 {
+        stress_delta += STRESS_EXHAUSTION * t_min;
+    }
+    if is_sleeping && !env.near_bed {
+        stress_delta += STRESS_GROUND_SLEEP * t_min;
+    }
+    if !env.is_indoors && !env.near_furniture {
+        stress_delta += STRESS_UGLY * t_min;
+    }
+    if needs.task_duration > 300.0 {
+        stress_delta += STRESS_MONOTONY * t_min;
+    } // 5+ min same task
 
     // Stress relief
-    if is_sleeping && env.near_bed { stress_delta -= STRESS_RELIEF_BED * t_min; }
-    if env.near_furniture { stress_delta -= STRESS_RELIEF_BENCH * t_min; }
-    if env.near_fire { stress_delta -= STRESS_RELIEF_FIRE * t_min; }
-    if needs.task_duration < 60.0 && needs.last_task_type != 255 { stress_delta -= STRESS_RELIEF_VARIED * t_min; }
+    if is_sleeping && env.near_bed {
+        stress_delta -= STRESS_RELIEF_BED * t_min;
+    }
+    if env.near_furniture {
+        stress_delta -= STRESS_RELIEF_BENCH * t_min;
+    }
+    if env.near_fire {
+        stress_delta -= STRESS_RELIEF_FIRE * t_min;
+    }
+    if needs.task_duration < 60.0 && needs.last_task_type != 255 {
+        stress_delta -= STRESS_RELIEF_VARIED * t_min;
+    }
 
     // Natural baseline decay (always trends toward 20 slowly)
     stress_delta += (20.0 - needs.stress) * 0.01 * t_min;
@@ -589,11 +680,17 @@ pub fn tick_needs(needs: &mut PlebNeeds, env: &EnvSample, dt: f32, time_speed: f
 
 /// Get a descriptive mood label from mood value.
 pub fn mood_label(mood: f32) -> &'static str {
-    if mood > 60.0 { "Happy" }
-    else if mood > 20.0 { "Content" }
-    else if mood > -20.0 { "Neutral" }
-    else if mood > -60.0 { "Stressed" }
-    else { "Breaking" }
+    if mood > 60.0 {
+        "Happy"
+    } else if mood > 20.0 {
+        "Content"
+    } else if mood > -20.0 {
+        "Neutral"
+    } else if mood > -60.0 {
+        "Stressed"
+    } else {
+        "Breaking"
+    }
 }
 
 /// Get the most critical need (lowest value) for crisis behavior.
@@ -605,7 +702,8 @@ pub fn critical_need(needs: &PlebNeeds) -> Option<(&'static str, f32)> {
         ("hunger", needs.hunger),
         ("rest", needs.rest),
     ];
-    pairs.iter()
+    pairs
+        .iter()
         .filter(|(_, v)| *v < 0.2)
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|&(name, val)| (name, val))
@@ -629,7 +727,9 @@ pub fn find_nearest_crate(grid: &[u32], bx: i32, by: i32) -> Option<(i32, i32)> 
         for dx in -scan_r..=scan_r {
             let sx = bx + dx;
             let sy = by + dy;
-            if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+            if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 {
+                continue;
+            }
             let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
             if block_type_rs(b) == BT_CRATE {
                 let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
@@ -652,7 +752,9 @@ pub fn find_nearest_well(grid: &[u32], bx: i32, by: i32) -> Option<(i32, i32)> {
         for dx in -scan_r..=scan_r {
             let sx = bx + dx;
             let sy = by + dy;
-            if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+            if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 {
+                continue;
+            }
             let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
             if block_type_rs(b) == BT_WELL {
                 let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
@@ -673,17 +775,23 @@ pub fn find_cool_tile(grid: &[u32], bx: i32, by: i32, max_radius: i32) -> Option
     for r in 3..=max_radius {
         for dy in -r..=r {
             for dx in -r..=r {
-                if dx.abs() != r && dy.abs() != r { continue; }
+                if dx.abs() != r && dy.abs() != r {
+                    continue;
+                }
                 let sx = bx + dx;
                 let sy = by + dy;
-                if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+                if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 {
+                    continue;
+                }
 
                 let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
                 // Outdoors (no roof) = likely cooler, and walkable
-                if roof_height_rs(b) == 0 && is_walkable_pos(grid, sx as f32 + 0.5, sy as f32 + 0.5) {
+                if roof_height_rs(b) == 0 && is_walkable_pos(grid, sx as f32 + 0.5, sy as f32 + 0.5)
+                {
                     // Also check no fire nearby
                     let bt = block_type_rs(b);
-                    if bt != BT_FIREPLACE { // not a fireplace
+                    if bt != BT_FIREPLACE {
+                        // not a fireplace
                         return Some((sx, sy));
                     }
                 }
@@ -701,14 +809,19 @@ pub fn find_breathable_tile(grid: &[u32], bx: i32, by: i32, max_radius: i32) -> 
     for r in 1..=max_radius {
         for dy in -r..=r {
             for dx in -r..=r {
-                if dx.abs() != r && dy.abs() != r { continue; } // only ring perimeter
+                if dx.abs() != r && dy.abs() != r {
+                    continue;
+                } // only ring perimeter
                 let sx = bx + dx;
                 let sy = by + dy;
-                if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+                if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 {
+                    continue;
+                }
 
                 let b = grid[(sy as u32 * GRID_W + sx as u32) as usize];
                 // Outdoors (no roof) = guaranteed breathable air
-                if roof_height_rs(b) == 0 && is_walkable_pos(grid, sx as f32 + 0.5, sy as f32 + 0.5) {
+                if roof_height_rs(b) == 0 && is_walkable_pos(grid, sx as f32 + 0.5, sy as f32 + 0.5)
+                {
                     return Some((sx, sy));
                 }
             }
@@ -741,15 +854,30 @@ mod tests {
     }
 
     fn good_air() -> AirReadback {
-        AirReadback { o2: 1.0, co2: 0.0, temp: 20.0, smoke: 0.0 }
+        AirReadback {
+            o2: 1.0,
+            co2: 0.0,
+            temp: 20.0,
+            smoke: 0.0,
+        }
     }
 
     fn toxic_air() -> AirReadback {
-        AirReadback { o2: 0.08, co2: 0.5, temp: 40.0, smoke: 1.0 }
+        AirReadback {
+            o2: 0.08,
+            co2: 0.5,
+            temp: 40.0,
+            smoke: 1.0,
+        }
     }
 
     fn high_co2_air() -> AirReadback {
-        AirReadback { o2: 0.8, co2: 0.4, temp: 22.0, smoke: 0.2 }
+        AirReadback {
+            o2: 0.8,
+            co2: 0.4,
+            temp: 22.0,
+            smoke: 0.2,
+        }
     }
 
     #[test]
@@ -787,11 +915,20 @@ mod tests {
         let mut needs = PlebNeeds::default();
         needs.warmth = 0.2;
         let env = default_env();
-        let warm_air = AirReadback { o2: 1.0, co2: 0.0, temp: 22.0, smoke: 0.0 };
+        let warm_air = AirReadback {
+            o2: 1.0,
+            co2: 0.0,
+            temp: 22.0,
+            smoke: 0.0,
+        };
         for _ in 0..10 {
             tick_needs(&mut needs, &env, 0.5, 1.0, false, false, Some(&warm_air));
         }
-        assert!(needs.warmth > 0.6, "warmth should rise in warm air, got {}", needs.warmth);
+        assert!(
+            needs.warmth > 0.6,
+            "warmth should rise in warm air, got {}",
+            needs.warmth
+        );
     }
 
     #[test]
@@ -799,11 +936,20 @@ mod tests {
         let mut needs = PlebNeeds::default();
         needs.warmth = 1.0;
         let env = default_env();
-        let cold_air = AirReadback { o2: 1.0, co2: 0.0, temp: 0.0, smoke: 0.0 };
+        let cold_air = AirReadback {
+            o2: 1.0,
+            co2: 0.0,
+            temp: 0.0,
+            smoke: 0.0,
+        };
         for _ in 0..20 {
             tick_needs(&mut needs, &env, 0.5, 1.0, false, false, Some(&cold_air));
         }
-        assert!(needs.warmth < 0.2, "warmth should drop in freezing air, got {}", needs.warmth);
+        assert!(
+            needs.warmth < 0.2,
+            "warmth should drop in freezing air, got {}",
+            needs.warmth
+        );
     }
 
     #[test]
@@ -820,9 +966,20 @@ mod tests {
         let mut needs = PlebNeeds::default();
         let env = default_env();
         // Expose to high CO2 — should trigger breath hold
-        tick_needs(&mut needs, &env, 1.0, 1.0, false, false, Some(&high_co2_air()));
-        assert_eq!(needs.breathing_state, BreathingState::HoldingBreath,
-            "should hold breath when CO2 > toxic threshold");
+        tick_needs(
+            &mut needs,
+            &env,
+            1.0,
+            1.0,
+            false,
+            false,
+            Some(&high_co2_air()),
+        );
+        assert_eq!(
+            needs.breathing_state,
+            BreathingState::HoldingBreath,
+            "should hold breath when CO2 > toxic threshold"
+        );
     }
 
     #[test]
@@ -832,7 +989,10 @@ mod tests {
         let env = default_env();
         let initial_breath = needs.breath_remaining;
         tick_needs(&mut needs, &env, 5.0, 1.0, false, false, Some(&toxic_air()));
-        assert!(needs.breath_remaining < initial_breath, "breath should deplete while holding");
+        assert!(
+            needs.breath_remaining < initial_breath,
+            "breath should deplete while holding"
+        );
     }
 
     #[test]
@@ -843,10 +1003,20 @@ mod tests {
         needs2.breathing_state = BreathingState::HoldingBreath;
         let env = default_env();
 
-        tick_needs(&mut needs1, &env, 5.0, 1.0, false, false, Some(&toxic_air()));
+        tick_needs(
+            &mut needs1,
+            &env,
+            5.0,
+            1.0,
+            false,
+            false,
+            Some(&toxic_air()),
+        );
         tick_needs(&mut needs2, &env, 5.0, 1.0, true, false, Some(&toxic_air()));
-        assert!(needs2.breath_remaining < needs1.breath_remaining,
-            "breath should deplete faster when moving (running uses more O2)");
+        assert!(
+            needs2.breath_remaining < needs1.breath_remaining,
+            "breath should deplete faster when moving (running uses more O2)"
+        );
     }
 
     #[test]
@@ -856,8 +1026,11 @@ mod tests {
         needs.breath_remaining = 0.5;
         let env = default_env();
         tick_needs(&mut needs, &env, 1.0, 1.0, false, false, Some(&toxic_air()));
-        assert_eq!(needs.breathing_state, BreathingState::Gasping,
-            "should start gasping when breath runs out");
+        assert_eq!(
+            needs.breathing_state,
+            BreathingState::Gasping,
+            "should start gasping when breath runs out"
+        );
     }
 
     #[test]
@@ -868,8 +1041,10 @@ mod tests {
         let env = default_env();
         let initial_health = needs.health;
         tick_needs(&mut needs, &env, 1.0, 1.0, false, false, Some(&toxic_air()));
-        assert!(needs.health < initial_health,
-            "gasping in toxic air should damage health");
+        assert!(
+            needs.health < initial_health,
+            "gasping in toxic air should damage health"
+        );
     }
 
     #[test]
@@ -879,8 +1054,11 @@ mod tests {
         needs.breath_remaining = 10.0;
         let env = default_env();
         tick_needs(&mut needs, &env, 1.0, 1.0, false, false, Some(&good_air()));
-        assert_eq!(needs.breathing_state, BreathingState::Normal,
-            "should resume breathing when air becomes good");
+        assert_eq!(
+            needs.breathing_state,
+            BreathingState::Normal,
+            "should resume breathing when air becomes good"
+        );
     }
 
     #[test]
@@ -889,8 +1067,11 @@ mod tests {
         needs.breath_remaining = 10.0;
         let env = default_env();
         tick_needs(&mut needs, &env, 2.0, 1.0, false, false, Some(&good_air()));
-        assert!(needs.breath_remaining > 10.0,
-            "breath should recover in good air, got {}", needs.breath_remaining);
+        assert!(
+            needs.breath_remaining > 10.0,
+            "breath should recover in good air, got {}",
+            needs.breath_remaining
+        );
     }
 
     #[test]
@@ -919,16 +1100,27 @@ mod tests {
     #[test]
     fn test_mood_reflects_needs() {
         let mut good = PlebNeeds::default();
-        good.hunger = 1.0; good.rest = 1.0; good.warmth = 1.0;
-        good.oxygen = 1.0; good.safety = 1.0; good.comfort = 1.0;
+        good.hunger = 1.0;
+        good.rest = 1.0;
+        good.warmth = 1.0;
+        good.oxygen = 1.0;
+        good.safety = 1.0;
+        good.comfort = 1.0;
         good.mood = 0.0;
         let env = default_env();
         tick_needs(&mut good, &env, 1.0, 1.0, false, false, Some(&good_air()));
-        assert!(good.mood > 0.0, "mood should be positive with all needs met");
+        assert!(
+            good.mood > 0.0,
+            "mood should be positive with all needs met"
+        );
 
         let mut bad = PlebNeeds::default();
-        bad.hunger = 0.0; bad.rest = 0.0; bad.warmth = 0.0;
-        bad.oxygen = 0.0; bad.safety = 0.0; bad.comfort = 0.0;
+        bad.hunger = 0.0;
+        bad.rest = 0.0;
+        bad.warmth = 0.0;
+        bad.oxygen = 0.0;
+        bad.safety = 0.0;
+        bad.comfort = 0.0;
         bad.mood = 0.0;
         tick_needs(&mut bad, &env, 1.0, 1.0, false, false, Some(&good_air()));
         assert!(bad.mood < 0.0, "mood should be negative with no needs met");
@@ -946,7 +1138,10 @@ mod tests {
     #[test]
     fn test_critical_need() {
         let mut needs = PlebNeeds::default();
-        assert!(critical_need(&needs).is_none(), "no critical need when all satisfied");
+        assert!(
+            critical_need(&needs).is_none(),
+            "no critical need when all satisfied"
+        );
 
         needs.oxygen = 0.1;
         let crit = critical_need(&needs);
@@ -962,7 +1157,11 @@ mod tests {
         for _ in 0..10 {
             tick_needs(&mut needs, &env, 0.5, 1.0, false, false, Some(&good_air()));
         }
-        assert!(needs.safety < 0.9, "safety should drop near fire, got {}", needs.safety);
+        assert!(
+            needs.safety < 0.9,
+            "safety should drop near fire, got {}",
+            needs.safety
+        );
     }
 
     #[test]
@@ -971,9 +1170,21 @@ mod tests {
         let env = default_env();
         // Tick in toxic air to trigger breath hold, then measure safety
         for _ in 0..5 {
-            tick_needs(&mut needs, &env, 1.0, 1.0, false, false, Some(&high_co2_air()));
+            tick_needs(
+                &mut needs,
+                &env,
+                1.0,
+                1.0,
+                false,
+                false,
+                Some(&high_co2_air()),
+            );
         }
-        assert!(needs.safety < 0.8, "safety should drop when holding breath, got {}", needs.safety);
+        assert!(
+            needs.safety < 0.8,
+            "safety should drop when holding breath, got {}",
+            needs.safety
+        );
     }
 
     #[test]
@@ -1002,7 +1213,11 @@ mod tests {
         let (rx, ry) = result.unwrap();
         // Should be just outside the indoor area
         let dist = ((rx - 11) as f32).hypot((ry - 11) as f32);
-        assert!(dist <= 3.0, "breathable tile should be nearby, dist={}", dist);
+        assert!(
+            dist <= 3.0,
+            "breathable tile should be nearby, dist={}",
+            dist
+        );
     }
 
     #[test]
@@ -1020,11 +1235,31 @@ mod tests {
         night_env.near_bed = true;
         night_env.is_night = true;
 
-        tick_needs(&mut day_needs, &day_env, 1.0, 1.0, false, true, Some(&good_air()));
-        tick_needs(&mut night_needs, &night_env, 1.0, 1.0, false, true, Some(&good_air()));
+        tick_needs(
+            &mut day_needs,
+            &day_env,
+            1.0,
+            1.0,
+            false,
+            true,
+            Some(&good_air()),
+        );
+        tick_needs(
+            &mut night_needs,
+            &night_env,
+            1.0,
+            1.0,
+            false,
+            true,
+            Some(&good_air()),
+        );
 
-        assert!(night_needs.rest > day_needs.rest,
-            "night sleep should recover faster: night={:.4} day={:.4}", night_needs.rest, day_needs.rest);
+        assert!(
+            night_needs.rest > day_needs.rest,
+            "night sleep should recover faster: night={:.4} day={:.4}",
+            night_needs.rest,
+            day_needs.rest
+        );
     }
 
     #[test]
@@ -1035,7 +1270,11 @@ mod tests {
         for _ in 0..5 {
             tick_needs(&mut needs, &env, 1.0, 1.0, false, false, Some(&good_air()));
         }
-        assert!(needs.oxygen > 0.8, "O2 need should recover in good air, got {}", needs.oxygen);
+        assert!(
+            needs.oxygen > 0.8,
+            "O2 need should recover in good air, got {}",
+            needs.oxygen
+        );
     }
 
     #[test]
@@ -1043,7 +1282,7 @@ mod tests {
         assert!(air_breathable(1.0, 0.0));
         assert!(air_breathable(0.5, 0.1));
         assert!(!air_breathable(0.05, 0.0)); // too little O2
-        assert!(!air_breathable(1.0, 0.3));  // too much CO2
+        assert!(!air_breathable(1.0, 0.3)); // too much CO2
         assert!(!air_breathable(0.05, 0.5)); // both bad
     }
 }

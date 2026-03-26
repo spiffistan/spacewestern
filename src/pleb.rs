@@ -1,8 +1,8 @@
 //! Pleb (colonist) — struct, appearance, movement, A* pathfinding, activity.
 
 use crate::grid::*;
+use crate::materials::{NUM_MATERIALS, build_material_table};
 use crate::needs::PlebNeeds;
-use crate::materials::{build_material_table, NUM_MATERIALS};
 use std::sync::OnceLock;
 
 /// Cached walkable lookup table indexed by block type. True = walkable at height 0.
@@ -31,25 +31,25 @@ fn is_type_walkable(bt: u32) -> bool {
 /// What the pleb is currently doing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MentalBreakKind {
-    Daze,      // wanders aimlessly
-    Binge,     // eats all available food
-    Tantrum,   // destroys a nearby item
-    Collapse,  // sits on ground, won't move
+    Daze,     // wanders aimlessly
+    Binge,    // eats all available food
+    Tantrum,  // destroys a nearby item
+    Collapse, // sits on ground, won't move
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlebActivity {
     Idle,
-    Walking,          // following a path (player-ordered or auto)
-    Sleeping,         // in bed, recovering rest
-    Harvesting(f32),  // progress 0-1, harvesting a berry bush at nearby tile
-    Eating,           // consuming food (quick action)
-    Hauling,          // carrying item to a storage crate
-    Farming(f32),     // progress 0-1, planting or harvesting a crop
-    Building(f32),    // progress 0-1, constructing a blueprint
-    Crafting(u16, f32), // (recipe_id, progress 0-1)
-    Drinking(f32),    // progress 0-1, drinking at a well
-    Staggering(f32),  // knockback recovery timer (seconds remaining)
+    Walking,                           // following a path (player-ordered or auto)
+    Sleeping,                          // in bed, recovering rest
+    Harvesting(f32),                   // progress 0-1, harvesting a berry bush at nearby tile
+    Eating,                            // consuming food (quick action)
+    Hauling,                           // carrying item to a storage crate
+    Farming(f32),                      // progress 0-1, planting or harvesting a crop
+    Building(f32),                     // progress 0-1, constructing a blueprint
+    Crafting(u16, f32),                // (recipe_id, progress 0-1)
+    Drinking(f32),                     // progress 0-1, drinking at a well
+    Staggering(f32),                   // knockback recovery timer (seconds remaining)
     MentalBreak(MentalBreakKind, f32), // (kind, seconds remaining)
     /// Crisis override — pleb acts autonomously, ignoring player input.
     /// Inner activity is what they're doing (Walking to food/bed, Harvesting, Eating, Sleeping).
@@ -84,18 +84,28 @@ pub use crate::resources::PlebInventory;
 /// Appearance data for rendering a pleb (Rimworld-style).
 #[derive(Clone, Debug)]
 pub struct PlebAppearance {
-    pub skin_r: f32, pub skin_g: f32, pub skin_b: f32,
-    pub hair_r: f32, pub hair_g: f32, pub hair_b: f32,
-    pub shirt_r: f32, pub shirt_g: f32, pub shirt_b: f32,
-    pub pants_r: f32, pub pants_g: f32, pub pants_b: f32,
-    pub hair_style: u32,  // 0=bald, 1=short, 2=medium, 3=long
+    pub skin_r: f32,
+    pub skin_g: f32,
+    pub skin_b: f32,
+    pub hair_r: f32,
+    pub hair_g: f32,
+    pub hair_b: f32,
+    pub shirt_r: f32,
+    pub shirt_g: f32,
+    pub shirt_b: f32,
+    pub pants_r: f32,
+    pub pants_g: f32,
+    pub pants_b: f32,
+    pub hair_style: u32, // 0=bald, 1=short, 2=medium, 3=long
 }
 
 impl PlebAppearance {
     /// Generate random appearance from a seed.
     pub fn random(seed: u32) -> Self {
         let hash = |i: u32| -> f32 {
-            let h = seed.wrapping_mul(2654435761).wrapping_add(i.wrapping_mul(1013904223));
+            let h = seed
+                .wrapping_mul(2654435761)
+                .wrapping_add(i.wrapping_mul(1013904223));
             (h & 0xFFFF) as f32 / 65535.0
         };
 
@@ -144,10 +154,18 @@ impl PlebAppearance {
         let hair_style = (hash(5) * 4.0) as u32;
 
         PlebAppearance {
-            skin_r, skin_g, skin_b,
-            hair_r, hair_g, hair_b,
-            shirt_r, shirt_g, shirt_b,
-            pants_r, pants_g, pants_b,
+            skin_r,
+            skin_g,
+            skin_b,
+            hair_r,
+            hair_g,
+            hair_b,
+            shirt_r,
+            shirt_g,
+            shirt_b,
+            pants_r,
+            pants_g,
+            pants_b,
             hair_style,
         }
     }
@@ -157,12 +175,30 @@ impl PlebAppearance {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuPleb {
-    pub x: f32, pub y: f32, pub angle: f32, pub selected: f32,
-    pub torch: f32, pub headlight: f32, pub carrying: f32, pub health: f32,
-    pub skin_r: f32, pub skin_g: f32, pub skin_b: f32, pub hair_style: f32,
-    pub hair_r: f32, pub hair_g: f32, pub hair_b: f32, pub _pad2: f32,
-    pub shirt_r: f32, pub shirt_g: f32, pub shirt_b: f32, pub _pad3: f32,
-    pub pants_r: f32, pub pants_g: f32, pub pants_b: f32, pub _pad4: f32,
+    pub x: f32,
+    pub y: f32,
+    pub angle: f32,
+    pub selected: f32,
+    pub torch: f32,
+    pub headlight: f32,
+    pub carrying: f32,
+    pub health: f32,
+    pub skin_r: f32,
+    pub skin_g: f32,
+    pub skin_b: f32,
+    pub hair_style: f32,
+    pub hair_r: f32,
+    pub hair_g: f32,
+    pub hair_b: f32,
+    pub _pad2: f32,
+    pub shirt_r: f32,
+    pub shirt_g: f32,
+    pub shirt_b: f32,
+    pub _pad3: f32,
+    pub pants_r: f32,
+    pub pants_g: f32,
+    pub pants_b: f32,
+    pub _pad4: f32,
 }
 
 pub struct Pleb {
@@ -189,7 +225,7 @@ pub struct Pleb {
     pub schedule: PlebSchedule,
     pub knockback_vx: f32, // explosion knockback velocity (decays over time)
     pub knockback_vy: f32,
-    pub is_dead: bool,     // corpse: stays in world but doesn't act
+    pub is_dead: bool,            // corpse: stays in world but doesn't act
     pub work_priorities: [u8; 4], // [haul, farm, build, craft] — 0=off, 1-3=priority
 }
 
@@ -202,7 +238,10 @@ pub struct PlebSchedule {
 
 impl Default for PlebSchedule {
     fn default() -> Self {
-        let mut s = PlebSchedule { hours: [true; 24], preset: PlebShift::Day };
+        let mut s = PlebSchedule {
+            hours: [true; 24],
+            preset: PlebShift::Day,
+        };
         s.apply_preset(PlebShift::Day);
         s
     }
@@ -225,9 +264,9 @@ impl PlebSchedule {
 /// Shift presets.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlebShift {
-    Day,     // sleep 22:00-06:00
-    Night,   // sleep 10:00-18:00
-    Custom,  // manually edited
+    Day,    // sleep 22:00-06:00
+    Night,  // sleep 10:00-18:00
+    Custom, // manually edited
 }
 
 impl PlebShift {
@@ -251,7 +290,10 @@ impl PlebShift {
 impl Pleb {
     pub fn new(id: usize, name: String, x: f32, y: f32, seed: u32) -> Self {
         Pleb {
-            id, name, x, y,
+            id,
+            name,
+            x,
+            y,
             angle: 0.0,
             path: Vec::new(),
             path_idx: 0,
@@ -279,17 +321,34 @@ impl Pleb {
     pub fn to_gpu(&self, selected: bool) -> GpuPleb {
         let a = &self.appearance;
         GpuPleb {
-            x: self.x, y: self.y, angle: self.angle,
+            x: self.x,
+            y: self.y,
+            angle: self.angle,
             selected: if selected { 1.0 } else { 0.0 },
             torch: if self.torch_on { 1.0 } else { 0.0 },
             headlight: if self.headlight_on { 1.0 } else { 0.0 },
-            carrying: if self.inventory.is_carrying() { 1.0 } else { 0.0 },
+            carrying: if self.inventory.is_carrying() {
+                1.0
+            } else {
+                0.0
+            },
             health: self.needs.health,
-            skin_r: a.skin_r, skin_g: a.skin_g, skin_b: a.skin_b,
+            skin_r: a.skin_r,
+            skin_g: a.skin_g,
+            skin_b: a.skin_b,
             hair_style: a.hair_style as f32,
-            hair_r: a.hair_r, hair_g: a.hair_g, hair_b: a.hair_b, _pad2: 0.0,
-            shirt_r: a.shirt_r, shirt_g: a.shirt_g, shirt_b: a.shirt_b, _pad3: 0.0,
-            pants_r: a.pants_r, pants_g: a.pants_g, pants_b: a.pants_b, _pad4: 0.0,
+            hair_r: a.hair_r,
+            hair_g: a.hair_g,
+            hair_b: a.hair_b,
+            _pad2: 0.0,
+            shirt_r: a.shirt_r,
+            shirt_g: a.shirt_g,
+            shirt_b: a.shirt_b,
+            _pad3: 0.0,
+            pants_r: a.pants_r,
+            pants_g: a.pants_g,
+            pants_b: a.pants_b,
+            _pad4: 0.0,
         }
     }
 }
@@ -298,8 +357,8 @@ pub const MAX_PLEBS: usize = 16;
 
 /// Names pool for random pleb names.
 const NAMES: &[&str] = &[
-    "Jeff", "Sarah", "Marcus", "Elena", "Dmitri", "Yuki", "Carlos", "Amara",
-    "Olaf", "Priya", "Liam", "Zara", "Kento", "Ingrid", "Rashid", "Mei",
+    "Jeff", "Sarah", "Marcus", "Elena", "Dmitri", "Yuki", "Carlos", "Amara", "Olaf", "Priya",
+    "Liam", "Zara", "Kento", "Ingrid", "Rashid", "Mei",
 ];
 
 pub fn random_name(seed: u32) -> String {
@@ -310,19 +369,31 @@ pub fn random_name(seed: u32) -> String {
 /// Check if a pleb can stand at continuous position (x, y) using 4-corner bounding box.
 pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
     let r = 0.25;
-    for &(cx, cy) in &[(x - r, y - r), (x + r, y - r), (x - r, y + r), (x + r, y + r)] {
+    for &(cx, cy) in &[
+        (x - r, y - r),
+        (x + r, y - r),
+        (x - r, y + r),
+        (x + r, y + r),
+    ] {
         let bx = cx.floor() as i32;
         let by = cy.floor() as i32;
-        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return false; }
+        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
+            return false;
+        }
         let b = grid[(by as u32 * GRID_W + bx as u32) as usize];
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         let is_dug_shallow = bt == BT_DUG_GROUND && bh <= 1;
         let bt32 = bt as u32;
-        let is_pipe = ((bt32 >= 15 && bt32 <= 20) || bt32 == BT_RESTRICTOR
-            || bt32 == BT_LIQUID_PIPE || bt32 == BT_PIPE_BRIDGE
-            || bt32 == BT_LIQUID_INTAKE || bt32 == BT_LIQUID_PUMP || bt32 == BT_LIQUID_OUTPUT) && bh <= 1;
+        let is_pipe = ((bt32 >= 15 && bt32 <= 20)
+            || bt32 == BT_RESTRICTOR
+            || bt32 == BT_LIQUID_PIPE
+            || bt32 == BT_PIPE_BRIDGE
+            || bt32 == BT_LIQUID_INTAKE
+            || bt32 == BT_LIQUID_PUMP
+            || bt32 == BT_LIQUID_OUTPUT)
+            && bh <= 1;
         // Wire/power equipment: height byte is connection mask, not visual height
         let is_wire = is_wire_block(bt32);
         // Diagonal wall: check which side of the diagonal this corner is on
@@ -336,10 +407,13 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
                 2 => lfy < (1.0 - lfx),
                 _ => lfy < lfx,
             };
-            if on_wall { return false; }
+            if on_wall {
+                return false;
+            }
             continue; // open half is walkable
         }
-        if !is_door && !is_dug_shallow && !is_pipe && !is_wire && (bh > 0 || !is_type_walkable(bt)) {
+        if !is_door && !is_dug_shallow && !is_pipe && !is_wire && (bh > 0 || !is_type_walkable(bt))
+        {
             return false;
         }
     }
@@ -348,7 +422,16 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
 
 /// Find the nearest walkable tile adjacent to (gx, gy). Used when pathfinding to non-walkable targets (e.g. crates, walls).
 pub fn adjacent_walkable(grid: &[u32], gx: i32, gy: i32) -> Option<(i32, i32)> {
-    for &(dx, dy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+    for &(dx, dy) in &[
+        (0i32, -1i32),
+        (0, 1),
+        (-1, 0),
+        (1, 0),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+        (1, 1),
+    ] {
         let nx = gx + dx;
         let ny = gy + dy;
         if is_walkable_pos(grid, nx as f32 + 0.5, ny as f32 + 0.5) {
@@ -363,35 +446,59 @@ pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32
     astar_path_full(grid, &[], &[], start, goal)
 }
 
-pub fn astar_path_terrain(grid: &[u32], terrain: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
+pub fn astar_path_terrain(
+    grid: &[u32],
+    terrain: &[u32],
+    start: (i32, i32),
+    goal: (i32, i32),
+) -> Vec<(i32, i32)> {
     astar_path_full(grid, &[], terrain, start, goal)
 }
 
 /// A* pathfinding with optional elevation and terrain-aware movement cost.
 /// Compacted terrain reduces cost (plebs prefer worn paths).
-pub fn astar_path_full(grid: &[u32], elevation: &[f32], terrain: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
-    use std::collections::{BinaryHeap, HashMap};
+pub fn astar_path_full(
+    grid: &[u32],
+    elevation: &[f32],
+    terrain: &[u32],
+    start: (i32, i32),
+    goal: (i32, i32),
+) -> Vec<(i32, i32)> {
     use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap};
 
-    if start == goal { return vec![goal]; }
+    if start == goal {
+        return vec![goal];
+    }
 
     let is_walk = |x: i32, y: i32| -> bool {
-        if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 { return false; }
+        if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 {
+            return false;
+        }
         let b = grid[(y as u32 * GRID_W + x as u32) as usize];
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         let bt32 = bt as u32;
-        let is_any_pipe = (bt32 >= 15 && bt32 <= 20) || bt32 == BT_RESTRICTOR
-            || bt32 == BT_LIQUID_PIPE || bt32 == BT_PIPE_BRIDGE
-            || bt32 == BT_LIQUID_INTAKE || bt32 == BT_LIQUID_PUMP || bt32 == BT_LIQUID_OUTPUT;
+        let is_any_pipe = (bt32 >= 15 && bt32 <= 20)
+            || bt32 == BT_RESTRICTOR
+            || bt32 == BT_LIQUID_PIPE
+            || bt32 == BT_PIPE_BRIDGE
+            || bt32 == BT_LIQUID_INTAKE
+            || bt32 == BT_LIQUID_PUMP
+            || bt32 == BT_LIQUID_OUTPUT;
         let is_wire = is_wire_block(bt32);
-        is_door || (bh == 0 && is_type_walkable(bt)) || (bt == BT_DUG_GROUND && bh <= 1)
-            || (is_any_pipe && bh <= 1) || is_wire
+        is_door
+            || (bh == 0 && is_type_walkable(bt))
+            || (bt == BT_DUG_GROUND && bh <= 1)
+            || (is_any_pipe && bh <= 1)
+            || is_wire
             || bt32 == BT_DIAGONAL
     };
 
-    if !is_walk(goal.0, goal.1) { return vec![]; }
+    if !is_walk(goal.0, goal.1) {
+        return vec![];
+    }
 
     // Chebyshev distance heuristic (optimal for 8-directional with cost 10/14)
     let heuristic = |a: (i32, i32)| -> i32 {
@@ -402,8 +509,14 @@ pub fn astar_path_full(grid: &[u32], elevation: &[f32], terrain: &[u32], start: 
 
     // 8 directions: 4 cardinal + 4 diagonal
     const DIRS: [(i32, i32, i32); 8] = [
-        (0, -1, 10), (0, 1, 10), (-1, 0, 10), (1, 0, 10),       // cardinal: cost 10
-        (-1, -1, 14), (1, -1, 14), (-1, 1, 14), (1, 1, 14),      // diagonal: cost 14
+        (0, -1, 10),
+        (0, 1, 10),
+        (-1, 0, 10),
+        (1, 0, 10), // cardinal: cost 10
+        (-1, -1, 14),
+        (1, -1, 14),
+        (-1, 1, 14),
+        (1, 1, 14), // diagonal: cost 14
     ];
 
     let mut open = BinaryHeap::new();
@@ -429,7 +542,9 @@ pub fn astar_path_full(grid: &[u32], elevation: &[f32], terrain: &[u32], start: 
 
         for &(ndx, ndy, cost) in &DIRS {
             let next = (current.0 + ndx, current.1 + ndy);
-            if !is_walk(next.0, next.1) { continue; }
+            if !is_walk(next.0, next.1) {
+                continue;
+            }
 
             // Diagonal: require both adjacent cardinal tiles to be walkable (no corner-cutting)
             if ndx != 0 && ndy != 0 {
@@ -446,8 +561,12 @@ pub fn astar_path_full(grid: &[u32], elevation: &[f32], terrain: &[u32], start: 
                     let diff = elevation[nxt_idx] - elevation[cur_idx];
                     // Uphill: +3 cost per unit elevation. Downhill: -1 (slight benefit, clamped)
                     (diff * 3.0).max(-1.0) as i32
-                } else { 0 }
-            } else { 0 };
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
             // Compaction bonus: well-trodden tiles are cheaper to traverse
             let compact_bonus = if !terrain.is_empty() {
                 let nxt_idx = (next.1 as u32 * GRID_W + next.0 as u32) as usize;
@@ -455,8 +574,12 @@ pub fn astar_path_full(grid: &[u32], elevation: &[f32], terrain: &[u32], start: 
                     let compact = terrain_compaction(terrain[nxt_idx]);
                     // Up to -3 cost for fully compacted (31) tiles
                     -((compact as i32) * 3 / 31)
-                } else { 0 }
-            } else { 0 };
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
             let ng = g + cost + elev_cost + compact_bonus;
             if ng < *g_score.get(&next).unwrap_or(&i32::MAX) {
                 g_score.insert(next, ng);
@@ -519,7 +642,16 @@ mod tests {
     #[test]
     fn test_astar_unreachable() {
         // Completely walled-off goal
-        let grid = test_grid(&[(9, 9), (10, 9), (11, 9), (9, 10), (11, 10), (9, 11), (10, 11), (11, 11)]);
+        let grid = test_grid(&[
+            (9, 9),
+            (10, 9),
+            (11, 9),
+            (9, 10),
+            (11, 10),
+            (9, 11),
+            (10, 11),
+            (11, 11),
+        ]);
         let path = astar_path(&grid, (5, 5), (10, 10));
         assert!(path.is_empty(), "should be empty for unreachable goal");
     }

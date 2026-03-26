@@ -1,18 +1,22 @@
 //! Cross-module integration tests for Rayworld.
 
 use rayworld::grid::*;
-use rayworld::pipes::*;
-use rayworld::resources::*;
 use rayworld::item_defs::*;
 use rayworld::materials::NUM_MATERIALS;
+use rayworld::pipes::*;
+use rayworld::resources::*;
 
 // --- Block system ---
 
 #[test]
 fn all_block_ids_fit_in_materials() {
     let highest = BT_LIQUID_OUTPUT; // 54
-    assert!(NUM_MATERIALS > highest as usize,
-        "NUM_MATERIALS ({}) must be > highest block ID ({})", NUM_MATERIALS, highest);
+    assert!(
+        NUM_MATERIALS > highest as usize,
+        "NUM_MATERIALS ({}) must be > highest block ID ({})",
+        NUM_MATERIALS,
+        highest
+    );
 }
 
 #[test]
@@ -52,11 +56,20 @@ fn wire_block_classification() {
 
 #[test]
 fn conductor_includes_all_power_blocks() {
-    let power_ids: &[u32] = &[36, 37, 38, 39, 40, 41, 42, 43, 45, 48, 51, 7, 10, 11, 12, 16];
+    let power_ids: &[u32] = &[
+        36, 37, 38, 39, 40, 41, 42, 43, 45, 48, 51, 7, 10, 11, 12, 16,
+    ];
     for &id in power_ids {
-        assert!(is_conductor_rs(id, 0), "Block type {} should be a conductor", id);
+        assert!(
+            is_conductor_rs(id, 0),
+            "Block type {} should be a conductor",
+            id
+        );
     }
-    assert!(is_conductor_rs(1, 0x80), "Wall with wire overlay should be conductor");
+    assert!(
+        is_conductor_rs(1, 0x80),
+        "Wall with wire overlay should be conductor"
+    );
     assert!(!is_conductor_rs(2, 0), "Dirt should not be conductor");
     assert!(!is_conductor_rs(15, 0), "Pipe should not be conductor");
 }
@@ -74,8 +87,8 @@ fn test_grid(blocks: &[((u32, u32), u8, u8)]) -> Vec<u32> {
 #[test]
 fn liquid_network_isolation_from_gas() {
     let grid = test_grid(&[
-        ((10, 10), 15, 1),  // gas pipe
-        ((11, 10), 49, 1),  // liquid pipe
+        ((10, 10), 15, 1), // gas pipe
+        ((11, 10), 49, 1), // liquid pipe
     ]);
     let mut gas_net = PipeNetwork::new();
     gas_net.rebuild(&grid);
@@ -91,39 +104,47 @@ fn liquid_network_isolation_from_gas() {
 
 #[test]
 fn liquid_pump_builds_pressure() {
-    let grid = test_grid(&[
-        ((10, 10), 49, 1), ((11, 10), 53, 1), ((12, 10), 49, 1),
-    ]);
+    let grid = test_grid(&[((10, 10), 49, 1), ((11, 10), 53, 1), ((12, 10), 49, 1)]);
     let mut net = PipeNetwork::new();
     net.rebuild_with(&grid, is_liquid_pipe_component);
-    for _ in 0..60 { net.tick(1.0 / 60.0, &grid, 5.0); }
+    for _ in 0..60 {
+        net.tick(1.0 / 60.0, &grid, 5.0);
+    }
     let pump_p = net.cells[&(10 * GRID_W + 11)].pressure;
-    assert!(pump_p > 1.0, "Pump should have built pressure, got {}", pump_p);
+    assert!(
+        pump_p > 1.0,
+        "Pump should have built pressure, got {}",
+        pump_p
+    );
 }
 
 #[test]
 fn liquid_output_creates_injections() {
-    let grid = test_grid(&[
-        ((10, 10), 53, 1), ((11, 10), 49, 1), ((12, 10), 54, 1),
-    ]);
+    let grid = test_grid(&[((10, 10), 53, 1), ((11, 10), 49, 1), ((12, 10), 54, 1)]);
     let mut net = PipeNetwork::new();
     net.rebuild_with(&grid, is_liquid_pipe_component);
     let mut total = 0;
-    for _ in 0..120 { total += net.tick(1.0 / 60.0, &grid, 5.0).len(); }
+    for _ in 0..120 {
+        total += net.tick(1.0 / 60.0, &grid, 5.0).len();
+    }
     assert!(total > 0, "Output should have produced injections");
 }
 
 #[test]
 fn intake_without_pump_no_pressure() {
-    let mut grid = test_grid(&[
-        ((10, 10), 52, 1), ((11, 10), 52, 1), ((12, 10), 49, 1),
-    ]);
+    let mut grid = test_grid(&[((10, 10), 52, 1), ((11, 10), 52, 1), ((12, 10), 49, 1)]);
     grid[(10 * GRID_W + 11) as usize] = make_block(52, 1, 1 << 3);
     let mut net = PipeNetwork::new();
     net.rebuild_with(&grid, is_liquid_pipe_component);
-    for _ in 0..60 { net.tick(1.0 / 60.0, &grid, 5.0); }
+    for _ in 0..60 {
+        net.tick(1.0 / 60.0, &grid, 5.0);
+    }
     let p = net.cells[&(10 * GRID_W + 12)].pressure;
-    assert!(p < 0.01, "Pipe should have no pressure without pump, got {:.4}", p);
+    assert!(
+        p < 0.01,
+        "Pipe should have no pressure without pump, got {:.4}",
+        p
+    );
 }
 
 // --- Resources ---
@@ -151,11 +172,19 @@ fn item_stack_counts() {
 fn fiber_and_scrap_wood_are_valid_items() {
     let reg = rayworld::item_defs::ItemRegistry::cached();
     let fiber = reg.get(ITEM_FIBER);
-    assert!(fiber.is_some(), "ITEM_FIBER (id={}) should exist in registry", ITEM_FIBER);
+    assert!(
+        fiber.is_some(),
+        "ITEM_FIBER (id={}) should exist in registry",
+        ITEM_FIBER
+    );
     assert_eq!(fiber.unwrap().name, "Fiber");
 
     let scrap = reg.get(ITEM_SCRAP_WOOD);
-    assert!(scrap.is_some(), "ITEM_SCRAP_WOOD (id={}) should exist in registry", ITEM_SCRAP_WOOD);
+    assert!(
+        scrap.is_some(),
+        "ITEM_SCRAP_WOOD (id={}) should exist in registry",
+        ITEM_SCRAP_WOOD
+    );
     assert_eq!(scrap.unwrap().name, "Scrap Wood");
 }
 
@@ -184,15 +213,20 @@ fn crate_stores_any_item_type() {
 #[test]
 fn recipe_can_craft_with_fiber() {
     let reg = rayworld::recipe_defs::RecipeRegistry::load();
-    let rope = reg.for_station("workbench").into_iter()
-        .find(|r| r.name == "Rope").expect("Rope recipe should exist");
+    let rope = reg
+        .for_station("workbench")
+        .into_iter()
+        .find(|r| r.name == "Rope")
+        .expect("Rope recipe should exist");
     // Rope needs 4 fiber
     assert_eq!(rope.inputs[0].item, ITEM_FIBER);
     assert_eq!(rope.inputs[0].count, 4);
 
     // Not enough
     let inv = vec![ItemStack::new(ITEM_FIBER, 3)];
-    assert!(!rayworld::recipe_defs::RecipeRegistry::can_craft(rope, &inv));
+    assert!(!rayworld::recipe_defs::RecipeRegistry::can_craft(
+        rope, &inv
+    ));
 
     // Enough
     let inv = vec![ItemStack::new(ITEM_FIBER, 4)];
@@ -202,14 +236,19 @@ fn recipe_can_craft_with_fiber() {
 #[test]
 fn recipe_can_craft_with_scrap_wood() {
     let reg = rayworld::recipe_defs::RecipeRegistry::load();
-    let bucket = reg.for_station("workbench").into_iter()
-        .find(|r| r.name == "Wooden Bucket").expect("Wooden Bucket recipe should exist");
+    let bucket = reg
+        .for_station("workbench")
+        .into_iter()
+        .find(|r| r.name == "Wooden Bucket")
+        .expect("Wooden Bucket recipe should exist");
     // Bucket needs 3 scrap wood
     assert_eq!(bucket.inputs[0].item, ITEM_SCRAP_WOOD);
     assert_eq!(bucket.inputs[0].count, 3);
 
     let inv = vec![ItemStack::new(ITEM_SCRAP_WOOD, 3)];
-    assert!(rayworld::recipe_defs::RecipeRegistry::can_craft(bucket, &inv));
+    assert!(rayworld::recipe_defs::RecipeRegistry::can_craft(
+        bucket, &inv
+    ));
 }
 
 #[test]
@@ -241,16 +280,20 @@ fn resource_counting_all_sources() {
     crate_inv.add(ITEM_FIBER, 2);
 
     // Total fiber should be 3 (ground) + 2 (crate) = 5
-    let total_fiber: u32 = ground_items.iter()
+    let total_fiber: u32 = ground_items
+        .iter()
         .filter(|gi| gi.stack.item_id == ITEM_FIBER)
-        .map(|gi| gi.stack.count as u32).sum::<u32>()
+        .map(|gi| gi.stack.count as u32)
+        .sum::<u32>()
         + crate_inv.count_of(ITEM_FIBER);
     assert_eq!(total_fiber, 5);
 
     // Total scrap wood: 4 (ground only)
-    let total_scrap: u32 = ground_items.iter()
+    let total_scrap: u32 = ground_items
+        .iter()
         .filter(|gi| gi.stack.item_id == ITEM_SCRAP_WOOD)
-        .map(|gi| gi.stack.count as u32).sum();
+        .map(|gi| gi.stack.count as u32)
+        .sum();
     assert_eq!(total_scrap, 4);
 }
 
@@ -261,19 +304,47 @@ fn obstacle_field_walls_are_solid() {
     use rayworld::fluid::build_obstacle_field;
     let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize]; // all dirt
     // Place a 4x4 room at (10,10)-(13,13) with stone walls (height 3)
-    for x in 10..14 { grid[(10 * GRID_W + x) as usize] = make_block(1, 3, 0); } // top
-    for x in 10..14 { grid[(13 * GRID_W + x) as usize] = make_block(1, 3, 0); } // bottom
-    for y in 10..14 { grid[(y * GRID_W + 10) as usize] = make_block(1, 3, 0); } // left
-    for y in 10..14 { grid[(y * GRID_W + 13) as usize] = make_block(1, 3, 0); } // right
+    for x in 10..14 {
+        grid[(10 * GRID_W + x) as usize] = make_block(1, 3, 0);
+    } // top
+    for x in 10..14 {
+        grid[(13 * GRID_W + x) as usize] = make_block(1, 3, 0);
+    } // bottom
+    for y in 10..14 {
+        grid[(y * GRID_W + 10) as usize] = make_block(1, 3, 0);
+    } // left
+    for y in 10..14 {
+        grid[(y * GRID_W + 13) as usize] = make_block(1, 3, 0);
+    } // right
 
     let obs = build_obstacle_field(&grid);
     // Walls should be solid (255)
-    assert_eq!(obs[(10 * GRID_W + 10) as usize], 255, "top-left wall should be solid");
-    assert_eq!(obs[(10 * GRID_W + 12) as usize], 255, "top wall should be solid");
-    assert_eq!(obs[(12 * GRID_W + 10) as usize], 255, "left wall should be solid");
+    assert_eq!(
+        obs[(10 * GRID_W + 10) as usize],
+        255,
+        "top-left wall should be solid"
+    );
+    assert_eq!(
+        obs[(10 * GRID_W + 12) as usize],
+        255,
+        "top wall should be solid"
+    );
+    assert_eq!(
+        obs[(12 * GRID_W + 10) as usize],
+        255,
+        "left wall should be solid"
+    );
     // Interior should be open (0)
-    assert_eq!(obs[(11 * GRID_W + 11) as usize], 0, "interior should be open");
-    assert_eq!(obs[(12 * GRID_W + 12) as usize], 0, "interior should be open");
+    assert_eq!(
+        obs[(11 * GRID_W + 11) as usize],
+        0,
+        "interior should be open"
+    );
+    assert_eq!(
+        obs[(12 * GRID_W + 12) as usize],
+        0,
+        "interior should be open"
+    );
     // Exterior should be open (0)
     assert_eq!(obs[(5 * GRID_W + 5) as usize], 0, "exterior should be open");
 }
@@ -286,8 +357,16 @@ fn obstacle_field_doors_open_are_passable() {
     grid[(10 * GRID_W + 10) as usize] = make_block(1, 3, 5); // open door
     grid[(10 * GRID_W + 11) as usize] = make_block(1, 3, 1); // closed door
     let obs = build_obstacle_field(&grid);
-    assert_eq!(obs[(10 * GRID_W + 10) as usize], 0, "open door should be passable");
-    assert_eq!(obs[(10 * GRID_W + 11) as usize], 255, "closed door should be solid");
+    assert_eq!(
+        obs[(10 * GRID_W + 10) as usize],
+        0,
+        "open door should be passable"
+    );
+    assert_eq!(
+        obs[(10 * GRID_W + 11) as usize],
+        255,
+        "closed door should be solid"
+    );
 }
 
 #[test]
@@ -298,9 +377,21 @@ fn obstacle_field_plants_are_passable() {
     grid[(10 * GRID_W + 11) as usize] = make_block(BT_BERRY_BUSH as u8, 1, 0);
     grid[(10 * GRID_W + 12) as usize] = make_block(BT_CROP as u8, 2, 0);
     let obs = build_obstacle_field(&grid);
-    assert_eq!(obs[(10 * GRID_W + 10) as usize], 0, "tree should be passable");
-    assert_eq!(obs[(10 * GRID_W + 11) as usize], 0, "berry bush should be passable");
-    assert_eq!(obs[(10 * GRID_W + 12) as usize], 0, "crop should be passable");
+    assert_eq!(
+        obs[(10 * GRID_W + 10) as usize],
+        0,
+        "tree should be passable"
+    );
+    assert_eq!(
+        obs[(10 * GRID_W + 11) as usize],
+        0,
+        "berry bush should be passable"
+    );
+    assert_eq!(
+        obs[(10 * GRID_W + 12) as usize],
+        0,
+        "crop should be passable"
+    );
 }
 
 #[test]
@@ -311,9 +402,21 @@ fn obstacle_field_pipes_wires_passable() {
     grid[(10 * GRID_W + 11) as usize] = make_block(BT_WIRE as u8, 0xA0, 0); // wire with conn mask
     grid[(10 * GRID_W + 12) as usize] = make_block(BT_LIQUID_PIPE as u8, 1, 0);
     let obs = build_obstacle_field(&grid);
-    assert_eq!(obs[(10 * GRID_W + 10) as usize], 0, "gas pipe should be passable");
-    assert_eq!(obs[(10 * GRID_W + 11) as usize], 0, "wire should be passable");
-    assert_eq!(obs[(10 * GRID_W + 12) as usize], 0, "liquid pipe should be passable");
+    assert_eq!(
+        obs[(10 * GRID_W + 10) as usize],
+        0,
+        "gas pipe should be passable"
+    );
+    assert_eq!(
+        obs[(10 * GRID_W + 11) as usize],
+        0,
+        "wire should be passable"
+    );
+    assert_eq!(
+        obs[(10 * GRID_W + 12) as usize],
+        0,
+        "liquid pipe should be passable"
+    );
 }
 
 #[test]
@@ -333,17 +436,38 @@ fn obstacle_field_complete_room_sealed() {
     let obs = build_obstacle_field(&grid);
     // Check every wall tile is solid
     for x in 20..26 {
-        assert_eq!(obs[(20 * GRID_W + x) as usize], 255, "top wall at x={} should be solid", x);
-        assert_eq!(obs[(25 * GRID_W + x) as usize], 255, "bottom wall at x={}", x);
+        assert_eq!(
+            obs[(20 * GRID_W + x) as usize],
+            255,
+            "top wall at x={} should be solid",
+            x
+        );
+        assert_eq!(
+            obs[(25 * GRID_W + x) as usize],
+            255,
+            "bottom wall at x={}",
+            x
+        );
     }
     for y in 20..26 {
         assert_eq!(obs[(y * GRID_W + 20) as usize], 255, "left wall at y={}", y);
-        assert_eq!(obs[(y * GRID_W + 25) as usize], 255, "right wall at y={}", y);
+        assert_eq!(
+            obs[(y * GRID_W + 25) as usize],
+            255,
+            "right wall at y={}",
+            y
+        );
     }
     // Interior all open
     for y in 21..25 {
         for x in 21..25 {
-            assert_eq!(obs[(y * GRID_W + x) as usize], 0, "interior ({},{}) should be open", x, y);
+            assert_eq!(
+                obs[(y * GRID_W + x) as usize],
+                0,
+                "interior ({},{}) should be open",
+                x,
+                y
+            );
         }
     }
 }

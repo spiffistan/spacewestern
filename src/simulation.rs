@@ -1,10 +1,10 @@
 //! Simulation update — time, sun, plebs, physics, pipes, doors.
 //! Extracted from render() to keep main.rs manageable.
 
-use crate::*;
 use crate::item_defs::*;
 use crate::recipe_defs;
 use crate::zones::*;
+use crate::*;
 
 impl App {
     /// Update all simulation state. Returns frame delta time.
@@ -31,25 +31,40 @@ impl App {
             for cond in self.conditions.iter_mut() {
                 if cond.remaining > 0.0 {
                     cond.remaining -= dt_game;
-                    if cond.remaining <= 0.0 { ended.push(cond.name.clone()); }
+                    if cond.remaining <= 0.0 {
+                        ended.push(cond.name.clone());
+                    }
                 }
             }
             for name in &ended {
                 events.push(GameEventKind::DroughtEnded(name.to_string()));
-                self.notify(NotifCategory::Positive, "\u{2705}", &format!("{} ended", name), "Conditions returning to normal.");
+                self.notify(
+                    NotifCategory::Positive,
+                    "\u{2705}",
+                    &format!("{} ended", name),
+                    "Conditions returning to normal.",
+                );
             }
-            self.conditions.retain(|c| c.remaining > 0.0 || c.duration == 0.0);
+            self.conditions
+                .retain(|c| c.remaining > 0.0 || c.duration == 0.0);
 
             self.drought_check_timer -= dt_game;
             if self.drought_check_timer <= 0.0 {
                 self.drought_check_timer = 60.0 + (self.time_of_day * 137.0) as f32 % 60.0;
                 let seed = (self.time_of_day * 10000.0) as u32;
                 let roll = seed.wrapping_mul(2654435761) & 0xFF;
-                if roll < 25 && self.weather == WeatherState::Clear && !self.has_condition("Drought") {
+                if roll < 25
+                    && self.weather == WeatherState::Clear
+                    && !self.has_condition("Drought")
+                {
                     let duration = 60.0 + (roll as f32) * 1.5;
                     self.add_condition("Drought", "\u{2600}", NotifCategory::Threat, duration);
-                    self.notify(NotifCategory::Threat, "\u{2600}", "Drought",
-                        format!("A drought has begun! Water drying up. ({:.0}s)", duration));
+                    self.notify(
+                        NotifCategory::Threat,
+                        "\u{2600}",
+                        "Drought",
+                        format!("A drought has begun! Water drying up. ({:.0}s)", duration),
+                    );
                     events.push(GameEventKind::DroughtStarted);
                 }
             }
@@ -107,7 +122,9 @@ impl App {
 
         // --- Weather tick ---
         if !self.time_paused {
-            if let Some(new_weather) = tick_weather(&self.weather, &mut self.weather_timer, dt, self.time_speed) {
+            if let Some(new_weather) =
+                tick_weather(&self.weather, &mut self.weather_timer, dt, self.time_speed)
+            {
                 let label = match &new_weather {
                     WeatherState::Clear => "Weather: Clear skies",
                     WeatherState::Cloudy => "Weather: Cloudy",
@@ -119,14 +136,17 @@ impl App {
             }
             // --- Lightning during heavy rain ---
             self.lightning_flash = (self.lightning_flash - dt * 2.0).max(0.0); // slower decay for visible bolt
-            if self.lightning_flash < 0.01 { self.lightning_strike = None; }
+            if self.lightning_flash < 0.01 {
+                self.lightning_strike = None;
+            }
             if self.weather == WeatherState::HeavyRain {
                 self.lightning_timer -= dt * self.time_speed;
                 if self.lightning_timer <= 0.0 {
                     // Random strike location (outdoor, no roof)
                     let seed = (self.time_of_day * 10000.0) as u32;
                     let hash = |i: u32| -> u32 {
-                        seed.wrapping_mul(2654435761).wrapping_add(i.wrapping_mul(1013904223))
+                        seed.wrapping_mul(2654435761)
+                            .wrapping_add(i.wrapping_mul(1013904223))
                     };
                     let sx = (hash(0) % GRID_W) as i32;
                     let sy = (hash(1) % GRID_H) as i32;
@@ -143,9 +163,13 @@ impl App {
                         // Thunder (~120 dB)
                         if self.sound_enabled {
                             self.sound_sources.push(SoundSource {
-                                x: sx as f32 + 0.5, y: sy as f32 + 0.5,
-                                amplitude: db_to_amplitude(120.0), frequency: 0.0,
-                                phase: 0.0, pattern: 0, duration: 0.2,
+                                x: sx as f32 + 0.5,
+                                y: sy as f32 + 0.5,
+                                amplitude: db_to_amplitude(120.0),
+                                frequency: 0.0,
+                                phase: 0.0,
+                                pattern: 0,
+                                duration: 0.2,
                             });
                         }
 
@@ -161,7 +185,11 @@ impl App {
                         let bt = block_type_rs(block);
                         let flags = block_flags_rs(block);
                         if is_conductor_rs(bt, flags) {
-                            log::info!("Lightning hit power grid at ({}, {})! Voltage surge!", sx, sy);
+                            log::info!(
+                                "Lightning hit power grid at ({}, {})! Voltage surge!",
+                                sx,
+                                sy
+                            );
                         }
                         // Voltage surge injection + breaker tripping happens in render pass
                         // via GPU voltage buffer writes + GPU-side breaker threshold check
@@ -183,24 +211,33 @@ impl App {
                 // Pick a new target: small random shift from current
                 let seed = (self.time_of_day * 1000.0) as u32;
                 let hash = |i: u32| -> f32 {
-                    let h = seed.wrapping_mul(2654435761).wrapping_add(i.wrapping_mul(1013904223));
+                    let h = seed
+                        .wrapping_mul(2654435761)
+                        .wrapping_add(i.wrapping_mul(1013904223));
                     (h & 0xFFFF) as f32 / 65535.0
                 };
                 // Shift angle by ±45° (gentle drift)
                 self.wind_target_angle += (hash(0) - 0.5) * std::f32::consts::FRAC_PI_2;
                 // Vary magnitude ±30% around 8-12 range
-                self.wind_target_mag = (self.wind_target_mag + (hash(1) - 0.5) * 6.0).clamp(3.0, 18.0);
+                self.wind_target_mag =
+                    (self.wind_target_mag + (hash(1) - 0.5) * 6.0).clamp(3.0, 18.0);
                 // Next change in 10-30 seconds game time
                 self.wind_change_timer = 10.0 + hash(2) * 20.0;
             }
             // Smoothly interpolate current wind toward target
             let lerp_rate = 0.3 * dt * self.time_speed;
             let cur_angle = self.fluid_params.wind_y.atan2(self.fluid_params.wind_x);
-            let cur_mag = (self.fluid_params.wind_x.powi(2) + self.fluid_params.wind_y.powi(2)).sqrt().max(0.1);
+            let cur_mag = (self.fluid_params.wind_x.powi(2) + self.fluid_params.wind_y.powi(2))
+                .sqrt()
+                .max(0.1);
             // Angle interpolation (handle wrapping)
             let mut angle_diff = self.wind_target_angle - cur_angle;
-            if angle_diff > std::f32::consts::PI { angle_diff -= std::f32::consts::TAU; }
-            if angle_diff < -std::f32::consts::PI { angle_diff += std::f32::consts::TAU; }
+            if angle_diff > std::f32::consts::PI {
+                angle_diff -= std::f32::consts::TAU;
+            }
+            if angle_diff < -std::f32::consts::PI {
+                angle_diff += std::f32::consts::TAU;
+            }
             let new_angle = cur_angle + angle_diff * lerp_rate;
             let new_mag = cur_mag + (self.wind_target_mag - cur_mag) * lerp_rate;
             self.fluid_params.wind_x = new_angle.cos() * new_mag;
@@ -223,13 +260,19 @@ impl App {
             // Pass weather to shader and fluid sim
             self.camera.rain_intensity = rain;
             self.camera.cloud_cover = self.weather.cloud_cover();
-            self.camera.wind_magnitude = (self.fluid_params.wind_x.powi(2) + self.fluid_params.wind_y.powi(2)).sqrt();
+            self.camera.wind_magnitude =
+                (self.fluid_params.wind_x.powi(2) + self.fluid_params.wind_y.powi(2)).sqrt();
             self.camera.wind_angle = self.fluid_params.wind_y.atan2(self.fluid_params.wind_x);
             self.fluid_params.rain_intensity = rain;
             // Update wetness
             tick_wetness(
-                &mut self.wetness_data, &self.grid_data,
-                rain, self.camera.sun_intensity, dt, self.time_speed, GRID_W,
+                &mut self.wetness_data,
+                &self.grid_data,
+                rain,
+                self.camera.sun_intensity,
+                dt,
+                self.time_speed,
+                GRID_W,
             );
             // Rain boosts CPU-side water table temporarily (so crops see moisture)
             if rain > 0.0 {
@@ -237,7 +280,8 @@ impl App {
                 for (i, wt) in self.water_table.iter_mut().enumerate() {
                     let b = self.grid_data[i];
                     let roof = (b >> 24) & 0xFF;
-                    if roof == 0 { // outdoor only
+                    if roof == 0 {
+                        // outdoor only
                         *wt = (*wt + rain_boost).min(0.5);
                     }
                 }
@@ -308,18 +352,26 @@ impl App {
                     let sy = pleb.y + dy * 0.4;
                     // Small random spread per shot
                     let spread = if self.burst_mode {
-                        let seed = (self.burst_queue as f32 * 137.0 + self.time_of_day * 1000.0) as u32;
+                        let seed =
+                            (self.burst_queue as f32 * 137.0 + self.time_of_day * 1000.0) as u32;
                         ((seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0 - 0.5) * 0.06
-                    } else { 0.0 };
+                    } else {
+                        0.0
+                    };
                     let bx = (pleb.angle + spread).cos();
                     let by = (pleb.angle + spread).sin();
-                    self.physics_bodies.push(PhysicsBody::new_bullet(sx, sy, bx, by));
+                    self.physics_bodies
+                        .push(PhysicsBody::new_bullet(sx, sy, bx, by));
                     // Gunshot sound (~100 dB)
                     if self.sound_enabled {
                         self.sound_sources.push(SoundSource {
-                            x: sx, y: sy,
-                            amplitude: db_to_amplitude(100.0), frequency: 0.0,
-                            phase: 0.0, pattern: 0, duration: 0.05,
+                            x: sx,
+                            y: sy,
+                            amplitude: db_to_amplitude(100.0),
+                            frequency: 0.0,
+                            phase: 0.0,
+                            pattern: 0,
+                            duration: 0.05,
                         });
                     }
                     // Muzzle smoke
@@ -342,7 +394,9 @@ impl App {
 
         // --- Enemy random walk AI ---
         for pleb in self.plebs.iter_mut() {
-            if !pleb.is_enemy { continue; }
+            if !pleb.is_enemy {
+                continue;
+            }
             pleb.wander_timer -= dt * self.time_speed;
             if pleb.wander_timer <= 0.0 && pleb.path_idx >= pleb.path.len() {
                 // Pick a random nearby walkable tile
@@ -353,7 +407,12 @@ impl App {
                 let target_x = (pleb.x + dx).clamp(1.0, GRID_W as f32 - 2.0) as i32;
                 let target_y = (pleb.y + dy).clamp(1.0, GRID_H as f32 - 2.0) as i32;
                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (target_x, target_y));
+                let path = astar_path_terrain(
+                    &self.grid_data,
+                    &self.terrain_data,
+                    start,
+                    (target_x, target_y),
+                );
                 if !path.is_empty() {
                     pleb.path = path;
                     pleb.path_idx = 0;
@@ -380,14 +439,20 @@ impl App {
         let sel = self.selected_pleb;
 
         for (i, pleb) in self.plebs.iter_mut().enumerate() {
-            if pleb.is_dead { continue; } // corpses don't act
+            if pleb.is_dead {
+                continue;
+            } // corpses don't act
             let is_selected = sel == Some(i);
 
             // Q/E rotation for selected pleb
             if is_selected && !pleb.activity.is_crisis() {
                 // Q/E rotation
-                if self.pressed_keys.contains(&KeyCode::KeyQ) { pleb.angle -= 2.0 * dt; }
-                if self.pressed_keys.contains(&KeyCode::KeyE) { pleb.angle += 2.0 * dt; }
+                if self.pressed_keys.contains(&KeyCode::KeyQ) {
+                    pleb.angle -= 2.0 * dt;
+                }
+                if self.pressed_keys.contains(&KeyCode::KeyE) {
+                    pleb.angle += 2.0 * dt;
+                }
             }
 
             // Unstick: if pleb is on a non-walkable tile, nudge to nearest walkable
@@ -414,8 +479,11 @@ impl App {
                     // Speed modifier from terrain compaction + roughness
                     let tile_x = pleb.x.floor() as i32;
                     let tile_y = pleb.y.floor() as i32;
-                    let speed_mul = if tile_x >= 0 && tile_y >= 0
-                        && tile_x < GRID_W as i32 && tile_y < GRID_H as i32 {
+                    let speed_mul = if tile_x >= 0
+                        && tile_y >= 0
+                        && tile_x < GRID_W as i32
+                        && tile_y < GRID_H as i32
+                    {
                         let tidx = (tile_y as u32 * GRID_W + tile_x as u32) as usize;
                         if tidx < self.terrain_data.len() {
                             let compact = terrain_compaction(self.terrain_data[tidx]) as f32;
@@ -423,8 +491,12 @@ impl App {
                             // Compaction: 0→1.0x, 31→1.25x speed boost
                             // Roughness: 0→1.0x, 3→0.85x speed penalty
                             (1.0 + compact / 31.0 * 0.25) * (1.0 - rough / 3.0 * 0.15)
-                        } else { 1.0 }
-                    } else { 1.0 };
+                        } else {
+                            1.0
+                        }
+                    } else {
+                        1.0
+                    };
 
                     let ndx = ddx / dist;
                     let ndy = ddy / dist;
@@ -444,8 +516,11 @@ impl App {
                     }
 
                     // Increment compaction on the tile being walked on
-                    if tile_x >= 0 && tile_y >= 0
-                        && tile_x < GRID_W as i32 && tile_y < GRID_H as i32 {
+                    if tile_x >= 0
+                        && tile_y >= 0
+                        && tile_x < GRID_W as i32
+                        && tile_y < GRID_H as i32
+                    {
                         let tidx = (tile_y as u32 * GRID_W + tile_x as u32) as usize;
                         if tidx < self.terrain_data.len() {
                             let before = terrain_compaction(self.terrain_data[tidx]);
@@ -469,14 +544,34 @@ impl App {
                 let env = sample_environment(&self.grid_data, pleb.x, pleb.y, day_frac);
                 let air = self.pleb_air_data.get(i);
                 let is_sleeping = pleb.activity == PlebActivity::Sleeping;
-                tick_needs(&mut pleb.needs, &env, dt, self.time_speed, is_moving, is_sleeping, air);
+                tick_needs(
+                    &mut pleb.needs,
+                    &env,
+                    dt,
+                    self.time_speed,
+                    is_moving,
+                    is_sleeping,
+                    air,
+                );
 
                 let was_crisis = pleb.activity.is_crisis();
-                tick_pleb_activity(pleb, &env, &self.grid_data, &self.terrain_data, dt, self.time_speed, &mut self.ground_items, self.time_of_day);
+                tick_pleb_activity(
+                    pleb,
+                    &env,
+                    &self.grid_data,
+                    &self.terrain_data,
+                    dt,
+                    self.time_speed,
+                    &mut self.ground_items,
+                    self.time_of_day,
+                );
                 // Log new crisis
                 if pleb.activity.is_crisis() && !was_crisis {
                     if let Some(reason) = pleb.activity.crisis_reason() {
-                        events.push(GameEventKind::CrisisStarted { pleb: pleb.name.clone(), reason });
+                        events.push(GameEventKind::CrisisStarted {
+                            pleb: pleb.name.clone(),
+                            reason,
+                        });
                     }
                 }
 
@@ -485,7 +580,8 @@ impl App {
                 if pleb.path_idx < pleb.path.len() && inner == PlebActivity::Idle {
                     if pleb.activity.is_crisis() {
                         let reason = pleb.activity.crisis_reason().unwrap_or("Crisis");
-                        pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Walking), reason);
+                        pleb.activity =
+                            PlebActivity::Crisis(Box::new(PlebActivity::Walking), reason);
                     } else {
                         pleb.activity = PlebActivity::Walking;
                     }
@@ -496,20 +592,28 @@ impl App {
                         if reason == "Starving!" {
                             // Arrived near bush — harvest or eat
                             if pleb.inventory.count_of(ITEM_BERRIES) > 0 {
-                                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Eating), reason);
+                                pleb.activity =
+                                    PlebActivity::Crisis(Box::new(PlebActivity::Eating), reason);
                             } else if env.near_berry_bush {
                                 if let Some((bx, by)) = env.nearest_berry_bush {
                                     pleb.harvest_target = Some((bx, by));
-                                    pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Harvesting(0.0)), reason);
+                                    pleb.activity = PlebActivity::Crisis(
+                                        Box::new(PlebActivity::Harvesting(0.0)),
+                                        reason,
+                                    );
                                 }
                             } else {
                                 pleb.activity = PlebActivity::Idle; // couldn't find food
                             }
                         } else if reason == "Exhausted!" {
                             if env.near_bed {
-                                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Sleeping), reason);
+                                pleb.activity =
+                                    PlebActivity::Crisis(Box::new(PlebActivity::Sleeping), reason);
                             } else {
-                                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Sleeping), "Collapsed!");
+                                pleb.activity = PlebActivity::Crisis(
+                                    Box::new(PlebActivity::Sleeping),
+                                    "Collapsed!",
+                                );
                             }
                         } else if reason == "Overheating!" {
                             // Arrived at cool tile — stay idle, overheating check will re-trigger if still hot
@@ -524,27 +628,45 @@ impl App {
 
                 // Hauling state machine: pickup → walk to destination → deposit
                 if pleb.activity == PlebActivity::Hauling {
-                    let at_pickup = pleb.harvest_target.map(|(rx, ry)|
-                        ((pleb.x - rx as f32 - 0.5).powi(2) + (pleb.y - ry as f32 - 0.5).powi(2)).sqrt() < 1.8
-                    ).unwrap_or(false);
-                    let at_delivery = pleb.haul_target.map(|(cx, cy)|
-                        ((pleb.x - cx as f32 - 0.5).powi(2) + (pleb.y - cy as f32 - 0.5).powi(2)).sqrt() < 2.0
-                    ).unwrap_or(false);
+                    let at_pickup = pleb
+                        .harvest_target
+                        .map(|(rx, ry)| {
+                            ((pleb.x - rx as f32 - 0.5).powi(2)
+                                + (pleb.y - ry as f32 - 0.5).powi(2))
+                            .sqrt()
+                                < 1.8
+                        })
+                        .unwrap_or(false);
+                    let at_delivery = pleb
+                        .haul_target
+                        .map(|(cx, cy)| {
+                            ((pleb.x - cx as f32 - 0.5).powi(2)
+                                + (pleb.y - cy as f32 - 0.5).powi(2))
+                            .sqrt()
+                                < 2.0
+                        })
+                        .unwrap_or(false);
                     let path_done = pleb.path_idx >= pleb.path.len();
 
                     // Phase 1: not carrying anything → pick up item at harvest_target
                     if (path_done || at_pickup) && !pleb.inventory.is_carrying() {
                         if let Some((rx, ry)) = pleb.harvest_target {
                             let ridx = (ry as u32 * GRID_W + rx as u32) as usize;
-                            let is_rock = ridx < self.grid_data.len() && (self.grid_data[ridx] & 0xFF) == 34;
+                            let is_rock =
+                                ridx < self.grid_data.len() && (self.grid_data[ridx] & 0xFF) == 34;
                             if is_rock {
                                 let roof_bits = self.grid_data[ridx] & 0xFF000000;
                                 let flag_bits = (self.grid_data[ridx] >> 16) & 2;
-                                self.grid_data[ridx] = make_block(2, 0, flag_bits as u8) | roof_bits;
+                                self.grid_data[ridx] =
+                                    make_block(2, 0, flag_bits as u8) | roof_bits;
                                 self.grid_dirty = true;
                                 pleb.inventory.add(ITEM_ROCK, 1);
                                 pleb.harvest_target = None;
-                                events.push(GameEventKind::PickedUp { pleb: pleb.name.clone(), count: 1, item: "rock".into() });
+                                events.push(GameEventKind::PickedUp {
+                                    pleb: pleb.name.clone(),
+                                    count: 1,
+                                    item: "rock".into(),
+                                });
                             } else if let Some(wi) = self.ground_items.iter().position(|item| {
                                 item.x.floor() as i32 == rx && item.y.floor() as i32 == ry
                             }) {
@@ -553,11 +675,18 @@ impl App {
                                 let count = self.ground_items[wi].stack.count;
                                 let max_take = if item_id == ITEM_WOOD { 5u16 } else { 10 };
                                 let take = count.min(max_take);
-                                if count <= take { self.ground_items.remove(wi); }
-                                else { self.ground_items[wi].stack.count -= take; }
+                                if count <= take {
+                                    self.ground_items.remove(wi);
+                                } else {
+                                    self.ground_items[wi].stack.count -= take;
+                                }
                                 pleb.inventory.add(item_id, take);
                                 let name = ItemRegistry::cached().name(item_id);
-                                events.push(GameEventKind::PickedUp { pleb: pleb.name.clone(), count: take, item: name.to_string() });
+                                events.push(GameEventKind::PickedUp {
+                                    pleb: pleb.name.clone(),
+                                    count: take,
+                                    item: name.to_string(),
+                                });
                                 pleb.harvest_target = None;
                             } else {
                                 // Item gone
@@ -569,13 +698,27 @@ impl App {
                             if pleb.inventory.is_carrying() {
                                 if let Some((cx, cy)) = pleb.haul_target {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                    let adj = adjacent_walkable(&self.grid_data, cx, cy).unwrap_or((cx, cy));
-                                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
-                                    if !path.is_empty() { pleb.path = path; pleb.path_idx = 0; }
-                                    else { pleb.activity = PlebActivity::Idle; }
-                                } else { pleb.activity = PlebActivity::Idle; }
+                                    let adj = adjacent_walkable(&self.grid_data, cx, cy)
+                                        .unwrap_or((cx, cy));
+                                    let path = astar_path_terrain(
+                                        &self.grid_data,
+                                        &self.terrain_data,
+                                        start,
+                                        adj,
+                                    );
+                                    if !path.is_empty() {
+                                        pleb.path = path;
+                                        pleb.path_idx = 0;
+                                    } else {
+                                        pleb.activity = PlebActivity::Idle;
+                                    }
+                                } else {
+                                    pleb.activity = PlebActivity::Idle;
+                                }
                             }
-                        } else { pleb.activity = PlebActivity::Idle; }
+                        } else {
+                            pleb.activity = PlebActivity::Idle;
+                        }
                     }
                     // Phase 2: carrying item → deliver at haul_target
                     else if (path_done || at_delivery) && pleb.inventory.is_carrying() {
@@ -584,7 +727,8 @@ impl App {
                                 && self.blueprints.contains_key(&(cx, cy));
                             let is_crate = {
                                 let ci = (cy as u32 * GRID_W + cx as u32) as usize;
-                                ci < self.grid_data.len() && block_type_rs(self.grid_data[ci]) == BT_CRATE
+                                ci < self.grid_data.len()
+                                    && block_type_rs(self.grid_data[ci]) == BT_CRATE
                             };
                             if is_blueprint {
                                 // Deliver materials to blueprint
@@ -595,7 +739,11 @@ impl App {
                                         bp.wood_delivered += deliver;
                                         pleb.inventory.remove(ITEM_WOOD, deliver as u16);
                                         if deliver > 0 {
-                                            events.push(GameEventKind::Delivered { pleb: pleb.name.clone(), material: "wood", amount: deliver });
+                                            events.push(GameEventKind::Delivered {
+                                                pleb: pleb.name.clone(),
+                                                material: "wood",
+                                                amount: deliver,
+                                            });
                                         }
                                     }
                                     if bp.clay_delivered < bp.clay_needed {
@@ -604,7 +752,11 @@ impl App {
                                         bp.clay_delivered += deliver;
                                         pleb.inventory.remove(ITEM_CLAY, deliver as u16);
                                         if deliver > 0 {
-                                            events.push(GameEventKind::Delivered { pleb: pleb.name.clone(), material: "clay", amount: deliver });
+                                            events.push(GameEventKind::Delivered {
+                                                pleb: pleb.name.clone(),
+                                                material: "clay",
+                                                amount: deliver,
+                                            });
                                         }
                                     }
                                 }
@@ -615,7 +767,8 @@ impl App {
                                 // Deposit all carried items in crate (preserves liquid on containers)
                                 let cidx = cy as u32 * GRID_W + cx as u32;
                                 let inv = self.crate_contents.entry(cidx).or_default();
-                                let carried: Vec<ItemStack> = pleb.inventory.stacks.drain(..).collect();
+                                let carried: Vec<ItemStack> =
+                                    pleb.inventory.stacks.drain(..).collect();
                                 for stack in carried {
                                     if !inv.add_stack(stack.clone()) {
                                         // Crate full for this item — put back in pleb inventory
@@ -626,8 +779,11 @@ impl App {
                                 if let Some(inv) = self.crate_contents.get(&cidx) {
                                     let count = inv.total().min(CRATE_MAX_ITEMS) as u8;
                                     let ci = cidx as usize;
-                                    if ci < self.grid_data.len() && (self.grid_data[ci] & 0xFF) == BT_CRATE {
-                                        self.grid_data[ci] = (self.grid_data[ci] & 0xFFFF00FF) | ((count as u32) << 8);
+                                    if ci < self.grid_data.len()
+                                        && (self.grid_data[ci] & 0xFF) == BT_CRATE
+                                    {
+                                        self.grid_data[ci] = (self.grid_data[ci] & 0xFFFF00FF)
+                                            | ((count as u32) << 8);
                                         self.grid_dirty = true;
                                     }
                                 }
@@ -646,15 +802,28 @@ impl App {
                                         // Redirect to another crate
                                         pleb.haul_target = Some((ax, ay));
                                         let start = (px, py);
-                                        let adj = adjacent_walkable(&self.grid_data, ax, ay).unwrap_or((ax, ay));
-                                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
-                                        if !path.is_empty() { pleb.path = path; pleb.path_idx = 0; }
-                                        else { pleb.haul_target = None; pleb.activity = PlebActivity::Idle; }
+                                        let adj = adjacent_walkable(&self.grid_data, ax, ay)
+                                            .unwrap_or((ax, ay));
+                                        let path = astar_path_terrain(
+                                            &self.grid_data,
+                                            &self.terrain_data,
+                                            start,
+                                            adj,
+                                        );
+                                        if !path.is_empty() {
+                                            pleb.path = path;
+                                            pleb.path_idx = 0;
+                                        } else {
+                                            pleb.haul_target = None;
+                                            pleb.activity = PlebActivity::Idle;
+                                        }
                                     } else {
                                         // No other crate — drop remaining items on ground
                                         for stack in pleb.inventory.stacks.drain(..) {
                                             self.ground_items.push(resources::GroundItem {
-                                                x: cx as f32 + 0.5, y: cy as f32 + 0.5, stack,
+                                                x: cx as f32 + 0.5,
+                                                y: cy as f32 + 0.5,
+                                                stack,
                                             });
                                         }
                                         pleb.haul_target = None;
@@ -666,7 +835,9 @@ impl App {
                                 // Drop at storage zone tile
                                 for stack in pleb.inventory.stacks.drain(..) {
                                     self.ground_items.push(resources::GroundItem {
-                                        x: cx as f32 + 0.5, y: cy as f32 + 0.5, stack,
+                                        x: cx as f32 + 0.5,
+                                        y: cy as f32 + 0.5,
+                                        stack,
                                     });
                                 }
                                 pleb.haul_target = None;
@@ -674,8 +845,9 @@ impl App {
                                 events.push(GameEventKind::Stored(pleb.name.clone()));
                             }
                         }
+                    } else if path_done {
+                        pleb.activity = PlebActivity::Idle;
                     }
-                    else if path_done { pleb.activity = PlebActivity::Idle; }
                 }
 
                 // Crisis flee behavior: when holding breath or gasping, pathfind to fresh air
@@ -689,7 +861,8 @@ impl App {
                         pleb.needs.flee_target = Some(target);
                         pleb.activity = PlebActivity::Walking;
                         let start = (bx, by);
-                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, target);
+                        let path =
+                            astar_path_terrain(&self.grid_data, &self.terrain_data, start, target);
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 0;
@@ -734,21 +907,32 @@ impl App {
                 for ddx in -1..=1 {
                     let door_x = pbx + ddx;
                     let door_y = pby + ddy;
-                    if door_x >= 0 && door_y >= 0 && door_x < GRID_W as i32 && door_y < GRID_H as i32 {
+                    if door_x >= 0
+                        && door_y >= 0
+                        && door_x < GRID_W as i32
+                        && door_y < GRID_H as i32
+                    {
                         let didx = (door_y as u32 * GRID_W + door_x as u32) as usize;
                         let db = self.grid_data[didx];
                         if is_door_rs(db) && (block_flags_rs(db) & 4) == 0 {
-                            let dist = ((door_x as f32 + 0.5 - pleb.x).powi(2) + (door_y as f32 + 0.5 - pleb.y).powi(2)).sqrt();
+                            let dist = ((door_x as f32 + 0.5 - pleb.x).powi(2)
+                                + (door_y as f32 + 0.5 - pleb.y).powi(2))
+                            .sqrt();
                             if dist < 1.2 {
-                                self.grid_data[didx] = (db & 0xFF00FFFF) | (((block_flags_rs(db) ^ 4) as u32) << 16);
+                                self.grid_data[didx] =
+                                    (db & 0xFF00FFFF) | (((block_flags_rs(db) ^ 4) as u32) << 16);
                                 self.grid_dirty = true;
                                 self.auto_doors.push((door_x, door_y, self.time_of_day));
                                 // Door open sound (~50 dB)
                                 if self.sound_enabled {
                                     self.sound_sources.push(SoundSource {
-                                        x: door_x as f32 + 0.5, y: door_y as f32 + 0.5,
-                                        amplitude: db_to_amplitude(50.0), frequency: 0.0,
-                                        phase: 0.0, pattern: 0, duration: 0.05,
+                                        x: door_x as f32 + 0.5,
+                                        y: door_y as f32 + 0.5,
+                                        amplitude: db_to_amplitude(50.0),
+                                        frequency: 0.0,
+                                        phase: 0.0,
+                                        pattern: 0,
+                                        duration: 0.05,
                                     });
                                 }
                             }
@@ -812,9 +996,13 @@ impl App {
                     // Door close sound (~50 dB)
                     if self.sound_enabled {
                         self.sound_sources.push(SoundSource {
-                            x: dx as f32 + 0.5, y: dy as f32 + 0.5,
-                            amplitude: db_to_amplitude(50.0), frequency: 0.0,
-                            phase: 0.0, pattern: 0, duration: 0.05,
+                            x: dx as f32 + 0.5,
+                            y: dy as f32 + 0.5,
+                            amplitude: db_to_amplitude(50.0),
+                            frequency: 0.0,
+                            phase: 0.0,
+                            pattern: 0,
+                            duration: 0.05,
                         });
                     }
                 }
@@ -824,15 +1012,20 @@ impl App {
         // --- Physics tick ---
         {
             let sel_pleb = self.selected_pleb.and_then(|i| self.plebs.get(i));
-            let pleb_data = sel_pleb.map(|p| {
-                (p.x, p.y, 0.0f32, 0.0f32, p.angle)
-            });
+            let pleb_data = sel_pleb.map(|p| (p.x, p.y, 0.0f32, 0.0f32, p.angle));
             // Collect pleb positions for bullet collision
-            let pleb_positions: Vec<(f32, f32, usize)> = self.plebs.iter().enumerate()
-                .map(|(i, p)| (p.x, p.y, i)).collect();
+            let pleb_positions: Vec<(f32, f32, usize)> = self
+                .plebs
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p.x, p.y, i))
+                .collect();
             // Extract sound source data for physics body force coupling
-            let sound_data: Vec<(f32, f32, f32)> = self.sound_sources.iter()
-                .map(|s| (s.x, s.y, s.amplitude)).collect();
+            let sound_data: Vec<(f32, f32, f32)> = self
+                .sound_sources
+                .iter()
+                .map(|s| (s.x, s.y, s.amplitude))
+                .collect();
             let (impacts, bullet_hits, explosion_events) = tick_bodies(
                 &mut self.physics_bodies,
                 dt,
@@ -852,7 +1045,10 @@ impl App {
                     // Look up damage from the projectile that hit (scan bodies for the source)
                     // For now use a fixed lookup since bullets are the only hitscan type
                     let dmg = projectile_def(PROJ_BULLET).hit_damage;
-                    events.push(GameEventKind::PlebHit { pleb: pleb.name.clone(), hp_pct: (pleb.needs.health - dmg).max(0.0) * 100.0 });
+                    events.push(GameEventKind::PlebHit {
+                        pleb: pleb.name.clone(),
+                        hp_pct: (pleb.needs.health - dmg).max(0.0) * 100.0,
+                    });
                     pleb.needs.health -= dmg;
                     self.fluid_params.splat_x = hit.x;
                     self.fluid_params.splat_y = hit.y;
@@ -867,16 +1063,23 @@ impl App {
 
                 if impact.destroy_block {
                     self.destroy_block_at(impact.block_x, impact.block_y);
-                    log::info!("Projectile destroyed block at ({}, {}) KE={:.0}",
-                        impact.block_x, impact.block_y, impact.kinetic_energy);
+                    log::info!(
+                        "Projectile destroyed block at ({}, {}) KE={:.0}",
+                        impact.block_x,
+                        impact.block_y,
+                        impact.kinetic_energy
+                    );
                 }
 
                 // Impact sound
                 if def.impact.sound_db > 0.0 && self.sound_enabled {
                     self.sound_sources.push(SoundSource {
-                        x: impact.x, y: impact.y,
+                        x: impact.x,
+                        y: impact.y,
                         amplitude: db_to_amplitude(def.impact.sound_db),
-                        frequency: 0.0, phase: 0.0, pattern: 0,
+                        frequency: 0.0,
+                        phase: 0.0,
+                        pattern: 0,
                         duration: def.impact.sound_duration,
                     });
                 }
@@ -907,7 +1110,9 @@ impl App {
                     let dx = body.x - expl.x;
                     let dy = body.y - expl.y;
                     let dist = (dx * dx + dy * dy).sqrt().max(0.3);
-                    if dist > radius { continue; }
+                    if dist > radius {
+                        continue;
+                    }
                     let falloff = 1.0 / (dist * dist);
                     let impulse = force * falloff / body.mass;
                     let nx = dx / dist;
@@ -924,7 +1129,9 @@ impl App {
                     let dx = pleb.x - expl.x;
                     let dy = pleb.y - expl.y;
                     let dist = (dx * dx + dy * dy).sqrt().max(0.5);
-                    if dist > radius { continue; }
+                    if dist > radius {
+                        continue;
+                    }
                     let falloff = 1.0 / (dist * dist);
                     let impulse = force * falloff * 0.5;
                     let nx = dx / dist;
@@ -946,9 +1153,12 @@ impl App {
                 // Explosion sound
                 if expl.def.sound_db > 0.0 && self.sound_enabled {
                     self.sound_sources.push(SoundSource {
-                        x: expl.x, y: expl.y,
+                        x: expl.x,
+                        y: expl.y,
                         amplitude: db_to_amplitude(expl.def.sound_db),
-                        frequency: 0.0, phase: 0.0, pattern: 0,
+                        frequency: 0.0,
+                        phase: 0.0,
+                        pattern: 0,
                         duration: expl.def.sound_duration,
                     });
                 }
@@ -971,11 +1181,15 @@ impl App {
             let mut matured = Vec::new();
             for (&grid_idx, timer) in self.crop_timers.iter_mut() {
                 let idx = grid_idx as usize;
-                if idx >= self.grid_data.len() { continue; }
+                if idx >= self.grid_data.len() {
+                    continue;
+                }
                 let block = self.grid_data[idx];
                 let bt = block & 0xFF;
                 let stage = block_height_rs(block) as u32;
-                if bt != BT_CROP || stage >= CROP_MATURE { continue; }
+                if bt != BT_CROP || stage >= CROP_MATURE {
+                    continue;
+                }
 
                 // --- Multi-factor growth model ---
                 let day_frac = self.time_of_day / DAY_DURATION;
@@ -998,7 +1212,11 @@ impl App {
                 let sun_factor = (self.camera.sun_intensity * 1.2).clamp(0.0, 1.0);
 
                 // Water: combines water table depth + rain moisture
-                let wt = if idx < self.water_table.len() { self.water_table[idx] } else { -3.0 };
+                let wt = if idx < self.water_table.len() {
+                    self.water_table[idx]
+                } else {
+                    -3.0
+                };
                 let wt_moisture = ((wt + 2.0) / 2.5).clamp(0.0, 1.0);
                 let rain_moisture = (self.camera.rain_intensity * 0.5).min(0.3);
                 // Approximate surface water: tiles with high water table or rain have it
@@ -1023,17 +1241,22 @@ impl App {
                 };
 
                 // Per-tile randomness: 0.7-1.3 variation (deterministic from position)
-                let hash = (grid_idx.wrapping_mul(2654435761).wrapping_add(stage * 1013904223)) & 0xFFFF;
+                let hash = (grid_idx
+                    .wrapping_mul(2654435761)
+                    .wrapping_add(stage * 1013904223))
+                    & 0xFFFF;
                 let random_factor = 0.7 + (hash as f32 / 65535.0) * 0.6;
 
-                let growth_rate = temp_factor * sun_factor * water_factor * random_factor * richness_factor;
+                let growth_rate =
+                    temp_factor * sun_factor * water_factor * random_factor * richness_factor;
                 *timer += grow_dt * growth_rate;
                 if *timer >= CROP_GROW_TIME {
                     *timer = 0.0;
                     let new_stage = (stage + 1).min(CROP_MATURE);
                     let roof_h = block & 0xFF000000;
                     let flags_bits = block_flags_rs(block) as u32;
-                    self.grid_data[idx] = make_block(BT_CROP as u8, new_stage as u8, flags_bits as u8) | roof_h;
+                    self.grid_data[idx] =
+                        make_block(BT_CROP as u8, new_stage as u8, flags_bits as u8) | roof_h;
                     self.grid_dirty = true;
                     if new_stage == CROP_MATURE {
                         matured.push(grid_idx);
@@ -1041,7 +1264,9 @@ impl App {
                 }
             }
             // Remove timers for matured crops
-            for idx in matured { self.crop_timers.remove(&idx); }
+            for idx in matured {
+                self.crop_timers.remove(&idx);
+            }
         }
 
         // --- Terrain compaction decay (natural path fading) ---
@@ -1051,7 +1276,10 @@ impl App {
             if grid_size > 0 {
                 // Decay 64 random tiles per tick (covers full map in ~3000 frames)
                 for k in 0..64u32 {
-                    let hash = self.frame_count.wrapping_mul(2654435761).wrapping_add(k * 1013904223);
+                    let hash = self
+                        .frame_count
+                        .wrapping_mul(2654435761)
+                        .wrapping_add(k * 1013904223);
                     let idx = (hash as usize) % grid_size;
                     terrain_decay_compaction(&mut self.terrain_data[idx]);
                 }
@@ -1061,7 +1289,8 @@ impl App {
 
         // --- Work queue: assign idle friendly plebs to tasks by priority ---
         {
-            let mut farm_tasks = generate_work_tasks(&self.zones, &self.grid_data, GRID_W, &self.active_work);
+            let mut farm_tasks =
+                generate_work_tasks(&self.zones, &self.grid_data, GRID_W, &self.active_work);
             for task in self.manual_tasks.drain(..) {
                 let pos = task.position();
                 if !self.active_work.contains(&pos) {
@@ -1070,23 +1299,32 @@ impl App {
             }
 
             // Collect workbenches/kilns with pending craft orders
-            let craft_stations: Vec<(i32, i32, u32)> = self.craft_queues.iter()
+            let craft_stations: Vec<(i32, i32, u32)> = self
+                .craft_queues
+                .iter()
                 .filter(|(_, q)| q.pending())
                 .filter_map(|(&gidx, _)| {
                     let x = (gidx % GRID_W) as i32;
                     let y = (gidx / GRID_W) as i32;
                     if !self.active_work.contains(&(x, y)) {
                         Some((x, y, gidx))
-                    } else { None }
-                }).collect();
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
             // Collect ground items that could be hauled (with a nearby crate)
             // Skip items already in a storage zone — they're considered "stored"
-            let storage_tiles: std::collections::HashSet<(i32, i32)> = self.zones.iter()
+            let storage_tiles: std::collections::HashSet<(i32, i32)> = self
+                .zones
+                .iter()
                 .filter(|z| z.kind == ZoneKind::Storage)
                 .flat_map(|z| z.tiles.iter().copied())
                 .collect();
-            let haul_candidates: Vec<(i32, i32)> = self.ground_items.iter()
+            let haul_candidates: Vec<(i32, i32)> = self
+                .ground_items
+                .iter()
                 .map(|item| (item.x.floor() as i32, item.y.floor() as i32))
                 .filter(|&(ix, iy)| !self.active_work.contains(&(ix, iy)))
                 .filter(|&(ix, iy)| !storage_tiles.contains(&(ix, iy)))
@@ -1094,24 +1332,35 @@ impl App {
                 .collect();
 
             for pleb in self.plebs.iter_mut() {
-                if pleb.is_enemy || pleb.is_dead { continue; }
-                if pleb.activity != PlebActivity::Idle { continue; }
-                if pleb.work_target.is_some() || pleb.haul_target.is_some() { continue; }
+                if pleb.is_enemy || pleb.is_dead {
+                    continue;
+                }
+                if pleb.activity != PlebActivity::Idle {
+                    continue;
+                }
+                if pleb.work_target.is_some() || pleb.haul_target.is_some() {
+                    continue;
+                }
 
                 // Try work types in priority order (1 first, then 2, then 3)
                 let mut assigned = false;
                 for priority_level in 1..=3u8 {
-                    if assigned { break; }
+                    if assigned {
+                        break;
+                    }
                     // Collect which work types this pleb has at this priority level
                     for wt in 0..zones::WORK_TYPE_COUNT {
-                        if pleb.work_priorities[wt] != priority_level { continue; }
+                        if pleb.work_priorities[wt] != priority_level {
+                            continue;
+                        }
                         match wt {
                             zones::WORK_FARM => {
                                 // Find nearest farm task (store index to avoid clone)
                                 let mut best: Option<(usize, f32)> = None;
                                 for (i, task) in farm_tasks.iter().enumerate() {
                                     let (tx, ty) = task.position();
-                                    let dist = (pleb.x - tx as f32 - 0.5).powi(2) + (pleb.y - ty as f32 - 0.5).powi(2);
+                                    let dist = (pleb.x - tx as f32 - 0.5).powi(2)
+                                        + (pleb.y - ty as f32 - 0.5).powi(2);
                                     if best.map_or(true, |(_, bd)| dist < bd) {
                                         best = Some((i, dist));
                                     }
@@ -1123,11 +1372,21 @@ impl App {
                                         WorkTask::Plant(_, _) => "plant",
                                         WorkTask::Harvest(_, _) => "harvest",
                                     };
-                                    events.push(GameEventKind::TaskAssigned { pleb: pleb.name.clone(), task: task_name, x: tx, y: ty });
+                                    events.push(GameEventKind::TaskAssigned {
+                                        pleb: pleb.name.clone(),
+                                        task: task_name,
+                                        x: tx,
+                                        y: ty,
+                                    });
                                     self.active_work.insert((tx, ty));
                                     pleb.work_target = Some((tx, ty));
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (tx, ty));
+                                    let path = astar_path_terrain(
+                                        &self.grid_data,
+                                        &self.terrain_data,
+                                        start,
+                                        (tx, ty),
+                                    );
                                     if !path.is_empty() {
                                         pleb.path = path;
                                         pleb.path_idx = 0;
@@ -1140,15 +1399,23 @@ impl App {
                                 // Find nearest ground item to haul
                                 let mut best: Option<((i32, i32), f32)> = None;
                                 for &(ix, iy) in &haul_candidates {
-                                    let dist = (pleb.x - ix as f32 - 0.5).powi(2) + (pleb.y - iy as f32 - 0.5).powi(2);
+                                    let dist = (pleb.x - ix as f32 - 0.5).powi(2)
+                                        + (pleb.y - iy as f32 - 0.5).powi(2);
                                     if best.map_or(true, |(_, bd)| dist < bd) {
                                         best = Some(((ix, iy), dist));
                                     }
                                 }
                                 if let Some(((ix, iy), _)) = best {
-                                    if let Some((cx, cy)) = find_nearest_crate(&self.grid_data, ix, iy) {
+                                    if let Some((cx, cy)) =
+                                        find_nearest_crate(&self.grid_data, ix, iy)
+                                    {
                                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (ix, iy));
+                                        let path = astar_path_terrain(
+                                            &self.grid_data,
+                                            &self.terrain_data,
+                                            start,
+                                            (ix, iy),
+                                        );
                                         if !path.is_empty() {
                                             pleb.path = path;
                                             pleb.path_idx = 0;
@@ -1156,7 +1423,9 @@ impl App {
                                             pleb.harvest_target = Some((ix, iy));
                                             pleb.haul_target = Some((cx, cy));
                                             self.active_work.insert((ix, iy));
-                                            events.push(GameEventKind::AutoHauling(pleb.name.clone()));
+                                            events.push(GameEventKind::AutoHauling(
+                                                pleb.name.clone(),
+                                            ));
                                             assigned = true;
                                         }
                                     }
@@ -1168,29 +1437,49 @@ impl App {
                                 let mut best: Option<((i32, i32, u32), f32)> = None;
                                 for &(sx, sy, gidx) in &craft_stations {
                                     // Check if the next order's ingredients are available
-                                    let craftable = self.craft_queues.get(&gidx).and_then(|q| q.next_order()).and_then(|order| {
-                                        recipe_reg.get(order.recipe_id)
-                                    }).map(|recipe| {
-                                        recipe.inputs.iter().all(|ing| {
-                                            let in_inv = pleb.inventory.count_of(ing.item) as u16;
-                                            let in_crates: u16 = self.crate_contents.values()
-                                                .map(|c| c.count_of(ing.item) as u16).sum();
-                                            let on_ground: u16 = self.ground_items.iter()
-                                                .filter(|gi| gi.stack.item_id == ing.item)
-                                                .map(|gi| gi.stack.count).sum();
-                                            in_inv + in_crates + on_ground >= ing.count
+                                    let craftable = self
+                                        .craft_queues
+                                        .get(&gidx)
+                                        .and_then(|q| q.next_order())
+                                        .and_then(|order| recipe_reg.get(order.recipe_id))
+                                        .map(|recipe| {
+                                            recipe.inputs.iter().all(|ing| {
+                                                let in_inv =
+                                                    pleb.inventory.count_of(ing.item) as u16;
+                                                let in_crates: u16 = self
+                                                    .crate_contents
+                                                    .values()
+                                                    .map(|c| c.count_of(ing.item) as u16)
+                                                    .sum();
+                                                let on_ground: u16 = self
+                                                    .ground_items
+                                                    .iter()
+                                                    .filter(|gi| gi.stack.item_id == ing.item)
+                                                    .map(|gi| gi.stack.count)
+                                                    .sum();
+                                                in_inv + in_crates + on_ground >= ing.count
+                                            })
                                         })
-                                    }).unwrap_or(false);
-                                    if !craftable { continue; }
-                                    let dist = (pleb.x - sx as f32 - 0.5).powi(2) + (pleb.y - sy as f32 - 0.5).powi(2);
+                                        .unwrap_or(false);
+                                    if !craftable {
+                                        continue;
+                                    }
+                                    let dist = (pleb.x - sx as f32 - 0.5).powi(2)
+                                        + (pleb.y - sy as f32 - 0.5).powi(2);
                                     if best.map_or(true, |(_, bd)| dist < bd) {
                                         best = Some(((sx, sy, gidx), dist));
                                     }
                                 }
                                 if let Some(((sx, sy, _gidx), _)) = best {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                    let adj = adjacent_walkable(&self.grid_data, sx, sy).unwrap_or((sx, sy));
-                                    let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
+                                    let adj = adjacent_walkable(&self.grid_data, sx, sy)
+                                        .unwrap_or((sx, sy));
+                                    let path = astar_path_terrain(
+                                        &self.grid_data,
+                                        &self.terrain_data,
+                                        start,
+                                        adj,
+                                    );
                                     if !path.is_empty() {
                                         pleb.path = path;
                                         pleb.path_idx = 0;
@@ -1210,7 +1499,9 @@ impl App {
 
             // Handle Farming activity: pleb arrived at work target
             for pleb in self.plebs.iter_mut() {
-                if pleb.is_enemy { continue; }
+                if pleb.is_enemy {
+                    continue;
+                }
 
                 // Check if pleb is doing Farming
                 if let PlebActivity::Farming(progress) = &pleb.activity {
@@ -1219,10 +1510,16 @@ impl App {
                     let has_axe = pleb.inventory.count_of(ITEM_STONE_AXE) > 0;
                     let speed = if let Some((tx, ty)) = pleb.work_target {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        if tidx < self.grid_data.len() && (self.grid_data[tidx] & 0xFF) as u32 == BT_TREE {
+                        if tidx < self.grid_data.len()
+                            && (self.grid_data[tidx] & 0xFF) as u32 == BT_TREE
+                        {
                             if has_axe { 0.60 } else { 0.30 } // axe: ~1.7s, bare hands: ~3.5s
-                        } else { 0.4 } // ~2.5s for crops/bushes
-                    } else { 0.4 };
+                        } else {
+                            0.4
+                        } // ~2.5s for crops/bushes
+                    } else {
+                        0.4
+                    };
                     let new_progress = progress + dt * self.time_speed * speed;
                     if new_progress >= 1.0 {
                         // Complete the task
@@ -1234,32 +1531,44 @@ impl App {
                                 if tbt == BT_DIRT {
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = block_flags_rs(tblock) as u32;
-                                    self.grid_data[tidx] = make_block(BT_CROP as u8, CROP_PLANTED as u8, fflags as u8) | roof_h;
+                                    self.grid_data[tidx] =
+                                        make_block(BT_CROP as u8, CROP_PLANTED as u8, fflags as u8)
+                                            | roof_h;
                                     self.crop_timers.insert(tidx as u32, 0.0);
                                     self.grid_dirty = true;
                                     events.push(GameEventKind::Planted(pleb.name.clone()));
                                 } else if tbt == BT_CROP {
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = block_flags_rs(tblock) as u32;
-                                    self.grid_data[tidx] = make_block(BT_DIRT as u8, 0, fflags as u8) | roof_h;
+                                    self.grid_data[tidx] =
+                                        make_block(BT_DIRT as u8, 0, fflags as u8) | roof_h;
                                     self.crop_timers.remove(&(tidx as u32));
                                     self.grid_dirty = true;
                                     // Drop harvest on ground near pleb
                                     self.ground_items.push(resources::GroundItem {
-                                        x: pleb.x, y: pleb.y,
+                                        x: pleb.x,
+                                        y: pleb.y,
                                         stack: ItemStack::new(ITEM_BERRIES, 2),
                                     });
                                     self.ground_items.push(resources::GroundItem {
-                                        x: pleb.x + 0.2, y: pleb.y + 0.2,
+                                        x: pleb.x + 0.2,
+                                        y: pleb.y + 0.2,
                                         stack: ItemStack::new(ITEM_FIBER, 2),
                                     });
-                                    events.push(GameEventKind::Harvested { pleb: pleb.name.clone(), what: "a crop (berries + fiber)" });
+                                    events.push(GameEventKind::Harvested {
+                                        pleb: pleb.name.clone(),
+                                        what: "a crop (berries + fiber)",
+                                    });
                                 } else if tbt == BT_BERRY_BUSH {
                                     self.ground_items.push(resources::GroundItem {
-                                        x: pleb.x, y: pleb.y,
+                                        x: pleb.x,
+                                        y: pleb.y,
                                         stack: ItemStack::new(ITEM_BERRIES, 3),
                                     });
-                                    events.push(GameEventKind::Harvested { pleb: pleb.name.clone(), what: "berries" });
+                                    events.push(GameEventKind::Harvested {
+                                        pleb: pleb.name.clone(),
+                                        what: "berries",
+                                    });
                                 } else if tbt == BT_TREE {
                                     // Chop down tree → remove all quadrants (2x2), drop 10 wood
                                     // Find the top-left corner from the quadrant flags
@@ -1271,12 +1580,22 @@ impl App {
                                         for dx in 0..2i32 {
                                             let nx = origin_x + dx;
                                             let ny = origin_y + dy;
-                                            if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                                            if nx < 0
+                                                || ny < 0
+                                                || nx >= GRID_W as i32
+                                                || ny >= GRID_H as i32
+                                            {
+                                                continue;
+                                            }
                                             let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
-                                            if nidx < self.grid_data.len() && (self.grid_data[nidx] & 0xFF) as u32 == BT_TREE {
+                                            if nidx < self.grid_data.len()
+                                                && (self.grid_data[nidx] & 0xFF) as u32 == BT_TREE
+                                            {
                                                 let nroof = self.grid_data[nidx] & 0xFF000000;
                                                 let nflags = (self.grid_data[nidx] >> 16) & 2;
-                                                self.grid_data[nidx] = make_block(BT_DIRT as u8, 0, nflags as u8) | nroof;
+                                                self.grid_data[nidx] =
+                                                    make_block(BT_DIRT as u8, 0, nflags as u8)
+                                                        | nroof;
                                             }
                                         }
                                     }
@@ -1284,18 +1603,24 @@ impl App {
                                     let drop_x = origin_x as f32 + 1.0;
                                     let drop_y = origin_y as f32 + 1.0;
                                     self.ground_items.push(resources::GroundItem {
-                                        x: drop_x, y: drop_y,
+                                        x: drop_x,
+                                        y: drop_y,
                                         stack: ItemStack::new(ITEM_WOOD, 10),
                                     });
                                     self.ground_items.push(resources::GroundItem {
-                                        x: drop_x + 0.3, y: drop_y + 0.3,
+                                        x: drop_x + 0.3,
+                                        y: drop_y + 0.3,
                                         stack: ItemStack::new(ITEM_SCRAP_WOOD, 4),
                                     });
                                     self.ground_items.push(resources::GroundItem {
-                                        x: drop_x - 0.3, y: drop_y + 0.2,
+                                        x: drop_x - 0.3,
+                                        y: drop_y + 0.2,
                                         stack: ItemStack::new(ITEM_FIBER, 3),
                                     });
-                                    events.push(GameEventKind::Harvested { pleb: pleb.name.clone(), what: "a tree (wood + scrap + fiber)" });
+                                    events.push(GameEventKind::Harvested {
+                                        pleb: pleb.name.clone(),
+                                        what: "a tree (wood + scrap + fiber)",
+                                    });
                                 }
                             }
                             self.active_work.remove(&(tx, ty));
@@ -1310,14 +1635,21 @@ impl App {
                 // Arrived at work target: start farming or crafting
                 let has_work = pleb.work_target.is_some();
                 let path_done = pleb.path_idx >= pleb.path.len();
-                let is_walking_or_idle = pleb.activity == PlebActivity::Walking || pleb.activity == PlebActivity::Idle;
+                let is_walking_or_idle =
+                    pleb.activity == PlebActivity::Walking || pleb.activity == PlebActivity::Idle;
                 if has_work && path_done && is_walking_or_idle {
                     if let Some((tx, ty)) = pleb.work_target {
-                        let dist = ((pleb.x - tx as f32 - 0.5).powi(2) + (pleb.y - ty as f32 - 0.5).powi(2)).sqrt();
+                        let dist = ((pleb.x - tx as f32 - 0.5).powi(2)
+                            + (pleb.y - ty as f32 - 0.5).powi(2))
+                        .sqrt();
                         if dist < 1.5 {
                             // Check if target is a craft station
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                            let tbt = if tidx < self.grid_data.len() { block_type_rs(self.grid_data[tidx]) } else { 0 };
+                            let tbt = if tidx < self.grid_data.len() {
+                                block_type_rs(self.grid_data[tidx])
+                            } else {
+                                0
+                            };
                             if tbt == BT_WORKBENCH || tbt == BT_KILN {
                                 // Try to start crafting from queue
                                 let gidx = ty as u32 * GRID_W + tx as u32;
@@ -1328,22 +1660,38 @@ impl App {
                                             // Check ingredients from inventory + crates + ground
                                             let mut have_all = true;
                                             for ing in &recipe.inputs {
-                                                let in_inv = pleb.inventory.count_of(ing.item) as u16;
-                                                let in_crates: u16 = self.crate_contents.values()
-                                                    .map(|c| c.count_of(ing.item) as u16).sum();
-                                                let on_ground: u16 = self.ground_items.iter()
+                                                let in_inv =
+                                                    pleb.inventory.count_of(ing.item) as u16;
+                                                let in_crates: u16 = self
+                                                    .crate_contents
+                                                    .values()
+                                                    .map(|c| c.count_of(ing.item) as u16)
+                                                    .sum();
+                                                let on_ground: u16 = self
+                                                    .ground_items
+                                                    .iter()
                                                     .filter(|gi| gi.stack.item_id == ing.item)
-                                                    .map(|gi| gi.stack.count).sum();
+                                                    .map(|gi| gi.stack.count)
+                                                    .sum();
                                                 if in_inv + in_crates + on_ground < ing.count {
-                                                    have_all = false; break;
+                                                    have_all = false;
+                                                    break;
                                                 }
                                             }
                                             if have_all {
                                                 Some(order.recipe_id)
-                                            } else { None }
-                                        } else { None }
-                                    } else { None }
-                                } else { None };
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
 
                                 if let Some(recipe_id) = started {
                                     let recipe_reg = recipe_defs::RecipeRegistry::cached();
@@ -1355,7 +1703,9 @@ impl App {
                                         need -= from_inv;
                                         if need > 0 {
                                             for (_, cinv) in self.crate_contents.iter_mut() {
-                                                if need == 0 { break; }
+                                                if need == 0 {
+                                                    break;
+                                                }
                                                 let taken = cinv.remove(ing.item, need);
                                                 need -= taken;
                                             }
@@ -1365,7 +1715,8 @@ impl App {
                                             let mut i = 0;
                                             while i < self.ground_items.len() && need > 0 {
                                                 if self.ground_items[i].stack.item_id == ing.item {
-                                                    let take = self.ground_items[i].stack.count.min(need);
+                                                    let take =
+                                                        self.ground_items[i].stack.count.min(need);
                                                     self.ground_items[i].stack.count -= take;
                                                     need -= take;
                                                     if self.ground_items[i].stack.count == 0 {
@@ -1378,7 +1729,10 @@ impl App {
                                         }
                                     }
                                     pleb.activity = PlebActivity::Crafting(recipe_id, 0.0);
-                                    events.push(GameEventKind::Crafting { pleb: pleb.name.clone(), recipe: recipe.name.clone() });
+                                    events.push(GameEventKind::Crafting {
+                                        pleb: pleb.name.clone(),
+                                        recipe: recipe.name.clone(),
+                                    });
                                 } else {
                                     // Can't craft — missing ingredients, release
                                     self.active_work.remove(&(tx, ty));
@@ -1390,22 +1744,35 @@ impl App {
                                 pleb.activity = PlebActivity::Drinking(0.0);
                             } else if tidx < self.terrain_data.len()
                                 && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY
-                                && (tbt == BT_DIRT || (tbt == BT_DUG_GROUND && block_height_rs(self.grid_data[tidx]) < 3))
+                                && (tbt == BT_DIRT
+                                    || (tbt == BT_DUG_GROUND
+                                        && block_height_rs(self.grid_data[tidx]) < 3))
                             {
                                 // Dig clay: deepen or create dug ground, drop clay
                                 let roof_h = self.grid_data[tidx] & 0xFF000000;
-                                let cur_depth = if tbt == BT_DUG_GROUND { block_height_rs(self.grid_data[tidx]) } else { 0 };
+                                let cur_depth = if tbt == BT_DUG_GROUND {
+                                    block_height_rs(self.grid_data[tidx])
+                                } else {
+                                    0
+                                };
                                 let new_depth = (cur_depth + 1).min(3);
-                                self.grid_data[tidx] = make_block(BT_DUG_GROUND as u8, new_depth, 0) | roof_h;
+                                self.grid_data[tidx] =
+                                    make_block(BT_DUG_GROUND as u8, new_depth, 0) | roof_h;
                                 self.grid_dirty = true;
                                 // Shovel bonus: +2 yield
                                 let has_shovel = pleb.inventory.count_of(ITEM_WOODEN_SHOVEL) > 0;
                                 let base_yield: u16 = if cur_depth == 0 { 4 } else { 3 };
                                 let yield_amt = base_yield + if has_shovel { 2 } else { 0 };
                                 self.ground_items.push(resources::GroundItem::new(
-                                    tx as f32 + 0.5, ty as f32 + 0.5, ITEM_CLAY, yield_amt,
+                                    tx as f32 + 0.5,
+                                    ty as f32 + 0.5,
+                                    ITEM_CLAY,
+                                    yield_amt,
                                 ));
-                                events.push(GameEventKind::DugClay { pleb: pleb.name.clone(), amount: yield_amt });
+                                events.push(GameEventKind::DugClay {
+                                    pleb: pleb.name.clone(),
+                                    amount: yield_amt,
+                                });
                                 pleb.work_target = None;
                                 pleb.activity = PlebActivity::Idle;
                             } else {
@@ -1425,7 +1792,9 @@ impl App {
         // --- Construction: plebs build blueprints ---
         // 1. Handle Building activity progress
         for pleb in self.plebs.iter_mut() {
-            if pleb.is_enemy { continue; }
+            if pleb.is_enemy {
+                continue;
+            }
             if let PlebActivity::Building(progress) = &pleb.activity {
                 if let Some((tx, ty)) = pleb.work_target {
                     let new_progress = if let Some(bp) = self.blueprints.get(&(tx, ty)) {
@@ -1442,7 +1811,9 @@ impl App {
                                 self.grid_dirty = true;
                                 events.push(GameEventKind::Built {
                                     pleb: pleb.name.clone(),
-                                    block: block_defs::BlockRegistry::cached().name(bp.block_data & 0xFF).to_string(),
+                                    block: block_defs::BlockRegistry::cached()
+                                        .name(bp.block_data & 0xFF)
+                                        .to_string(),
                                 });
                             }
                         }
@@ -1464,7 +1835,9 @@ impl App {
 
         // --- Crafting: advance crafting progress ---
         for pleb in self.plebs.iter_mut() {
-            if pleb.is_dead || pleb.is_enemy { continue; }
+            if pleb.is_dead || pleb.is_enemy {
+                continue;
+            }
             if let PlebActivity::Crafting(recipe_id, progress) = pleb.activity {
                 let recipe_reg = recipe_defs::RecipeRegistry::cached();
                 if let Some(recipe) = recipe_reg.get(recipe_id) {
@@ -1472,14 +1845,24 @@ impl App {
                     if new_progress >= 1.0 {
                         // Crafting complete — drop output on ground near pleb
                         self.ground_items.push(resources::GroundItem::new(
-                            pleb.x, pleb.y, recipe.output.item, recipe.output.count,
+                            pleb.x,
+                            pleb.y,
+                            recipe.output.item,
+                            recipe.output.count,
                         ));
-                        events.push(GameEventKind::Crafted { pleb: pleb.name.clone(), recipe: recipe.name.clone() });
+                        events.push(GameEventKind::Crafted {
+                            pleb: pleb.name.clone(),
+                            recipe: recipe.name.clone(),
+                        });
                         // Increment queue counter
                         if let Some((tx, ty)) = pleb.work_target {
                             let gidx = ty as u32 * GRID_W + tx as u32;
                             if let Some(queue) = self.craft_queues.get_mut(&gidx) {
-                                if let Some(order) = queue.orders.iter_mut().find(|o| o.recipe_id == recipe_id && o.completed < o.count) {
+                                if let Some(order) = queue
+                                    .orders
+                                    .iter_mut()
+                                    .find(|o| o.recipe_id == recipe_id && o.completed < o.count)
+                                {
                                     order.completed += 1;
                                 }
                                 // Clean up completed orders
@@ -1507,16 +1890,24 @@ impl App {
         if !self.blueprints.is_empty() {
             let bp_positions: Vec<(i32, i32)> = self.blueprints.keys().copied().collect();
             for &(bx, by) in &bp_positions {
-                if self.active_work.contains(&(bx, by)) { continue; }
+                if self.active_work.contains(&(bx, by)) {
+                    continue;
+                }
                 let bp = &self.blueprints[&(bx, by)];
 
                 if bp.resources_met() {
                     // Resources delivered — assign pleb to build
                     let mut best: Option<(usize, f32)> = None;
                     for (i, pleb) in self.plebs.iter().enumerate() {
-                        if pleb.is_enemy || pleb.work_target.is_some() { continue; }
-                        if !matches!(pleb.activity, PlebActivity::Idle) { continue; }
-                        let dist = ((pleb.x - bx as f32 - 0.5).powi(2) + (pleb.y - by as f32 - 0.5).powi(2)).sqrt();
+                        if pleb.is_enemy || pleb.work_target.is_some() {
+                            continue;
+                        }
+                        if !matches!(pleb.activity, PlebActivity::Idle) {
+                            continue;
+                        }
+                        let dist = ((pleb.x - bx as f32 - 0.5).powi(2)
+                            + (pleb.y - by as f32 - 0.5).powi(2))
+                        .sqrt();
                         if dist < 40.0 && (best.map_or(true, |(_, bd)| dist < bd)) {
                             best = Some((i, dist));
                         }
@@ -1525,7 +1916,8 @@ impl App {
                         let pleb = &mut self.plebs[pi];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                         let adj = adjacent_walkable(&self.grid_data, bx, by).unwrap_or((bx, by));
-                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
+                        let path =
+                            astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 0;
@@ -1541,14 +1933,18 @@ impl App {
                         Some(ITEM_WOOD)
                     } else if bp.clay_delivered < bp.clay_needed {
                         Some(ITEM_CLAY)
-                    } else { None };
+                    } else {
+                        None
+                    };
 
                     if let Some(needed_id) = need_item {
                         // Find nearest ground item of needed type
                         let mut best_item: Option<(usize, f32)> = None;
                         for (i, item) in self.ground_items.iter().enumerate() {
                             if item.stack.item_id == needed_id {
-                                let d = ((item.x - bx as f32 - 0.5).powi(2) + (item.y - by as f32 - 0.5).powi(2)).sqrt();
+                                let d = ((item.x - bx as f32 - 0.5).powi(2)
+                                    + (item.y - by as f32 - 0.5).powi(2))
+                                .sqrt();
                                 if best_item.is_none() || d < best_item.unwrap().1 {
                                     best_item = Some((i, d));
                                 }
@@ -1560,7 +1956,9 @@ impl App {
                                 if cinv.count_of(needed_id) > 0 {
                                     let cx2 = (cidx % GRID_W) as i32;
                                     let cy2 = (cidx / GRID_W) as i32;
-                                    let d = ((cx2 as f32 + 0.5 - bx as f32 - 0.5).powi(2) + (cy2 as f32 + 0.5 - by as f32 - 0.5).powi(2)).sqrt();
+                                    let d = ((cx2 as f32 + 0.5 - bx as f32 - 0.5).powi(2)
+                                        + (cy2 as f32 + 0.5 - by as f32 - 0.5).powi(2))
+                                    .sqrt();
                                     if best_item.is_none() || d < best_item.unwrap().1 {
                                         // Use crate position as pickup
                                         best_item = Some((usize::MAX, d)); // sentinel
@@ -1570,7 +1968,10 @@ impl App {
                         }
                         if let Some((wi, _)) = best_item {
                             let pickup_pos = if wi < self.ground_items.len() {
-                                (self.ground_items[wi].x.floor() as i32, self.ground_items[wi].y.floor() as i32)
+                                (
+                                    self.ground_items[wi].x.floor() as i32,
+                                    self.ground_items[wi].y.floor() as i32,
+                                )
                             } else {
                                 // From crate — find nearest crate with the material
                                 let mut best_crate = (bx, by);
@@ -1579,8 +1980,12 @@ impl App {
                                     if cinv.count_of(needed_id) > 0 {
                                         let cx2 = (cidx % GRID_W) as i32;
                                         let cy2 = (cidx / GRID_W) as i32;
-                                        let d = ((cx2 - bx) as f32).powi(2) + ((cy2 - by) as f32).powi(2);
-                                        if d < best_d { best_d = d; best_crate = (cx2, cy2); }
+                                        let d = ((cx2 - bx) as f32).powi(2)
+                                            + ((cy2 - by) as f32).powi(2);
+                                        if d < best_d {
+                                            best_d = d;
+                                            best_crate = (cx2, cy2);
+                                        }
                                     }
                                 }
                                 best_crate
@@ -1588,9 +1993,15 @@ impl App {
                             // Find nearest idle pleb
                             let mut best_pleb: Option<(usize, f32)> = None;
                             for (i, pleb) in self.plebs.iter().enumerate() {
-                                if pleb.is_enemy || pleb.is_dead || pleb.work_target.is_some() { continue; }
-                                if !matches!(pleb.activity, PlebActivity::Idle) { continue; }
-                                let dist = ((pleb.x - pickup_pos.0 as f32 - 0.5).powi(2) + (pleb.y - pickup_pos.1 as f32 - 0.5).powi(2)).sqrt();
+                                if pleb.is_enemy || pleb.is_dead || pleb.work_target.is_some() {
+                                    continue;
+                                }
+                                if !matches!(pleb.activity, PlebActivity::Idle) {
+                                    continue;
+                                }
+                                let dist = ((pleb.x - pickup_pos.0 as f32 - 0.5).powi(2)
+                                    + (pleb.y - pickup_pos.1 as f32 - 0.5).powi(2))
+                                .sqrt();
                                 if dist < 50.0 && (best_pleb.map_or(true, |(_, bd)| dist < bd)) {
                                     best_pleb = Some((i, dist));
                                 }
@@ -1598,7 +2009,12 @@ impl App {
                             if let Some((pi, _)) = best_pleb {
                                 let pleb = &mut self.plebs[pi];
                                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, pickup_pos);
+                                let path = astar_path_terrain(
+                                    &self.grid_data,
+                                    &self.terrain_data,
+                                    start,
+                                    pickup_pos,
+                                );
                                 if !path.is_empty() {
                                     pleb.path = path;
                                     pleb.path_idx = 0;
@@ -1616,13 +2032,17 @@ impl App {
 
         // 3. Plebs arriving at blueprints: start building (if resources met) or deliver wood
         for pleb in self.plebs.iter_mut() {
-            if pleb.is_enemy { continue; }
+            if pleb.is_enemy {
+                continue;
+            }
             // Walking pleb arriving at blueprint → start building
             if pleb.activity == PlebActivity::Walking {
                 if let Some((tx, ty)) = pleb.work_target {
                     if let Some(bp) = self.blueprints.get(&(tx, ty)) {
                         if bp.resources_met() {
-                            let dist = ((pleb.x - tx as f32 - 0.5).powi(2) + (pleb.y - ty as f32 - 0.5).powi(2)).sqrt();
+                            let dist = ((pleb.x - tx as f32 - 0.5).powi(2)
+                                + (pleb.y - ty as f32 - 0.5).powi(2))
+                            .sqrt();
                             if dist < 1.5 {
                                 pleb.activity = PlebActivity::Building(0.0);
                                 pleb.path.clear();
@@ -1637,12 +2057,19 @@ impl App {
         // Handle plebs arriving at ground item to eat:
         // Check proximity every frame (not just path_done) — pleb may walk close enough mid-path
         for pleb in self.plebs.iter_mut() {
-            if pleb.is_enemy { continue; }
-            let is_walking_or_idle = matches!(pleb.activity, PlebActivity::Walking | PlebActivity::Idle);
-            let has_eat_target = pleb.harvest_target.is_some() && pleb.work_target.is_none() && pleb.haul_target.is_none();
+            if pleb.is_enemy {
+                continue;
+            }
+            let is_walking_or_idle =
+                matches!(pleb.activity, PlebActivity::Walking | PlebActivity::Idle);
+            let has_eat_target = pleb.harvest_target.is_some()
+                && pleb.work_target.is_none()
+                && pleb.haul_target.is_none();
             if is_walking_or_idle && has_eat_target {
                 if let Some((tx, ty)) = pleb.harvest_target {
-                    let dist = ((pleb.x - tx as f32 - 0.5).powi(2) + (pleb.y - ty as f32 - 0.5).powi(2)).sqrt();
+                    let dist = ((pleb.x - tx as f32 - 0.5).powi(2)
+                        + (pleb.y - ty as f32 - 0.5).powi(2))
+                    .sqrt();
                     if dist < 1.5 {
                         pleb.activity = PlebActivity::Eating;
                         pleb.path.clear();
@@ -1655,18 +2082,24 @@ impl App {
         // --- Auto-haul ground items to storage zones ---
         if !self.ground_items.is_empty() {
             // Collect storage zone tiles
-            let storage_tiles: Vec<(i32, i32)> = self.zones.iter()
+            let storage_tiles: Vec<(i32, i32)> = self
+                .zones
+                .iter()
                 .filter(|z| z.kind == ZoneKind::Storage)
                 .flat_map(|z| z.tiles.iter().copied())
                 .collect();
             if !storage_tiles.is_empty() {
                 // Find ground items NOT already on a storage zone tile
-                let occupied: std::collections::HashSet<(i32, i32)> = self.ground_items.iter()
+                let occupied: std::collections::HashSet<(i32, i32)> = self
+                    .ground_items
+                    .iter()
                     .map(|item| (item.x.floor() as i32, item.y.floor() as i32))
                     .collect();
-                let empty_storage: Vec<(i32, i32)> = storage_tiles.iter()
+                let empty_storage: Vec<(i32, i32)> = storage_tiles
+                    .iter()
                     .filter(|t| !occupied.contains(t))
-                    .copied().collect();
+                    .copied()
+                    .collect();
 
                 // For each loose ground item (not on storage), try to assign a haul
                 for gi in 0..self.ground_items.len() {
@@ -1675,21 +2108,33 @@ impl App {
                     let iy = item.y.floor() as i32;
                     // Skip items already on a storage zone tile
                     let on_storage = storage_tiles.contains(&(ix, iy));
-                    if on_storage { continue; }
+                    if on_storage {
+                        continue;
+                    }
                     // Find nearest empty storage tile
-                    let nearest_slot = empty_storage.iter()
+                    let nearest_slot = empty_storage
+                        .iter()
                         .map(|&(sx, sy)| {
                             let d = ((ix - sx).pow(2) + (iy - sy).pow(2)) as f32;
                             (sx, sy, d)
                         })
                         .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
-                    let Some((sx, sy, _)) = nearest_slot else { break; };
+                    let Some((sx, sy, _)) = nearest_slot else {
+                        break;
+                    };
                     // Find nearest idle pleb not already doing something
                     let mut best_pleb: Option<(usize, f32)> = None;
                     for (pi, pleb) in self.plebs.iter().enumerate() {
-                        if pleb.is_enemy || pleb.work_target.is_some() || pleb.haul_target.is_some() { continue; }
-                        if !matches!(pleb.activity, PlebActivity::Idle) { continue; }
-                        let dist = ((pleb.x - ix as f32 - 0.5).powi(2) + (pleb.y - iy as f32 - 0.5).powi(2)).sqrt();
+                        if pleb.is_enemy || pleb.work_target.is_some() || pleb.haul_target.is_some()
+                        {
+                            continue;
+                        }
+                        if !matches!(pleb.activity, PlebActivity::Idle) {
+                            continue;
+                        }
+                        let dist = ((pleb.x - ix as f32 - 0.5).powi(2)
+                            + (pleb.y - iy as f32 - 0.5).powi(2))
+                        .sqrt();
                         if dist < 40.0 && (best_pleb.map_or(true, |(_, bd)| dist < bd)) {
                             best_pleb = Some((pi, dist));
                         }
@@ -1697,13 +2142,18 @@ impl App {
                     if let Some((pi, _)) = best_pleb {
                         let pleb = &mut self.plebs[pi];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (ix, iy));
+                        let path = astar_path_terrain(
+                            &self.grid_data,
+                            &self.terrain_data,
+                            start,
+                            (ix, iy),
+                        );
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 0;
                             pleb.activity = PlebActivity::Hauling;
                             pleb.harvest_target = Some((ix, iy)); // pickup location
-                            pleb.haul_target = Some((sx, sy));    // storage zone tile
+                            pleb.haul_target = Some((sx, sy)); // storage zone tile
                             break; // one haul assignment per tick to avoid overwhelm
                         }
                     }
@@ -1733,7 +2183,10 @@ impl App {
                     pleb.needs.health -= damage;
                     if damage > 0.005 {
                         let _db_at_pleb = amplitude_to_db(max_pressure);
-                        events.push(GameEventKind::PlebHit { pleb: pleb.name.clone(), hp_pct: pleb.needs.health.max(0.0) * 100.0 });
+                        events.push(GameEventKind::PlebHit {
+                            pleb: pleb.name.clone(),
+                            hp_pct: pleb.needs.health.max(0.0) * 100.0,
+                        });
                     }
                 }
             }
@@ -1741,10 +2194,16 @@ impl App {
 
         // --- Mental breaks: trigger at high stress ---
         for pleb in self.plebs.iter_mut() {
-            if pleb.is_dead || pleb.is_enemy { continue; }
+            if pleb.is_dead || pleb.is_enemy {
+                continue;
+            }
 
             // Tick existing mental break
-            let break_state = if let PlebActivity::MentalBreak(ref k, r) = pleb.activity { Some((k.clone(), r)) } else { None };
+            let break_state = if let PlebActivity::MentalBreak(ref k, r) = pleb.activity {
+                Some((k.clone(), r))
+            } else {
+                None
+            };
             if let Some((kind, remaining)) = break_state {
                 if remaining <= dt * self.time_speed {
                     // Break over — stress drops, return to idle
@@ -1755,21 +2214,38 @@ impl App {
                         MentalBreakKind::Tantrum => "tantrum",
                         MentalBreakKind::Collapse => "collapse",
                     };
-                    events.push(GameEventKind::MentalBreakRecovered { pleb: pleb.name.clone(), kind: kind_name });
+                    events.push(GameEventKind::MentalBreakRecovered {
+                        pleb: pleb.name.clone(),
+                        kind: kind_name,
+                    });
                     pleb.activity = PlebActivity::Idle;
                 } else {
-                    pleb.activity = PlebActivity::MentalBreak(kind.clone(), remaining - dt * self.time_speed);
+                    pleb.activity =
+                        PlebActivity::MentalBreak(kind.clone(), remaining - dt * self.time_speed);
                     // Daze: random wandering
                     if matches!(kind, MentalBreakKind::Daze) && pleb.path.is_empty() {
-                        let hash = (self.frame_count.wrapping_mul(2654435761).wrapping_add(pleb.id as u32 * 7919)) % 100;
-                        if hash < 5 { // occasionally pick a new wander target
+                        let hash = (self
+                            .frame_count
+                            .wrapping_mul(2654435761)
+                            .wrapping_add(pleb.id as u32 * 7919))
+                            % 100;
+                        if hash < 5 {
+                            // occasionally pick a new wander target
                             let dx = (hash % 11) as i32 - 5;
                             let dy = ((hash / 11) % 11) as i32 - 5;
                             let tx = (pleb.x as i32 + dx).clamp(0, GRID_W as i32 - 1);
                             let ty = (pleb.y as i32 + dy).clamp(0, GRID_H as i32 - 1);
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path_terrain(&self.grid_data, &self.terrain_data, start, (tx, ty));
-                            if !path.is_empty() { pleb.path = path; pleb.path_idx = 0; }
+                            let path = astar_path_terrain(
+                                &self.grid_data,
+                                &self.terrain_data,
+                                start,
+                                (tx, ty),
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                            }
                         }
                     }
                 }
@@ -1781,7 +2257,10 @@ impl App {
                 && !matches!(pleb.activity, PlebActivity::MentalBreak(_, _))
                 && !pleb.activity.is_crisis()
             {
-                let hash = self.frame_count.wrapping_mul(2654435761).wrapping_add(pleb.id as u32 * 1013904223);
+                let hash = self
+                    .frame_count
+                    .wrapping_mul(2654435761)
+                    .wrapping_add(pleb.id as u32 * 1013904223);
                 let kind = match hash % 4 {
                     0 => MentalBreakKind::Daze,
                     1 => MentalBreakKind::Binge,
@@ -1800,7 +2279,10 @@ impl App {
                     MentalBreakKind::Tantrum => "tantrum",
                     MentalBreakKind::Collapse => "collapse",
                 };
-                events.push(GameEventKind::MentalBreak { pleb: pleb.name.clone(), kind: kind_name });
+                events.push(GameEventKind::MentalBreak {
+                    pleb: pleb.name.clone(),
+                    kind: kind_name,
+                });
                 pleb.path.clear();
                 pleb.path_idx = 0;
                 pleb.work_target = None;
@@ -1861,8 +2343,8 @@ fn tick_pleb_activity(
             let fully_rested = pleb.needs.rest > 0.95;
             let cant_breathe = pleb.needs.breathing_state != BreathingState::Normal;
             // Wake up when: fully rested, can't breathe, OR shift says work time and rested enough
-            let shift_wake = !pleb.schedule.is_sleep_time(time_of_day, DAY_DURATION)
-                && pleb.needs.rest > 0.5;
+            let shift_wake =
+                !pleb.schedule.is_sleep_time(time_of_day, DAY_DURATION) && pleb.needs.rest > 0.5;
             if fully_rested || cant_breathe || shift_wake {
                 pleb.activity = PlebActivity::Idle;
             }
@@ -1872,7 +2354,8 @@ fn tick_pleb_activity(
             if new_progress >= 1.0 {
                 // Drop berries on ground near pleb
                 ground_items.push(resources::GroundItem {
-                    x: pleb.x, y: pleb.y,
+                    x: pleb.x,
+                    y: pleb.y,
                     stack: ItemStack::new(ITEM_BERRIES, 3),
                 });
                 pleb.harvest_target = None;
@@ -1900,28 +2383,41 @@ fn tick_pleb_activity(
             if pleb.inventory.count_of(ITEM_BERRIES) > 0 {
                 pleb.inventory.remove(ITEM_BERRIES, 1);
                 pleb.needs.hunger = (pleb.needs.hunger + BERRY_HUNGER_RESTORE).min(1.0);
-                log::info!("{} ate a berry from inventory (hunger: {:.0}%)",
-                    pleb.name, pleb.needs.hunger * 100.0);
+                log::info!(
+                    "{} ate a berry from inventory (hunger: {:.0}%)",
+                    pleb.name,
+                    pleb.needs.hunger * 100.0
+                );
                 ate = true;
             }
             // Try eating from ground item at harvest_target
             if !ate {
                 if let Some((tx, ty)) = pleb.harvest_target {
                     if let Some(gi) = ground_items.iter_mut().position(|item| {
-                        item.x.floor() as i32 == tx && item.y.floor() as i32 == ty
+                        item.x.floor() as i32 == tx
+                            && item.y.floor() as i32 == ty
                             && item.stack.item_id == ITEM_BERRIES
                     }) {
                         pleb.needs.hunger = (pleb.needs.hunger + BERRY_HUNGER_RESTORE).min(1.0);
-                        if ground_items[gi].stack.count <= 1 { ground_items.remove(gi); }
-                        else { ground_items[gi].stack.count -= 1; }
-                        log::info!("{} ate a berry from ground (hunger: {:.0}%)",
-                            pleb.name, pleb.needs.hunger * 100.0);
+                        if ground_items[gi].stack.count <= 1 {
+                            ground_items.remove(gi);
+                        } else {
+                            ground_items[gi].stack.count -= 1;
+                        }
+                        log::info!(
+                            "{} ate a berry from ground (hunger: {:.0}%)",
+                            pleb.name,
+                            pleb.needs.hunger * 100.0
+                        );
                         ate = true;
                     }
                 }
             }
             pleb.harvest_target = None;
-            if was_crisis && pleb.needs.hunger < 0.3 && (pleb.inventory.count_of(ITEM_BERRIES) > 0 || ate) {
+            if was_crisis
+                && pleb.needs.hunger < 0.3
+                && (pleb.inventory.count_of(ITEM_BERRIES) > 0 || ate)
+            {
                 pleb.activity = PlebActivity::Crisis(
                     Box::new(PlebActivity::Eating),
                     crisis_reason.unwrap_or("Starving"),
@@ -1934,7 +2430,11 @@ fn tick_pleb_activity(
             let new_progress = progress + dt * time_speed / WELL_DRINK_TIME;
             if new_progress >= 1.0 {
                 pleb.needs.thirst = (pleb.needs.thirst + WELL_THIRST_RESTORE).min(1.0);
-                log::info!("{} drank from well (thirst: {:.0}%)", pleb.name, pleb.needs.thirst * 100.0);
+                log::info!(
+                    "{} drank from well (thirst: {:.0}%)",
+                    pleb.name,
+                    pleb.needs.thirst * 100.0
+                );
                 // Also fill any empty containers in inventory
                 for stack in &mut pleb.inventory.stacks {
                     if stack.is_container() && stack.liquid.is_none() {
@@ -1954,8 +2454,10 @@ fn tick_pleb_activity(
     }
 
     // --- Crisis auto-behaviors (override player control) ---
-    let is_idle_or_walk = matches!(pleb.activity.inner(),
-        PlebActivity::Idle | PlebActivity::Walking);
+    let is_idle_or_walk = matches!(
+        pleb.activity.inner(),
+        PlebActivity::Idle | PlebActivity::Walking
+    );
 
     if pleb.needs.hunger < 0.10 && is_idle_or_walk {
         // CRISIS: Starving
@@ -1964,25 +2466,40 @@ fn tick_pleb_activity(
         } else if let Some((bx, by)) = env.nearest_berry_bush {
             if env.near_berry_bush {
                 pleb.harvest_target = Some((bx, by));
-                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Harvesting(0.0)), "Starving!");
+                pleb.activity =
+                    PlebActivity::Crisis(Box::new(PlebActivity::Harvesting(0.0)), "Starving!");
                 pleb.path.clear();
                 pleb.path_idx = 0;
             } else {
-                send_pleb_to(pleb, grid, terrain, (bx, by),
-                    PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Starving!"));
+                send_pleb_to(
+                    pleb,
+                    grid,
+                    terrain,
+                    (bx, by),
+                    PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Starving!"),
+                );
             }
         }
     } else if pleb.needs.thirst < 0.10 && is_idle_or_walk {
         // CRISIS: Dehydrated — seek nearest well
-        if let Some((wx, wy)) = find_nearest_well(grid, pleb.x.floor() as i32, pleb.y.floor() as i32) {
+        if let Some((wx, wy)) =
+            find_nearest_well(grid, pleb.x.floor() as i32, pleb.y.floor() as i32)
+        {
             let adj = adjacent_walkable(grid, wx, wy).unwrap_or((wx, wy));
-            let dist = ((pleb.x - wx as f32 - 0.5).powi(2) + (pleb.y - wy as f32 - 0.5).powi(2)).sqrt();
+            let dist =
+                ((pleb.x - wx as f32 - 0.5).powi(2) + (pleb.y - wy as f32 - 0.5).powi(2)).sqrt();
             if dist < 1.5 {
-                pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Drinking(0.0)), "Dehydrated!");
+                pleb.activity =
+                    PlebActivity::Crisis(Box::new(PlebActivity::Drinking(0.0)), "Dehydrated!");
                 pleb.work_target = Some((wx, wy));
             } else {
-                send_pleb_to(pleb, grid, terrain, adj,
-                    PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Dehydrated!"));
+                send_pleb_to(
+                    pleb,
+                    grid,
+                    terrain,
+                    adj,
+                    PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Dehydrated!"),
+                );
                 pleb.work_target = Some((wx, wy));
             }
         }
@@ -1993,8 +2510,13 @@ fn tick_pleb_activity(
             pleb.path.clear();
             pleb.path_idx = 0;
         } else if let Some((bx, by)) = env.nearest_bed {
-            send_pleb_to(pleb, grid, terrain, (bx, by),
-                PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Exhausted!"));
+            send_pleb_to(
+                pleb,
+                grid,
+                terrain,
+                (bx, by),
+                PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Exhausted!"),
+            );
         } else {
             pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Sleeping), "Collapsed!");
             pleb.path.clear();
@@ -2006,8 +2528,13 @@ fn tick_pleb_activity(
             // Already sheltered, just wait it out
         } else if let Some((bx, by)) = env.nearest_bed {
             // Run to nearest bed (likely indoors)
-            send_pleb_to(pleb, grid, terrain, (bx, by),
-                PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Freezing!"));
+            send_pleb_to(
+                pleb,
+                grid,
+                terrain,
+                (bx, by),
+                PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Freezing!"),
+            );
         } else {
             // No shelter — huddle in place
             pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Idle), "Freezing!");
@@ -2017,14 +2544,25 @@ fn tick_pleb_activity(
     // CRISIS: Overheating — overrides ALL activities (even sleeping/harvesting)
     // Any pleb in dangerous heat drops everything and runs
     // Only triggers on idle/walking to prevent re-trigger loop when pleb arrives at cool tile
-    let can_heat_flee = matches!(pleb.activity.inner(), PlebActivity::Idle | PlebActivity::Walking);
-    if pleb.needs.air_temp > HEAT_CRISIS_TEMP && can_heat_flee && pleb.activity.crisis_reason() != Some("Overheating!") {
+    let can_heat_flee = matches!(
+        pleb.activity.inner(),
+        PlebActivity::Idle | PlebActivity::Walking
+    );
+    if pleb.needs.air_temp > HEAT_CRISIS_TEMP
+        && can_heat_flee
+        && pleb.activity.crisis_reason() != Some("Overheating!")
+    {
         let bx = pleb.x.floor() as i32;
         let by = pleb.y.floor() as i32;
         // Search from radius 3+ to avoid pathing to an adjacent tile that's equally hot
         if let Some(target) = find_cool_tile(grid, bx, by, 20) {
-            send_pleb_to(pleb, grid, terrain, target,
-                PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Overheating!"));
+            send_pleb_to(
+                pleb,
+                grid,
+                terrain,
+                target,
+                PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Overheating!"),
+            );
         }
     } else if !pleb.activity.is_crisis() {
         // Non-crisis auto-behaviors
@@ -2041,7 +2579,8 @@ fn tick_pleb_activity(
                         let bx = item.x.floor() as i32;
                         let by = item.y.floor() as i32;
                         let d = ((px - bx).pow(2) + (py - by).pow(2)) as f32;
-                        if d < 900.0 && (best_berry.is_none() || d < best_berry.unwrap().2) { // within 30 tiles
+                        if d < 900.0 && (best_berry.is_none() || d < best_berry.unwrap().2) {
+                            // within 30 tiles
                             best_berry = Some((bx, by, d));
                         }
                     }
@@ -2063,7 +2602,9 @@ fn tick_pleb_activity(
                 let px = pleb.x.floor() as i32;
                 let py = pleb.y.floor() as i32;
                 if let Some((wx, wy)) = find_nearest_well(grid, px, py) {
-                    let dist = ((pleb.x - wx as f32 - 0.5).powi(2) + (pleb.y - wy as f32 - 0.5).powi(2)).sqrt();
+                    let dist = ((pleb.x - wx as f32 - 0.5).powi(2)
+                        + (pleb.y - wy as f32 - 0.5).powi(2))
+                    .sqrt();
                     if dist < 1.5 {
                         pleb.activity = PlebActivity::Drinking(0.0);
                         pleb.work_target = Some((wx, wy));
@@ -2106,7 +2647,13 @@ fn tick_pleb_activity(
 }
 
 /// Helper: pathfind pleb to a target and set their activity. Returns true if path found.
-fn send_pleb_to(pleb: &mut Pleb, grid: &[u32], terrain: &[u32], target: (i32, i32), activity: PlebActivity) -> bool {
+fn send_pleb_to(
+    pleb: &mut Pleb,
+    grid: &[u32],
+    terrain: &[u32],
+    target: (i32, i32),
+    activity: PlebActivity,
+) -> bool {
     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
     let path = astar_path_terrain(grid, terrain, start, target);
     if !path.is_empty() {

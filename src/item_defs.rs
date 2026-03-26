@@ -27,13 +27,19 @@ pub struct ItemDef {
     pub id: u16,
     pub name: String,
     pub icon: String,
-    #[serde(default)] pub category: String,
-    #[serde(default = "default_stack_max")] pub stack_max: u16,
-    #[serde(default)] pub nutrition: f32,
-    #[serde(default)] pub liquid_capacity: u16,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default = "default_stack_max")]
+    pub stack_max: u16,
+    #[serde(default)]
+    pub nutrition: f32,
+    #[serde(default)]
+    pub liquid_capacity: u16,
 }
 
-fn default_stack_max() -> u16 { 1 }
+fn default_stack_max() -> u16 {
+    1
+}
 
 /// An item stack: one slot holding some quantity of an item type,
 /// optionally containing liquid (for containers).
@@ -51,7 +57,11 @@ pub enum LiquidType {
 
 impl ItemStack {
     pub fn new(item_id: u16, count: u16) -> Self {
-        Self { item_id, count, liquid: None }
+        Self {
+            item_id,
+            count,
+            liquid: None,
+        }
     }
 
     pub fn label(&self) -> String {
@@ -60,8 +70,16 @@ impl ItemStack {
         if self.count == 1 {
             let mut s = name.to_string();
             if let Some((liq, amt)) = self.liquid {
-                let liq_name = match liq { LiquidType::Water => "water" };
-                s += &format!(" ({}/{})", amt, reg.get(self.item_id).map(|d| d.liquid_capacity).unwrap_or(0));
+                let liq_name = match liq {
+                    LiquidType::Water => "water",
+                };
+                s += &format!(
+                    " ({}/{})",
+                    amt,
+                    reg.get(self.item_id)
+                        .map(|d| d.liquid_capacity)
+                        .unwrap_or(0)
+                );
                 s += &format!(" {}", liq_name);
             }
             s
@@ -72,17 +90,23 @@ impl ItemStack {
 
     pub fn icon(&self) -> &str {
         let reg = ItemRegistry::cached();
-        reg.get(self.item_id).map(|d| d.icon.as_str()).unwrap_or("?")
+        reg.get(self.item_id)
+            .map(|d| d.icon.as_str())
+            .unwrap_or("?")
     }
 
     pub fn is_container(&self) -> bool {
         let reg = ItemRegistry::cached();
-        reg.get(self.item_id).map(|d| d.liquid_capacity > 0).unwrap_or(false)
+        reg.get(self.item_id)
+            .map(|d| d.liquid_capacity > 0)
+            .unwrap_or(false)
     }
 
     pub fn liquid_capacity(&self) -> u16 {
         let reg = ItemRegistry::cached();
-        reg.get(self.item_id).map(|d| d.liquid_capacity).unwrap_or(0)
+        reg.get(self.item_id)
+            .map(|d| d.liquid_capacity)
+            .unwrap_or(0)
     }
 }
 
@@ -105,7 +129,12 @@ impl ItemRegistry {
         let mut defs: Vec<Option<ItemDef>> = (0..MAX_ITEMS).map(|_| None).collect();
         for def in file.item {
             let id = def.id as usize;
-            assert!(id < MAX_ITEMS, "Item ID {} exceeds MAX_ITEMS ({})", id, MAX_ITEMS);
+            assert!(
+                id < MAX_ITEMS,
+                "Item ID {} exceeds MAX_ITEMS ({})",
+                id,
+                MAX_ITEMS
+            );
             defs[id] = Some(def);
         }
         ItemRegistry { defs }

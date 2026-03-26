@@ -29,7 +29,10 @@ impl App {
             self.fluid_params.splat_radius = 1.5;
             self.fluid_params.splat_active = 1.0;
             self.lightning_surge(wx.floor() as i32, wy.floor() as i32);
-            self.log_event(EventCategory::Weather, format!("Lightning strike at ({:.0}, {:.0})", wx, wy));
+            self.log_event(
+                EventCategory::Weather,
+                format!("Lightning strike at ({:.0}, {:.0})", wx, wy),
+            );
             return;
         }
         if self.sandbox_tool == SandboxTool::InjectWater {
@@ -42,9 +45,13 @@ impl App {
                     for dx in -radius..=radius {
                         let nx = cx + dx;
                         let ny = cy + dy;
-                        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+                            continue;
+                        }
                         let dist = ((dx * dx + dy * dy) as f32).sqrt();
-                        if dist > radius as f32 { continue; }
+                        if dist > radius as f32 {
+                            continue;
+                        }
                         let strength = 1.0 - dist / (radius as f32 + 0.5);
                         let water_val = (strength * 2.0) as f32;
                         let pixel = water_val.to_le_bytes();
@@ -54,12 +61,24 @@ impl App {
                                 wgpu::TexelCopyTextureInfo {
                                     texture: &gfx.water_textures[ti],
                                     mip_level: 0,
-                                    origin: wgpu::Origin3d { x: nx as u32, y: ny as u32, z: 0 },
+                                    origin: wgpu::Origin3d {
+                                        x: nx as u32,
+                                        y: ny as u32,
+                                        z: 0,
+                                    },
                                     aspect: wgpu::TextureAspect::All,
                                 },
                                 &pixel,
-                                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
-                                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                                wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(4),
+                                    rows_per_image: Some(1),
+                                },
+                                wgpu::Extent3d {
+                                    width: 1,
+                                    height: 1,
+                                    depth_or_array_layers: 1,
+                                },
                             );
                         }
                         // Also raise CPU-side water table so crop growth sees it immediately
@@ -69,7 +88,10 @@ impl App {
                         }
                     }
                 }
-                self.log_event(EventCategory::General, format!("Injected water at ({}, {})", cx, cy));
+                self.log_event(
+                    EventCategory::General,
+                    format!("Injected water at ({}, {})", cx, cy),
+                );
             }
             return;
         }
@@ -91,7 +113,10 @@ impl App {
                         );
                     }
                     self.burn_progress.insert(idx, 0.0);
-                    self.log_event(EventCategory::Weather, format!("Fire! {} ignited at ({}, {})", def.name, bx, by));
+                    self.log_event(
+                        EventCategory::Weather,
+                        format!("Fire! {} ignited at ({}, {})", def.name, bx, by),
+                    );
                 }
             }
             return;
@@ -99,7 +124,8 @@ impl App {
         if let SandboxTool::SoundPlace(idx) = self.sandbox_tool {
             if let Some(&(_name, db, freq, pattern, duration)) = SANDBOX_SOUNDS.get(idx) {
                 self.sound_sources.push(SoundSource {
-                    x: wx, y: wy,
+                    x: wx,
+                    y: wy,
                     amplitude: db_to_amplitude(db),
                     frequency: freq,
                     phase: 0.0,
@@ -131,7 +157,8 @@ impl App {
                 let dir_y = angle.sin();
                 let spawn_x = bx as f32 + 0.5 + dir_x * 0.8;
                 let spawn_y = by as f32 + 0.5 + dir_y * 0.8;
-                self.physics_bodies.push(PhysicsBody::new_cannonball(spawn_x, spawn_y, dir_x, dir_y));
+                self.physics_bodies
+                    .push(PhysicsBody::new_cannonball(spawn_x, spawn_y, dir_x, dir_y));
                 // Muzzle smoke + recoil blast
                 self.fluid_params.splat_x = bx as f32 + 0.5;
                 self.fluid_params.splat_y = by as f32 + 0.5;
@@ -149,9 +176,9 @@ impl App {
                     let dir_bits = (flags >> 3) & 3;
                     let angle = match dir_bits {
                         0 => -std::f32::consts::FRAC_PI_2, // north
-                        1 => 0.0,                           // east
+                        1 => 0.0,                          // east
                         2 => std::f32::consts::FRAC_PI_2,  // south
-                        _ => std::f32::consts::PI,          // west
+                        _ => std::f32::consts::PI,         // west
                     };
                     self.cannon_angles.insert(cannon_idx, angle);
                 }
@@ -188,7 +215,11 @@ impl App {
         // Click on storage crate: toggle inspection popup
         if bt == BT_CRATE && self.build_tool != BuildTool::Destroy {
             let cidx = by as u32 * GRID_W + bx as u32;
-            self.block_sel.crate_idx = if self.block_sel.crate_idx == Some(cidx) { None } else { Some(cidx) };
+            self.block_sel.crate_idx = if self.block_sel.crate_idx == Some(cidx) {
+                None
+            } else {
+                Some(cidx)
+            };
             self.block_sel.crate_world = (bx as f32 + 0.5, by as f32 + 0.5);
             return;
         }
@@ -208,7 +239,8 @@ impl App {
                 // Clicking a pleb selects it (deselects everything else)
                 self.selected_pleb = Some(idx);
                 let p = &self.plebs[idx];
-                self.world_sel = WorldSelection::single_pleb(idx, p.x.floor() as i32, p.y.floor() as i32);
+                self.world_sel =
+                    WorldSelection::single_pleb(idx, p.x.floor() as i32, p.y.floor() as i32);
                 self.block_sel = BlockSelection::default();
                 self.context_menu = None;
                 return;
@@ -245,15 +277,22 @@ impl App {
             }
 
             // Click on ground item: select it
-            if let Some(gi) = self.ground_items.iter().position(|item| {
-                item.x.floor() as i32 == bx && item.y.floor() as i32 == by
-            }) {
+            if let Some(gi) = self
+                .ground_items
+                .iter()
+                .position(|item| item.x.floor() as i32 == bx && item.y.floor() as i32 == by)
+            {
                 let _gi_ref = &self.ground_items[gi]; // validates index
                 self.world_sel = WorldSelection::single(bx, by, 1, 1, 0);
                 self.context_menu = None;
                 // If a pleb is selected, open context menu for hauling
                 if self.selected_pleb.is_some() {
-                    self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
+                    self.open_context_menu(
+                        self.last_mouse_x as f32,
+                        self.last_mouse_y as f32,
+                        wx,
+                        wy,
+                    );
                 }
                 return;
             }
@@ -279,34 +318,62 @@ impl App {
         let cx = (GRID_W / 2) as f32 + 0.5;
         let cy = (GRID_H / 2) as f32 + 0.5;
 
-        let spawn_enemy = |plebs: &mut Vec<Pleb>, next_id: &mut usize, name: &str, x: f32, y: f32, seed: u32| {
-            let mut e = Pleb::new(*next_id, name.to_string(), x, y, seed);
-            e.is_enemy = true;
-            e.wander_timer = 3.0;
-            // Redskull: distinctive red skin, dark clothes
-            e.appearance.skin_r = 0.8;
-            e.appearance.skin_g = 0.15;
-            e.appearance.skin_b = 0.1;
-            e.appearance.shirt_r = 0.2;
-            e.appearance.shirt_g = 0.1;
-            e.appearance.shirt_b = 0.1;
-            e.appearance.pants_r = 0.15;
-            e.appearance.pants_g = 0.1;
-            e.appearance.pants_b = 0.1;
-            e.appearance.hair_r = 0.1;
-            e.appearance.hair_g = 0.05;
-            e.appearance.hair_b = 0.05;
-            *next_id += 1;
-            plebs.push(e);
-        };
+        let spawn_enemy =
+            |plebs: &mut Vec<Pleb>, next_id: &mut usize, name: &str, x: f32, y: f32, seed: u32| {
+                let mut e = Pleb::new(*next_id, name.to_string(), x, y, seed);
+                e.is_enemy = true;
+                e.wander_timer = 3.0;
+                // Redskull: distinctive red skin, dark clothes
+                e.appearance.skin_r = 0.8;
+                e.appearance.skin_g = 0.15;
+                e.appearance.skin_b = 0.1;
+                e.appearance.shirt_r = 0.2;
+                e.appearance.shirt_g = 0.1;
+                e.appearance.shirt_b = 0.1;
+                e.appearance.pants_r = 0.15;
+                e.appearance.pants_g = 0.1;
+                e.appearance.pants_b = 0.1;
+                e.appearance.hair_r = 0.1;
+                e.appearance.hair_g = 0.05;
+                e.appearance.hair_b = 0.05;
+                *next_id += 1;
+                plebs.push(e);
+            };
 
         // Spawn Redskulls around the base perimeter
-        spawn_enemy(&mut self.plebs, &mut self.next_pleb_id, "Redskull", cx + 25.0, cy - 15.0, 666);
-        spawn_enemy(&mut self.plebs, &mut self.next_pleb_id, "Redskull", cx - 20.0, cy + 18.0, 667);
-        spawn_enemy(&mut self.plebs, &mut self.next_pleb_id, "Redskull", cx + 30.0, cy + 10.0, 668);
+        spawn_enemy(
+            &mut self.plebs,
+            &mut self.next_pleb_id,
+            "Redskull",
+            cx + 25.0,
+            cy - 15.0,
+            666,
+        );
+        spawn_enemy(
+            &mut self.plebs,
+            &mut self.next_pleb_id,
+            "Redskull",
+            cx - 20.0,
+            cy + 18.0,
+            667,
+        );
+        spawn_enemy(
+            &mut self.plebs,
+            &mut self.next_pleb_id,
+            "Redskull",
+            cx + 30.0,
+            cy + 10.0,
+            668,
+        );
     }
 
-    pub(crate) fn notify(&mut self, category: NotifCategory, icon: &'static str, title: impl Into<String>, desc: impl Into<String>) {
+    pub(crate) fn notify(
+        &mut self,
+        category: NotifCategory,
+        icon: &'static str,
+        title: impl Into<String>,
+        desc: impl Into<String>,
+    ) {
         self.next_notif_id += 1;
         self.notifications.push(GameNotification {
             id: self.next_notif_id,
@@ -319,10 +386,18 @@ impl App {
         });
     }
 
-    pub(crate) fn add_condition(&mut self, name: impl Into<String>, icon: &'static str, category: NotifCategory, duration: f32) {
+    pub(crate) fn add_condition(
+        &mut self,
+        name: impl Into<String>,
+        icon: &'static str,
+        category: NotifCategory,
+        duration: f32,
+    ) {
         let name = name.into();
         // Don't duplicate
-        if self.conditions.iter().any(|c| c.name == name) { return; }
+        if self.conditions.iter().any(|c| c.name == name) {
+            return;
+        }
         self.next_notif_id += 1;
         self.conditions.push(ActiveCondition {
             id: self.next_notif_id,
@@ -348,8 +423,6 @@ impl App {
             self.game_log.pop_front();
         }
     }
-
-
 
     pub(crate) fn handle_keyboard(&mut self, event: &winit::event::KeyEvent) {
         if let PhysicalKey::Code(code) = event.physical_key {
@@ -402,7 +475,10 @@ impl App {
                 PhysicalKey::Code(KeyCode::KeyX) => {
                     if self.selected_pleb.is_some() {
                         self.burst_mode = !self.burst_mode;
-                        log::info!("Fire mode: {}", if self.burst_mode { "BURST" } else { "SINGLE" });
+                        log::info!(
+                            "Fire mode: {}",
+                            if self.burst_mode { "BURST" } else { "SINGLE" }
+                        );
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyI) => {
@@ -413,7 +489,14 @@ impl App {
                 }
                 PhysicalKey::Code(KeyCode::KeyQ) => {
                     if self.selected_pleb.is_none() {
-                        if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19) | BuildTool::Place(44)) {
+                        if matches!(
+                            self.build_tool,
+                            BuildTool::Place(12)
+                                | BuildTool::Place(16)
+                                | BuildTool::Place(20)
+                                | BuildTool::Place(19)
+                                | BuildTool::Place(44)
+                        ) {
                             self.build_rotation = (self.build_rotation + 3) % 4;
                         } else {
                             self.build_rotation = (self.build_rotation + 1) % 2;
@@ -422,7 +505,14 @@ impl App {
                 }
                 PhysicalKey::Code(KeyCode::KeyE) => {
                     if self.selected_pleb.is_none() {
-                        if matches!(self.build_tool, BuildTool::Place(12) | BuildTool::Place(16) | BuildTool::Place(20) | BuildTool::Place(19) | BuildTool::Place(44)) {
+                        if matches!(
+                            self.build_tool,
+                            BuildTool::Place(12)
+                                | BuildTool::Place(16)
+                                | BuildTool::Place(20)
+                                | BuildTool::Place(19)
+                                | BuildTool::Place(44)
+                        ) {
                             self.build_rotation = (self.build_rotation + 1) % 4;
                         } else {
                             self.build_rotation = (self.build_rotation + 1) % 2;
@@ -469,14 +559,12 @@ impl App {
                         let spawn_x = pleb.x + dx * 0.5;
                         let spawn_y = pleb.y + dy * 0.5;
                         let power = self.grenade_charge.clamp(0.0, 1.0);
-                        self.physics_bodies.push(PhysicsBody::new_grenade(
-                            spawn_x, spawn_y, dx, dy, power,
-                        ));
+                        self.physics_bodies
+                            .push(PhysicsBody::new_grenade(spawn_x, spawn_y, dx, dy, power));
                     }
                     self.grenade_charge = 0.0;
                 }
             }
         }
     }
-
 }

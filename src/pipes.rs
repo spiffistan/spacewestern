@@ -69,21 +69,27 @@ const FIRE_SCAN_RADIUS: i32 = 5;
 pub fn bridge_partner(grid: &[u32], idx: u32) -> Option<u32> {
     let block = grid[idx as usize];
     let bt = block_type_rs(block);
-    if bt != BT_PIPE_BRIDGE { return None; }
+    if bt != BT_PIPE_BRIDGE {
+        return None;
+    }
     let flags = block_flags_rs(block);
     let seg = (flags >> 3) & 3;
-    if seg == 1 { return None; } // middle tile has no partner
+    if seg == 1 {
+        return None;
+    } // middle tile has no partner
     let rot = (flags >> 5) & 3;
     let (dx, dy): (i32, i32) = match rot {
-        0 => (0, 1),   // N: south
-        1 => (1, 0),   // E: east
-        2 => (0, -1),  // S: north
-        _ => (-1, 0),  // W: west
+        0 => (0, 1),  // N: south
+        1 => (1, 0),  // E: east
+        2 => (0, -1), // S: north
+        _ => (-1, 0), // W: west
     };
     let sign = if seg == 0 { 2i32 } else { -2 };
     let x = (idx % GRID_W) as i32 + dx * sign;
     let y = (idx / GRID_W) as i32 + dy * sign;
-    if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 { return None; }
+    if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 {
+        return None;
+    }
     Some(y as u32 * GRID_W + x as u32)
 }
 
@@ -91,7 +97,7 @@ pub fn bridge_partner(grid: &[u32], idx: u32) -> Option<u32> {
 #[derive(Clone, Debug)]
 pub struct PipeCell {
     pub pressure: f32,
-    pub gas: [f32; 4],         // [smoke, O2, CO2, temperature]
+    pub gas: [f32; 4], // [smoke, O2, CO2, temperature]
     pub volume: f32,
     pub pump_rate: f32,
     pub flow_x: f32,
@@ -128,17 +134,36 @@ impl PipeConnections {
     }
 
     pub fn as_bits(&self) -> u32 {
-        (self.north as u32) | ((self.south as u32) << 1)
-            | ((self.east as u32) << 2) | ((self.west as u32) << 3)
+        (self.north as u32)
+            | ((self.south as u32) << 1)
+            | ((self.east as u32) << 2)
+            | ((self.west as u32) << 3)
     }
 }
 
 pub fn is_gas_pipe_component(bt: u32) -> bool {
-    bt_is!(bt, BT_PIPE, BT_PUMP, BT_TANK, BT_VALVE, BT_OUTLET, BT_INLET, BT_RESTRICTOR, BT_PIPE_BRIDGE)
+    bt_is!(
+        bt,
+        BT_PIPE,
+        BT_PUMP,
+        BT_TANK,
+        BT_VALVE,
+        BT_OUTLET,
+        BT_INLET,
+        BT_RESTRICTOR,
+        BT_PIPE_BRIDGE
+    )
 }
 
 pub fn is_liquid_pipe_component(bt: u32) -> bool {
-    bt_is!(bt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE, BT_LIQUID_INTAKE, BT_LIQUID_PUMP, BT_LIQUID_OUTPUT)
+    bt_is!(
+        bt,
+        BT_LIQUID_PIPE,
+        BT_PIPE_BRIDGE,
+        BT_LIQUID_INTAKE,
+        BT_LIQUID_PUMP,
+        BT_LIQUID_OUTPUT
+    )
 }
 
 pub fn is_pipe_component(bt: u32) -> bool {
@@ -148,8 +173,12 @@ pub fn is_pipe_component(bt: u32) -> bool {
 #[allow(dead_code)]
 pub fn get_connections(grid: &[u32], x: i32, y: i32) -> PipeConnections {
     let check = |nx: i32, ny: i32| -> bool {
-        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { return false; }
-        is_pipe_component(block_type_rs(grid[(ny as u32 * GRID_W + nx as u32) as usize]))
+        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+            return false;
+        }
+        is_pipe_component(block_type_rs(
+            grid[(ny as u32 * GRID_W + nx as u32) as usize],
+        ))
     };
     PipeConnections {
         north: check(x, y - 1),
@@ -190,14 +219,17 @@ impl PipeNetwork {
 
     /// Rebuild the network from the grid using a component predicate.
     pub fn rebuild_with(&mut self, grid: &[u32], is_component: fn(u32) -> bool) {
-        self.cells.retain(|&idx, _| is_component(block_type_rs(grid[idx as usize])));
+        self.cells
+            .retain(|&idx, _| is_component(block_type_rs(grid[idx as usize])));
         for y in 0..GRID_H {
             for x in 0..GRID_W {
                 let idx = y * GRID_W + x;
                 let bt = block_type_rs(grid[idx as usize]);
                 if is_component(bt) && !self.cells.contains_key(&idx) {
                     let mut cell = PipeCell::default();
-                    if bt == BT_TANK { cell.volume = TANK_VOLUME; }
+                    if bt == BT_TANK {
+                        cell.volume = TANK_VOLUME;
+                    }
                     self.cells.insert(idx, cell);
                 }
             }
@@ -209,7 +241,12 @@ impl PipeNetwork {
     }
 
     /// Simulate one tick of pressure equalization and gas transfer.
-    pub fn tick(&mut self, dt: f32, grid: &[u32], _pipe_width: f32) -> Vec<(f32, f32, [f32; 4], f32)> {
+    pub fn tick(
+        &mut self,
+        dt: f32,
+        grid: &[u32],
+        _pipe_width: f32,
+    ) -> Vec<(f32, f32, [f32; 4], f32)> {
         let mut outlet_injections = Vec::new();
         let mut indices = std::mem::take(&mut self.scratch_indices);
         indices.clear();
@@ -224,7 +261,9 @@ impl PipeNetwork {
                 let bt = block_type_rs(block);
                 let flags = block_flags_rs(block);
 
-                if bt == BT_VALVE && (flags & 4) == 0 { continue; }
+                if bt == BT_VALVE && (flags & 4) == 0 {
+                    continue;
+                }
 
                 // Pumps: maintain target pressure
                 if bt_is!(bt, BT_PUMP, BT_LIQUID_PUMP) {
@@ -241,7 +280,8 @@ impl PipeNetwork {
                     let rate = self.cells[&idx].pump_rate;
                     let cur = self.cells[&idx].pressure;
                     if let Some(cell) = self.cells.get_mut(&idx) {
-                        cell.pressure = cur + (rate * INLET_SOURCE_FACTOR - cur).max(0.0) * INLET_CONVERGENCE_RATE;
+                        cell.pressure = cur
+                            + (rate * INLET_SOURCE_FACTOR - cur).max(0.0) * INLET_CONVERGENCE_RATE;
                     }
                     continue;
                 }
@@ -280,8 +320,12 @@ impl PipeNetwork {
                         let is_ew = dx != 0;
                         let bridge_is_ns = bridge_rot % 2 == 0;
                         if bridge_seg == 1 {
-                            if bridge_is_ns && is_ns { continue; }
-                            if !bridge_is_ns && is_ew { continue; }
+                            if bridge_is_ns && is_ns {
+                                continue;
+                            }
+                            if !bridge_is_ns && is_ew {
+                                continue;
+                            }
                         } else {
                             let (out_dx, out_dy) = match bridge_rot {
                                 0 => (0, if bridge_seg == 0 { -1 } else { 1 }),
@@ -289,16 +333,24 @@ impl PipeNetwork {
                                 2 => (0, if bridge_seg == 0 { 1 } else { -1 }),
                                 _ => (if bridge_seg == 0 { 1 } else { -1 }, 0),
                             };
-                            if dx != out_dx || dy != out_dy { continue; }
+                            if dx != out_dx || dy != out_dy {
+                                continue;
+                            }
                         }
                     }
-                    if uses_connection_mask(bt) && conn_mask != 0 && (conn_mask & dmask) == 0 { continue; }
+                    if uses_connection_mask(bt) && conn_mask != 0 && (conn_mask & dmask) == 0 {
+                        continue;
+                    }
 
                     let nx = x + dx;
                     let ny = y + dy;
-                    if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                    if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+                        continue;
+                    }
                     let nidx = ny as u32 * GRID_W + nx as u32;
-                    if is_closed_valve(grid, nidx) { continue; }
+                    if is_closed_valve(grid, nidx) {
+                        continue;
+                    }
                     if let Some(neighbor) = self.cells.get(&nidx) {
                         neighbor_sum += neighbor.pressure;
                         neighbor_count += 1.0;
@@ -310,7 +362,8 @@ impl PipeNetwork {
                     if let Some(cell) = self.cells.get_mut(&idx) {
                         let alpha = if bt == BT_RESTRICTOR {
                             let level = ((block >> 8) & 0x0F) as f32;
-                            RESTRICTOR_BASE_ALPHA * (level / RESTRICTOR_MAX_LEVEL).max(RESTRICTOR_MIN_ALPHA)
+                            RESTRICTOR_BASE_ALPHA
+                                * (level / RESTRICTOR_MAX_LEVEL).max(RESTRICTOR_MIN_ALPHA)
                         } else {
                             PIPE_RELAXATION_ALPHA
                         };
@@ -332,16 +385,22 @@ impl PipeNetwork {
             let block = grid[idx as usize];
             let bt = block_type_rs(block);
             let flags = block_flags_rs(block);
-            if bt == BT_VALVE && (flags & 4) == 0 { continue; }
+            if bt == BT_VALVE && (flags & 4) == 0 {
+                continue;
+            }
             let cell = &self.cells[&idx];
             let pipe_h = (block >> 8) & 0xFF;
             let conn_mask = pipe_h >> 4;
 
             for &(dx, dy, dmask) in &DIR_MASKS {
-                if uses_connection_mask(bt) && conn_mask != 0 && (conn_mask & dmask) == 0 { continue; }
+                if uses_connection_mask(bt) && conn_mask != 0 && (conn_mask & dmask) == 0 {
+                    continue;
+                }
                 let nx = x + dx;
                 let ny = y + dy;
-                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+                    continue;
+                }
                 let nidx = ny as u32 * GRID_W + nx as u32;
                 if let Some(neighbor) = self.cells.get(&nidx) {
                     let dp = cell.pressure - neighbor.pressure;
@@ -350,12 +409,18 @@ impl PipeNetwork {
                         fa.0 += dx as f32 * dp;
                         fa.1 += dy as f32 * dp;
                     }
-                    let adv_rate = if dp > 0.0 { (dp * ADVECTION_SCALE).min(ADVECTION_MAX) } else { 0.0 };
+                    let adv_rate = if dp > 0.0 {
+                        (dp * ADVECTION_SCALE).min(ADVECTION_MAX)
+                    } else {
+                        0.0
+                    };
                     let diff_rate = dt * DIFFUSION_RATE;
                     let rate = (adv_rate + diff_rate).min(MAX_TRANSFER_RATE);
                     if rate > MIN_TRANSFER_RATE {
                         let gd = gas_delta.entry(nidx).or_insert([0.0; 4]);
-                        for i in 0..4 { gd[i] += (cell.gas[i] - neighbor.gas[i]) * rate; }
+                        for i in 0..4 {
+                            gd[i] += (cell.gas[i] - neighbor.gas[i]) * rate;
+                        }
                     }
                 }
             }
@@ -364,7 +429,9 @@ impl PipeNetwork {
             if bt == BT_INLET {
                 let env_gas = self.sample_inlet_environment(grid, x, y);
                 let gd = gas_delta.entry(idx).or_insert([0.0; 4]);
-                for i in 0..4 { gd[i] += (env_gas[i] - cell.gas[i]) * INLET_ABSORPTION_RATE * dt; }
+                for i in 0..4 {
+                    gd[i] += (env_gas[i] - cell.gas[i]) * INLET_ABSORPTION_RATE * dt;
+                }
             }
 
             // Liquid intake: water properties
@@ -373,7 +440,9 @@ impl PipeNetwork {
                 let has_water = seg == 1 || self.check_adjacent_water(grid, x, y);
                 if has_water {
                     let gd = gas_delta.entry(idx).or_insert([0.0; 4]);
-                    for i in 0..4 { gd[i] += (WATER_GAS[i] - cell.gas[i]) * INTAKE_ABSORPTION_RATE * dt; }
+                    for i in 0..4 {
+                        gd[i] += (WATER_GAS[i] - cell.gas[i]) * INTAKE_ABSORPTION_RATE * dt;
+                    }
                 }
             }
         }
@@ -381,7 +450,9 @@ impl PipeNetwork {
         // Apply gas deltas
         for (&idx, gd) in &gas_delta {
             if let Some(cell) = self.cells.get_mut(&idx) {
-                for i in 0..4 { cell.gas[i] = (cell.gas[i] + gd[i]).max(0.0); }
+                for i in 0..4 {
+                    cell.gas[i] = (cell.gas[i] + gd[i]).max(0.0);
+                }
                 cell.gas[GAS_SMOKE] = cell.gas[GAS_SMOKE].min(MAX_SMOKE);
                 cell.gas[GAS_O2] = cell.gas[GAS_O2].min(MAX_O2);
                 cell.gas[GAS_CO2] = cell.gas[GAS_CO2].min(MAX_CO2);
@@ -410,7 +481,9 @@ impl PipeNetwork {
 
         // Outlet emissions
         for &idx in &indices {
-            if idx as usize >= grid.len() { continue; }
+            if idx as usize >= grid.len() {
+                continue;
+            }
             let bt = block_type_rs(grid[idx as usize]);
             if bt_is!(bt, BT_OUTLET, BT_LIQUID_OUTPUT) {
                 if let Some(cell) = self.cells.get_mut(&idx) {
@@ -443,12 +516,18 @@ impl PipeNetwork {
         for &(adx, ady) in &[(0i32, -1i32), (0, 1), (1, 0), (-1, 0)] {
             let ax = x + adx;
             let ay = y + ady;
-            if ax < 0 || ay < 0 || ax >= GRID_W as i32 || ay >= GRID_H as i32 { continue; }
+            if ax < 0 || ay < 0 || ax >= GRID_W as i32 || ay >= GRID_H as i32 {
+                continue;
+            }
             let ab = grid[(ay as u32 * GRID_W + ax as u32) as usize];
             let abt = block_type_rs(ab);
-            if is_pipe_component(abt) { continue; }
+            if is_pipe_component(abt) {
+                continue;
+            }
             let has_roof = (block_flags_rs(ab) & 2) != 0;
-            if !has_roof { continue; }
+            if !has_roof {
+                continue;
+            }
 
             let near_fire = self.scan_for_fire(grid, x, y);
             return if near_fire { SMOKY_ROOM } else { CLEAN_ROOM };
@@ -462,7 +541,9 @@ impl PipeNetwork {
             for fx in -FIRE_SCAN_RADIUS..=FIRE_SCAN_RADIUS {
                 let sx = cx + fx;
                 let sy = cy + fy;
-                if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 { continue; }
+                if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 {
+                    continue;
+                }
                 if block_type_rs(grid[(sy as u32 * GRID_W + sx as u32) as usize]) == BT_FIREPLACE {
                     return true;
                 }
@@ -476,11 +557,17 @@ impl PipeNetwork {
         for &(adx, ady) in &[(0i32, -1i32), (0, 1), (1, 0), (-1, 0)] {
             let ax = x + adx;
             let ay = y + ady;
-            if ax < 0 || ay < 0 || ax >= GRID_W as i32 || ay >= GRID_H as i32 { continue; }
+            if ax < 0 || ay < 0 || ax >= GRID_W as i32 || ay >= GRID_H as i32 {
+                continue;
+            }
             let ab = grid[(ay as u32 * GRID_W + ax as u32) as usize];
             let abt = block_type_rs(ab);
-            if bt_is!(abt, BT_WATER, BT_DUG_GROUND) { return true; }
-            if abt == BT_LIQUID_INTAKE && ((block_flags_rs(ab) >> 3) & 3) == 1 { return true; }
+            if bt_is!(abt, BT_WATER, BT_DUG_GROUND) {
+                return true;
+            }
+            if abt == BT_LIQUID_INTAKE && ((block_flags_rs(ab) >> 3) & 3) == 1 {
+                return true;
+            }
         }
         false
     }
@@ -501,28 +588,36 @@ mod tests {
 
     #[test]
     fn test_liquid_pump_builds_pressure() {
-        let grid = test_grid(&[
-            ((10, 10), 49, 1), ((11, 10), 53, 1), ((12, 10), 49, 1),
-        ]);
+        let grid = test_grid(&[((10, 10), 49, 1), ((11, 10), 53, 1), ((12, 10), 49, 1)]);
         let mut net = PipeNetwork::new();
         net.rebuild_with(&grid, is_liquid_pipe_component);
         assert_eq!(net.cells.len(), 3);
-        for _ in 0..60 { net.tick(1.0 / 60.0, &grid, 5.0); }
+        for _ in 0..60 {
+            net.tick(1.0 / 60.0, &grid, 5.0);
+        }
         let pump_p = net.cells[&(10 * GRID_W + 11)].pressure;
-        assert!(pump_p > 1.0, "Pump should have built pressure, got {}", pump_p);
+        assert!(
+            pump_p > 1.0,
+            "Pump should have built pressure, got {}",
+            pump_p
+        );
         let pipe_p = net.cells[&(10 * GRID_W + 10)].pressure;
-        assert!(pipe_p > 0.1, "Pipe should have pressure from pump, got {}", pipe_p);
+        assert!(
+            pipe_p > 0.1,
+            "Pipe should have pressure from pump, got {}",
+            pipe_p
+        );
     }
 
     #[test]
     fn test_liquid_output_creates_injections() {
-        let grid = test_grid(&[
-            ((10, 10), 53, 1), ((11, 10), 49, 1), ((12, 10), 54, 1),
-        ]);
+        let grid = test_grid(&[((10, 10), 53, 1), ((11, 10), 49, 1), ((12, 10), 54, 1)]);
         let mut net = PipeNetwork::new();
         net.rebuild_with(&grid, is_liquid_pipe_component);
         let mut total = 0;
-        for _ in 0..120 { total += net.tick(1.0 / 60.0, &grid, 5.0).len(); }
+        for _ in 0..120 {
+            total += net.tick(1.0 / 60.0, &grid, 5.0).len();
+        }
         assert!(total > 0, "Output should have produced injections");
     }
 
@@ -542,28 +637,33 @@ mod tests {
     #[test]
     fn test_intake_to_output_full_pipeline() {
         let mut grid = test_grid(&[
-            ((10, 10), 52, 1), ((11, 10), 52, 1), ((12, 10), 53, 1),
-            ((13, 10), 49, 1), ((14, 10), 54, 1),
+            ((10, 10), 52, 1),
+            ((11, 10), 52, 1),
+            ((12, 10), 53, 1),
+            ((13, 10), 49, 1),
+            ((14, 10), 54, 1),
         ]);
         grid[(10 * GRID_W + 11) as usize] = make_block(52, 1, 1 << 3);
         let mut net = PipeNetwork::new();
         net.rebuild_with(&grid, is_liquid_pipe_component);
         assert_eq!(net.cells.len(), 5);
         let mut total = 0;
-        for _ in 0..120 { total += net.tick(1.0 / 60.0, &grid, 5.0).len(); }
+        for _ in 0..120 {
+            total += net.tick(1.0 / 60.0, &grid, 5.0).len();
+        }
         assert!(net.cells[&(10 * GRID_W + 12)].pressure > 0.5);
         assert!(total > 0);
     }
 
     #[test]
     fn test_intake_without_pump_no_pressure() {
-        let mut grid = test_grid(&[
-            ((10, 10), 52, 1), ((11, 10), 52, 1), ((12, 10), 49, 1),
-        ]);
+        let mut grid = test_grid(&[((10, 10), 52, 1), ((11, 10), 52, 1), ((12, 10), 49, 1)]);
         grid[(10 * GRID_W + 11) as usize] = make_block(52, 1, 1 << 3);
         let mut net = PipeNetwork::new();
         net.rebuild_with(&grid, is_liquid_pipe_component);
-        for _ in 0..60 { net.tick(1.0 / 60.0, &grid, 5.0); }
+        for _ in 0..60 {
+            net.tick(1.0 / 60.0, &grid, 5.0);
+        }
         let p = net.cells[&(10 * GRID_W + 12)].pressure;
         assert!(p < 0.01, "No pressure without pump, got {:.4}", p);
     }

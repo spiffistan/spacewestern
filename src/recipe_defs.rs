@@ -1,7 +1,7 @@
 //! Crafting recipe definitions loaded from recipes.toml.
 
-use serde::Deserialize;
 use crate::item_defs::*;
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct RecipeFile {
@@ -24,8 +24,8 @@ pub struct RecipeOutput {
 pub struct RecipeDef {
     pub id: u16,
     pub name: String,
-    pub station: String,  // "workbench", "kiln", "hand"
-    pub time: f32,        // seconds to craft
+    pub station: String, // "workbench", "kiln", "hand"
+    pub time: f32,       // seconds to craft
     pub inputs: Vec<RecipeIngredient>,
     pub output: RecipeOutput,
 }
@@ -44,12 +44,17 @@ impl RecipeRegistry {
     pub fn load() -> Self {
         let toml_str = include_str!("recipes.toml");
         let file: RecipeFile = toml::from_str(toml_str).expect("Failed to parse recipes.toml");
-        RecipeRegistry { recipes: file.recipe }
+        RecipeRegistry {
+            recipes: file.recipe,
+        }
     }
 
     /// Get all recipes for a given station type.
     pub fn for_station(&self, station: &str) -> Vec<&RecipeDef> {
-        self.recipes.iter().filter(|r| r.station == station).collect()
+        self.recipes
+            .iter()
+            .filter(|r| r.station == station)
+            .collect()
     }
 
     /// Get a recipe by ID.
@@ -60,7 +65,8 @@ impl RecipeRegistry {
     /// Check if an inventory has enough materials for a recipe.
     pub fn can_craft(recipe: &RecipeDef, inv: &[ItemStack]) -> bool {
         recipe.inputs.iter().all(|ing| {
-            let have: u32 = inv.iter()
+            let have: u32 = inv
+                .iter()
                 .filter(|s| s.item_id == ing.item)
                 .map(|s| s.count as u32)
                 .sum();
@@ -71,7 +77,9 @@ impl RecipeRegistry {
     /// Format ingredient list for display.
     pub fn ingredients_label(recipe: &RecipeDef) -> String {
         let item_reg = ItemRegistry::cached();
-        recipe.inputs.iter()
+        recipe
+            .inputs
+            .iter()
             .map(|ing| format!("{}x {}", ing.count, item_reg.name(ing.item)))
             .collect::<Vec<_>>()
             .join(" + ")
@@ -94,7 +102,11 @@ mod tests {
     #[test]
     fn test_can_craft() {
         let reg = RecipeRegistry::load();
-        let rope = reg.for_station("workbench").into_iter().find(|r| r.name == "Rope").unwrap();
+        let rope = reg
+            .for_station("workbench")
+            .into_iter()
+            .find(|r| r.name == "Rope")
+            .unwrap();
         // Need 4 fiber
         let empty: Vec<ItemStack> = vec![];
         assert!(!RecipeRegistry::can_craft(rope, &empty));

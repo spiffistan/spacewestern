@@ -58,7 +58,7 @@ pub enum NotifCategory {
     Warning,  // yellow
     Positive, // green
     #[allow(dead_code)]
-    Info,     // gray
+    Info, // gray
 }
 
 impl NotifCategory {

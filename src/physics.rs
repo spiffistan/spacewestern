@@ -31,7 +31,7 @@ pub struct ImpactEffect {
     pub smoke_radius: f32,
     pub explosion: Option<ExplosionDef>,
     pub ricochet: bool,
-    pub ricochet_loss: f32,      // speed fraction lost per bounce (0.4 = lose 40%)
+    pub ricochet_loss: f32, // speed fraction lost per bounce (0.4 = lose 40%)
 }
 
 /// Continuous emission while on ground with fuse > 0.
@@ -47,10 +47,10 @@ pub struct FuseEmission {
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct ExplosionDef {
-    pub radius: f32,      // effective radius (tiles)
-    pub force: f32,       // impulse at epicenter (tiles/sec)
-    pub damage: f32,      // health damage at epicenter (0-1)
-    pub sound_db: f32,    // detonation sound
+    pub radius: f32,   // effective radius (tiles)
+    pub force: f32,    // impulse at epicenter (tiles/sec)
+    pub damage: f32,   // health damage at epicenter (0-1)
+    pub sound_db: f32, // detonation sound
     pub sound_duration: f32,
     pub block_ke: f32,    // KE applied to blocks for destruction
     pub fire_radius: f32, // ignite flammable blocks (0 = no fire)
@@ -70,7 +70,7 @@ pub struct ProjectileDef {
     pub traversal: TraversalMode,
     pub impact: ImpactEffect,
     pub fuse: Option<FuseEmission>,
-    pub hit_damage: f32,              // direct-hit damage (hitscan projectiles)
+    pub hit_damage: f32, // direct-hit damage (hitscan projectiles)
     pub remove_when_stopped: bool,
     pub remove_speed_threshold: f32,
 }
@@ -88,46 +88,77 @@ fn build_projectile_defs() -> Vec<ProjectileDef> {
         // PROJ_WOOD_BOX (0)
         ProjectileDef {
             name: "Wood Box",
-            mass: 20.0, friction: 0.85, bounce: 0.3,
-            size: 0.45, render_height: 1.5, max_speed: 30.0,
+            mass: 20.0,
+            friction: 0.85,
+            bounce: 0.3,
+            size: 0.45,
+            render_height: 1.5,
+            max_speed: 30.0,
             traversal: TraversalMode::Ballistic,
             impact: ImpactEffect {
-                sound_db: 0.0, sound_duration: 0.0,
-                destroy_multiplier: 0.0, smoke_radius: 0.0,
-                explosion: None, ricochet: false, ricochet_loss: 0.0,
+                sound_db: 0.0,
+                sound_duration: 0.0,
+                destroy_multiplier: 0.0,
+                smoke_radius: 0.0,
+                explosion: None,
+                ricochet: false,
+                ricochet_loss: 0.0,
             },
-            fuse: None, hit_damage: 0.0,
-            remove_when_stopped: false, remove_speed_threshold: 0.0,
+            fuse: None,
+            hit_damage: 0.0,
+            remove_when_stopped: false,
+            remove_speed_threshold: 0.0,
         },
         // PROJ_CANNONBALL (1)
         ProjectileDef {
             name: "Cannonball",
-            mass: 5.0, friction: 0.6, bounce: 0.2,
-            size: 0.12, render_height: 0.5, max_speed: 40.0,
+            mass: 5.0,
+            friction: 0.6,
+            bounce: 0.2,
+            size: 0.12,
+            render_height: 0.5,
+            max_speed: 40.0,
             traversal: TraversalMode::Ballistic,
             impact: ImpactEffect {
-                sound_db: 110.0, sound_duration: 0.08,
-                destroy_multiplier: 1.0, smoke_radius: 2.0,
-                explosion: None, ricochet: false, ricochet_loss: 0.0,
+                sound_db: 110.0,
+                sound_duration: 0.08,
+                destroy_multiplier: 1.0,
+                smoke_radius: 2.0,
+                explosion: None,
+                ricochet: false,
+                ricochet_loss: 0.0,
             },
-            fuse: None, hit_damage: 0.0,
-            remove_when_stopped: true, remove_speed_threshold: 0.5,
+            fuse: None,
+            hit_damage: 0.0,
+            remove_when_stopped: true,
+            remove_speed_threshold: 0.5,
         },
         // PROJ_GRENADE (2) — toxic grenade with fuse + explosion on landing
         ProjectileDef {
             name: "Toxic Grenade",
-            mass: 0.8, friction: 0.8, bounce: 0.3,
-            size: 0.08, render_height: 0.3, max_speed: 30.0,
+            mass: 0.8,
+            friction: 0.8,
+            bounce: 0.3,
+            size: 0.08,
+            render_height: 0.3,
+            max_speed: 30.0,
             traversal: TraversalMode::Ballistic,
             impact: ImpactEffect {
-                sound_db: 0.0, sound_duration: 0.0, // landing itself is quiet
-                destroy_multiplier: 0.0, smoke_radius: 0.0,
+                sound_db: 0.0,
+                sound_duration: 0.0, // landing itself is quiet
+                destroy_multiplier: 0.0,
+                smoke_radius: 0.0,
                 explosion: Some(ExplosionDef {
-                    radius: 6.0, force: 20.0, damage: 0.15,
-                    sound_db: 130.0, sound_duration: 0.15,
-                    block_ke: 0.0, fire_radius: 0.0,
+                    radius: 6.0,
+                    force: 20.0,
+                    damage: 0.15,
+                    sound_db: 130.0,
+                    sound_duration: 0.15,
+                    block_ke: 0.0,
+                    fire_radius: 0.0,
                 }),
-                ricochet: false, ricochet_loss: 0.0,
+                ricochet: false,
+                ricochet_loss: 0.0,
             },
             fuse: Some(FuseEmission {
                 duration: 12.0,
@@ -136,21 +167,32 @@ fn build_projectile_defs() -> Vec<ProjectileDef> {
                 freeze_on_ground: true,
             }),
             hit_damage: 0.0,
-            remove_when_stopped: false, remove_speed_threshold: 0.0,
+            remove_when_stopped: false,
+            remove_speed_threshold: 0.0,
         },
         // PROJ_BULLET (3)
         ProjectileDef {
             name: "Bullet",
-            mass: 0.01, friction: 0.0, bounce: 0.0,
-            size: 0.02, render_height: 0.05, max_speed: 120.0,
+            mass: 0.01,
+            friction: 0.0,
+            bounce: 0.0,
+            size: 0.02,
+            render_height: 0.05,
+            max_speed: 120.0,
             traversal: TraversalMode::Hitscan,
             impact: ImpactEffect {
-                sound_db: 0.0, sound_duration: 0.0,
-                destroy_multiplier: 0.0, smoke_radius: 0.0,
-                explosion: None, ricochet: true, ricochet_loss: 0.4,
+                sound_db: 0.0,
+                sound_duration: 0.0,
+                destroy_multiplier: 0.0,
+                smoke_radius: 0.0,
+                explosion: None,
+                ricochet: true,
+                ricochet_loss: 0.4,
             },
-            fuse: None, hit_damage: 0.2,
-            remove_when_stopped: true, remove_speed_threshold: 1.0,
+            fuse: None,
+            hit_damage: 0.2,
+            remove_when_stopped: true,
+            remove_speed_threshold: 1.0,
         },
     ]
 }
@@ -165,29 +207,29 @@ pub fn projectile_def(id: ProjectileId) -> &'static ProjectileDef {
 /// A physics body in the world (continuous position, not grid-aligned).
 #[derive(Clone, Debug)]
 pub struct PhysicsBody {
-#[allow(dead_code)]
+    #[allow(dead_code)]
     pub x: f32,
     pub y: f32,
-    pub z: f32,            // height above ground (0 = on ground)
+    pub z: f32, // height above ground (0 = on ground)
     pub vx: f32,
     pub vy: f32,
-    pub vz: f32,           // vertical velocity (positive = up)
-    pub rot_x: f32,        // rotation around X axis (radians, tilts forward/back)
-    pub rot_y: f32,        // rotation around Y axis (radians, tilts left/right)
-    pub rot_z: f32,        // rotation around Z axis (radians, spins flat)
-    pub spin_x: f32,       // angular velocity around X
-    pub spin_y: f32,       // angular velocity around Y
-    pub spin_z: f32,       // angular velocity around Z
+    pub vz: f32,     // vertical velocity (positive = up)
+    pub rot_x: f32,  // rotation around X axis (radians, tilts forward/back)
+    pub rot_y: f32,  // rotation around Y axis (radians, tilts left/right)
+    pub rot_z: f32,  // rotation around Z axis (radians, spins flat)
+    pub spin_x: f32, // angular velocity around X
+    pub spin_y: f32, // angular velocity around Y
+    pub spin_z: f32, // angular velocity around Z
     pub mass: f32,
     pub friction: f32,
     pub bounce: f32,
     pub size: f32,
     pub render_height: f32,
     pub body_type: BodyType,
-    pub kind: ProjectileId,    // data-driven type (replaces body_type after migration)
-    pub fuse_timer: f32,       // seconds remaining for fuse emission (0 = inactive)
-    pub has_landed: bool,      // true after first ground contact (for one-time explosion)
-    pub prev_x: f32,          // position at start of frame (for line-segment collision)
+    pub kind: ProjectileId, // data-driven type (replaces body_type after migration)
+    pub fuse_timer: f32,    // seconds remaining for fuse emission (0 = inactive)
+    pub has_landed: bool,   // true after first ground contact (for one-time explosion)
+    pub prev_x: f32,        // position at start of frame (for line-segment collision)
     pub prev_y: f32,
 }
 
@@ -202,8 +244,10 @@ pub enum BodyType {
 /// Result of a projectile impact.
 #[derive(Debug)]
 pub struct Impact {
-    pub x: f32, pub y: f32,
-    pub block_x: i32, pub block_y: i32,
+    pub x: f32,
+    pub y: f32,
+    pub block_x: i32,
+    pub block_y: i32,
     pub kinetic_energy: f32,
     pub destroy_block: bool,
     pub projectile_id: ProjectileId,
@@ -213,23 +257,36 @@ pub struct Impact {
 #[derive(Debug)]
 pub struct BulletHit {
     pub pleb_idx: usize,
-    pub x: f32, pub y: f32,
+    pub x: f32,
+    pub y: f32,
 }
 
 impl PhysicsBody {
     pub fn new_wood_box(x: f32, y: f32) -> Self {
         PhysicsBody {
-            x, y, z: 0.0,
-            vx: 0.0, vy: 0.0, vz: 0.0,
-            rot_x: 0.0, rot_y: 0.0, rot_z: 0.0,
-            spin_x: 0.0, spin_y: 0.0, spin_z: 0.0,
+            x,
+            y,
+            z: 0.0,
+            vx: 0.0,
+            vy: 0.0,
+            vz: 0.0,
+            rot_x: 0.0,
+            rot_y: 0.0,
+            rot_z: 0.0,
+            spin_x: 0.0,
+            spin_y: 0.0,
+            spin_z: 0.0,
             mass: 20.0,
             friction: 0.85,
             bounce: 0.3,
             size: 0.45,
             render_height: 1.5,
-            body_type: BodyType::WoodBox, kind: PROJ_WOOD_BOX,
-            fuse_timer: 0.0, has_landed: false, prev_x: x, prev_y: y,
+            body_type: BodyType::WoodBox,
+            kind: PROJ_WOOD_BOX,
+            fuse_timer: 0.0,
+            has_landed: false,
+            prev_x: x,
+            prev_y: y,
         }
     }
 
@@ -238,20 +295,29 @@ impl PhysicsBody {
         let speed = 28.0; // tiles/sec horizontal
         let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
         PhysicsBody {
-            x, y, z: 1.5, // starts at cannon barrel height
+            x,
+            y,
+            z: 1.5, // starts at cannon barrel height
             vx: dir_x / len * speed,
             vy: dir_y / len * speed,
             vz: 6.0, // upward arc
-            rot_x: 0.0, rot_y: 0.0, rot_z: 0.0,
-            spin_x: 0.0, spin_y: 0.0,
+            rot_x: 0.0,
+            rot_y: 0.0,
+            rot_z: 0.0,
+            spin_x: 0.0,
+            spin_y: 0.0,
             spin_z: dir_y.atan2(dir_x) * 3.0, // spin around flight axis
             mass: 5.0,
             friction: 0.6,
             bounce: 0.2, // low bounce — cannonballs don't bounce much
             size: 0.12,
             render_height: 0.5,
-            body_type: BodyType::Cannonball, kind: PROJ_CANNONBALL,
-            fuse_timer: 0.0, has_landed: false, prev_x: x, prev_y: y,
+            body_type: BodyType::Cannonball,
+            kind: PROJ_CANNONBALL,
+            fuse_timer: 0.0,
+            has_landed: false,
+            prev_x: x,
+            prev_y: y,
         }
     }
 
@@ -260,19 +326,29 @@ impl PhysicsBody {
         let speed = 8.0 + power * 14.0; // 8-22 tiles/sec based on charge
         let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
         PhysicsBody {
-            x, y, z: 1.2,
+            x,
+            y,
+            z: 1.2,
             vx: dir_x / len * speed,
             vy: dir_y / len * speed,
             vz: 4.0 + power * 6.0, // higher arc with more power
-            rot_x: 0.0, rot_y: 0.0, rot_z: 0.0,
-            spin_x: 3.0, spin_y: 2.0, spin_z: 5.0, // tumbles
+            rot_x: 0.0,
+            rot_y: 0.0,
+            rot_z: 0.0,
+            spin_x: 3.0,
+            spin_y: 2.0,
+            spin_z: 5.0, // tumbles
             mass: 0.8,
             friction: 0.8,
             bounce: 0.3,
             size: 0.08,
             render_height: 0.3,
-            body_type: BodyType::Grenade, kind: PROJ_GRENADE,
-            fuse_timer: 12.0, has_landed: false, prev_x: x, prev_y: y,
+            body_type: BodyType::Grenade,
+            kind: PROJ_GRENADE,
+            fuse_timer: 12.0,
+            has_landed: false,
+            prev_x: x,
+            prev_y: y,
         }
     }
 
@@ -281,19 +357,29 @@ impl PhysicsBody {
         let speed = 120.0; // very fast — crosses screen in ~2s
         let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
         PhysicsBody {
-            x, y, z: 1.0,
+            x,
+            y,
+            z: 1.0,
             vx: dir_x / len * speed,
             vy: dir_y / len * speed,
             vz: 0.0,
-            rot_x: 0.0, rot_y: 0.0, rot_z: dir_y.atan2(dir_x),
-            spin_x: 0.0, spin_y: 0.0, spin_z: 0.0,
+            rot_x: 0.0,
+            rot_y: 0.0,
+            rot_z: dir_y.atan2(dir_x),
+            spin_x: 0.0,
+            spin_y: 0.0,
+            spin_z: 0.0,
             mass: 0.01,
             friction: 0.0,
             bounce: 0.0,
             size: 0.02,
             render_height: 0.05,
-            body_type: BodyType::Bullet, kind: PROJ_BULLET,
-            fuse_timer: 0.0, has_landed: false, prev_x: x, prev_y: y,
+            body_type: BodyType::Bullet,
+            kind: PROJ_BULLET,
+            fuse_timer: 0.0,
+            has_landed: false,
+            prev_x: x,
+            prev_y: y,
         }
     }
 
@@ -319,17 +405,27 @@ impl PhysicsBody {
 /// Check if a physics body can occupy position (x, y) without overlapping walls.
 pub fn body_can_move(grid: &[u32], x: f32, y: f32, size: f32) -> bool {
     // Check 4 corners of bounding box
-    for &(cx, cy) in &[(x - size, y - size), (x + size, y - size), (x - size, y + size), (x + size, y + size)] {
+    for &(cx, cy) in &[
+        (x - size, y - size),
+        (x + size, y - size),
+        (x - size, y + size),
+        (x + size, y + size),
+    ] {
         let bx = cx.floor() as i32;
         let by = cy.floor() as i32;
-        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 { return false; }
+        if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
+            return false;
+        }
         let b = grid[(by as u32 * GRID_W + bx as u32) as usize];
         let bt = block_type_rs(b);
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         let is_open = (b >> 16) & 4 != 0;
         // Solid blocks that bodies can't pass through
-        if bh > 0 && !matches!(bt, 6 | 7 | 8 | 10 | 11 | 13 | 15 | 16 | 17 | 18) && !(is_door && is_open) {
+        if bh > 0
+            && !matches!(bt, 6 | 7 | 8 | 10 | 11 | 13 | 15 | 16 | 17 | 18)
+            && !(is_door && is_open)
+        {
             return false;
         }
     }
@@ -344,7 +440,9 @@ pub fn pleb_body_collision(bodies: &[PhysicsBody], px: f32, py: f32) -> (f32, f3
     let mut ax = px;
     let mut ay = py;
     for body in bodies {
-        if !body.on_ground() { continue; } // only collide with grounded boxes
+        if !body.on_ground() {
+            continue;
+        } // only collide with grounded boxes
         let ddx = ax - body.x;
         let ddy = ay - body.y;
         let dist = (ddx * ddx + ddy * ddy).sqrt();
@@ -364,7 +462,9 @@ pub fn nearest_body(bodies: &[PhysicsBody], x: f32, y: f32, range: f32) -> Optio
     let mut best = None;
     let mut best_dist = range;
     for (i, body) in bodies.iter().enumerate() {
-        if !body.on_ground() { continue; }
+        if !body.on_ground() {
+            continue;
+        }
         let dist = ((x - body.x).powi(2) + (y - body.y).powi(2)).sqrt();
         if dist < best_dist {
             best_dist = dist;
@@ -379,15 +479,18 @@ pub fn nearest_body(bodies: &[PhysicsBody], x: f32, y: f32, range: f32) -> Optio
 /// Steps through every grid cell the line segment crosses — no skips at any speed.
 /// DDA bullet trace result
 struct BulletTraceHit {
-    x: f32, y: f32,           // hit position
-    hit_x_face: bool,         // true if hit a vertical face (reflect vx), false = horizontal face (reflect vy)
+    x: f32,
+    y: f32,           // hit position
+    hit_x_face: bool, // true if hit a vertical face (reflect vx), false = horizontal face (reflect vy)
 }
 
 fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<BulletTraceHit> {
     let dx = x1 - x0;
     let dy = y1 - y0;
     let dist = (dx * dx + dy * dy).sqrt();
-    if dist < 0.001 { return None; }
+    if dist < 0.001 {
+        return None;
+    }
 
     let dir_x = dx / dist;
     let dir_y = dy / dist;
@@ -398,8 +501,16 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
     let step_x: i32 = if dir_x >= 0.0 { 1 } else { -1 };
     let step_y: i32 = if dir_y >= 0.0 { 1 } else { -1 };
 
-    let t_delta_x = if dir_x.abs() > 1e-6 { (1.0 / dir_x).abs() } else { f32::MAX };
-    let t_delta_y = if dir_y.abs() > 1e-6 { (1.0 / dir_y).abs() } else { f32::MAX };
+    let t_delta_x = if dir_x.abs() > 1e-6 {
+        (1.0 / dir_x).abs()
+    } else {
+        f32::MAX
+    };
+    let t_delta_y = if dir_y.abs() > 1e-6 {
+        (1.0 / dir_y).abs()
+    } else {
+        f32::MAX
+    };
 
     let mut t_max_x = if dir_x > 1e-6 {
         ((ix as f32 + 1.0) - x0) / dir_x
@@ -418,11 +529,16 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
     };
 
     // Check cells along the ray until we reach the endpoint or hit something
-    for _ in 0..256 { // safety limit
+    for _ in 0..256 {
+        // safety limit
         // Out of bounds = hit
         if ix < 0 || iy < 0 || ix >= GRID_W as i32 || iy >= GRID_H as i32 {
             let t = t_max_x.min(t_max_y).min(dist);
-            return Some(BulletTraceHit { x: x0 + dir_x * t, y: y0 + dir_y * t, hit_x_face: t_max_x < t_max_y });
+            return Some(BulletTraceHit {
+                x: x0 + dir_x * t,
+                y: y0 + dir_y * t,
+                hit_x_face: t_max_x < t_max_y,
+            });
         }
 
         let block = grid[(iy as u32 * GRID_W + ix as u32) as usize];
@@ -432,22 +548,37 @@ fn dda_bullet_trace(grid: &[u32], x0: f32, y0: f32, x1: f32, y1: f32) -> Option<
         let is_open = (block >> 16) & 4 != 0;
 
         // Bullet stops on: solid blocks with height, except passable types and open doors
-        let passable = bt_is!(bt, BT_TREE, BT_FIREPLACE, BT_CEILING_LIGHT, BT_FLOOR_LAMP, BT_BERRY_BUSH, BT_CROP);
-        if bh > 0 && !passable && !(is_door && is_open)
-        {
+        let passable = bt_is!(
+            bt,
+            BT_TREE,
+            BT_FIREPLACE,
+            BT_CEILING_LIGHT,
+            BT_FLOOR_LAMP,
+            BT_BERRY_BUSH,
+            BT_CROP
+        );
+        if bh > 0 && !passable && !(is_door && is_open) {
             let t = t_max_x.min(t_max_y).max(0.0);
             // Determine which face was hit: the last axis we stepped along
             let hit_x = t_max_x <= t_max_y;
-            return Some(BulletTraceHit { x: x0 + dir_x * t, y: y0 + dir_y * t, hit_x_face: hit_x });
+            return Some(BulletTraceHit {
+                x: x0 + dir_x * t,
+                y: y0 + dir_y * t,
+                hit_x_face: hit_x,
+            });
         }
 
         // Step to next cell
         if t_max_x < t_max_y {
-            if t_max_x > dist { break; }
+            if t_max_x > dist {
+                break;
+            }
             ix += step_x;
             t_max_x += t_delta_x;
         } else {
-            if t_max_y > dist { break; }
+            if t_max_y > dist {
+                break;
+            }
             iy += step_y;
             t_max_y += t_delta_y;
         }
@@ -464,7 +595,7 @@ pub fn tick_bodies(
     wind_x: f32,
     wind_y: f32,
     pleb: Option<(f32, f32, f32, f32, f32)>, // (pleb_x, pleb_y, pleb_vx, pleb_vy, pleb_angle)
-    all_plebs: &[(f32, f32, usize)], // (x, y, pleb_index) for bullet collision
+    all_plebs: &[(f32, f32, usize)],         // (x, y, pleb_index) for bullet collision
     selected_pleb: Option<usize>,
     ricochets_enabled: bool,
     sound_sources: &[(f32, f32, f32)], // (x, y, amplitude) for sound→body force
@@ -502,10 +633,12 @@ pub fn tick_bodies(
                         body.y += if body.vy > 0.0 { 0.05 } else { -0.05 };
                     }
                     if body.vx.abs() + body.vy.abs() < def.remove_speed_threshold {
-                        body.vx = 0.0; body.vy = 0.0;
+                        body.vx = 0.0;
+                        body.vy = 0.0;
                     }
                 } else {
-                    body.vx = 0.0; body.vy = 0.0;
+                    body.vx = 0.0;
+                    body.vy = 0.0;
                 }
             } else {
                 body.x = x1;
@@ -531,11 +664,16 @@ pub fn tick_bodies(
             for dx in -2i32..=2 {
                 let nx = bx + dx;
                 let ny = by + dy;
-                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 { continue; }
+                if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+                    continue;
+                }
                 let b = grid[(ny as u32 * GRID_W + nx as u32) as usize];
                 let bt = block_type_rs(b);
-                if bt == BT_FAN { // fan
-                    let dist = ((nx as f32 + 0.5 - body.x).powi(2) + (ny as f32 + 0.5 - body.y).powi(2)).sqrt();
+                if bt == BT_FAN {
+                    // fan
+                    let dist = ((nx as f32 + 0.5 - body.x).powi(2)
+                        + (ny as f32 + 0.5 - body.y).powi(2))
+                    .sqrt();
                     if dist < 2.5 {
                         let dir_bits = ((b >> 16) >> 3) & 3;
                         let (fdx, fdy) = match dir_bits {
@@ -612,7 +750,9 @@ pub fn tick_bodies(
             // Snap rotation to nearest 90° when nearly stopped and on ground
             let spin_total = body.spin_x.abs() + body.spin_y.abs() + body.spin_z.abs();
             if spin_total < 0.1 {
-                body.spin_x = 0.0; body.spin_y = 0.0; body.spin_z = 0.0;
+                body.spin_x = 0.0;
+                body.spin_y = 0.0;
+                body.spin_z = 0.0;
             }
         } else {
             // Air: very light spin damping
@@ -663,7 +803,8 @@ pub fn tick_bodies(
         let nx = body.x + body.vx * dt;
         let ny = body.y + body.vy * dt;
 
-        if body.z < 2.0 { // below wall height — collide
+        if body.z < 2.0 {
+            // below wall height — collide
             let mut hit_wall_x = false;
             let mut hit_wall_y = false;
 
@@ -683,8 +824,16 @@ pub fn tick_bodies(
             // Projectile impact on wall hit (block destruction check)
             if def.impact.destroy_multiplier > 0.0 && (hit_wall_x || hit_wall_y) {
                 let ke = 0.5 * body.mass * speed * speed * def.impact.destroy_multiplier;
-                let hit_bx = if hit_wall_x { nx.floor() as i32 } else { body.x.floor() as i32 };
-                let hit_by = if hit_wall_y { ny.floor() as i32 } else { body.y.floor() as i32 };
+                let hit_bx = if hit_wall_x {
+                    nx.floor() as i32
+                } else {
+                    body.x.floor() as i32
+                };
+                let hit_by = if hit_wall_y {
+                    ny.floor() as i32
+                } else {
+                    body.y.floor() as i32
+                };
 
                 let mut destroy = false;
                 if hit_bx >= 0 && hit_by >= 0 && hit_bx < GRID_W as i32 && hit_by < GRID_H as i32 {
@@ -704,8 +853,10 @@ pub fn tick_bodies(
                 }
 
                 impacts.push(Impact {
-                    x: body.x, y: body.y,
-                    block_x: hit_bx, block_y: hit_by,
+                    x: body.x,
+                    y: body.y,
+                    block_x: hit_bx,
+                    block_y: hit_by,
                     kinetic_energy: ke,
                     destroy_block: destroy,
                     projectile_id: body.kind,
@@ -739,7 +890,8 @@ pub fn tick_bodies(
             if let Some(expl) = &def.impact.explosion {
                 body.has_landed = true;
                 explosions.push(ExplosionEvent {
-                    x: body.x, y: body.y,
+                    x: body.x,
+                    y: body.y,
                     def: expl.clone(),
                 });
             }
@@ -754,8 +906,10 @@ pub fn tick_bodies(
                     body.vy = 0.0;
                 }
                 impacts.push(Impact {
-                    x: body.x, y: body.y,
-                    block_x: body.x.floor() as i32, block_y: body.y.floor() as i32,
+                    x: body.x,
+                    y: body.y,
+                    block_x: body.x.floor() as i32,
+                    block_y: body.y.floor() as i32,
                     kinetic_energy: 0.0,
                     destroy_block: false,
                     projectile_id: body.kind,
@@ -770,7 +924,9 @@ pub fn tick_bodies(
     let mut bullets_hit = std::collections::HashSet::new();
     for (bi, body) in bodies.iter().enumerate() {
         let def = projectile_def(body.kind);
-        if def.hit_damage <= 0.0 { continue; } // only projectiles with direct-hit damage
+        if def.hit_damage <= 0.0 {
+            continue;
+        } // only projectiles with direct-hit damage
         let bx0 = body.prev_x;
         let by0 = body.prev_y;
         let bx1 = body.x;
@@ -779,15 +935,24 @@ pub fn tick_bodies(
         let seg_dy = by1 - by0;
         let seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
         for &(px, py, pi) in all_plebs {
-            if Some(pi) == selected_pleb { continue; }
+            if Some(pi) == selected_pleb {
+                continue;
+            }
             let t = if seg_len_sq > 0.0001 {
                 ((px - bx0) * seg_dx + (py - by0) * seg_dy) / seg_len_sq
-            } else { 0.0 }.clamp(0.0, 1.0);
+            } else {
+                0.0
+            }
+            .clamp(0.0, 1.0);
             let cx = bx0 + t * seg_dx;
             let cy = by0 + t * seg_dy;
             let dist = ((cx - px) * (cx - px) + (cy - py) * (cy - py)).sqrt();
             if dist < hit_radius {
-                bullet_hits.push(BulletHit { pleb_idx: pi, x: cx, y: cy });
+                bullet_hits.push(BulletHit {
+                    pleb_idx: pi,
+                    x: cx,
+                    y: cy,
+                });
                 bullets_hit.insert(bi);
                 break;
             }
@@ -807,7 +972,9 @@ pub fn tick_bodies(
     bodies.retain(|b| {
         let def = projectile_def(b.kind);
         let in_bounds = b.x > 0.0 && b.y > 0.0 && b.x < GRID_W as f32 && b.y < GRID_H as f32;
-        if !in_bounds { return false; }
+        if !in_bounds {
+            return false;
+        }
 
         // Fuse-based: remove when fuse expired and on ground
         if def.fuse.is_some() {

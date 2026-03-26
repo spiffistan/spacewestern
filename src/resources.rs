@@ -23,7 +23,8 @@ impl CrateInventory {
 
     /// Count of a specific item type.
     pub fn count_of(&self, item_id: u16) -> u32 {
-        self.stacks.iter()
+        self.stacks
+            .iter()
             .filter(|s| s.item_id == item_id)
             .map(|s| s.count as u32)
             .sum()
@@ -33,9 +34,14 @@ impl CrateInventory {
     #[allow(dead_code)]
     pub fn add(&mut self, item_id: u16, count: u16) -> u16 {
         let can_add = (self.space() as u16).min(count);
-        if can_add == 0 { return 0; }
+        if can_add == 0 {
+            return 0;
+        }
         // Don't merge containers (they have unique liquid state)
-        let is_container = ItemRegistry::cached().get(item_id).map(|d| d.liquid_capacity > 0).unwrap_or(false);
+        let is_container = ItemRegistry::cached()
+            .get(item_id)
+            .map(|d| d.liquid_capacity > 0)
+            .unwrap_or(false);
         if !is_container {
             if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
                 stack.count += can_add;
@@ -49,7 +55,9 @@ impl CrateInventory {
     /// Store a full ItemStack (preserves liquid contents for containers).
     /// Returns true if stored successfully.
     pub fn add_stack(&mut self, stack: ItemStack) -> bool {
-        if self.space() < stack.count as u32 { return false; }
+        if self.space() < stack.count as u32 {
+            return false;
+        }
         let is_container = stack.is_container();
         if !is_container {
             if let Some(existing) = self.stacks.iter_mut().find(|s| s.item_id == stack.item_id) {
@@ -74,7 +82,6 @@ impl CrateInventory {
             0
         }
     }
-
 }
 
 /// What a pleb is currently carrying.
@@ -86,7 +93,8 @@ pub struct PlebInventory {
 impl PlebInventory {
     /// Count of a specific item type in inventory.
     pub fn count_of(&self, item_id: u16) -> u32 {
-        self.stacks.iter()
+        self.stacks
+            .iter()
             .filter(|s| s.item_id == item_id)
             .map(|s| s.count as u32)
             .sum()
@@ -94,8 +102,13 @@ impl PlebInventory {
 
     /// Add items to inventory (merges into existing stack or creates new).
     pub fn add(&mut self, item_id: u16, count: u16) {
-        if count == 0 { return; }
-        let is_container = ItemRegistry::cached().get(item_id).map(|d| d.liquid_capacity > 0).unwrap_or(false);
+        if count == 0 {
+            return;
+        }
+        let is_container = ItemRegistry::cached()
+            .get(item_id)
+            .map(|d| d.liquid_capacity > 0)
+            .unwrap_or(false);
         if !is_container {
             if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
                 stack.count += count;
@@ -107,7 +120,9 @@ impl PlebInventory {
 
     /// Add a full ItemStack (preserves liquid for containers).
     pub fn add_stack(&mut self, stack: ItemStack) {
-        if stack.count == 0 { return; }
+        if stack.count == 0 {
+            return;
+        }
         if !stack.is_container() {
             if let Some(existing) = self.stacks.iter_mut().find(|s| s.item_id == stack.item_id) {
                 existing.count += stack.count;
@@ -151,7 +166,9 @@ impl PlebInventory {
         }
     }
 
-    pub fn wood(&self) -> u32 { self.count_of(ITEM_WOOD) }
+    pub fn wood(&self) -> u32 {
+        self.count_of(ITEM_WOOD)
+    }
 }
 
 /// An item sitting on the ground, waiting to be hauled.
@@ -164,6 +181,10 @@ pub struct GroundItem {
 
 impl GroundItem {
     pub fn new(x: f32, y: f32, item_id: u16, count: u16) -> Self {
-        Self { x, y, stack: ItemStack::new(item_id, count) }
+        Self {
+            x,
+            y,
+            stack: ItemStack::new(item_id, count),
+        }
     }
 }
