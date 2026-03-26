@@ -178,16 +178,22 @@ fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_e
             if !is_wall_half { continue; }
         }
 
-        if is_door(block) {
-            if is_open(block) { continue; } else { return vec4<f32>(tint, 0.0); }
-        }
-
-        // Thin wall: only casts shadow in wall sub-cells
-        // Check wall_data layer first (DN-008), then fall back to block grid
+        // Read wall_data for this tile
         let sfx = fract(sx);
         let sfy = fract(sy);
         let wd_idx = u32(by) * u32(camera.grid_w) + u32(bx);
         let wd = read_wall_data(wd_idx);
+
+        // Door check: both grid_data and wall_data doors
+        let is_wd_door = (wd & 0x400u) != 0u;
+        let is_wd_door_open = (wd & 0x800u) != 0u;
+        if is_door(block) || is_wd_door {
+            if (is_door(block) && is_open(block)) || (is_wd_door && is_wd_door_open) { continue; }
+            else { return vec4<f32>(tint, 0.0); }
+        }
+
+        // Thin wall: only casts shadow in wall sub-cells
+        // Check wall_data layer first (DN-008), then fall back to block grid
         if (wd & 0xFu) != 0u {
             // Wall_data has edges — use it for thin wall check
             if wd_is_wall_pixel(sfx, sfy, wd) {
