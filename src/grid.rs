@@ -364,6 +364,88 @@ pub fn extract_wall_data_from_grid(grid: &[u32]) -> Vec<u16> {
     wd
 }
 
+// --- Physical Doors ---
+
+pub const MAX_DOORS: usize = 64;
+pub const DOOR_MAX_ANGLE: f32 = 2.967; // ~170 degrees
+pub const DOOR_OPEN_THRESHOLD: f32 = 0.524; // ~30 degrees — passable for pathfinding/gas
+
+#[derive(Clone, Debug)]
+pub struct Door {
+    pub x: i32,
+    pub y: i32,
+    pub edge: u8,         // 0=N, 1=E, 2=S, 3=W
+    pub angle: f32,       // 0.0=closed, DOOR_MAX_ANGLE=fully open
+    pub angular_vel: f32, // rad/s
+    pub hinge_side: u8,   // 0=left, 1=right (relative to facing inside)
+    pub locked: bool,
+    pub material: u8, // wall material index (color)
+}
+
+impl Door {
+    pub fn new(x: i32, y: i32, edge: u8, hinge_side: u8, material: u8) -> Self {
+        Self {
+            x,
+            y,
+            edge,
+            angle: 0.0,
+            angular_vel: 0.0,
+            hinge_side,
+            locked: false,
+            material,
+        }
+    }
+
+    pub fn is_passable(&self) -> bool {
+        self.angle > DOOR_OPEN_THRESHOLD
+    }
+
+    /// Pack for GPU upload (2 x u32).
+    pub fn pack_gpu(&self) -> [u32; 2] {
+        let w0 = (self.x as u32 & 0xFF)
+            | ((self.y as u32 & 0xFF) << 8)
+            | ((self.edge as u32 & 3) << 16)
+            | ((self.hinge_side as u32 & 1) << 18)
+            | (if self.locked { 1u32 } else { 0 } << 19)
+            | ((self.material as u32 & 0xF) << 20);
+        let w1 = self.angle.to_bits();
+        [w0, w1]
+    }
+}
+
+/// Scan wall_data for tiles with WD_HAS_DOOR and create Door structs.
+/// Used after world generation to populate the doors list.
+pub fn extract_doors_from_wall_data(wall_data: &[u16]) -> Vec<Door> {
+    let mut doors = Vec::new();
+    for i in 0..wall_data.len() {
+        let wd = wall_data[i];
+        if (wd & WD_HAS_DOOR) == 0 {
+            continue;
+        }
+        let x = (i % GRID_W as usize) as i32;
+        let y = (i / GRID_W as usize) as i32;
+        let edges = wd & WD_EDGE_MASK;
+        // Determine which edge the door is on (pick first set edge)
+        let edge = if edges & WD_EDGE_N != 0 {
+            0
+        } else if edges & WD_EDGE_E != 0 {
+            1
+        } else if edges & WD_EDGE_S != 0 {
+            2
+        } else {
+            3
+        };
+        let material = wd_material(wd) as u8;
+        let is_open = (wd & WD_DOOR_OPEN) != 0;
+        let mut door = Door::new(x, y, edge, 0, material);
+        if is_open {
+            door.angle = DOOR_OPEN_THRESHOLD + 0.1;
+        }
+        doors.push(door);
+    }
+    doors
+}
+
 // =============================================================
 // Legacy thin wall encoding (in block height byte, still used
 // during migration). Will be removed once wall_data is primary.

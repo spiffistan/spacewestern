@@ -142,6 +142,8 @@ impl App {
                             }
                         }
                         compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
+                        // Extract physical doors from wall_data
+                        self.doors = grid::extract_doors_from_wall_data(&self.wall_data);
                         self.grid_dirty = true;
                         // Spawn sample enemies
                         self.spawn_sample_enemies();
@@ -360,6 +362,7 @@ impl App {
             compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
             // Extract wall data from legacy block grid
             self.wall_data = extract_wall_data_from_grid(&self.grid_data);
+            self.doors = grid::extract_doors_from_wall_data(&self.wall_data);
             self.game_state = GameState::Playing;
         }
     }

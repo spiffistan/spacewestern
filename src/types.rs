@@ -565,3 +565,5 @@ impl Blueprint {
             && self.plank_delivered >= self.plank_needed
     }
 }
+
+// Door struct and constants are in grid.rs (to avoid circular dependency)

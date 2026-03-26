@@ -207,7 +207,7 @@ struct App {
     show_schedule: bool,                                // show shift schedule window
     show_priorities: bool,                              // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
-    auto_doors: Vec<(i32, i32, f32)>, // (x, y, time_opened) for auto-closing
+    doors: Vec<Door>, // physical hinged doors (replaces auto_doors)
     physics_bodies: Vec<PhysicsBody>,
     ground_items: Vec<resources::GroundItem>,
     blueprints: std::collections::HashMap<(i32, i32), Blueprint>,
@@ -565,7 +565,7 @@ impl App {
             show_schedule: false,
             show_priorities: false,
             pressed_keys: std::collections::HashSet::new(),
-            auto_doors: Vec::new(),
+            doors: Vec::new(),
             physics_bodies: Vec::new(),
             ground_items: Vec::new(),
             blueprints: std::collections::HashMap::new(),

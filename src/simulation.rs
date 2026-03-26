@@ -913,56 +913,98 @@ impl App {
             }
         }
 
-        // Auto-open doors near ANY pleb
-        for pleb in &self.plebs {
-            let pbx = pleb.x.floor() as i32;
-            let pby = pleb.y.floor() as i32;
-            for ddy in -1..=1 {
-                for ddx in -1..=1 {
-                    let door_x = pbx + ddx;
-                    let door_y = pby + ddy;
-                    if door_x >= 0
-                        && door_y >= 0
-                        && door_x < GRID_W as i32
-                        && door_y < GRID_H as i32
-                    {
-                        let didx = (door_y as u32 * GRID_W + door_x as u32) as usize;
-                        let db = self.grid_data[didx];
-                        // Check for doors in grid_data OR wall_data
-                        let wd_door = didx < self.wall_data.len()
-                            && (self.wall_data[didx] & WD_HAS_DOOR) != 0
-                            && (self.wall_data[didx] & WD_DOOR_OPEN) == 0;
-                        let grid_door = is_door_rs(db) && (block_flags_rs(db) & 4) == 0;
-                        if grid_door || wd_door {
-                            let dist = ((door_x as f32 + 0.5 - pleb.x).powi(2)
-                                + (door_y as f32 + 0.5 - pleb.y).powi(2))
-                            .sqrt();
-                            if dist < 1.2 {
-                                if grid_door {
-                                    self.grid_data[didx] = (db & 0xFF00FFFF)
-                                        | (((block_flags_rs(db) ^ 4) as u32) << 16);
-                                }
-                                if wd_door {
-                                    self.wall_data[didx] |= WD_DOOR_OPEN;
-                                }
-                                self.grid_dirty = true;
-                                self.auto_doors.push((door_x, door_y, self.time_of_day));
-                                // Door open sound (~50 dB)
-                                if self.sound_enabled {
-                                    self.sound_sources.push(SoundSource {
-                                        x: door_x as f32 + 0.5,
-                                        y: door_y as f32 + 0.5,
-                                        amplitude: db_to_amplitude(50.0),
-                                        frequency: 0.0,
-                                        phase: 0.0,
-                                        pattern: 0,
-                                        duration: 0.05,
-                                    });
-                                }
-                            }
-                        }
+        // --- Physical door tick ---
+        {
+            const WIND_TORQUE_SCALE: f32 = 0.008;
+            const DOOR_DAMPING: f32 = 3.0;
+            const LATCH_SPRING: f32 = 20.0;
+
+            let wind_mag = self.camera.wind_magnitude;
+            let wind_angle = self.camera.wind_angle;
+
+            // Pleb positions for door interaction
+            let pleb_positions: Vec<(f32, f32)> = self.plebs.iter().map(|p| (p.x, p.y)).collect();
+
+            for door in &mut self.doors {
+                // Pleb proximity: push door open
+                let door_cx = door.x as f32 + 0.5;
+                let door_cy = door.y as f32 + 0.5;
+                let pleb_nearby = pleb_positions.iter().any(|&(px, py)| {
+                    ((door_cx - px).powi(2) + (door_cy - py).powi(2)).sqrt() < 1.2
+                });
+                if pleb_nearby && !door.is_passable() && !door.locked {
+                    door.angular_vel += 3.0 * dt; // gentle push toward open
+                }
+
+                if door.locked {
+                    // Locked doors don't move (but can still be pushed by plebs above)
+                    door.angular_vel = 0.0;
+                } else {
+                    // Wind torque: depends on angle between wind and door normal
+                    let edge_normal = match door.edge {
+                        0 => std::f32::consts::FRAC_PI_2,  // N: normal points south (+y)
+                        1 => 0.0,                          // E: normal points west (-x)
+                        2 => -std::f32::consts::FRAC_PI_2, // S: normal points north (-y)
+                        _ => std::f32::consts::PI,         // W: normal points east (+x)
+                    };
+                    let hinge_sign = if door.hinge_side == 0 { 1.0f32 } else { -1.0 };
+                    let effective_normal = edge_normal + door.angle * hinge_sign;
+                    let angle_diff = wind_angle - effective_normal;
+                    let torque = wind_mag * angle_diff.sin() * door.angle.cos() * WIND_TORQUE_SCALE;
+
+                    // Damping (hinge friction)
+                    let damping = -door.angular_vel * DOOR_DAMPING;
+
+                    // Latch spring: snaps shut when nearly closed and slow
+                    let latch = if door.angle < 0.05 && door.angular_vel.abs() < 0.3 {
+                        -door.angle * LATCH_SPRING
+                    } else {
+                        0.0
+                    };
+
+                    // Integrate
+                    let accel = torque + damping + latch;
+                    door.angular_vel += accel * dt;
+                }
+
+                door.angle += door.angular_vel * dt;
+
+                // Clamp to [0, max_angle]
+                if door.angle <= 0.0 {
+                    let slam_vel = door.angular_vel.abs();
+                    door.angle = 0.0;
+                    door.angular_vel = (-door.angular_vel * 0.3).max(0.0); // slight bounce
+                    // Slam sound
+                    if slam_vel > 2.0 && self.sound_enabled {
+                        let db = 50.0 + (slam_vel * 5.0).min(30.0);
+                        self.sound_sources.push(SoundSource {
+                            x: door_cx,
+                            y: door_cy,
+                            amplitude: db_to_amplitude(db),
+                            frequency: 0.0,
+                            phase: 0.0,
+                            pattern: 0,
+                            duration: 0.05,
+                        });
                     }
                 }
+                if door.angle >= DOOR_MAX_ANGLE {
+                    door.angle = DOOR_MAX_ANGLE;
+                    door.angular_vel = 0.0; // wall stop
+                }
+
+                // Sync WD_DOOR_OPEN bit for backward compat (gas, pathfinding, sound shaders)
+                let didx = (door.y as u32 * GRID_W + door.x as u32) as usize;
+                if didx < self.wall_data.len() {
+                    if door.is_passable() {
+                        self.wall_data[didx] |= WD_DOOR_OPEN;
+                    } else {
+                        self.wall_data[didx] &= !WD_DOOR_OPEN;
+                    }
+                }
+            }
+            if !self.doors.is_empty() {
+                self.grid_dirty = true; // wall_data changed, re-upload
             }
         }
 
@@ -992,56 +1034,7 @@ impl App {
             self.camera.pleb_headlight = 0.0;
         }
 
-        // Auto-close doors after 2 seconds
-        {
-            let current_time = self.time_of_day;
-            // Check if any pleb is near auto-doors
-            let pleb_positions: Vec<(f32, f32)> = self.plebs.iter().map(|p| (p.x, p.y)).collect();
-            let mut doors_to_close = Vec::new();
-            self.auto_doors.retain(|&(dx, dy, opened_time)| {
-                let elapsed = (current_time - opened_time).abs();
-                let should_close = elapsed > 2.0;
-                let pleb_nearby = pleb_positions.iter().any(|&(px, py)| {
-                    ((dx as f32 + 0.5 - px).powi(2) + (dy as f32 + 0.5 - py).powi(2)).sqrt() < 1.5
-                });
-                if should_close && !pleb_nearby {
-                    doors_to_close.push((dx, dy));
-                    false
-                } else {
-                    true
-                }
-            });
-            for (dx, dy) in doors_to_close {
-                let didx = (dy as u32 * GRID_W + dx as u32) as usize;
-                let db = self.grid_data[didx];
-                let grid_door_open = is_door_rs(db) && (block_flags_rs(db) & 4) != 0;
-                let wd_door_open = didx < self.wall_data.len()
-                    && (self.wall_data[didx] & WD_HAS_DOOR) != 0
-                    && (self.wall_data[didx] & WD_DOOR_OPEN) != 0;
-                if grid_door_open || wd_door_open {
-                    if grid_door_open {
-                        self.grid_data[didx] =
-                            (db & 0xFF00FFFF) | ((((db >> 16) & 0xFF) ^ 4) << 16);
-                    }
-                    if wd_door_open {
-                        self.wall_data[didx] &= !WD_DOOR_OPEN;
-                    }
-                    self.grid_dirty = true;
-                    // Door close sound (~50 dB)
-                    if self.sound_enabled {
-                        self.sound_sources.push(SoundSource {
-                            x: dx as f32 + 0.5,
-                            y: dy as f32 + 0.5,
-                            amplitude: db_to_amplitude(50.0),
-                            frequency: 0.0,
-                            phase: 0.0,
-                            pattern: 0,
-                            duration: 0.05,
-                        });
-                    }
-                }
-            }
-        }
+        // (Auto-close replaced by physical door tick above — doors swing shut via damping/latch)
 
         // --- Physics tick ---
         {
