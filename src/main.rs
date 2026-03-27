@@ -413,7 +413,7 @@ impl App {
                 light_bleed_mul: 0.10,
                 foliage_opacity: 0.55,
                 foliage_variation: 0.3,
-                oblique_strength: 0.12,
+                oblique_strength: 0.0,
                 lm_vp_min_x: 0.0,
                 lm_vp_min_y: 0.0,
                 lm_vp_max_x: GRID_W as f32,

@@ -385,13 +385,13 @@ pub fn is_walkable_pos_wd(grid: &[u32], wall_data: &[u16], x: f32, y: f32) -> bo
             return false;
         }
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
-        // Wall_data: full-thickness walls block movement
+        // Wall_data: full-thickness walls block movement (any edge with thickness >= 4 fills whole tile)
         if idx < wall_data.len() {
             let wd = wall_data[idx];
             let edges = wd_edges(wd);
-            if edges == 0xF {
+            if edges != 0 {
                 let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
-                if !is_open_door {
+                if !is_open_door && (edges == 0xF || wd_thickness(wd) >= 4) {
                     return false;
                 }
             }
@@ -511,14 +511,13 @@ pub fn astar_path_wd(
             return false;
         }
         let idx = (y as u32 * GRID_W + x as u32) as usize;
-        // Wall_data: full-thickness walls (all 4 edges) block, unless open door
+        // Wall_data: full-thickness walls block (any edge with thickness >= 4 fills whole tile)
         if idx < wall_data.len() {
             let wd = wall_data[idx];
             let edges = wd_edges(wd);
-            if edges == 0xF {
-                // Full wall — only passable if open door
+            if edges != 0 {
                 let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
-                if !is_open_door {
+                if !is_open_door && (edges == 0xF || wd_thickness(wd) >= 4) {
                     return false;
                 }
             }

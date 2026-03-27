@@ -192,16 +192,13 @@ fn trace_shadow(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, sun_e
             else { return vec4<f32>(tint, 0.0); }
         }
 
-        // Thin wall: only casts shadow in wall sub-cells
-        // Check wall_data layer first (DN-008), then fall back to block grid
+        // Wall_data walls: any tile with edges blocks shadow as solid block
         if (wd & 0xFu) != 0u {
-            // Wall_data has edges — use it for thin wall check
-            if wd_is_wall_pixel(sfx, sfy, wd) {
-                // Wall pixel: check height (wall material height is typically 3)
+            let is_wd_door_open = (wd & 0x400u) != 0u && (wd & 0x800u) != 0u;
+            if !is_wd_door_open {
                 let wall_h = 3.0 + get_elev(bx, by);
                 if current_h < wall_h { return vec4<f32>(tint, 0.0); }
             }
-            // If not in wall pixel, might still be a block with height — fall through
             if bh < 0.1 { continue; }
         }
         let bf = block_flags(block);
