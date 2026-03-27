@@ -62,4 +62,5 @@ pub struct CameraUniform {
     pub fog_enabled: f32,           // 1.0 = fog of war active, 0.0 = full map visible
     pub hover_x: f32,               // hovered world x (-1 = none)
     pub hover_y: f32,               // hovered world y (-1 = none)
+    pub shadow_intensity: f32,      // 0.0 = no shadows, 1.0 = full shadows
 }

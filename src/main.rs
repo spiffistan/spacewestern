@@ -26,7 +26,7 @@ use sprites::generate_tree_sprites;
 mod pleb;
 use pleb::{
     GpuPleb, MAX_PLEBS, MentalBreakKind, Pleb, PlebActivity, PlebShift, adjacent_walkable,
-    astar_path_terrain, is_walkable_pos, is_walkable_pos_wd, random_name,
+    astar_path_terrain, astar_path_terrain_wd, is_walkable_pos, is_walkable_pos_wd, random_name,
 };
 
 mod needs;
@@ -457,6 +457,7 @@ impl App {
                 fog_enabled: 0.0,
                 hover_x: -1.0,
                 hover_y: -1.0,
+                shadow_intensity: 1.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),

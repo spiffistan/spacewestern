@@ -65,6 +65,7 @@ struct Camera {
     fog_enabled: f32,
     hover_x: f32,
     hover_y: f32,
+    shadow_intensity: f32,
 };
 
 @group(0) @binding(0) var shadow_out: texture_storage_2d<rgba8unorm, write>;

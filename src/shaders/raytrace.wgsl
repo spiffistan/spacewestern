@@ -64,6 +64,7 @@ struct Camera {
     fog_enabled: f32,
     hover_x: f32,
     hover_y: f32,
+    shadow_intensity: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -190,31 +191,27 @@ fn render_door(fx: f32, fy: f32, wd: u32, door: DoorInfo) -> vec4<f32> {
     let wall_frac = f32(wd_thickness_s(wd)) * 0.25;
     let edge = door.edge;
 
-    // Transform to edge-local: u=along edge(0..1), v=into wall(0..wall_frac)
+    // Transform to edge-local: u=along edge(0..1), v=perpendicular (0=edge, positive=into tile)
     var u: f32; var v: f32;
     if edge == 0u { u = fx; v = fy; }                       // N: wall at top
     else if edge == 1u { u = fy; v = 1.0 - fx; }            // E: wall at right
     else if edge == 2u { u = 1.0 - fx; v = 1.0 - fy; }     // S: wall at bottom
     else { u = 1.0 - fy; v = fx; }                          // W: wall at left
 
-    // Only render within the wall strip
-    if v > wall_frac { return vec4<f32>(0.0); }
-
     let wall_color = wall_material_color(wd_material_s(wd));
     let door_color = vec3<f32>(0.45, 0.32, 0.18); // wood brown
 
-    // Jambs: solid wall material at edges
-    if u < DOOR_JAMB_FRAC || u > (1.0 - DOOR_JAMB_FRAC) {
+    // Jambs: solid wall material at edges (only within wall strip)
+    if v <= wall_frac && (u < DOOR_JAMB_FRAC || u > (1.0 - DOOR_JAMB_FRAC)) {
         return vec4<f32>(wall_color, 1.0);
     }
 
-    // Door leaf: rotated line from hinge
+    // Door leaf: rotated line from hinge — extends beyond wall strip when open
     let gap_start = DOOR_JAMB_FRAC;
     let gap_width = DOOR_GAP_FRAC;
     let hinge_u = select(gap_start, gap_start + gap_width, door.hinge_side == 1u);
     let hinge_v = wall_frac * 0.5;
 
-    // Leaf endpoint after rotation
     let swing = select(1.0, -1.0, door.hinge_side == 1u);
     let leaf_end_u = hinge_u + swing * cos(door.angle) * gap_width;
     let leaf_end_v = hinge_v + sin(door.angle) * gap_width;
@@ -231,12 +228,13 @@ fn render_door(fx: f32, fy: f32, wd: u32, door: DoorInfo) -> vec4<f32> {
     let dist = length(vec2<f32>(u - closest_u, v - closest_v));
 
     if dist < DOOR_LEAF_THICK * 0.5 {
-        // On the door leaf
-        // Slight darkening toward edges for depth
         let edge_t = abs(t - 0.5) * 2.0;
         let leaf_color = door_color * (0.85 + 0.15 * (1.0 - edge_t));
         return vec4<f32>(leaf_color, 1.0);
     }
+
+    // Beyond wall strip and not on leaf = not a door pixel
+    if v > wall_frac { return vec4<f32>(0.0); }
 
     // In the gap (floor visible)
     return vec4<f32>(0.0);
@@ -4186,12 +4184,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ign_y = f32(py) + frame_offset * 0.7;
         let ign1 = fract(52.9829189 * fract(0.06711056 * ign_x + 0.00583715 * ign_y));
         let ign2 = fract(52.9829189 * fract(0.00583715 * ign_x + 0.06711056 * ign_y));
+        let shadow_dither = 0.06; // subtle penumbra softening (±0.03 tiles)
         let shadow_result = trace_shadow_ray(
-            world_x + (ign1 - 0.5) * 0.18,
-            world_y + (ign2 - 0.5) * 0.18,
+            world_x + (ign1 - 0.5) * shadow_dither,
+            world_y + (ign2 - 0.5) * shadow_dither,
             effective_fheight, sun_dir, sun_elev);
         shadow_tint = shadow_result.xyz;
-        light_factor = shadow_result.w;
+        // Shadow intensity: 1.0 = full shadow, 0.0 = no shadow (always lit)
+        light_factor = mix(1.0, shadow_result.w, camera.shadow_intensity);
 
         // DEBUG: output roof height as color — red channel = roof_h/5
 

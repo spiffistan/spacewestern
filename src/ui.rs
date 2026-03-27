@@ -1174,6 +1174,19 @@ impl App {
 
                         ui.separator();
 
+                        // --- Shadows ---
+                        ui.label(egui::RichText::new("Shadows").strong().size(11.0));
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Intensity: {:.0}%",
+                                self.camera.shadow_intensity * 100.0
+                            ))
+                            .size(10.0)
+                            .weak(),
+                        );
+
+                        ui.separator();
+
                         // --- Raytrace ---
                         ui.label(egui::RichText::new("Raytrace").strong().size(11.0));
                         if ui
@@ -2934,8 +2947,13 @@ impl App {
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                             let adj =
                                 adjacent_walkable(&self.grid_data, hx, hy).unwrap_or((hx, hy));
-                            let path =
-                                astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
+                            let path = astar_path_terrain_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                start,
+                                adj,
+                            );
                             if !path.is_empty() {
                                 pleb.path = path;
                                 pleb.path_idx = 0;
@@ -2974,8 +2992,9 @@ impl App {
                         if let Some((cx, cy)) = nearest_crate {
                             let pleb = &mut self.plebs[pi];
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path_terrain(
+                            let path = astar_path_terrain_wd(
                                 &self.grid_data,
+                                &self.wall_data,
                                 &self.terrain_data,
                                 start,
                                 (hx, hy),
@@ -3012,8 +3031,9 @@ impl App {
                                     pleb.path.clear();
                                 } else {
                                     // Walk there first, eat on arrival
-                                    let path = astar_path_terrain(
+                                    let path = astar_path_terrain_wd(
                                         &self.grid_data,
+                                        &self.wall_data,
                                         &self.terrain_data,
                                         start,
                                         (ix, iy),
@@ -3036,8 +3056,13 @@ impl App {
                         let pleb = &mut self.plebs[sel_idx];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                         let goal = (wx.floor() as i32, wy.floor() as i32);
-                        let path =
-                            astar_path_terrain(&self.grid_data, &self.terrain_data, start, goal);
+                        let path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            start,
+                            goal,
+                        );
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 1;
@@ -3054,8 +3079,9 @@ impl App {
                     if let Some(sel_idx) = self.selected_pleb {
                         let pleb = &mut self.plebs[sel_idx];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path_terrain(
+                        let path = astar_path_terrain_wd(
                             &self.grid_data,
+                            &self.wall_data,
                             &self.terrain_data,
                             start,
                             (dx, dy),

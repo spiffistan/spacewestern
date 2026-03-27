@@ -465,29 +465,30 @@ pub fn adjacent_walkable(grid: &[u32], gx: i32, gy: i32) -> Option<(i32, i32)> {
 }
 
 /// A* pathfinding on the block grid. Returns path from start to goal (inclusive), or empty if unreachable.
+/// Legacy A* without wall_data (for tests).
 pub fn astar_path(grid: &[u32], start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
-    astar_path_full(grid, &[], &[], start, goal)
+    astar_path_terrain_wd(grid, &[], &[], start, goal)
 }
 
+/// Legacy A* with terrain but no wall_data (for callers without wall_data access).
 pub fn astar_path_terrain(
     grid: &[u32],
     terrain: &[u32],
     start: (i32, i32),
     goal: (i32, i32),
 ) -> Vec<(i32, i32)> {
-    astar_path_full(grid, &[], terrain, start, goal)
+    astar_path_terrain_wd(grid, &[], terrain, start, goal)
 }
 
-/// A* pathfinding with optional elevation and terrain-aware movement cost.
-/// Compacted terrain reduces cost (plebs prefer worn paths).
-pub fn astar_path_full(
+/// Primary A* pathfinding — wall_data-aware, terrain cost, doors passable.
+pub fn astar_path_terrain_wd(
     grid: &[u32],
-    elevation: &[f32],
+    wall_data: &[u16],
     terrain: &[u32],
     start: (i32, i32),
     goal: (i32, i32),
 ) -> Vec<(i32, i32)> {
-    astar_path_wd(grid, &[], elevation, terrain, start, goal)
+    astar_path_wd(grid, wall_data, &[], terrain, start, goal)
 }
 
 /// A* pathfinding with wall_data layer support.
@@ -512,12 +513,13 @@ pub fn astar_path_wd(
         }
         let idx = (y as u32 * GRID_W + x as u32) as usize;
         // Wall_data: full-thickness walls block (any edge with thickness >= 4 fills whole tile)
+        // Doors are always passable for pathfinding (pleb will push them open)
         if idx < wall_data.len() {
             let wd = wall_data[idx];
             let edges = wd_edges(wd);
             if edges != 0 {
-                let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
-                if !is_open_door && (edges == 0xF || wd_thickness(wd) >= 4) {
+                let has_door = (wd & WD_HAS_DOOR) != 0;
+                if !has_door && (edges == 0xF || wd_thickness(wd) >= 4) {
                     return false;
                 }
             }
@@ -595,27 +597,33 @@ pub fn astar_path_wd(
                 continue;
             }
 
-            // Edge blocking: thin walls block crossing their walled edge
+            // Edge blocking: walls block crossing, but doors are passable (pleb opens them)
             if ndx == 0 || ndy == 0 {
-                // Cardinal move: check direct edge
-                if edge_blocked_wd(grid, wall_data, current.0, current.1, next.0, next.1) {
+                if wd_edge_blocked_ignore_doors(wall_data, current.0, current.1, next.0, next.1) {
+                    continue;
+                }
+                // Legacy block grid edge blocking
+                if edge_blocked(grid, current.0, current.1, next.0, next.1) {
                     continue;
                 }
             }
 
             // Diagonal: require both adjacent cardinal tiles to be walkable (no corner-cutting)
-            // AND no edge blocking on either cardinal step of the diagonal
             if ndx != 0 && ndy != 0 {
                 let cx = (current.0 + ndx, current.1);
                 let cy = (current.0, current.1 + ndy);
                 if !is_walk(cx.0, cx.1) || !is_walk(cy.0, cy.1) {
                     continue;
                 }
-                // Check edges along both cardinal steps of the diagonal
-                if edge_blocked_wd(grid, wall_data, current.0, current.1, cx.0, cx.1)
-                    || edge_blocked_wd(grid, wall_data, cx.0, cx.1, next.0, next.1)
-                    || edge_blocked_wd(grid, wall_data, current.0, current.1, cy.0, cy.1)
-                    || edge_blocked_wd(grid, wall_data, cy.0, cy.1, next.0, next.1)
+                // Check edges along both cardinal steps of the diagonal (doors passable)
+                if wd_edge_blocked_ignore_doors(wall_data, current.0, current.1, cx.0, cx.1)
+                    || wd_edge_blocked_ignore_doors(wall_data, cx.0, cx.1, next.0, next.1)
+                    || wd_edge_blocked_ignore_doors(wall_data, current.0, current.1, cy.0, cy.1)
+                    || wd_edge_blocked_ignore_doors(wall_data, cy.0, cy.1, next.0, next.1)
+                    || edge_blocked(grid, current.0, current.1, cx.0, cx.1)
+                    || edge_blocked(grid, cx.0, cx.1, next.0, next.1)
+                    || edge_blocked(grid, current.0, current.1, cy.0, cy.1)
+                    || edge_blocked(grid, cy.0, cy.1, next.0, next.1)
                 {
                     continue;
                 }

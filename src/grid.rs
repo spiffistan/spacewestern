@@ -310,6 +310,47 @@ pub fn wd_edge_blocked(wall_data: &[u16], ax: i32, ay: i32, bx: i32, by: i32) ->
     false
 }
 
+/// Like wd_edge_blocked but treats ALL doors as passable (for pathfinding — pleb will open doors).
+pub fn wd_edge_blocked_ignore_doors(wall_data: &[u16], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    if wall_data.is_empty() {
+        return false;
+    }
+    let dx = bx - ax;
+    let dy = by - ay;
+    let dir_a = if dy < 0 {
+        0u8
+    } else if dx > 0 {
+        1
+    } else if dy > 0 {
+        2
+    } else {
+        3
+    };
+    let dir_b = (dir_a + 2) % 4;
+    let gw = GRID_W as i32;
+    let gh = GRID_H as i32;
+    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
+        let idx = (ay as u32 * GRID_W + ax as u32) as usize;
+        if idx >= wall_data.len() {
+            return false;
+        }
+        let wd = wall_data[idx];
+        if wd != 0 && (wd & WD_HAS_DOOR) == 0 && wd_has_edge(wd, dir_a) {
+            return true;
+        }
+    }
+    if bx >= 0 && by >= 0 && bx < gw && by < gh {
+        let idx = (by as u32 * GRID_W + bx as u32) as usize;
+        if idx < wall_data.len() {
+            let wd = wall_data[idx];
+            if wd != 0 && (wd & WD_HAS_DOOR) == 0 && wd_has_edge(wd, dir_b) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Extract wall_data from the block grid (migration from legacy encoding).
 /// Scans for wall block types and converts their edge/thickness/material into wall_data.
 pub fn extract_wall_data_from_grid(grid: &[u32]) -> Vec<u16> {

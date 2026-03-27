@@ -107,6 +107,9 @@ impl App {
             let fade_out = smoothstep_f32(dusk + 0.05, dusk - 0.05, t);
             let intensity = fade_in * fade_out;
             self.camera.sun_intensity = intensity;
+            // Shadow intensity: stronger at dawn/dusk (low sun = directional),
+            // softer at noon (overhead = scattered). noon: 0→1→0 over the day.
+            self.camera.shadow_intensity = 0.9 - 0.4 * noon;
             let dawn_col = [1.0f32, 0.55, 0.25];
             let noon_col = [1.0f32, 0.97, 0.90];
             let s = smoothstep_f32(0.0, 0.6, noon);
@@ -407,8 +410,9 @@ impl App {
                 let target_x = (pleb.x + dx).clamp(1.0, GRID_W as f32 - 2.0) as i32;
                 let target_y = (pleb.y + dy).clamp(1.0, GRID_H as f32 - 2.0) as i32;
                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                let path = astar_path_terrain(
+                let path = astar_path_terrain_wd(
                     &self.grid_data,
+                    &self.wall_data,
                     &self.terrain_data,
                     start,
                     (target_x, target_y),
@@ -506,12 +510,36 @@ impl App {
                     let step_y = ndy * effective_speed * dt;
                     let nx = pleb.x + step_x;
                     let ny = pleb.y + step_y;
-                    if is_walkable_pos_wd(&self.grid_data, &self.wall_data, nx, ny) {
+                    // Check walkability AND wall edge crossings
+                    let old_tx = pleb.x.floor() as i32;
+                    let old_ty = pleb.y.floor() as i32;
+                    let can_move = |mx: f32, my: f32| -> bool {
+                        if !is_walkable_pos_wd(&self.grid_data, &self.wall_data, mx, my) {
+                            return false;
+                        }
+                        // Check if movement crosses a tile boundary with a wall edge
+                        let new_tx = mx.floor() as i32;
+                        let new_ty = my.floor() as i32;
+                        if new_tx != old_tx || new_ty != old_ty {
+                            if edge_blocked_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                old_tx,
+                                old_ty,
+                                new_tx,
+                                new_ty,
+                            ) {
+                                return false;
+                            }
+                        }
+                        true
+                    };
+                    if can_move(nx, ny) {
                         pleb.x = nx;
                         pleb.y = ny;
-                    } else if is_walkable_pos_wd(&self.grid_data, &self.wall_data, nx, pleb.y) {
+                    } else if can_move(nx, pleb.y) {
                         pleb.x = nx;
-                    } else if is_walkable_pos_wd(&self.grid_data, &self.wall_data, pleb.x, ny) {
+                    } else if can_move(pleb.x, ny) {
                         pleb.y = ny;
                     }
 
@@ -559,6 +587,7 @@ impl App {
                     pleb,
                     &env,
                     &self.grid_data,
+                    &self.wall_data,
                     &self.terrain_data,
                     dt,
                     self.time_speed,
@@ -700,8 +729,9 @@ impl App {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                                     let adj = adjacent_walkable(&self.grid_data, cx, cy)
                                         .unwrap_or((cx, cy));
-                                    let path = astar_path_terrain(
+                                    let path = astar_path_terrain_wd(
                                         &self.grid_data,
+                                        &self.wall_data,
                                         &self.terrain_data,
                                         start,
                                         adj,
@@ -818,8 +848,9 @@ impl App {
                                         let start = (px, py);
                                         let adj = adjacent_walkable(&self.grid_data, ax, ay)
                                             .unwrap_or((ax, ay));
-                                        let path = astar_path_terrain(
+                                        let path = astar_path_terrain_wd(
                                             &self.grid_data,
+                                            &self.wall_data,
                                             &self.terrain_data,
                                             start,
                                             adj,
@@ -875,8 +906,13 @@ impl App {
                         pleb.needs.flee_target = Some(target);
                         pleb.activity = PlebActivity::Walking;
                         let start = (bx, by);
-                        let path =
-                            astar_path_terrain(&self.grid_data, &self.terrain_data, start, target);
+                        let path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            start,
+                            target,
+                        );
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 0;
@@ -1425,8 +1461,9 @@ impl App {
                                     self.active_work.insert((tx, ty));
                                     pleb.work_target = Some((tx, ty));
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                    let path = astar_path_terrain(
+                                    let path = astar_path_terrain_wd(
                                         &self.grid_data,
+                                        &self.wall_data,
                                         &self.terrain_data,
                                         start,
                                         (tx, ty),
@@ -1454,8 +1491,9 @@ impl App {
                                         find_nearest_crate(&self.grid_data, ix, iy)
                                     {
                                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                        let path = astar_path_terrain(
+                                        let path = astar_path_terrain_wd(
                                             &self.grid_data,
+                                            &self.wall_data,
                                             &self.terrain_data,
                                             start,
                                             (ix, iy),
@@ -1518,8 +1556,9 @@ impl App {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                                     let adj = adjacent_walkable(&self.grid_data, sx, sy)
                                         .unwrap_or((sx, sy));
-                                    let path = astar_path_terrain(
+                                    let path = astar_path_terrain_wd(
                                         &self.grid_data,
+                                        &self.wall_data,
                                         &self.terrain_data,
                                         start,
                                         adj,
@@ -1984,8 +2023,13 @@ impl App {
                         let pleb = &mut self.plebs[pi];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                         let adj = adjacent_walkable(&self.grid_data, bx, by).unwrap_or((bx, by));
-                        let path =
-                            astar_path_terrain(&self.grid_data, &self.terrain_data, start, adj);
+                        let path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            start,
+                            adj,
+                        );
                         if !path.is_empty() {
                             pleb.path = path;
                             pleb.path_idx = 0;
@@ -2079,8 +2123,9 @@ impl App {
                             if let Some((pi, _)) = best_pleb {
                                 let pleb = &mut self.plebs[pi];
                                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                let path = astar_path_terrain(
+                                let path = astar_path_terrain_wd(
                                     &self.grid_data,
+                                    &self.wall_data,
                                     &self.terrain_data,
                                     start,
                                     pickup_pos,
@@ -2212,8 +2257,9 @@ impl App {
                     if let Some((pi, _)) = best_pleb {
                         let pleb = &mut self.plebs[pi];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path_terrain(
+                        let path = astar_path_terrain_wd(
                             &self.grid_data,
+                            &self.wall_data,
                             &self.terrain_data,
                             start,
                             (ix, iy),
@@ -2306,8 +2352,9 @@ impl App {
                             let tx = (pleb.x as i32 + dx).clamp(0, GRID_W as i32 - 1);
                             let ty = (pleb.y as i32 + dy).clamp(0, GRID_H as i32 - 1);
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path_terrain(
+                            let path = astar_path_terrain_wd(
                                 &self.grid_data,
+                                &self.wall_data,
                                 &self.terrain_data,
                                 start,
                                 (tx, ty),
@@ -2397,6 +2444,7 @@ fn tick_pleb_activity(
     pleb: &mut Pleb,
     env: &needs::EnvSample,
     grid: &[u32],
+    wall_data: &[u16],
     terrain: &[u32],
     dt: f32,
     time_speed: f32,
@@ -2544,6 +2592,7 @@ fn tick_pleb_activity(
                 send_pleb_to(
                     pleb,
                     grid,
+                    wall_data,
                     terrain,
                     (bx, by),
                     PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Starving!"),
@@ -2566,6 +2615,7 @@ fn tick_pleb_activity(
                 send_pleb_to(
                     pleb,
                     grid,
+                    wall_data,
                     terrain,
                     adj,
                     PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Dehydrated!"),
@@ -2583,6 +2633,7 @@ fn tick_pleb_activity(
             send_pleb_to(
                 pleb,
                 grid,
+                wall_data,
                 terrain,
                 (bx, by),
                 PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Exhausted!"),
@@ -2601,6 +2652,7 @@ fn tick_pleb_activity(
             send_pleb_to(
                 pleb,
                 grid,
+                wall_data,
                 terrain,
                 (bx, by),
                 PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Freezing!"),
@@ -2629,6 +2681,7 @@ fn tick_pleb_activity(
             send_pleb_to(
                 pleb,
                 grid,
+                wall_data,
                 terrain,
                 target,
                 PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Overheating!"),
@@ -2657,7 +2710,7 @@ fn tick_pleb_activity(
                 }
                 if let Some((bx, by, _)) = best_berry {
                     let start = (px, py);
-                    let path = astar_path_terrain(grid, terrain, start, (bx, by));
+                    let path = astar_path_terrain_wd(grid, wall_data, terrain, start, (bx, by));
                     if !path.is_empty() {
                         pleb.path = path;
                         pleb.path_idx = 0;
@@ -2680,7 +2733,7 @@ fn tick_pleb_activity(
                         pleb.work_target = Some((wx, wy));
                     } else {
                         let adj = adjacent_walkable(grid, wx, wy).unwrap_or((wx, wy));
-                        send_pleb_to(pleb, grid, terrain, adj, PlebActivity::Walking);
+                        send_pleb_to(pleb, grid, wall_data, terrain, adj, PlebActivity::Walking);
                         pleb.work_target = Some((wx, wy));
                     }
                 }
@@ -2695,7 +2748,14 @@ fn tick_pleb_activity(
                         pleb.path.clear();
                         pleb.path_idx = 0;
                     } else if let Some((bx, by)) = env.nearest_bed {
-                        send_pleb_to(pleb, grid, terrain, (bx, by), PlebActivity::Walking);
+                        send_pleb_to(
+                            pleb,
+                            grid,
+                            wall_data,
+                            terrain,
+                            (bx, by),
+                            PlebActivity::Walking,
+                        );
                     }
                 }
             } else if pleb.needs.hunger < 0.4 && pleb.inventory.count_of(ITEM_BERRIES) == 0 {
@@ -2708,7 +2768,14 @@ fn tick_pleb_activity(
                     }
                 } else if pleb.harvest_target.is_none() {
                     if let Some((bx, by)) = env.nearest_berry_bush {
-                        send_pleb_to(pleb, grid, terrain, (bx, by), PlebActivity::Walking);
+                        send_pleb_to(
+                            pleb,
+                            grid,
+                            wall_data,
+                            terrain,
+                            (bx, by),
+                            PlebActivity::Walking,
+                        );
                     }
                 }
             }
@@ -2720,12 +2787,13 @@ fn tick_pleb_activity(
 fn send_pleb_to(
     pleb: &mut Pleb,
     grid: &[u32],
+    wall_data: &[u16],
     terrain: &[u32],
     target: (i32, i32),
     activity: PlebActivity,
 ) -> bool {
     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-    let path = astar_path_terrain(grid, terrain, start, target);
+    let path = astar_path_terrain_wd(grid, wall_data, terrain, start, target);
     if !path.is_empty() {
         pleb.path = path;
         pleb.path_idx = 0;
