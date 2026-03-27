@@ -39,6 +39,11 @@ Early-stage design exploration. Not commitments — creative brainstorming for f
 | `SPRITES.md` | Practical sprite design: what needs sprites, production approaches |
 | `WALLS_AND_GROUND.md` | Wall and ground rendering assessment — procedural vs sprites |
 | `MULTI_LEVEL.md` | Underground levels: depth as escalating difficulty, fluid coupling, UX |
+| `CHARACTER_VISUALS.md` | Character visual ideas: wear, emotes, relationships, scars, paper doll |
+| `GAMEPLAY_SYSTEMS.md` | Day/night, weather events, sound, ruins, trade, seasons, fire, reputation, music, animals |
+| `DEEPER_SYSTEMS.md` | Food/cooking, medicine, knowledge/oral tradition, psychology, aesthetics, mapping, comms, endgame |
+| `PHILOSOPHY.md` | Design philosophy: permanence, silence, loneliness, scarcity as teacher, the colony as character |
+| `COMBAT.md` | Real-time tactical combat: RTwP, breaching, cover, suppression, weapons, enemy AI, wounds |
 
 ## Reference (`fluid_mechanics/`)
 
