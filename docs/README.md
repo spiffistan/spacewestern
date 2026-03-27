@@ -25,6 +25,7 @@ Numbered technical documents for specific architectural decisions. Format: `DN-N
 | `DN-006-subgrid-system-implications.md` | Proposed | Full audit of every system affected by the sub-grid architecture |
 | `DN-007-building-patterns.md` | Analysis | Allowed building patterns with thin walls — corners, T-junctions, double walls |
 | `DN-008-three-layer-world-model.md` | Proposed | Three-layer architecture: wall edges, blocks, surface items |
+| `DN-009-pleb-sprites.md` | Proposed | Layered sprite compositing for colonist rendering |
 
 ## Ideas (`ideas/`)
 
