@@ -1200,6 +1200,22 @@ impl App {
                 self.fluid_params.splat_active = 1.0;
 
                 events.push(GameEventKind::Explosion(expl.x, expl.y));
+
+                // Blow open nearby doors
+                for door in &mut self.doors {
+                    if door.locked {
+                        continue;
+                    }
+                    let dx = door.x as f32 + 0.5 - expl.x;
+                    let dy = door.y as f32 + 0.5 - expl.y;
+                    let dist = (dx * dx + dy * dy).sqrt().max(0.5);
+                    if dist > radius {
+                        continue;
+                    }
+                    let impulse = force * (1.0 - dist / radius) / dist.max(0.5);
+                    // Push toward open (positive angular velocity)
+                    door.angular_vel += impulse * 0.5;
+                }
             }
         }
 
