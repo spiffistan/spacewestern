@@ -1569,25 +1569,54 @@ impl App {
                     }
                 }
                 BuildTool::Door => {
-                    // Door: replaces wall blocks with door
-                    if bt_is!(
-                        bt,
-                        BT_STONE,
-                        BT_GLASS,
-                        BT_INSULATED,
-                        BT_WOOD_WALL,
-                        BT_STEEL_WALL,
-                        BT_SANDSTONE,
-                        BT_GRANITE,
-                        BT_LIMESTONE
-                    ) && block_height_rs(block) as u32 > 0
-                    {
-                        let roof_h = block & 0xFF000000;
-                        // Door: height 1, flag bit0=is_door, starts closed (bit2=0)
-                        self.grid_data[idx] = make_block(4, 1, 1) | roof_h;
-                        self.grid_dirty = true;
-                        log::info!("Placed door at ({}, {})", bx, by);
-                        self.build_tool = BuildTool::None;
+                    // Door: place on a wall_data edge tile
+                    let wd = if idx < self.wall_data.len() {
+                        self.wall_data[idx]
+                    } else {
+                        0
+                    };
+                    let has_wall_edges = wd_edges(wd) != 0;
+                    // Also accept legacy wall blocks
+                    let legacy_wall = is_wall_block(bt) && block_height_rs(block) as u32 > 0;
+                    if has_wall_edges || legacy_wall {
+                        // Already has a door here? Skip
+                        if (wd & WD_HAS_DOOR) != 0
+                            || self.doors.iter().any(|d| d.x == bx && d.y == by)
+                        {
+                            // Already has door
+                        } else if self.doors.len() >= MAX_DOORS {
+                            log::warn!("Max doors ({}) reached", MAX_DOORS);
+                        } else {
+                            // Determine edge: pick first edge with a wall
+                            let edges = wd_edges(wd);
+                            let edge = if edges & WD_EDGE_N as u16 != 0 {
+                                0u8
+                            } else if edges & WD_EDGE_E as u16 != 0 {
+                                1
+                            } else if edges & WD_EDGE_S as u16 != 0 {
+                                2
+                            } else {
+                                3
+                            };
+                            let material = wd_material(wd) as u8;
+                            // Hinge side: default 0 (left), R key flips
+                            let hinge_side = (self.build_rotation & 1) as u8;
+                            let door = Door::new(bx, by, edge, hinge_side, material);
+                            self.doors.push(door);
+                            // Set WD_HAS_DOOR in wall_data
+                            if idx < self.wall_data.len() {
+                                self.wall_data[idx] |= WD_HAS_DOOR;
+                            }
+                            self.grid_dirty = true;
+                            log::info!(
+                                "Placed door at ({}, {}) edge={} hinge={}",
+                                bx,
+                                by,
+                                edge,
+                                hinge_side
+                            );
+                            self.build_tool = BuildTool::None;
+                        }
                     }
                 }
                 BuildTool::RemoveFloor => {
