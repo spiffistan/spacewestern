@@ -37,6 +37,7 @@ Early-stage design exploration. Not commitments — creative brainstorming for f
 | `ARTSTYLE.md` | Six art direction options (Dust & Iron, Moebius, Dime Novel, etc.) |
 | `SPRITES.md` | Practical sprite design: what needs sprites, production approaches |
 | `WALLS_AND_GROUND.md` | Wall and ground rendering assessment — procedural vs sprites |
+| `MULTI_LEVEL.md` | Underground levels: depth as escalating difficulty, fluid coupling, UX |
 
 ## Reference (`fluid_mechanics/`)
 
