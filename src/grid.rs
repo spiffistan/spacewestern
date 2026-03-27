@@ -273,50 +273,20 @@ pub fn wd_has_edge(wd: u16, edge: u8) -> bool {
 }
 
 /// Check if crossing from (ax,ay) to (bx,by) is blocked by wall_data.
-pub fn wd_edge_blocked(wall_data: &[u16], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
-    let dx = bx - ax;
-    let dy = by - ay;
-    let dir_a = if dy < 0 {
-        0u8
-    } else if dx > 0 {
-        1
-    } else if dy > 0 {
-        2
-    } else {
-        3
-    };
-    let dir_b = (dir_a + 2) % 4;
-    let gw = GRID_W as i32;
-    let gh = GRID_H as i32;
-
-    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
-        let wd = wall_data[(ay as u32 * GRID_W + ax as u32) as usize];
-        if wd != 0 {
-            let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
-            if !is_open_door && wd_has_edge(wd, dir_a) {
-                return true;
-            }
-        }
-    }
-    if bx >= 0 && by >= 0 && bx < gw && by < gh {
-        let wd = wall_data[(by as u32 * GRID_W + bx as u32) as usize];
-        if wd != 0 {
-            let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
-            if !is_open_door && wd_has_edge(wd, dir_b) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Like wd_edge_blocked but treats ALL doors as passable (for pathfinding — pleb will open doors).
-pub fn wd_edge_blocked_ignore_doors(wall_data: &[u16], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+/// When `doors_passable` is true, all door edges are treated as open (for pathfinding).
+fn wd_edge_blocked_inner(
+    wall_data: &[u16],
+    ax: i32,
+    ay: i32,
+    bx: i32,
+    by: i32,
+    doors_passable: bool,
+) -> bool {
     if wall_data.is_empty() {
         return false;
     }
-    let dx = bx - ax;
     let dy = by - ay;
+    let dx = bx - ax;
     let dir_a = if dy < 0 {
         0u8
     } else if dx > 0 {
@@ -329,26 +299,41 @@ pub fn wd_edge_blocked_ignore_doors(wall_data: &[u16], ax: i32, ay: i32, bx: i32
     let dir_b = (dir_a + 2) % 4;
     let gw = GRID_W as i32;
     let gh = GRID_H as i32;
-    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
-        let idx = (ay as u32 * GRID_W + ax as u32) as usize;
+
+    let blocks = |x: i32, y: i32, dir: u8| -> bool {
+        if x < 0 || y < 0 || x >= gw || y >= gh {
+            return false;
+        }
+        let idx = (y as u32 * GRID_W + x as u32) as usize;
         if idx >= wall_data.len() {
             return false;
         }
         let wd = wall_data[idx];
-        if wd != 0 && (wd & WD_HAS_DOOR) == 0 && wd_has_edge(wd, dir_a) {
-            return true;
+        if wd == 0 || !wd_has_edge(wd, dir) {
+            return false;
         }
-    }
-    if bx >= 0 && by >= 0 && bx < gw && by < gh {
-        let idx = (by as u32 * GRID_W + bx as u32) as usize;
-        if idx < wall_data.len() {
-            let wd = wall_data[idx];
-            if wd != 0 && (wd & WD_HAS_DOOR) == 0 && wd_has_edge(wd, dir_b) {
-                return true;
+        let has_door = (wd & WD_HAS_DOOR) != 0;
+        if has_door {
+            if doors_passable {
+                return false;
             }
+            let is_open = (wd & WD_DOOR_OPEN) != 0;
+            return !is_open;
         }
-    }
-    false
+        true
+    };
+
+    blocks(ax, ay, dir_a) || blocks(bx, by, dir_b)
+}
+
+/// Check if crossing is blocked by wall_data (closed doors block).
+pub fn wd_edge_blocked(wall_data: &[u16], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    wd_edge_blocked_inner(wall_data, ax, ay, bx, by, false)
+}
+
+/// Check if crossing is blocked by wall_data (all doors passable, for pathfinding).
+pub fn wd_edge_blocked_ignore_doors(wall_data: &[u16], ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    wd_edge_blocked_inner(wall_data, ax, ay, bx, by, true)
 }
 
 /// Extract wall_data from the block grid (migration from legacy encoding).
@@ -454,6 +439,37 @@ impl Door {
     }
 }
 
+/// Returns the first set edge direction (0=N, 1=E, 2=S, 3=W) from wall_data, or 0 if none.
+pub fn wd_first_edge(wd: u16) -> u8 {
+    let edges = wd_edges(wd);
+    if edges & WD_EDGE_N != 0 {
+        0
+    } else if edges & WD_EDGE_E != 0 {
+        1
+    } else if edges & WD_EDGE_S != 0 {
+        2
+    } else {
+        3
+    }
+}
+
+/// Does this wall_data tile block movement? Full-thickness walls with any edge block.
+/// Doors are passable when `doors_passable` is true.
+pub fn wd_blocks_movement(wd: u16, doors_passable: bool) -> bool {
+    let edges = wd_edges(wd);
+    if edges == 0 {
+        return false;
+    }
+    let has_door = (wd & WD_HAS_DOOR) != 0;
+    if has_door && doors_passable {
+        return false;
+    }
+    if has_door && (wd & WD_DOOR_OPEN) != 0 {
+        return false;
+    }
+    edges == 0xF || wd_thickness(wd) >= 4
+}
+
 /// Scan wall_data for tiles with WD_HAS_DOOR and create Door structs.
 /// Used after world generation to populate the doors list.
 pub fn extract_doors_from_wall_data(wall_data: &[u16]) -> Vec<Door> {
@@ -465,17 +481,7 @@ pub fn extract_doors_from_wall_data(wall_data: &[u16]) -> Vec<Door> {
         }
         let x = (i % GRID_W as usize) as i32;
         let y = (i / GRID_W as usize) as i32;
-        let edges = wd & WD_EDGE_MASK;
-        // Determine which edge the door is on (pick first set edge)
-        let edge = if edges & WD_EDGE_N != 0 {
-            0
-        } else if edges & WD_EDGE_E != 0 {
-            1
-        } else if edges & WD_EDGE_S != 0 {
-            2
-        } else {
-            3
-        };
+        let edge = wd_first_edge(wd);
         let material = wd_material(wd) as u8;
         let is_open = (wd & WD_DOOR_OPEN) != 0;
         let mut door = Door::new(x, y, edge, 0, material);

@@ -1587,17 +1587,7 @@ impl App {
                         } else if self.doors.len() >= MAX_DOORS {
                             log::warn!("Max doors ({}) reached", MAX_DOORS);
                         } else {
-                            // Determine edge: pick first edge with a wall
-                            let edges = wd_edges(wd);
-                            let edge = if edges & WD_EDGE_N as u16 != 0 {
-                                0u8
-                            } else if edges & WD_EDGE_E as u16 != 0 {
-                                1
-                            } else if edges & WD_EDGE_S as u16 != 0 {
-                                2
-                            } else {
-                                3
-                            };
+                            let edge = wd_first_edge(wd);
                             let material = wd_material(wd) as u8;
                             // Hinge side: default 0 (left), R key flips
                             let hinge_side = (self.build_rotation & 1) as u8;

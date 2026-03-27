@@ -26,7 +26,7 @@ use sprites::generate_tree_sprites;
 mod pleb;
 use pleb::{
     GpuPleb, MAX_PLEBS, MentalBreakKind, Pleb, PlebActivity, PlebShift, adjacent_walkable,
-    astar_path_terrain, astar_path_terrain_wd, is_walkable_pos, is_walkable_pos_wd, random_name,
+    astar_path_terrain_wd, is_walkable_pos, is_walkable_pos_wd, random_name,
 };
 
 mod needs;
@@ -207,7 +207,8 @@ struct App {
     show_schedule: bool,                                // show shift schedule window
     show_priorities: bool,                              // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
-    doors: Vec<Door>, // physical hinged doors (replaces auto_doors)
+    doors: Vec<Door>,  // physical hinged doors
+    doors_dirty: bool, // door angles changed, re-upload door_buffer
     physics_bodies: Vec<PhysicsBody>,
     ground_items: Vec<resources::GroundItem>,
     blueprints: std::collections::HashMap<(i32, i32), Blueprint>,
@@ -568,6 +569,7 @@ impl App {
             show_priorities: false,
             pressed_keys: std::collections::HashSet::new(),
             doors: Vec::new(),
+            doors_dirty: false,
             physics_bodies: Vec::new(),
             ground_items: Vec::new(),
             blueprints: std::collections::HashMap::new(),
@@ -1585,23 +1587,27 @@ impl App {
             }
             gfx.queue
                 .write_buffer(&gfx.wall_buffer, 0, bytemuck::cast_slice(&self.wall_data));
-            // Upload door data
-            let mut door_gpu = vec![self.doors.len() as u32];
+            self.grid_dirty = false;
+            self.doors_dirty = true; // wall_data changed, refresh doors too
+            self.pipe_network.rebuild(&self.grid_data);
+            self.liquid_network
+                .rebuild_with(&self.grid_data, pipes::is_liquid_pipe_component);
+        }
+
+        // Upload door angles (tiny buffer, independent of grid rebuild)
+        if self.doors_dirty {
+            let buf_len = MAX_DOORS * 2 + 1;
+            let mut door_gpu = Vec::with_capacity(buf_len);
+            door_gpu.push(self.doors.len() as u32);
             for door in &self.doors {
                 let packed = door.pack_gpu();
                 door_gpu.push(packed[0]);
                 door_gpu.push(packed[1]);
             }
-            // Pad to minimum buffer size
-            while door_gpu.len() < MAX_DOORS * 2 + 1 {
-                door_gpu.push(0);
-            }
+            door_gpu.resize(buf_len, 0);
             gfx.queue
                 .write_buffer(&gfx.door_buffer, 0, bytemuck::cast_slice(&door_gpu));
-            self.grid_dirty = false;
-            self.pipe_network.rebuild(&self.grid_data);
-            self.liquid_network
-                .rebuild_with(&self.grid_data, pipes::is_liquid_pipe_component);
+            self.doors_dirty = false;
         }
 
         // Re-upload terrain data if dirty (compaction changed)

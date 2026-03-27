@@ -109,7 +109,9 @@ impl App {
             self.camera.sun_intensity = intensity;
             // Shadow intensity: stronger at dawn/dusk (low sun = directional),
             // softer at noon (overhead = scattered). noon: 0→1→0 over the day.
-            self.camera.shadow_intensity = 0.9 - 0.4 * noon;
+            const SHADOW_DAWN_DUSK: f32 = 0.9;
+            const SHADOW_NOON_REDUCTION: f32 = 0.4;
+            self.camera.shadow_intensity = SHADOW_DAWN_DUSK - SHADOW_NOON_REDUCTION * noon;
             let dawn_col = [1.0f32, 0.55, 0.25];
             let noon_col = [1.0f32, 0.97, 0.90];
             let s = smoothstep_f32(0.0, 0.6, noon);
@@ -954,6 +956,13 @@ impl App {
             const WIND_TORQUE_SCALE: f32 = 0.008;
             const DOOR_DAMPING: f32 = 3.0;
             const LATCH_SPRING: f32 = 20.0;
+            const DOOR_PROXIMITY_SQ: f32 = 1.44; // 1.2^2
+            const DOOR_PUSH_IMPULSE: f32 = 3.0;
+            const DOOR_BOUNCE_RESTITUTION: f32 = 0.3;
+            const DOOR_SLAM_DB_BASE: f32 = 50.0;
+            const DOOR_SLAM_DB_FACTOR: f32 = 5.0;
+            const DOOR_SLAM_DB_MAX_BONUS: f32 = 30.0;
+            const DOOR_SLAM_VEL_THRESHOLD: f32 = 2.0;
 
             let wind_mag = self.camera.wind_magnitude;
             let wind_angle = self.camera.wind_angle;
@@ -966,10 +975,10 @@ impl App {
                 let door_cx = door.x as f32 + 0.5;
                 let door_cy = door.y as f32 + 0.5;
                 let pleb_nearby = pleb_positions.iter().any(|&(px, py)| {
-                    ((door_cx - px).powi(2) + (door_cy - py).powi(2)).sqrt() < 1.2
+                    (door_cx - px).powi(2) + (door_cy - py).powi(2) < DOOR_PROXIMITY_SQ
                 });
                 if pleb_nearby && !door.is_passable() && !door.locked {
-                    door.angular_vel += 3.0 * dt; // gentle push toward open
+                    door.angular_vel += DOOR_PUSH_IMPULSE * dt;
                 }
 
                 if door.locked {
@@ -1009,10 +1018,10 @@ impl App {
                 if door.angle <= 0.0 {
                     let slam_vel = door.angular_vel.abs();
                     door.angle = 0.0;
-                    door.angular_vel = (-door.angular_vel * 0.3).max(0.0); // slight bounce
-                    // Slam sound
-                    if slam_vel > 2.0 && self.sound_enabled {
-                        let db = 50.0 + (slam_vel * 5.0).min(30.0);
+                    door.angular_vel = (-door.angular_vel * DOOR_BOUNCE_RESTITUTION).max(0.0);
+                    if slam_vel > DOOR_SLAM_VEL_THRESHOLD && self.sound_enabled {
+                        let db = DOOR_SLAM_DB_BASE
+                            + (slam_vel * DOOR_SLAM_DB_FACTOR).min(DOOR_SLAM_DB_MAX_BONUS);
                         self.sound_sources.push(SoundSource {
                             x: door_cx,
                             y: door_cy,
@@ -1029,19 +1038,23 @@ impl App {
                     door.angular_vel = 0.0; // wall stop
                 }
 
-                // Sync WD_DOOR_OPEN bit for backward compat (gas, pathfinding, sound shaders)
+                // Sync WD_DOOR_OPEN bit — only set grid_dirty if it actually changed
                 let didx = (door.y as u32 * GRID_W + door.x as u32) as usize;
                 if didx < self.wall_data.len() {
-                    if door.is_passable() {
-                        self.wall_data[didx] |= WD_DOOR_OPEN;
-                    } else {
-                        self.wall_data[didx] &= !WD_DOOR_OPEN;
+                    let was_open = (self.wall_data[didx] & WD_DOOR_OPEN) != 0;
+                    let now_open = door.is_passable();
+                    if was_open != now_open {
+                        if now_open {
+                            self.wall_data[didx] |= WD_DOOR_OPEN;
+                        } else {
+                            self.wall_data[didx] &= !WD_DOOR_OPEN;
+                        }
+                        self.grid_dirty = true;
                     }
                 }
             }
-            if !self.doors.is_empty() {
-                self.grid_dirty = true; // wall_data changed, re-upload
-            }
+            // Always upload door angles for rendering (tiny buffer, no grid rebuild needed)
+            self.doors_dirty = !self.doors.is_empty();
         }
 
         // Update camera uniform with selected pleb (for backward compat with single-pleb shader)

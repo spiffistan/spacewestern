@@ -385,16 +385,8 @@ pub fn is_walkable_pos_wd(grid: &[u32], wall_data: &[u16], x: f32, y: f32) -> bo
             return false;
         }
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
-        // Wall_data: full-thickness walls block movement (any edge with thickness >= 4 fills whole tile)
-        if idx < wall_data.len() {
-            let wd = wall_data[idx];
-            let edges = wd_edges(wd);
-            if edges != 0 {
-                let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
-                if !is_open_door && (edges == 0xF || wd_thickness(wd) >= 4) {
-                    return false;
-                }
-            }
+        if idx < wall_data.len() && wd_blocks_movement(wall_data[idx], false) {
+            return false;
         }
         let b = grid[idx];
         let bt = b & 0xFF;
@@ -512,17 +504,9 @@ pub fn astar_path_wd(
             return false;
         }
         let idx = (y as u32 * GRID_W + x as u32) as usize;
-        // Wall_data: full-thickness walls block (any edge with thickness >= 4 fills whole tile)
-        // Doors are always passable for pathfinding (pleb will push them open)
-        if idx < wall_data.len() {
-            let wd = wall_data[idx];
-            let edges = wd_edges(wd);
-            if edges != 0 {
-                let has_door = (wd & WD_HAS_DOOR) != 0;
-                if !has_door && (edges == 0xF || wd_thickness(wd) >= 4) {
-                    return false;
-                }
-            }
+        // Doors passable for pathfinding (pleb will push them open)
+        if idx < wall_data.len() && wd_blocks_movement(wall_data[idx], true) {
+            return false;
         }
         let b = grid[idx];
         let bt = b & 0xFF;
