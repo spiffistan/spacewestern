@@ -182,6 +182,14 @@ impl App {
         });
         queue.write_buffer(&wall_buffer, 0, bytemuck::cast_slice(&self.wall_data));
 
+        // Door data buffer (MAX_DOORS * 2 u32 + 1 count u32)
+        let door_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("door-data"),
+            size: ((MAX_DOORS * 2 + 1) * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Pleb storage buffer (up to MAX_PLEBS, updated each frame)
         let pleb_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pleb-buffer"),
@@ -1685,6 +1693,16 @@ impl App {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 25,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1987,6 +2005,10 @@ impl App {
                     resource: wall_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
+                    binding: 25,
+                    resource: door_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(&fv_dye_a),
                 },
@@ -2091,6 +2113,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 24,
                     resource: wall_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 25,
+                    resource: door_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -2199,6 +2225,10 @@ impl App {
                     resource: wall_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
+                    binding: 25,
+                    resource: door_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(&fv_dye_b),
                 },
@@ -2303,6 +2333,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 24,
                     resource: wall_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 25,
+                    resource: door_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -3049,6 +3083,7 @@ impl App {
             elevation_buffer,
             terrain_buffer,
             wall_buffer,
+            door_buffer,
             voltage_buffer,
             pipe_flow_buffer,
             power_pipeline: power_pipeline_val,

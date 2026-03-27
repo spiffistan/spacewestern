@@ -330,6 +330,7 @@ struct GfxState {
     elevation_buffer: wgpu::Buffer,
     terrain_buffer: wgpu::Buffer,
     wall_buffer: wgpu::Buffer, // u16 per tile: wall edges, thickness, material (DN-008)
+    door_buffer: wgpu::Buffer, // physical door data for raytrace (binding 25)
     // Power grid
     voltage_buffer: wgpu::Buffer,
     power_pipeline: wgpu::ComputePipeline,
@@ -896,6 +897,10 @@ impl App {
                         resource: gfx.wall_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
+                        binding: 25,
+                        resource: gfx.door_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(&fv_dye_a),
                     },
@@ -1003,6 +1008,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 24,
                         resource: gfx.wall_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 25,
+                        resource: gfx.door_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 6,
@@ -1114,6 +1123,10 @@ impl App {
                         resource: gfx.wall_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
+                        binding: 25,
+                        resource: gfx.door_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(&fv_dye_b),
                     },
@@ -1221,6 +1234,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 24,
                         resource: gfx.wall_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 25,
+                        resource: gfx.door_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 6,
@@ -1567,6 +1584,19 @@ impl App {
             }
             gfx.queue
                 .write_buffer(&gfx.wall_buffer, 0, bytemuck::cast_slice(&self.wall_data));
+            // Upload door data
+            let mut door_gpu = vec![self.doors.len() as u32];
+            for door in &self.doors {
+                let packed = door.pack_gpu();
+                door_gpu.push(packed[0]);
+                door_gpu.push(packed[1]);
+            }
+            // Pad to minimum buffer size
+            while door_gpu.len() < MAX_DOORS * 2 + 1 {
+                door_gpu.push(0);
+            }
+            gfx.queue
+                .write_buffer(&gfx.door_buffer, 0, bytemuck::cast_slice(&door_gpu));
             self.grid_dirty = false;
             self.pipe_network.rebuild(&self.grid_data);
             self.liquid_network

@@ -91,6 +91,7 @@ struct Camera {
 @group(0) @binding(22) var fog_sampler: sampler;
 @group(0) @binding(23) var<storage, read> terrain_buf: array<u32>;
 @group(0) @binding(24) var<storage, read> wall_buf: array<u32>; // u16 packed as u32 pairs
+@group(0) @binding(25) var<storage, read> door_buf: array<u32>; // [count, w0, angle, w0, angle, ...]
 
 // --- Wall data helpers (DN-008 wall edge layer) ---
 // wall_buf stores u16 per tile packed as u32 (two tiles per u32 entry).
@@ -148,6 +149,97 @@ fn wd_pixel_is_wall(fx: f32, fy: f32, wd: u32) -> bool {
     if (edges & 4u) != 0u && edge_covers_pixel(fx, fy, 2u, wall_frac) { return true; }
     if (edges & 8u) != 0u && edge_covers_pixel(fx, fy, 3u, wall_frac) { return true; }
     return false;
+}
+
+// --- Physical door rendering (DN-009) ---
+// Door data: door_buf[0] = count, then pairs of (packed_w0, angle_bits)
+struct DoorInfo {
+    edge: u32,
+    hinge_side: u32,
+    angle: f32,
+    material: u32,
+    found: bool,
+};
+
+fn find_door(tx: u32, ty: u32) -> DoorInfo {
+    let count = min(door_buf[0], 64u);
+    for (var i = 0u; i < count; i++) {
+        let w0 = door_buf[1u + i * 2u];
+        let dx = w0 & 0xFFu;
+        let dy = (w0 >> 8u) & 0xFFu;
+        if dx == tx && dy == ty {
+            return DoorInfo(
+                (w0 >> 16u) & 3u,
+                (w0 >> 18u) & 1u,
+                bitcast<f32>(door_buf[2u + i * 2u]),
+                (w0 >> 20u) & 0xFu,
+                true
+            );
+        }
+    }
+    return DoorInfo(0u, 0u, 0.0, 0u, false);
+}
+
+// Door geometry constants
+const DOOR_JAMB_FRAC: f32 = 0.15;  // each jamb = 15% of tile width
+const DOOR_GAP_FRAC: f32 = 0.70;   // doorway = 70% of tile width
+const DOOR_LEAF_THICK: f32 = 0.06;  // leaf thickness
+
+// Render a door pixel. Returns vec4(color, 1.0) if on door/jamb, vec4(0) if gap.
+fn render_door(fx: f32, fy: f32, wd: u32, door: DoorInfo) -> vec4<f32> {
+    let wall_frac = f32(wd_thickness_s(wd)) * 0.25;
+    let edge = door.edge;
+
+    // Transform to edge-local: u=along edge(0..1), v=into wall(0..wall_frac)
+    var u: f32; var v: f32;
+    if edge == 0u { u = fx; v = fy; }                       // N: wall at top
+    else if edge == 1u { u = fy; v = 1.0 - fx; }            // E: wall at right
+    else if edge == 2u { u = 1.0 - fx; v = 1.0 - fy; }     // S: wall at bottom
+    else { u = 1.0 - fy; v = fx; }                          // W: wall at left
+
+    // Only render within the wall strip
+    if v > wall_frac { return vec4<f32>(0.0); }
+
+    let wall_color = wall_material_color(wd_material_s(wd));
+    let door_color = vec3<f32>(0.45, 0.32, 0.18); // wood brown
+
+    // Jambs: solid wall material at edges
+    if u < DOOR_JAMB_FRAC || u > (1.0 - DOOR_JAMB_FRAC) {
+        return vec4<f32>(wall_color, 1.0);
+    }
+
+    // Door leaf: rotated line from hinge
+    let gap_start = DOOR_JAMB_FRAC;
+    let gap_width = DOOR_GAP_FRAC;
+    let hinge_u = select(gap_start, gap_start + gap_width, door.hinge_side == 1u);
+    let hinge_v = wall_frac * 0.5;
+
+    // Leaf endpoint after rotation
+    let swing = select(1.0, -1.0, door.hinge_side == 1u);
+    let leaf_end_u = hinge_u + swing * cos(door.angle) * gap_width;
+    let leaf_end_v = hinge_v + sin(door.angle) * gap_width;
+
+    // Distance from pixel to line segment (hinge → leaf_end)
+    let seg_du = leaf_end_u - hinge_u;
+    let seg_dv = leaf_end_v - hinge_v;
+    let seg_len_sq = seg_du * seg_du + seg_dv * seg_dv;
+    let pu = u - hinge_u;
+    let pv = v - hinge_v;
+    let t = clamp((pu * seg_du + pv * seg_dv) / max(seg_len_sq, 0.0001), 0.0, 1.0);
+    let closest_u = hinge_u + t * seg_du;
+    let closest_v = hinge_v + t * seg_dv;
+    let dist = length(vec2<f32>(u - closest_u, v - closest_v));
+
+    if dist < DOOR_LEAF_THICK * 0.5 {
+        // On the door leaf
+        // Slight darkening toward edges for depth
+        let edge_t = abs(t - 0.5) * 2.0;
+        let leaf_color = door_color * (0.85 + 0.15 * (1.0 - edge_t));
+        return vec4<f32>(leaf_color, 1.0);
+    }
+
+    // In the gap (floor visible)
+    return vec4<f32>(0.0);
 }
 
 // Wall material color table (indexed by wd_material_s)
@@ -2456,19 +2548,44 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- Wall data layer (DN-008): check if this tile has walls from wall_buf ---
     let wd_idx = u32(by) * u32(camera.grid_w) + u32(bx);
     let wd = read_wall_data(wd_idx);
-    let wd_is_wall_pixel = wd_pixel_is_wall(fx, fy, wd);
+
+    // Physical door check: if this tile has a door, use door rendering
+    var is_door_pixel = false;
+    var is_door_gap = false;
+    var door_pixel_color = vec3<f32>(0.0);
+    if wd_has_door(wd) {
+        let door_info = find_door(u32(bx), u32(by));
+        if door_info.found {
+            let door_result = render_door(fx, fy, wd, door_info);
+            if door_result.w > 0.5 {
+                is_door_pixel = true;
+                door_pixel_color = door_result.xyz;
+            } else {
+                // Check if we're in the wall strip but in the gap
+                let wall_frac = f32(wd_thickness_s(wd)) * 0.25;
+                var in_strip = false;
+                let edge = door_info.edge;
+                if edge == 0u && fy < wall_frac { in_strip = true; }
+                else if edge == 1u && fx > (1.0 - wall_frac) { in_strip = true; }
+                else if edge == 2u && fy > (1.0 - wall_frac) { in_strip = true; }
+                else if edge == 3u && fx < wall_frac { in_strip = true; }
+                if in_strip { is_door_gap = true; }
+            }
+        }
+    }
+
+    let wd_is_wall_pixel = wd_pixel_is_wall(fx, fy, wd) && !is_door_gap;
 
     // If the wall_data says this pixel is wall, override effective height for shadows
     // and set a flag for the renderer to use wall material color instead of block color.
     var is_wd_wall = false;
     var wd_wall_height = 0.0;
-    if wd_is_wall_pixel {
+    if wd_is_wall_pixel || is_door_pixel {
         is_wd_wall = true;
         let wmat = wd_material_s(wd);
         wd_wall_height = wall_material_height(wmat);
         // Override block height so shadows/oblique work correctly
         if bheight == 0u || !matches_wall_type(btype) {
-            // The underlying block has no height (floor/furniture) — use wall height
             bheight = u32(wd_wall_height);
             bheight_raw = bheight;
             fheight = wd_wall_height;
@@ -3815,7 +3932,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = crop_color;
     } else {
         // Wall rendering: check wall_data layer first (DN-008), fall back to legacy block
-        if is_wd_wall {
+        if is_door_pixel {
+            // Physical door: jamb or leaf color
+            color = door_pixel_color;
+        } else if is_wd_wall {
             // Wall pixel from wall_data layer — use wall material color
             let wmat = wd_material_s(wd);
             color = wall_material_color(wmat);
