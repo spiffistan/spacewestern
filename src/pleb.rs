@@ -368,6 +368,10 @@ pub fn random_name(seed: u32) -> String {
 
 /// Check if a pleb can stand at continuous position (x, y) using 4-corner bounding box.
 pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
+    is_walkable_pos_wd(grid, &[], x, y)
+}
+
+pub fn is_walkable_pos_wd(grid: &[u32], wall_data: &[u16], x: f32, y: f32) -> bool {
     let r = 0.25;
     for &(cx, cy) in &[
         (x - r, y - r),
@@ -380,7 +384,19 @@ pub fn is_walkable_pos(grid: &[u32], x: f32, y: f32) -> bool {
         if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
             return false;
         }
-        let b = grid[(by as u32 * GRID_W + bx as u32) as usize];
+        let idx = (by as u32 * GRID_W + bx as u32) as usize;
+        // Wall_data: full-thickness walls block movement
+        if idx < wall_data.len() {
+            let wd = wall_data[idx];
+            let edges = wd_edges(wd);
+            if edges == 0xF {
+                let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
+                if !is_open_door {
+                    return false;
+                }
+            }
+        }
+        let b = grid[idx];
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
@@ -494,7 +510,20 @@ pub fn astar_path_wd(
         if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 {
             return false;
         }
-        let b = grid[(y as u32 * GRID_W + x as u32) as usize];
+        let idx = (y as u32 * GRID_W + x as u32) as usize;
+        // Wall_data: full-thickness walls (all 4 edges) block, unless open door
+        if idx < wall_data.len() {
+            let wd = wall_data[idx];
+            let edges = wd_edges(wd);
+            if edges == 0xF {
+                // Full wall — only passable if open door
+                let is_open_door = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
+                if !is_open_door {
+                    return false;
+                }
+            }
+        }
+        let b = grid[idx];
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
@@ -507,7 +536,6 @@ pub fn astar_path_wd(
             || bt32 == BT_LIQUID_PUMP
             || bt32 == BT_LIQUID_OUTPUT;
         let is_wire = is_wire_block(bt32);
-        // Thin walls: tile is walkable (has open sub-cells)
         let is_thin = is_wall_block(bt32) && bh > 0 && thin_wall_is_walkable(b);
         is_door
             || is_thin

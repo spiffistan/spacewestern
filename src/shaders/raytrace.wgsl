@@ -2208,14 +2208,21 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
 
         var effective_h = select(bh, 0.0, is_pipe_block || is_dug_block || is_crate_block || is_rock_block || is_wire_block || is_dimmer_block || is_breaker_block || is_plant_block || diag_open);
 
-        // Wall_data walls: check if this pixel is inside a wall (DN-008)
+        // Wall_data walls: check if ray is in a wall tile (DN-008)
         if bx >= 0 && by >= 0 && bx < i32(camera.grid_w) && by < i32(camera.grid_h) {
             let wd_idx = u32(by) * u32(camera.grid_w) + u32(bx);
             let shadow_wd = read_wall_data(wd_idx);
             if shadow_wd != 0u {
+                let shadow_edges = wd_edges_s(shadow_wd);
                 let shadow_sfx = fract(sx);
                 let shadow_sfy = fract(sy);
-                if wd_pixel_is_wall(shadow_sfx, shadow_sfy, shadow_wd) {
+                // Full walls (all 4 edges): entire tile is solid
+                if shadow_edges == 0xFu {
+                    let wmat = wd_material_s(shadow_wd);
+                    let wall_h = wall_material_height(wmat) + sample_elev;
+                    if wall_h > effective_h { effective_h = wall_h; }
+                } else if wd_pixel_is_wall(shadow_sfx, shadow_sfy, shadow_wd) {
+                    // Thin/partial walls: sub-pixel check
                     let wmat = wd_material_s(shadow_wd);
                     let wall_h = wall_material_height(wmat) + sample_elev;
                     if wall_h > effective_h { effective_h = wall_h; }

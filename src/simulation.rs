@@ -456,7 +456,7 @@ impl App {
             }
 
             // Unstick: if pleb is on a non-walkable tile, nudge to nearest walkable
-            if !is_walkable_pos(&self.grid_data, pleb.x, pleb.y) {
+            if !is_walkable_pos_wd(&self.grid_data, &self.wall_data, pleb.x, pleb.y) {
                 let bx = pleb.x.floor() as i32;
                 let by = pleb.y.floor() as i32;
                 if let Some((wx, wy)) = adjacent_walkable(&self.grid_data, bx, by) {
@@ -506,12 +506,12 @@ impl App {
                     let step_y = ndy * effective_speed * dt;
                     let nx = pleb.x + step_x;
                     let ny = pleb.y + step_y;
-                    if is_walkable_pos(&self.grid_data, nx, ny) {
+                    if is_walkable_pos_wd(&self.grid_data, &self.wall_data, nx, ny) {
                         pleb.x = nx;
                         pleb.y = ny;
-                    } else if is_walkable_pos(&self.grid_data, nx, pleb.y) {
+                    } else if is_walkable_pos_wd(&self.grid_data, &self.wall_data, nx, pleb.y) {
                         pleb.x = nx;
-                    } else if is_walkable_pos(&self.grid_data, pleb.x, ny) {
+                    } else if is_walkable_pos_wd(&self.grid_data, &self.wall_data, pleb.x, ny) {
                         pleb.y = ny;
                     }
 
@@ -891,7 +891,7 @@ impl App {
                 if pleb.knockback_vx.abs() + pleb.knockback_vy.abs() > 0.01 {
                     let kx = pleb.x + pleb.knockback_vx * dt;
                     let ky = pleb.y + pleb.knockback_vy * dt;
-                    if is_walkable_pos(&self.grid_data, kx, ky) {
+                    if is_walkable_pos_wd(&self.grid_data, &self.wall_data, kx, ky) {
                         pleb.x = kx;
                         pleb.y = ky;
                     }

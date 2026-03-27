@@ -26,7 +26,7 @@ use sprites::generate_tree_sprites;
 mod pleb;
 use pleb::{
     GpuPleb, MAX_PLEBS, MentalBreakKind, Pleb, PlebActivity, PlebShift, adjacent_walkable,
-    astar_path_terrain, is_walkable_pos, random_name,
+    astar_path_terrain, is_walkable_pos, is_walkable_pos_wd, random_name,
 };
 
 mod needs;
