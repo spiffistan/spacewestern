@@ -214,6 +214,8 @@ struct App {
     physics_bodies: Vec<PhysicsBody>,
     ground_items: Vec<resources::GroundItem>,
     blueprints: std::collections::HashMap<(i32, i32), Blueprint>,
+    game_hints: Vec<GameHint>,
+    active_hint_idx: Option<usize>, // hint being hovered → highlights active
     // Per-pleb air readback from fluid sim (updated one frame behind)
     pleb_air_data: Vec<AirReadback>,
     pleb_air_readback_pending: bool,
@@ -320,7 +322,7 @@ struct GfxState {
     output_textures: [wgpu::Texture; 2],
     camera_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
-    sprite_buffer: wgpu::Buffer,
+    sprite_buffer: wgpu::Buffer, // combined: trees + bushes
     material_buffer: wgpu::Buffer,
     pleb_buffer: wgpu::Buffer,
     block_temp_buffer: wgpu::Buffer,
@@ -588,6 +590,8 @@ impl App {
                 ]
             },
             blueprints: std::collections::HashMap::new(),
+            game_hints: Vec::new(),
+            active_hint_idx: None,
             pleb_air_data: Vec::new(),
             pleb_air_readback_pending: false,
             context_menu: None, // unified context menu
@@ -1463,6 +1467,11 @@ impl App {
         }
 
         let dt = self.update_simulation();
+
+        // Generate hints every 30 frames
+        if self.frame_count % 30 == 0 {
+            self.generate_hints();
+        }
 
         // WASD camera pan (always active)
         {

@@ -29,8 +29,10 @@ Sprites are rendered as **flat albedo only** (no baked lighting). The game's ray
 ### Render Settings
 - **Transparent background** (RGBA output, Film > Transparent in Cycles, or Alpha in Workbench)
 - PNG output with alpha channel
-- No anti-aliasing (nearest-neighbor scaling) or minimal AA for clean pixel edges
 - Color management: Standard (not Filmic) to preserve flat material colors
+- **Cavity** enabled: valley_factor=2.0, ridge_factor=0.3, type=BOTH. This darkens creases where canopy clusters overlap, giving depth separation without baking directional light.
+- **UV spheres** over icospheres — icosphere triangles create visible artifacts at 256px; UV sphere quads are smoother
+- **Per-face vertex colors** for texture variation — one noise sample per polygon center, not per-vertex (per-vertex loops crash Blender MCP at high vertex counts)
 
 ## What to Render
 
@@ -85,16 +87,19 @@ fiber.png
 
 ### Trees
 
-Blender-rendered sprites (256x256, 8 variants per species). Render with per-pixel height in alpha channel for shadow casting through canopy.
+Blender-rendered sprites (256x256, 8 species × 4 variants = 32 atlas entries). Each pixel packs albedo + height for shadow casting through canopy.
 
-Currently implemented: **conifer** (see `assets/blender/conifer.blend`). The Blender scene uses:
-- 5 layered cone meshes for foliage tiers (dark→light green gradient, base→tip)
-- Tapered cylinder trunk (dark brown bark)
-- **Vertex color painting** with multi-octave noise for per-pixel texture variation within each tier
-- **Vertex displacement** on foliage edges for organic/ragged needle-cluster silhouettes
-- Orthographic camera at **45° from vertical** (reveals layered tier structure)
-- Workbench renderer, flat shading, vertex color mode, transparent background
-- Per-variant randomization: foliage rotation + scale jitter (seed 42)
+**Species** (atlas slots):
+- **0: Conifer** (slots 0-3) — layered cones, dark→light green. Grass/rocky terrain.
+- **1: Oak** (slots 4-19) — round dome canopy from 11 overlapping UV sphere lobes, gnarled trunk with bark texture. 16 variants with canopy size ranging young→mature. See `docs/OAK_BUILD.md` for full build documentation. Grass/loam terrain.
+- **2: Scrub bush** (slots 8-11) — low wide lumps, no trunk. Chalky/gravel/rocky.
+- **3: Dead tree** (slots 12-15) — bare branches, sparse leaf tips. Peat/clay.
+- **4: Yucca** (slots 16-19) — forking arms, spiky clusters. Rocky/clay/gravel.
+- **5: Willow** (slots 20-23) — drooping dome + skirt canopy. Marsh/peat.
+- **6: Poplar** (slots 24-27) — tall narrow columnar. Loam/grass.
+- **7: Birch** (slots 28-31) — white trunk, sparse leaf clusters. Grass/loam.
+
+Atlas index formula: `sprites[(species * 4 + variant) * 256² + y * 256 + x]`
 
 **How in-game lighting works on sprites** (from `raytrace.wgsl`):
 1. `render_tree()` samples the sprite atlas → returns `vec4(albedo_rgb, height)`
@@ -103,13 +108,9 @@ Currently implemented: **conifer** (see `assets/blender/conifer.blend`). The Ble
 4. Shadow map uses the alpha/height channel to cast per-pixel shadows from canopy
 5. Proximity glow from nearby torches/lamps adds warm light to trunk and lower canopy
 6. `foliage_opacity` uniform controls canopy transparency (see-through mode)
-7. Per-tree `id_hash` tints color by ±15% for natural variation across the map
+7. Per-tree `id_hash` selects species+variant and tints color by ±15%
 
-This means the sprite only needs to carry **material color + height** — all lighting, shadows, day/night, and glow are computed in real-time by the shader.
-
-Render pipeline: `blender --background assets/blender/conifer.blend --python assets/blender/render_conifer.py`
-
-Output: `assets/sprites/conifer_atlas_256.bin` (2 MB, 8 variants × 256² × u32).
+Output: `assets/sprites/tree_atlas_all.bin` (8 MB, 32 entries × 256² × u32).
 
 ## Sprite Atlas Packing
 
@@ -121,7 +122,8 @@ Individual PNGs are packed into a sprite atlas — a single large buffer uploade
 sprites[variant * SPRITE_SIZE^2 + y * SPRITE_SIZE + x] = R | (G << 8) | (B << 16) | (HEIGHT << 24)
 ```
 
-- SPRITE_SIZE: 256 or 512 (upgrade from previous 16)
+- SPRITE_SIZE: 256
+- SPRITE_VARIANTS: 32 (8 species × 4 variants)
 - R, G, B: albedo color (0-255 each)
 - HEIGHT: normalized height above ground (0=transparent/ground, 1-255=height). Used for:
   - Determining if a pixel is part of the object (height > 0)
@@ -207,14 +209,12 @@ A Python script automates Blender render → atlas:
 ```
 assets/
   blender/
-    conifer.blend           # conifer tree model (5 foliage tiers + trunk, vertex colors, displaced edges)
-    render_conifer.py       # batch render: 8 variants × 256px → atlas.bin
-    pleb.blend              # character model + rig (future)
-    furniture.blend         # bench, bed, crate, etc. (future)
-    items.blend             # ground items (future)
+    conifer.blend           # conifer tree model (kept as template for future species .blend files)
+    render_conifer.py       # single-species batch render script (template)
   sprites/
-    raw/                    # individual rendered PNGs (albedo, height, final per variant)
-    conifer_atlas_256.bin   # packed sprite buffer (8 variants × 256×256 × u32 = 2 MB)
+    raw/                    # individual rendered PNGs + preview sheets
+    tree_atlas_all.bin      # packed sprite buffer (8 species × 4 variants × 256² × u32 = 8 MB)
+    conifer_atlas_256.bin   # single-species atlas (legacy, 2 MB)
     catalog.json            # sprite index — names → offsets (future)
 ```
 
