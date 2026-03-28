@@ -550,7 +550,7 @@ impl Blueprint {
             BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0, 0, 0, 2, 0),
             // --- Walls ---
             BT_WOOD_WALL => (4.0, 2, 0, 0, 0, 0), // raw logs, no saw needed
-            BT_MUD_WALL => (2.5, 0, 0, 0, 0, 0),  // auto-dug from ground, no material cost
+            BT_MUD_WALL => (1.2, 0, 0, 0, 0, 0),  // auto-dug from ground, no material cost
             BT_STONE | BT_WALL | BT_SANDSTONE | BT_GRANITE | BT_LIMESTONE => (3.0, 0, 0, 0, 3, 0),
             BT_GLASS => (3.0, 0, 0, 0, 2, 0),
             BT_INSULATED => (4.0, 0, 2, 2, 0, 0),

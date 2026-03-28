@@ -343,7 +343,7 @@ fn diag_dist_to_edge(fx: f32, fy: f32, variant: u32) -> f32 {
 }
 
 // --- Sprite constants ---
-const SPRITE_SIZE: u32 = 16u;
+const SPRITE_SIZE: u32 = 256u;
 const SPRITE_VARIANTS: u32 = 8u;
 
 // Sample a tree sprite. Returns vec4(r, g, b, height_normalized).
@@ -2055,25 +2055,22 @@ fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32, flags: u32) -> v
     let id_hash = fract(sin(tree_id) * 43758.5453);
     let variant = u32(id_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
 
-    // Full 360° continuous rotation
-    let rot_hash = fract(sin(tree_id * 1.7 + 5.3) * 27183.6142);
-    let angle = rot_hash * 6.2832; // full 360 degrees
-    var ru = sprite_u - 0.5;
-    var rv = sprite_v - 0.5;
-    let cos_a = cos(angle);
-    let sin_a = sin(angle);
-    let rotated_u = ru * cos_a - rv * sin_a;
-    let rotated_v = ru * sin_a + rv * cos_a;
-    ru = rotated_u;
-    rv = rotated_v;
-    let sprite = sample_sprite(variant, ru + 0.5, rv + 0.5);
+    // Flip V (Blender renders top-down, shader Y increases downward)
+    sprite_v = 1.0 - sprite_v;
 
-    if sprite.w < 0.01 {
-        // Transparent: show ground
-        return vec4<f32>(0.45, 0.35, 0.20, 0.0);
+    // Zoom in to make trees larger (show center 70% of sprite)
+    let zoom = 0.7;
+    let margin = (1.0 - zoom) * 0.5;
+    sprite_u = margin + sprite_u * zoom;
+    sprite_v = margin + sprite_v * zoom;
+
+    let sprite = sample_sprite(variant, sprite_u, sprite_v);
+
+    // Threshold high enough to reject anti-aliasing fringe from Blender render
+    if sprite.w < 0.05 {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    // Trunk vs canopy: trunk pixels are low height (< 0.4), canopy is high (> 0.5)
     let is_trunk = sprite.w < 0.4;
     let color = sprite.xyz * (0.85 + id_hash * 0.3);
     if is_trunk {
@@ -2852,8 +2849,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if btype == BT_TREE {
         // Tree: sprite-based rendering
         let tree_result = render_tree(world_x, world_y, fx, fy, bheight, bflags);
-        color = tree_result.xyz;
-        is_tree_pixel = tree_result.w > 0.01;
+        is_tree_pixel = tree_result.w > 0.04;
+        if is_tree_pixel {
+            color = tree_result.xyz;
+        } else {
+            // Transparent pixel: match exactly what a BT_DIRT tile would show
+            color = block_base_color(BT_DIRT, 0u);
+        }
     } else if btype == BT_BENCH {
         // Bench
         color = render_bench(fx, fy, bflags);
@@ -3305,8 +3307,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if btype == BT_BERRY_BUSH {
         // Berry bush: leafy mound with berries
         let bush_result = render_berry_bush(fx, fy, world_x, world_y, camera.time);
-        color = bush_result.xyz;
-        is_tree_pixel = bush_result.w > 0.01;
+        is_tree_pixel = bush_result.w > 0.05;
+        if is_tree_pixel {
+            color = bush_result.xyz;
+        } else {
+            color = block_base_color(BT_DIRT, 0u);
+        }
     } else if btype == BT_DUG_GROUND {
         // Dug ground: excavated pit, 20% per depth level (max 5 = one full block)
         let depth = f32(bheight); // 1-5, each = 20% of a block
@@ -3994,7 +4000,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- Procedural terrain detail (ground-level blocks only) ---
     // Replace this block with sprite sampling when migrating to sprites.
     let is_scorched_dirt = btype == BT_DIRT && (bflags & 1u) != 0u;
-    if camera.enable_terrain_detail > 0.5 && bheight == 0u && (btype == BT_DIRT || btype == BT_AIR) && !is_scorched_dirt {
+    let is_transparent_vegetation = (btype == BT_TREE || btype == BT_BERRY_BUSH) && !is_tree_pixel;
+    let is_ground_tile = btype == BT_DIRT || btype == BT_AIR || btype == BT_DUG_GROUND
+        || btype == BT_ROCK || is_transparent_vegetation;
+    if camera.enable_terrain_detail > 0.5 && (bheight == 0u || is_transparent_vegetation) && is_ground_tile && !is_scorched_dirt {
         // Dirt / air (ground): full terrain detail with grass, flowers, pebbles
         let td_idx = u32(by) * u32(camera.grid_w) + u32(bx);
         let td_wt = water_table_buf[td_idx];
@@ -4024,7 +4033,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Elevation visual cues (ground-level blocks only) ---
     // Uses bilinear-interpolated elevation for smooth gradients (no tile-edge jaggies).
-    if camera.enable_terrain_detail > 0.5 && bheight == 0u {
+    if camera.enable_terrain_detail > 0.5 && (bheight == 0u || is_transparent_vegetation) {
         let elev = sample_elevation(world_x, world_y);
 
         // 1. Altitude brightness: higher = lighter, lower = darker (topographic convention)
@@ -4080,8 +4089,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let water_level = textureLoad(water_tex, vec2<i32>(bx, by), 0).r;
     let wt_idx = u32(by) * 256u + u32(bx);
     let wt_depth = water_table_buf[wt_idx]; // negative = below ground, positive = spring
-    let is_ground_tile = btype == BT_DIRT || btype == BT_WOOD_FLOOR || btype == BT_STONE_FLOOR || btype == BT_CONCRETE_FLOOR || btype == BT_ROUGH_FLOOR || btype == BT_DUG_GROUND;
-    if is_ground_tile && effective_height == 0u {
+    let is_floor_tile = btype == BT_DIRT || btype == BT_WOOD_FLOOR || btype == BT_STONE_FLOOR || btype == BT_CONCRETE_FLOOR || btype == BT_ROUGH_FLOOR || btype == BT_DUG_GROUND;
+    if is_floor_tile && effective_height == 0u {
         // Water table coloring: subtle moisture for high water table (even without surface water)
         let wt_moisture = clamp((wt_depth + 1.5) / 2.0, 0.0, 0.5); // 0 at -1.5, 0.5 at +0.5
         if wt_moisture > 0.02 && water_level < 0.1 {

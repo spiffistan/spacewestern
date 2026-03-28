@@ -944,22 +944,32 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
             let r_berry = (h >> 4) & 0xFFF; // 0..4095
             let r_rock = (h >> 8) & 0xFFF; // 0..4095
 
-            // --- TREES: require high forest density, smoothly thinned ---
-            // forest: 0.0..1.0 — trees appear above ~0.45, dense above 0.7
-            let tree_chance = if forest > 0.7 {
-                // Dense forest: ~8% per tile
-                320u32
-            } else if forest > 0.55 {
-                // Moderate forest: ~3%
-                120
-            } else if forest > 0.45 {
-                // Sparse treeline: ~0.7%
-                30
+            // --- TREES: require forest density + suitable terrain ---
+            // Suppress trees on rocky/chalky terrain, boost on loam/moist
+            // Uses same noise fields as terrain generation for consistency
+            let aridity = fbm(fx, fy, 0.05, 200000); // matches terrain gen aridity noise
+            let terrain_suitability = if rockiness > 0.65 {
+                0.0 // rocky outcrops: no trees
+            } else if rockiness > 0.5 {
+                0.2 // gravelly: sparse scrub only
+            } else if aridity > 0.7 {
+                0.3 // arid/chalky: few trees
+            } else if moisture > 0.6 {
+                1.2 // moist/loam: lush growth
             } else {
-                // Open: rare lone tree ~0.1%
-                4
+                1.0 // normal grassland
             };
-            // Thin near spawn
+
+            let base_chance = if forest > 0.7 {
+                320u32 // dense forest
+            } else if forest > 0.55 {
+                120 // moderate
+            } else if forest > 0.45 {
+                30 // sparse treeline
+            } else {
+                4 // rare lone tree
+            };
+            let tree_chance = (base_chance as f32 * terrain_suitability) as u32;
             let tree_threshold = (tree_chance as f32 * spawn_factor) as u32;
 
             if r_tree < tree_threshold {
@@ -987,11 +997,11 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
                 continue; // placed a tree, skip other features
             }
 
-            // --- BERRY BUSHES: forest edges + moist areas ---
-            // Best at moderate forest (edge) + moderate moisture
-            let berry_score = (1.0 - (forest - 0.45).abs() * 3.0).max(0.0) // peak at forest=0.45
-                * (moisture * 1.5).min(1.0); // boosted by moisture
-            let berry_threshold = (berry_score * 18.0 * spawn_factor) as u32; // max ~18/4096 = 0.4%
+            // --- BERRY BUSHES: forest edges + moist areas, not on rock ---
+            let berry_score = (1.0 - (forest - 0.45).abs() * 3.0).max(0.0)
+                * (moisture * 1.5).min(1.0)
+                * terrain_suitability.min(1.0); // suppress on rocky/arid
+            let berry_threshold = (berry_score * 18.0 * spawn_factor) as u32;
             if r_berry < berry_threshold && grid[idx] == make_block(2, 0, 0) {
                 grid[idx] = make_block(31, 1, 0);
                 continue;

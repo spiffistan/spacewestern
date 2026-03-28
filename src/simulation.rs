@@ -856,19 +856,29 @@ impl App {
                                     self.blueprints.get(&(cx, cy)).map_or(false, |bp| {
                                         if bp.is_roof() {
                                             pleb.inventory.count_of(ITEM_FIBER) >= 1
+                                        } else if bp.is_campfire() {
+                                            pleb.inventory.count_of(ITEM_SCRAP_WOOD) >= 3
                                         } else {
                                             bp.resources_met()
                                         }
                                     });
+                                let bp_is_campfire = self
+                                    .blueprints
+                                    .get(&(cx, cy))
+                                    .map_or(false, |bp| bp.is_campfire());
                                 if start_building {
                                     if bp_is_roof {
                                         pleb.inventory.remove(ITEM_FIBER, 1);
+                                    } else if bp_is_campfire {
+                                        pleb.inventory.remove(ITEM_SCRAP_WOOD, 3);
                                     }
                                     pleb.activity = PlebActivity::Building(0.0);
                                     pleb.work_target = Some((cx, cy));
                                     self.active_work.insert((cx, cy));
                                 } else {
+                                    // Not enough special materials yet — go idle but stay near
                                     pleb.activity = PlebActivity::Idle;
+                                    pleb.work_target = None; // release so material fetch can re-assign
                                 }
                             } else if is_crate {
                                 // Deposit all carried items in crate (preserves liquid on containers)
@@ -2182,8 +2192,39 @@ impl App {
                             }
                         }
                         self.active_work.remove(&(tx, ty));
-                        pleb.work_target = None;
-                        pleb.activity = PlebActivity::Idle;
+                        // Chain to adjacent blueprint if one exists (build walls sequentially)
+                        let mut chained = false;
+                        for &(dx, dy) in &[(1i32, 0), (-1, 0), (0, 1), (0, -1)] {
+                            let nx = tx + dx;
+                            let ny = ty + dy;
+                            if let Some(nbp) = self.blueprints.get(&(nx, ny)) {
+                                if !self.active_work.contains(&(nx, ny)) {
+                                    let ready = if nbp.is_roof() {
+                                        pleb.inventory.count_of(ITEM_FIBER) >= 1
+                                    } else if nbp.is_campfire() {
+                                        pleb.inventory.count_of(ITEM_SCRAP_WOOD) >= 3
+                                    } else {
+                                        nbp.resources_met()
+                                    };
+                                    if ready {
+                                        if nbp.is_roof() {
+                                            pleb.inventory.remove(ITEM_FIBER, 1);
+                                        } else if nbp.is_campfire() {
+                                            pleb.inventory.remove(ITEM_SCRAP_WOOD, 3);
+                                        }
+                                        pleb.work_target = Some((nx, ny));
+                                        pleb.activity = PlebActivity::Building(0.0);
+                                        self.active_work.insert((nx, ny));
+                                        chained = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if !chained {
+                            pleb.work_target = None;
+                            pleb.activity = PlebActivity::Idle;
+                        }
                     } else {
                         pleb.activity = PlebActivity::Building(new_progress);
                         // Also update blueprint progress for UI
@@ -2291,13 +2332,24 @@ impl App {
                 }
                 let bp = &self.blueprints[&(bx, by)];
 
-                let ready = if bp.is_roof() {
-                    true // roof always "ready" — fiber checked on arrival
+                // For roofs/campfires: check if any pleb has the special resource
+                let special_ready = if bp.is_roof() {
+                    self.plebs
+                        .iter()
+                        .any(|p| !p.is_enemy && p.inventory.count_of(ITEM_FIBER) >= 1)
+                } else if bp.is_campfire() {
+                    self.plebs
+                        .iter()
+                        .any(|p| !p.is_enemy && p.inventory.count_of(ITEM_SCRAP_WOOD) >= 3)
+                } else {
+                    true // standard blueprints don't need special check
+                };
+                let ready = if bp.is_roof() || bp.is_campfire() {
+                    special_ready // only ready if someone has the material
                 } else {
                     bp.resources_met()
                 };
                 if ready {
-                    // Resources delivered — assign pleb to build
                     let needs_fiber = bp.is_roof();
                     let needs_sticks = bp.is_campfire();
                     let mut best: Option<(usize, f32)> = None;
@@ -2343,8 +2395,12 @@ impl App {
                 } else {
                     // Needs resources — find nearest material on ground and assign pleb to haul it
                     // Determine which material is needed
-                    let need_item = if bp.wood_delivered < bp.wood_needed {
-                        Some(ITEM_LOG) // prefer logs, fall back to wood
+                    let need_item = if bp.is_roof() {
+                        Some(ITEM_FIBER) // roof needs fiber (not tracked in standard fields)
+                    } else if bp.is_campfire() {
+                        Some(ITEM_SCRAP_WOOD) // campfire needs sticks
+                    } else if bp.wood_delivered < bp.wood_needed {
+                        Some(ITEM_LOG)
                     } else if bp.clay_delivered < bp.clay_needed {
                         Some(ITEM_CLAY)
                     } else if bp.plank_delivered < bp.plank_needed {
@@ -2443,6 +2499,58 @@ impl App {
                                     pleb.harvest_target = Some(pickup_pos);
                                     pleb.haul_target = Some((bx, by));
                                     self.active_work.insert((bx, by));
+                                }
+                            }
+                        } else if needed_id == ITEM_SCRAP_WOOD || needed_id == ITEM_FIBER {
+                            // No sticks/fiber on ground — auto-gather from nearest tree
+                            let mut best_tree: Option<(i32, i32, f32)> = None;
+                            for dy in -15i32..=15 {
+                                for dx in -15i32..=15 {
+                                    let tx2 = bx + dx;
+                                    let ty2 = by + dy;
+                                    if tx2 < 0
+                                        || ty2 < 0
+                                        || tx2 >= GRID_W as i32
+                                        || ty2 >= GRID_H as i32
+                                    {
+                                        continue;
+                                    }
+                                    let tidx2 = (ty2 as u32 * GRID_W + tx2 as u32) as usize;
+                                    if (self.grid_data[tidx2] & 0xFF) as u32 == BT_TREE {
+                                        let d = (dx * dx + dy * dy) as f32;
+                                        if best_tree.map_or(true, |(_, _, bd)| d < bd) {
+                                            best_tree = Some((tx2, ty2, d));
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some((tree_x, tree_y, _)) = best_tree {
+                                for pleb in self.plebs.iter_mut() {
+                                    if pleb.is_enemy || pleb.is_dead || pleb.work_target.is_some() {
+                                        continue;
+                                    }
+                                    if !matches!(pleb.activity, PlebActivity::Idle) {
+                                        continue;
+                                    }
+                                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                    let adj = adjacent_walkable(&self.grid_data, tree_x, tree_y)
+                                        .unwrap_or((tree_x, tree_y));
+                                    let path = astar_path_terrain_wd(
+                                        &self.grid_data,
+                                        &self.wall_data,
+                                        &self.terrain_data,
+                                        start,
+                                        adj,
+                                    );
+                                    if !path.is_empty() {
+                                        pleb.path = path;
+                                        pleb.path_idx = 0;
+                                        pleb.activity = PlebActivity::Walking;
+                                        pleb.work_target = Some((tree_x, tree_y));
+                                        pleb.harvest_target = Some((tree_x, tree_y));
+                                        self.active_work.insert((bx, by));
+                                        break;
+                                    }
                                 }
                             }
                         }

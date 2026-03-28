@@ -270,6 +270,8 @@ struct App {
     game_state: GameState,
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
+    // Entryway position for hollow rect drag (shown differently in preview)
+    drag_entryway: Option<(i32, i32)>,
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
     voltage_data: Vec<f32>,
     voltage_readback_pending: bool,
@@ -473,7 +475,7 @@ impl App {
             start_time: Instant::now(),
             time_of_day: DAY_DURATION * (CAMERA_START_HOUR / 24.0),
             time_paused: false,
-            time_speed: 0.25,
+            time_speed: 0.125,
             last_frame_time: Instant::now(),
             last_click_frame: 0,
             last_click_pos: (-1, -1),
@@ -628,6 +630,7 @@ impl App {
             terrain_params: grid::TerrainParams::default(),
             game_state: GameState::MainMenu,
             diag_preview: Vec::new(),
+            drag_entryway: None,
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
             fog_enabled: false,
@@ -1955,7 +1958,14 @@ impl App {
                                 Self::filled_rect_tiles(sx, sy, hbx, hby)
                             }
                             Some(block_defs::DragShape::HollowRect) => {
-                                Self::hollow_rect_tiles(sx, sy, hbx, hby)
+                                let pleb_pos = self
+                                    .selected_pleb
+                                    .and_then(|pi| self.plebs.get(pi).map(|p| (p.x, p.y)));
+                                let (wall_tiles, entry) =
+                                    Self::hollow_rect_tiles_with_entry(sx, sy, hbx, hby, pleb_pos);
+                                // Store entryway for preview rendering
+                                self.drag_entryway = entry;
+                                wall_tiles
                             }
                             Some(block_defs::DragShape::DiagonalLine) => {
                                 Self::diagonal_wall_tiles(sx, sy, hbx, hby, self.build_rotation)
@@ -2012,7 +2022,7 @@ impl App {
                     | BuildTool::Place(19)
                     | BuildTool::Place(20)
             );
-            tiles
+            let mut preview_tiles: Vec<((i32, i32), u8)> = tiles
                 .iter()
                 .map(|&(tx, ty)| {
                     if is_physics {
@@ -2269,7 +2279,12 @@ impl App {
                         }
                     }
                 })
-                .collect()
+                .collect::<Vec<_>>();
+            // Add entryway marker (state 3 = green gap)
+            if let Some((ex, ey)) = self.drag_entryway {
+                preview_tiles.push(((ex, ey), 3u8));
+            }
+            preview_tiles
         } else {
             vec![]
         };
@@ -3365,6 +3380,7 @@ impl ApplicationHandler for App {
                         self.mouse_pressed = false;
                         self.mouse_dragged = false;
                         self.drag_start = None;
+                        self.drag_entryway = None;
                         self.select_drag_start = None;
                     }
                 }

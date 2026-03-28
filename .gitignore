@@ -1,3 +1,13 @@
 /target
 /dist
 CONTEXT.md
+
+# Blender backups
+*.blend1
+
+# Sprite build artifacts (regenerate with render scripts)
+assets/sprites/raw/
+assets/sprites/*.bin
+
+# macOS
+.DS_Store

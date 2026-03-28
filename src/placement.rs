@@ -411,24 +411,76 @@ impl App {
 
     /// Compute tiles for a hollow rectangle (walls) between two corners.
     pub(crate) fn hollow_rect_tiles(x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<(i32, i32)> {
+        Self::hollow_rect_tiles_with_entry(x0, y0, x1, y1, None).0
+    }
+
+    /// Compute tiles for a hollow rectangle with an optional entryway.
+    /// If `pleb_pos` is given, the entryway is placed on the side closest to the pleb.
+    /// Returns (tiles, entryway_position).
+    pub(crate) fn hollow_rect_tiles_with_entry(
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+        pleb_pos: Option<(f32, f32)>,
+    ) -> (Vec<(i32, i32)>, Option<(i32, i32)>) {
         let min_x = x0.min(x1);
         let max_x = x0.max(x1);
         let min_y = y0.min(y1);
         let max_y = y0.max(y1);
+
+        // Room must be at least 3x3 for an entryway to make sense
+        let w = max_x - min_x;
+        let h = max_y - min_y;
+        let entry = if w >= 2 && h >= 2 {
+            if let Some((px, py)) = pleb_pos {
+                // Find which side the pleb is closest to
+                let cx = (min_x + max_x) as f32 / 2.0;
+                let cy = (min_y + max_y) as f32 / 2.0;
+                let mid_x = (min_x + max_x) / 2;
+                let mid_y = (min_y + max_y) / 2;
+
+                let d_north = (py - min_y as f32).abs();
+                let d_south = (py - max_y as f32).abs();
+                let d_west = (px - min_x as f32).abs();
+                let d_east = (px - max_x as f32).abs();
+                let min_d = d_north.min(d_south).min(d_west).min(d_east);
+
+                if min_d == d_north {
+                    Some((mid_x, min_y))
+                } else if min_d == d_south {
+                    Some((mid_x, max_y))
+                } else if min_d == d_west {
+                    Some((min_x, mid_y))
+                } else {
+                    Some((max_x, mid_y))
+                }
+            } else {
+                // Default: south side center
+                Some(((min_x + max_x) / 2, max_y))
+            }
+        } else {
+            None // too small for entryway
+        };
+
         let mut tiles = Vec::new();
         for x in min_x..=max_x {
-            tiles.push((x, min_y));
-            if max_y != min_y {
+            if entry != Some((x, min_y)) {
+                tiles.push((x, min_y));
+            }
+            if max_y != min_y && entry != Some((x, max_y)) {
                 tiles.push((x, max_y));
             }
         }
         for y in (min_y + 1)..max_y {
-            tiles.push((min_x, y));
-            if max_x != min_x {
+            if entry != Some((min_x, y)) {
+                tiles.push((min_x, y));
+            }
+            if max_x != min_x && entry != Some((max_x, y)) {
                 tiles.push((max_x, y));
             }
         }
-        tiles
+        (tiles, entry)
     }
 
     pub(crate) fn diagonal_wall_tiles(
@@ -677,7 +729,10 @@ impl App {
                         Self::filled_rect_tiles(sx, sy, ex, ey)
                     }
                     Some(block_defs::DragShape::HollowRect) => {
-                        Self::hollow_rect_tiles(sx, sy, ex, ey)
+                        let pleb_pos = self
+                            .selected_pleb
+                            .and_then(|pi| self.plebs.get(pi).map(|p| (p.x, p.y)));
+                        Self::hollow_rect_tiles_with_entry(sx, sy, ex, ey, pleb_pos).0
                     }
                     _ => return,
                 };

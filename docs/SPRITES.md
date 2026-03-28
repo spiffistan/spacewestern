@@ -8,9 +8,9 @@ Sprites are rendered as **flat albedo only** (no baked lighting). The game's ray
 
 ### Camera
 - **Orthographic** projection
-- Looking straight down (or ~10 degrees from south to match the game's oblique wall-face projection)
-- Frame the object so 1 Blender unit maps to 1 output pixel
-- Output resolution: 16x16, 24x24, or 32x32 depending on object size
+- **45° from vertical** (looking south-downward) — reveals the layered structure of 3D objects while keeping a top-down game feel
+- Frame the object to fill ~70-80% of the sprite area
+- Output resolution: 256x256 or 512x512 for detailed sprites (trees, furniture); 64x64 or 128x128 for small ground items
 
 ### Lighting
 - **No directional light, no shadows**
@@ -21,6 +21,9 @@ Sprites are rendered as **flat albedo only** (no baked lighting). The game's ray
 ### Materials
 - Assign distinct flat colors per part (wood=brown, metal=gray, skin=beige, fabric=colored)
 - No PBR (no roughness, metallic, subsurface) — invisible at sprite resolution
+- **Use vertex colors** for within-object texture variation (noise-based painting)
+- Workbench displays vertex colors with `color_type = 'VERTEX'`
+- Displace outer vertices with noise for organic silhouette edges (avoid perfect geometric shapes)
 - Character materials should match the game's color system: skin_rgb, hair_rgb, shirt_rgb, pants_rgb
 
 ### Render Settings
@@ -82,7 +85,31 @@ fiber.png
 
 ### Trees
 
-Already sprite-based (16x16, 8 variants). Could upgrade to 32x32 for more detail. Render with per-pixel height in alpha channel for shadow casting through canopy.
+Blender-rendered sprites (256x256, 8 variants per species). Render with per-pixel height in alpha channel for shadow casting through canopy.
+
+Currently implemented: **conifer** (see `assets/blender/conifer.blend`). The Blender scene uses:
+- 5 layered cone meshes for foliage tiers (dark→light green gradient, base→tip)
+- Tapered cylinder trunk (dark brown bark)
+- **Vertex color painting** with multi-octave noise for per-pixel texture variation within each tier
+- **Vertex displacement** on foliage edges for organic/ragged needle-cluster silhouettes
+- Orthographic camera at **45° from vertical** (reveals layered tier structure)
+- Workbench renderer, flat shading, vertex color mode, transparent background
+- Per-variant randomization: foliage rotation + scale jitter (seed 42)
+
+**How in-game lighting works on sprites** (from `raytrace.wgsl`):
+1. `render_tree()` samples the sprite atlas → returns `vec4(albedo_rgb, height)`
+2. The sprite albedo is treated as a **pure diffuse color** — no baked light
+3. The raytrace shader applies dynamically: `color = albedo * (ambient + sun_color * shadow * 0.85)`
+4. Shadow map uses the alpha/height channel to cast per-pixel shadows from canopy
+5. Proximity glow from nearby torches/lamps adds warm light to trunk and lower canopy
+6. `foliage_opacity` uniform controls canopy transparency (see-through mode)
+7. Per-tree `id_hash` tints color by ±15% for natural variation across the map
+
+This means the sprite only needs to carry **material color + height** — all lighting, shadows, day/night, and glow are computed in real-time by the shader.
+
+Render pipeline: `blender --background assets/blender/conifer.blend --python assets/blender/render_conifer.py`
+
+Output: `assets/sprites/conifer_atlas_256.bin` (2 MB, 8 variants × 256² × u32).
 
 ## Sprite Atlas Packing
 
@@ -94,6 +121,7 @@ Individual PNGs are packed into a sprite atlas — a single large buffer uploade
 sprites[variant * SPRITE_SIZE^2 + y * SPRITE_SIZE + x] = R | (G << 8) | (B << 16) | (HEIGHT << 24)
 ```
 
+- SPRITE_SIZE: 256 or 512 (upgrade from previous 16)
 - R, G, B: albedo color (0-255 each)
 - HEIGHT: normalized height above ground (0=transparent/ground, 1-255=height). Used for:
   - Determining if a pixel is part of the object (height > 0)
@@ -179,23 +207,24 @@ A Python script automates Blender render → atlas:
 ```
 assets/
   blender/
-    pleb.blend          # character model + rig
-    furniture.blend     # bench, bed, crate, etc.
-    items.blend         # ground items
-    render_template.py  # batch render script
+    conifer.blend           # conifer tree model (5 foliage tiers + trunk, vertex colors, displaced edges)
+    render_conifer.py       # batch render: 8 variants × 256px → atlas.bin
+    pleb.blend              # character model + rig (future)
+    furniture.blend         # bench, bed, crate, etc. (future)
+    items.blend             # ground items (future)
   sprites/
-    raw/                # individual rendered PNGs
-    atlas.bin           # packed sprite buffer
-    catalog.json        # sprite index (names → offsets)
+    raw/                    # individual rendered PNGs (albedo, height, final per variant)
+    conifer_atlas_256.bin   # packed sprite buffer (8 variants × 256×256 × u32 = 2 MB)
+    catalog.json            # sprite index — names → offsets (future)
 ```
 
 ## Priority Order
 
-1. **Plebs** — biggest visual impact, most visible, most animated
-2. **Furniture** — bench, bed, crate, cannon, fireplace
-3. **Ground items** — berries, wood, rocks
-4. **Walls** — auto-tiled wall sprites (complex: 16-47 variants per material)
-5. **Trees** — upgrade from 16x16 to 32x32
+1. **Trees** — ✅ conifer done (256/512, 8 variants, Blender-rendered). Next: oak, willow, birch, bush variants
+2. **Plebs** — biggest visual impact, most visible, most animated
+3. **Furniture** — bench, bed, crate, cannon, fireplace
+4. **Ground items** — berries, wood, rocks
+5. **Walls** — auto-tiled wall sprites (complex: 16-47 variants per material)
 
 ## Gotchas
 

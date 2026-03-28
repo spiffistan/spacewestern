@@ -1783,7 +1783,7 @@ impl App {
 
                             // Count items per category for 1 vs 2 column layout
                             let item_count: usize = match cat {
-                                "Walls" => 7,
+                                "Walls" => 2,
                                 "Floor" => 4,
                                 "Roof" => 2,
                                 "Build" => 8,
@@ -1864,33 +1864,8 @@ impl App {
                                         };
                                     match cat {
                                         "Walls" => {
-                                            icon_btn(ui, BuildTool::Place(21), "\u{1fab5}", "Wood");
-                                            icon_btn(ui, BuildTool::Place(22), "\u{2699}", "Steel");
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::Place(23),
-                                                "\u{1faa8}",
-                                                "Sandstone",
-                                            );
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::Place(24),
-                                                "\u{26f0}",
-                                                "Granite",
-                                            );
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::Place(25),
-                                                "\u{1f532}",
-                                                "Limestone",
-                                            );
                                             icon_btn(ui, BuildTool::Place(35), "\u{1f3da}", "Mud");
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::Place(44),
-                                                "\u{25e3}",
-                                                "Diagonal",
-                                            );
+                                            icon_btn(ui, BuildTool::Place(21), "\u{1fab5}", "Wood");
                                         }
                                         "Floor" => {
                                             icon_btn(ui, BuildTool::Place(26), "\u{1fab5}", "Wood");
@@ -3753,7 +3728,10 @@ impl App {
                                 Self::filled_rect_tiles(sx, sy, ex, ey)
                             }
                             Some(crate::block_defs::DragShape::HollowRect) => {
-                                Self::hollow_rect_tiles(sx, sy, ex, ey)
+                                let pleb_pos = self
+                                    .selected_pleb
+                                    .and_then(|pi| self.plebs.get(pi).map(|p| (p.x, p.y)));
+                                Self::hollow_rect_tiles_with_entry(sx, sy, ex, ey, pleb_pos).0
                             }
                             _ => Vec::new(),
                         }
@@ -4372,11 +4350,12 @@ impl App {
             ));
 
             for &((tx, ty), state) in blueprint_tiles {
-                // 0=invalid (red), 1=valid/new (blue), 2=upgrade/modify (orange)
+                // 0=invalid (red), 1=valid/new (blue), 2=upgrade (orange), 3=entryway (green)
                 let color = match state {
-                    1 => egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80), // blue: new placement
-                    2 => egui::Color32::from_rgba_unmultiplied(255, 180, 40, 90), // orange: upgrade
-                    _ => egui::Color32::from_rgba_unmultiplied(255, 60, 60, 80),  // red: invalid
+                    1 => egui::Color32::from_rgba_unmultiplied(80, 180, 255, 80),
+                    2 => egui::Color32::from_rgba_unmultiplied(255, 180, 40, 90),
+                    3 => egui::Color32::from_rgba_unmultiplied(80, 220, 80, 90), // entryway
+                    _ => egui::Color32::from_rgba_unmultiplied(255, 60, 60, 80),
                 };
 
                 let wx0 = tx as f32;
@@ -5289,6 +5268,13 @@ impl App {
                         }
                         let holes = terrain_dig_holes(self.terrain_data[idx]);
                         if holes == 0 {
+                            continue;
+                        }
+                        // Skip tiles with walls or blueprints (walls render on top)
+                        if idx < self.wall_data.len() && wd_edges(self.wall_data[idx]) != 0 {
+                            continue;
+                        }
+                        if self.blueprints.contains_key(&(x as i32, y as i32)) {
                             continue;
                         }
                         // Deterministic random hole positions within the tile
