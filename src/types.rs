@@ -426,6 +426,10 @@ pub enum ContextAction {
     MoveTo(f32, f32),
     /// Dig clay at (grid_x, grid_y) — pleb auto-fetches bucket
     DigClay(i32, i32),
+    /// Hand-craft a recipe (recipe_id) — pleb crafts at current position
+    HandCraft(u16),
+    /// Gather branches from a tree without felling it (grid_x, grid_y)
+    GatherBranches(i32, i32),
 }
 
 /// A context menu action entry: (label, action, enabled).
@@ -524,45 +528,146 @@ pub struct Blueprint {
     pub clay_delivered: u32,  // clay deposited so far
     pub plank_needed: u32,    // planks required (processed wood)
     pub plank_delivered: u32, // planks deposited so far
+    pub rock_needed: u32,     // rock required
+    pub rock_delivered: u32,  // rock deposited so far
+    pub rope_needed: u32,     // rope required
+    pub rope_delivered: u32,  // rope deposited so far
+    // Wall blueprints: write to wall_data instead of grid_data
+    pub wall_edges: u16,     // 0 = block blueprint, >0 = wall_data edges to place
+    pub wall_thickness: u16, // wall_data thickness (1-4)
+    pub wall_material: u16,  // wall_data material index
 }
 
 impl Blueprint {
     pub fn new(block_data: u32) -> Self {
         let bt = block_data & 0xFF;
-        // (build_time, wood, clay, planks)
-        let (build_time, wood_needed, clay_needed, plank_needed) = match bt as u32 {
-            BT_ROUGH_FLOOR => (0.8, 1, 0, 0),    // raw logs, no processing
-            BT_SAW_HORSE => (2.0, 2, 0, 0),      // raw logs for the frame
-            BT_WOOD_FLOOR => (1.5, 0, 0, 2),     // planks (processed)
-            BT_WOOD_WALL => (3.0, 0, 0, 3),      // planks
-            BT_BENCH | BT_BED => (2.0, 0, 0, 2), // planks
-            BT_CRATE => (2.0, 0, 0, 2),          // planks
-            BT_WORKBENCH => (3.0, 0, 0, 4),      // planks
-            BT_WELL => (8.0, 4, 0, 0),           // raw logs
-            BT_STONE | BT_WALL | BT_GLASS | BT_INSULATED | BT_STEEL_WALL | BT_SANDSTONE
-            | BT_GRANITE | BT_LIMESTONE | BT_MUD_WALL | BT_DIAGONAL => (3.0, 0, 0, 0),
-            BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0, 0, 0),
-            BT_FIREPLACE | BT_CANNON => (2.0, 0, 0, 0),
-            BT_KILN => (8.0, 0, 10, 0),
-            _ => (1.0, 0, 0, 0),
+        //                          (time, wood, clay, planks, rock, rope)
+        let (build_time, wood, clay, planks, rock, rope) = match bt as u32 {
+            //                     time  wood clay plnk rock rope
+            // --- Floors ---
+            BT_ROUGH_FLOOR => (0.8, 1, 0, 0, 0, 0),
+            BT_WOOD_FLOOR => (1.5, 0, 0, 2, 0, 0),
+            BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0, 0, 0, 2, 0),
+            // --- Walls ---
+            BT_WOOD_WALL => (4.0, 2, 0, 0, 0, 0), // raw logs, no saw needed
+            BT_MUD_WALL => (2.5, 0, 0, 0, 0, 0),  // auto-dug from ground, no material cost
+            BT_STONE | BT_WALL | BT_SANDSTONE | BT_GRANITE | BT_LIMESTONE => (3.0, 0, 0, 0, 3, 0),
+            BT_GLASS => (3.0, 0, 0, 0, 2, 0),
+            BT_INSULATED => (4.0, 0, 2, 2, 0, 0),
+            BT_STEEL_WALL => (4.0, 0, 0, 0, 4, 0),
+            BT_DIAGONAL => (2.0, 0, 0, 0, 2, 0),
+            // --- Furniture ---
+            BT_BENCH => (2.0, 0, 0, 2, 0, 0),
+            BT_BED => (3.0, 0, 0, 3, 0, 1), // rope for lacing
+            BT_CRATE => (2.0, 0, 0, 2, 0, 0),
+            // --- Crafting stations ---
+            BT_WORKBENCH => (3.0, 0, 0, 4, 0, 0),
+            BT_SAW_HORSE => (2.0, 2, 0, 0, 0, 0),
+            BT_KILN => (8.0, 0, 10, 0, 0, 0),
+            // --- Utilities ---
+            BT_WELL => (8.0, 3, 0, 0, 2, 1), // rope to lower bucket
+            BT_FIREPLACE => (1.0, 0, 0, 0, 0, 0), // campfire: 3 sticks (consumed on build)
+            BT_CANNON => (5.0, 0, 0, 0, 6, 0),
+            BT_COMPOST => (1.0, 1, 0, 0, 0, 0),
+            // --- Lighting ---
+            BT_FLOOR_LAMP => (1.0, 0, 0, 1, 0, 0),
+            BT_TABLE_LAMP => (0.5, 0, 0, 0, 0, 0),
+            BT_CEILING_LIGHT => (1.0, 0, 0, 1, 0, 0),
+            BT_WALL_TORCH => (0.5, 1, 0, 0, 0, 0),
+            BT_WALL_LAMP => (1.0, 0, 0, 1, 0, 0),
+            BT_FLOODLIGHT => (2.0, 0, 0, 0, 2, 0),
+            // --- Power ---
+            BT_WIRE => (0.3, 0, 0, 0, 0, 0),
+            BT_SOLAR => (3.0, 0, 0, 2, 1, 0),
+            BT_BATTERY_S => (2.0, 0, 0, 1, 1, 0),
+            BT_BATTERY_M => (3.0, 0, 0, 2, 2, 0),
+            BT_BATTERY_L => (4.0, 0, 0, 3, 3, 0),
+            BT_WIND_TURBINE => (5.0, 2, 0, 2, 0, 1), // rope for rigging
+            BT_SWITCH | BT_DIMMER | BT_BREAKER => (0.5, 0, 0, 0, 0, 0),
+            BT_WIRE_BRIDGE => (0.5, 0, 0, 0, 0, 0),
+            // --- Gas piping ---
+            BT_PIPE => (0.5, 0, 0, 0, 0, 0),
+            BT_PUMP => (2.0, 0, 0, 1, 1, 0),
+            BT_TANK => (3.0, 0, 0, 2, 1, 0),
+            BT_VALVE | BT_RESTRICTOR => (1.0, 0, 0, 0, 0, 0),
+            BT_OUTLET | BT_INLET => (0.5, 0, 0, 0, 0, 0),
+            BT_FAN => (2.0, 0, 0, 1, 1, 0),
+            BT_PIPE_BRIDGE => (0.5, 0, 0, 0, 0, 0),
+            // --- Liquid piping ---
+            BT_LIQUID_PIPE => (0.5, 0, 1, 0, 0, 0),
+            BT_LIQUID_INTAKE | BT_LIQUID_OUTPUT => (1.0, 0, 1, 0, 0, 0),
+            BT_LIQUID_PUMP => (2.0, 0, 0, 1, 1, 0),
+            _ => (1.0, 0, 0, 0, 0, 0),
         };
         Blueprint {
             block_data,
             progress: 0.0,
             build_time,
-            wood_needed,
+            wood_needed: wood,
             wood_delivered: 0,
-            clay_needed,
+            clay_needed: clay,
             clay_delivered: 0,
-            plank_needed,
+            plank_needed: planks,
             plank_delivered: 0,
+            rock_needed: rock,
+            rock_delivered: 0,
+            rope_needed: rope,
+            rope_delivered: 0,
+            wall_edges: 0,
+            wall_thickness: 0,
+            wall_material: 0,
         }
+    }
+
+    /// Create a wall blueprint (writes to wall_data on completion).
+    pub fn new_wall(block_type: u32, edges: u16, thickness: u16, material: u16) -> Self {
+        let mut bp = Self::new(make_block(block_type as u8, 0, 0));
+        bp.wall_edges = edges;
+        bp.wall_thickness = thickness;
+        bp.wall_material = material;
+        bp
+    }
+
+    /// Create a roof blueprint (requires 1 fiber, marks tile as roofed on completion).
+    pub fn new_roof() -> Self {
+        Blueprint {
+            block_data: 0, // no block, just roof
+            progress: 0.0,
+            build_time: 0.5,
+            wood_needed: 0,
+            wood_delivered: 0,
+            clay_needed: 0,
+            clay_delivered: 0,
+            plank_needed: 0,
+            plank_delivered: 0,
+            rock_needed: 0,
+            rock_delivered: 0,
+            rope_needed: 0,
+            rope_delivered: 0,
+            wall_edges: 0,
+            wall_thickness: 0,
+            wall_material: 0,
+        }
+    }
+
+    pub fn is_roof(&self) -> bool {
+        self.block_data == 0 && self.wall_edges == 0
+    }
+
+    pub fn is_campfire(&self) -> bool {
+        (self.block_data & 0xFF) as u32 == BT_FIREPLACE && self.wall_edges == 0
+    }
+
+    pub fn is_wall(&self) -> bool {
+        self.wall_edges != 0
     }
 
     pub fn resources_met(&self) -> bool {
         self.wood_delivered >= self.wood_needed
             && self.clay_delivered >= self.clay_needed
             && self.plank_delivered >= self.plank_needed
+            && self.rock_delivered >= self.rock_needed
+            && self.rope_delivered >= self.rope_needed
     }
 }
 

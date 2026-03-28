@@ -867,8 +867,8 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
         }
     };
 
-    // Trees and bushes — clustered in small forests with outliers
-    let noise = |x: f32, y: f32| -> f32 {
+    // Smoothstep noise with seeded hash — returns 0.0..1.0
+    let noise = |x: f32, y: f32, offset: u32| -> f32 {
         let ix = x.floor() as i32;
         let iy = y.floor() as i32;
         let fx = x - x.floor();
@@ -876,7 +876,8 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
         let hash = |ix: i32, iy: i32| -> f32 {
             let h = ((ix.wrapping_mul(374761393) as u32) ^ (iy.wrapping_mul(668265263) as u32))
                 .wrapping_add(1013904223)
-                .wrapping_add(seed);
+                .wrapping_add(seed)
+                .wrapping_add(offset);
             (h & 0xFFFF) as f32 / 65535.0
         };
         let a = hash(ix, iy);
@@ -888,12 +889,35 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
         a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
     };
 
-    let is_bare = |grid: &Vec<u32>, x: u32, y: u32| -> bool {
+    // Multi-octave fractal noise (2 octaves) — returns 0.0..1.0 (normalized)
+    let fbm = |x: f32, y: f32, scale: f32, offset: u32| -> f32 {
+        let n1 = noise(x * scale, y * scale, offset);
+        let n2 = noise(
+            x * scale * 2.1 + 37.0,
+            y * scale * 2.1 + 71.0,
+            offset.wrapping_add(7919),
+        );
+        (n1 + n2 * 0.5) / 1.5 // normalize to 0..1
+    };
+
+    let is_bare = |grid: &[u32], x: u32, y: u32| -> bool {
         if x >= GRID_W || y >= GRID_H {
             return false;
         }
         grid[(y * w + x) as usize] == make_block(2, 0, 0)
     };
+
+    // Per-tile deterministic random hash
+    let tile_hash = |x: u32, y: u32| -> u32 {
+        ((x.wrapping_mul(374761393)) ^ (y.wrapping_mul(668265263)))
+            .wrapping_add(1013904223)
+            .wrapping_add(seed)
+    };
+
+    // Spawn clearing: keep ~8-tile radius around center mostly open
+    let cx = GRID_W as f32 / 2.0;
+    let cy = GRID_H as f32 / 2.0;
+    let spawn_clear_radius_sq: f32 = 8.0 * 8.0;
 
     for y in 0..GRID_H {
         for x in 0..GRID_W {
@@ -902,85 +926,92 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
                 continue;
             }
 
-            // Forest density from multi-octave noise (scale creates ~30-tile clusters)
-            let scale = 0.07;
-            let n1 = noise(x as f32 * scale, y as f32 * scale);
-            let n2 = noise(
-                x as f32 * scale * 2.3 + 100.0,
-                y as f32 * scale * 2.3 + 200.0,
-            ) * 0.5;
-            let density = n1 + n2; // 0.0 - 1.5 range
+            let fx = x as f32;
+            let fy = y as f32;
 
-            // Per-tile random hash
-            let h = ((x.wrapping_mul(374761393)) ^ (y.wrapping_mul(668265263)))
-                .wrapping_add(1013904223)
-                .wrapping_add(seed);
-            let r = (h >> 16) & 0xFFF; // 0..4095
+            // Distance from spawn (used to thin features near start)
+            let spawn_dist_sq = (fx - cx) * (fx - cx) + (fy - cy) * (fy - cy);
+            let spawn_factor = (spawn_dist_sq / spawn_clear_radius_sq).min(1.0); // 0 at center, 1 at edge
 
-            // Threshold based on density: dense areas have many trees
-            let tree_threshold = if density > 0.9 {
-                400
-            }
-            // dense forest
-            else if density > 0.7 {
-                150
-            }
-            // moderate forest
-            else if density > 0.5 {
-                40
-            }
-            // sparse
-            else {
-                8
-            }; // rare outlier
+            // Three independent noise layers for different features
+            let forest = fbm(fx, fy, 0.06, 0); // forest clusters (~35-tile scale)
+            let rockiness = fbm(fx, fy, 0.04, 50000); // geological formations (~50-tile scale)
+            let moisture = fbm(fx, fy, 0.05, 100000); // berry/bush zones (~40-tile scale)
 
-            if r < tree_threshold {
-                if r < tree_threshold / 5 {
-                    // Large 2x2 tree
+            // Per-tile random (multiple independent streams via bit slicing)
+            let h = tile_hash(x, y);
+            let r_tree = (h >> 16) & 0xFFF; // 0..4095
+            let r_berry = (h >> 4) & 0xFFF; // 0..4095
+            let r_rock = (h >> 8) & 0xFFF; // 0..4095
+
+            // --- TREES: require high forest density, smoothly thinned ---
+            // forest: 0.0..1.0 — trees appear above ~0.45, dense above 0.7
+            let tree_chance = if forest > 0.7 {
+                // Dense forest: ~8% per tile
+                320u32
+            } else if forest > 0.55 {
+                // Moderate forest: ~3%
+                120
+            } else if forest > 0.45 {
+                // Sparse treeline: ~0.7%
+                30
+            } else {
+                // Open: rare lone tree ~0.1%
+                4
+            };
+            // Thin near spawn
+            let tree_threshold = (tree_chance as f32 * spawn_factor) as u32;
+
+            if r_tree < tree_threshold {
+                if r_tree < tree_threshold / 6 {
+                    // Large 2x2 tree (dense forest only)
                     if is_bare(&grid, x + 1, y)
                         && is_bare(&grid, x, y + 1)
                         && is_bare(&grid, x + 1, y + 1)
                     {
-                        let tree_h = 4 + ((h >> 8) & 0x1) as u8;
+                        let tree_h = 4 + ((h >> 2) & 0x1) as u8;
                         set(&mut grid, x, y, make_block(8, tree_h, 32 | 0));
                         set(&mut grid, x + 1, y, make_block(8, tree_h, 32 | 8));
                         set(&mut grid, x, y + 1, make_block(8, tree_h, 32 | 16));
                         set(&mut grid, x + 1, y + 1, make_block(8, tree_h, 32 | 24));
                     }
-                } else if r < tree_threshold * 3 / 4 {
+                } else if r_tree < tree_threshold * 3 / 4 {
                     // Medium tree
-                    let tree_h = 2 + ((h >> 8) & 0x3) as u8;
+                    let tree_h = 2 + ((h >> 2) & 0x3) as u8;
                     grid[idx] = make_block(8, tree_h, 0);
                 } else {
-                    // Small bush (tree type)
-                    let bush_h = 1 + ((h >> 8) & 0x1) as u8;
+                    // Small bush/shrub
+                    let bush_h = 1 + ((h >> 2) & 0x1) as u8;
                     grid[idx] = make_block(8, bush_h, 0);
                 }
+                continue; // placed a tree, skip other features
             }
 
-            // Berry bushes: scattered in moderate-density areas, rarer than trees
-            let berry_r = ((h >> 4) & 0xFFF) as u32;
-            let berry_threshold = if density > 0.6 && density < 1.0 {
-                15
-            } else if density > 0.4 {
-                5
-            } else {
-                1
-            };
-            if grid[idx] == make_block(2, 0, 0) && berry_r < berry_threshold {
+            // --- BERRY BUSHES: forest edges + moist areas ---
+            // Best at moderate forest (edge) + moderate moisture
+            let berry_score = (1.0 - (forest - 0.45).abs() * 3.0).max(0.0) // peak at forest=0.45
+                * (moisture * 1.5).min(1.0); // boosted by moisture
+            let berry_threshold = (berry_score * 18.0 * spawn_factor) as u32; // max ~18/4096 = 0.4%
+            if r_berry < berry_threshold && grid[idx] == make_block(2, 0, 0) {
                 grid[idx] = make_block(31, 1, 0);
+                continue;
             }
 
-            // Rocks: scattered on bare ground, more common in sparse/open areas
-            let rock_r = ((h >> 6) & 0xFFF) as u32;
-            let rock_threshold = if density < 0.3 {
-                12
-            } else if density < 0.5 {
-                6
+            // --- ROCKS: geological clusters, independent of forest ---
+            // rockiness: 0..1 — rocks cluster where rockiness > 0.6
+            let rock_score = if rockiness > 0.7 {
+                1.0 // rocky outcrop
+            } else if rockiness > 0.55 {
+                (rockiness - 0.55) / 0.15 // smooth ramp
             } else {
-                2
+                0.0 // no rocks
             };
-            if grid[idx] == make_block(2, 0, 0) && rock_r < rock_threshold {
+            // Scatter a few loose rocks everywhere for early-game pickup
+            let base_rocks = 1u32; // very rare lone rocks
+            let cluster_rocks = (rock_score * 25.0) as u32; // up to 25/4096 = 0.6% in clusters
+            let rock_threshold =
+                ((base_rocks + cluster_rocks) as f32 * spawn_factor.max(0.3)) as u32;
+            if r_rock < rock_threshold && grid[idx] == make_block(2, 0, 0) {
                 grid[idx] = make_block(34, 0, 0);
             }
         }
@@ -1551,14 +1582,14 @@ pub struct TerrainParams {
 impl Default for TerrainParams {
     fn default() -> Self {
         Self {
-            grass: 0.40,
-            loam: 0.25,
-            clay: 0.10,
-            chalky: 0.02,
-            rocky: 0.05,
-            gravel: 0.05,
-            peat: 0.03,
-            marsh: 0.05,
+            grass: 0.35,  // ~35% — common baseline
+            loam: 0.20,   // ~20% — fertile dark soil
+            clay: 0.10,   // ~10% — reddish patches, clay source
+            chalky: 0.06, // ~6% — pale outcrops
+            rocky: 0.08,  // ~8% — exposed stone
+            gravel: 0.07, // ~7% — loose stone areas
+            peat: 0.05,   // ~5% — dark organic soil
+            marsh: 0.06,  // ~6% — wet lowlands
             pond_density: 0.5,
             seed: 42,
         }
@@ -1640,68 +1671,73 @@ pub fn generate_terrain_with_params(
             let pond_factor = (pond_noise * 0.7 + pond_detail * 0.3 + wt * 0.3).max(0.0);
             let pond_thresh = 1.0 - params.pond_density * 0.3; // higher density = lower threshold
 
-            // --- Terrain type assignment (weighted scoring) ---
-            // Each type gets a score: natural affinity * param weight + noise variation
+            // --- Terrain type assignment (threshold stacking) ---
+            // Each terrain gets its own coherent noise field (0..1).
+            // We assign terrain if its noise exceeds a threshold derived from its weight.
+            // Higher weight = lower threshold = more area. Evaluated in priority order
+            // (rarest first) so rare terrains can override common ones in their clusters.
+            //
+            // threshold = 1.0 - weight (so weight=0.40 → threshold=0.60, needs noise>0.60)
+            // Environmental biases nudge the noise ±0.15 to steer terrain to suitable spots.
             let terrain_type = if pond_factor > pond_thresh + 0.1 {
-                TERRAIN_MARSH // pond center
+                TERRAIN_MARSH
             } else if pond_factor > pond_thresh {
-                TERRAIN_MARSH // marsh ring
+                TERRAIN_MARSH
             } else if pond_factor > pond_thresh - 0.15 && params.clay > 0.01 {
-                TERRAIN_CLAY // clay ring around ponds
+                TERRAIN_CLAY
             } else {
-                // Score = weight * (noise_region + environmental_bias)
-                // Each type uses its own noise field for coherent regions.
-                // Environmental factors provide subtle bias (max ±0.15), noise dominates (0.0-1.0).
-                let scores: [(u32, f32); 8] = [
-                    (
-                        TERRAIN_GRASS,
-                        params.grass
-                            * (noise_seeded(fx * 0.06, fy * 0.06, 10) + (1.0 - rockiness) * 0.1),
-                    ),
-                    (
-                        TERRAIN_LOAM,
-                        params.loam
-                            * (noise_seeded(fx * 0.06, fy * 0.06, 20) + (1.0 - aridity) * 0.15),
-                    ),
-                    (
-                        TERRAIN_CLAY,
-                        params.clay
-                            * (noise_seeded(fx * 0.06, fy * 0.06, 30) + (1.0 - aridity) * 0.1),
-                    ),
+                // Each terrain: (type, noise_value + env_bias, threshold)
+                // Evaluate rarest first so they get their clusters
+                let candidates: [(u32, f32, f32); 8] = [
                     (
                         TERRAIN_CHALKY,
-                        params.chalky
-                            * (noise_seeded(fx * 0.06, fy * 0.06, 40)
-                                + aridity * 0.1
-                                + rockiness * 0.05),
-                    ),
-                    (
-                        TERRAIN_ROCKY,
-                        params.rocky * (noise_seeded(fx * 0.06, fy * 0.06, 50) + rockiness * 0.15),
-                    ),
-                    (
-                        TERRAIN_GRAVEL,
-                        params.gravel * (noise_seeded(fx * 0.06, fy * 0.06, 60) + rockiness * 0.1),
+                        noise_seeded(fx * 0.05, fy * 0.05, 40) + aridity * 0.1,
+                        1.0 - params.chalky,
                     ),
                     (
                         TERRAIN_PEAT,
-                        params.peat * (noise_seeded(fx * 0.06, fy * 0.06, 70) + moisture * 0.15),
+                        noise_seeded(fx * 0.05, fy * 0.05, 70) + moisture * 0.15,
+                        1.0 - params.peat,
                     ),
                     (
                         TERRAIN_MARSH,
-                        params.marsh
-                            * (noise_seeded(fx * 0.06, fy * 0.06, 80) + (wt + 2.0).max(0.0) * 0.1),
+                        noise_seeded(fx * 0.05, fy * 0.05, 80) + (wt + 2.0).max(0.0) * 0.15,
+                        1.0 - params.marsh,
+                    ),
+                    (
+                        TERRAIN_ROCKY,
+                        noise_seeded(fx * 0.04, fy * 0.04, 50) + rockiness * 0.2,
+                        1.0 - params.rocky,
+                    ),
+                    (
+                        TERRAIN_GRAVEL,
+                        noise_seeded(fx * 0.05, fy * 0.05, 60) + rockiness * 0.1,
+                        1.0 - params.gravel,
+                    ),
+                    (
+                        TERRAIN_CLAY,
+                        noise_seeded(fx * 0.05, fy * 0.05, 30) + moisture * 0.1,
+                        1.0 - params.clay,
+                    ),
+                    (
+                        TERRAIN_LOAM,
+                        noise_seeded(fx * 0.06, fy * 0.06, 20) + (1.0 - aridity) * 0.1,
+                        1.0 - params.loam,
+                    ),
+                    (
+                        TERRAIN_GRASS,
+                        noise_seeded(fx * 0.06, fy * 0.06, 10) + (1.0 - rockiness) * 0.05,
+                        0.0, // grass is the default fallback
                     ),
                 ];
-                let mut best_type = TERRAIN_GRASS;
-                let mut best_score = -1.0f32;
-                for &(tt, score) in &scores {
-                    if score > best_score {
-                        best_score = score;
-                        best_type = tt;
+                let mut chosen = TERRAIN_GRASS;
+                for &(tt, val, thresh) in &candidates {
+                    if val > thresh {
+                        chosen = tt;
+                        break; // first match wins (rarest evaluated first)
                     }
                 }
-                best_type
+                chosen
             };
 
             // --- Vegetation density ---

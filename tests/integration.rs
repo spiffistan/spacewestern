@@ -185,7 +185,7 @@ fn fiber_and_scrap_wood_are_valid_items() {
         "ITEM_SCRAP_WOOD (id={}) should exist in registry",
         ITEM_SCRAP_WOOD
     );
-    assert_eq!(scrap.unwrap().name, "Scrap Wood");
+    assert_eq!(scrap.unwrap().name, "Sticks");
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn ground_items_with_new_types() {
 
     let scrap_item = GroundItem::new(5.0, 5.0, ITEM_SCRAP_WOOD, 4);
     assert_eq!(scrap_item.stack.item_id, ITEM_SCRAP_WOOD);
-    assert!(scrap_item.stack.label().contains("Scrap"));
+    assert!(scrap_item.stack.label().contains("Sticks"));
 }
 
 #[test]

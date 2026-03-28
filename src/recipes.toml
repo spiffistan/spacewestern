@@ -1,5 +1,25 @@
 # Crafting recipes — defines what can be made, where, and from what.
 
+# ── Hand-crafting (no station needed) ──
+
+[[recipe]]
+id = 8
+name = "Stone Axe"
+station = "hand"
+time = 4.0
+inputs = [{item = 2, count = 2}, {item = 5, count = 1}]
+output = {item = 20, count = 1}
+
+[[recipe]]
+id = 9
+name = "Stone Pick"
+station = "hand"
+time = 4.0
+inputs = [{item = 2, count = 2}, {item = 5, count = 1}]
+output = {item = 22, count = 1}
+
+# ── Workbench recipes ──
+
 [[recipe]]
 id = 0
 name = "Rope"
@@ -25,22 +45,6 @@ inputs = [{item = 4, count = 2}]
 output = {item = 13, count = 1}
 
 [[recipe]]
-id = 3
-name = "Clay Jug"
-station = "kiln"
-time = 30.0
-inputs = [{item = 13, count = 1}]
-output = {item = 12, count = 1}
-
-[[recipe]]
-id = 4
-name = "Stone Axe"
-station = "workbench"
-time = 6.0
-inputs = [{item = 2, count = 2}, {item = 1, count = 1}]
-output = {item = 20, count = 1}
-
-[[recipe]]
 id = 5
 name = "Wooden Shovel"
 station = "workbench"
@@ -48,13 +52,17 @@ time = 5.0
 inputs = [{item = 5, count = 2}, {item = 1, count = 1}]
 output = {item = 21, count = 1}
 
+# ── Kiln recipes ──
+
 [[recipe]]
-id = 6
-name = "Stone Pick"
-station = "workbench"
-time = 6.0
-inputs = [{item = 2, count = 2}, {item = 5, count = 1}]
-output = {item = 22, count = 1}
+id = 3
+name = "Clay Jug"
+station = "kiln"
+time = 30.0
+inputs = [{item = 13, count = 1}]
+output = {item = 12, count = 1}
+
+# ── Saw Horse recipes ──
 
 [[recipe]]
 id = 7
@@ -62,4 +70,4 @@ name = "Planks"
 station = "saw_horse"
 time = 4.0
 inputs = [{item = 1, count = 1}]
-output = {item = 23, count = 3}
+output = {item = 23, count = 2}

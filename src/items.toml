@@ -39,10 +39,17 @@ stack_max = 10
 
 [[item]]
 id = 5
-name = "Scrap Wood"
-icon = "🪓"
+name = "Sticks"
+icon = "🪵"
 category = "raw"
 stack_max = 10
+
+[[item]]
+id = 6
+name = "Log"
+icon = "🪵"
+category = "raw"
+stack_max = 1
 
 [[item]]
 id = 10

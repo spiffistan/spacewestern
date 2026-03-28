@@ -838,40 +838,52 @@ impl App {
                                 continue;
                             }
 
-                            // Wall material for wall_data layer
                             let wd_mat = wall_block_to_material(block_type_id);
                             let wd_thick = self.wall_thickness as u16;
 
                             // Rule 2: auto-merge edges if tile already has a wall
                             if self.tile_has_walls(tx, ty) {
-                                // Merge: add new edge to existing wall_data
                                 let new_edge_bit = 1u16 << edge;
-                                self.place_wall_edge(tx, ty, new_edge_bit, wd_thick, wd_mat);
-                                if is_corner {
-                                    let corner_edge_bit = 1u16 << ((edge + 1) & 3);
-                                    self.place_wall_edge(tx, ty, corner_edge_bit, wd_thick, wd_mat);
+                                let edges = if is_corner {
+                                    new_edge_bit | (1u16 << ((edge + 1) & 3))
+                                } else {
+                                    new_edge_bit
+                                };
+                                if self.sandbox_mode {
+                                    self.place_wall_edge(tx, ty, edges, wd_thick, wd_mat);
+                                } else {
+                                    let bp =
+                                        Blueprint::new_wall(block_type_id, edges, wd_thick, wd_mat);
+                                    self.blueprints.insert((tx, ty), bp);
                                 }
                                 continue;
                             }
-                            // New thin wall: write only to wall_data (DN-008)
+
+                            // New thin wall
                             let new_edge_bit = 1u16 << edge;
-                            if is_corner {
-                                let corner_edge_bit = 1u16 << ((edge + 1) & 3);
-                                self.place_wall_edge(
-                                    tx,
-                                    ty,
-                                    new_edge_bit | corner_edge_bit,
-                                    wd_thick,
-                                    wd_mat,
-                                );
+                            let edges = if is_corner {
+                                new_edge_bit | (1u16 << ((edge + 1) & 3))
                             } else {
-                                self.place_wall_edge(tx, ty, new_edge_bit, wd_thick, wd_mat);
+                                new_edge_bit
+                            };
+                            if self.sandbox_mode {
+                                self.place_wall_edge(tx, ty, edges, wd_thick, wd_mat);
+                            } else {
+                                let bp =
+                                    Blueprint::new_wall(block_type_id, edges, wd_thick, wd_mat);
+                                self.blueprints.insert((tx, ty), bp);
                             }
                             continue;
                         } else if is_wall_block(block_type_id) {
-                            // Full-thickness walls: write only to wall_data (DN-008)
+                            // Full-thickness walls
                             let wd_mat = wall_block_to_material(block_type_id);
-                            self.place_wall_edge(tx, ty, WD_EDGE_MASK, 4, wd_mat);
+                            if self.sandbox_mode {
+                                self.place_wall_edge(tx, ty, WD_EDGE_MASK, 4, wd_mat);
+                            } else {
+                                let bp =
+                                    Blueprint::new_wall(block_type_id, WD_EDGE_MASK, 4, wd_mat);
+                                self.blueprints.insert((tx, ty), bp);
+                            }
                         } else {
                             self.place_or_blueprint(
                                 tx,
@@ -986,35 +998,19 @@ impl App {
     /// Place a block or create a blueprint (if not sandbox mode and block is structural).
     pub(crate) fn place_or_blueprint(&mut self, x: i32, y: i32, block_data: u32) {
         let bt = (block_data & 0xFF) as u32;
-        // Structural blocks need construction in non-sandbox mode
-        let needs_construction = !self.sandbox_mode
-            && matches!(
-                bt,
-                BT_STONE
-                    | BT_WALL
-                    | BT_GLASS
-                    | BT_INSULATED
-                    | BT_WOOD_WALL
-                    | BT_STEEL_WALL
-                    | BT_SANDSTONE
-                    | BT_GRANITE
-                    | BT_LIMESTONE
-                    | BT_MUD_WALL
-                    | BT_DIAGONAL
-                    | BT_WOOD_FLOOR
-                    | BT_STONE_FLOOR
-                    | BT_CONCRETE_FLOOR
-                    | BT_ROUGH_FLOOR
-                    | BT_FIREPLACE
-                    | BT_BENCH
-                    | BT_BED
-                    | BT_CRATE
-                    | BT_CANNON
-                    | BT_WORKBENCH
-                    | BT_KILN
-                    | BT_WELL
-            );
-        if needs_construction {
+        // Non-buildable block types that always place instantly (terrain, vegetation)
+        let always_instant = matches!(
+            bt,
+            BT_AIR
+                | BT_DIRT
+                | BT_WATER
+                | BT_TREE
+                | BT_BERRY_BUSH
+                | BT_CROP
+                | BT_DUG_GROUND
+                | BT_ROCK
+        );
+        if !self.sandbox_mode && !always_instant {
             self.blueprints.insert((x, y), Blueprint::new(block_data));
         } else {
             let idx = (y as u32 * GRID_W + x as u32) as usize;
@@ -1064,12 +1060,25 @@ impl App {
             }
         }
 
-        // Tree: chop down for wood
+        // Tree: gather branches (no axe) or chop down (needs axe)
         if sel_pleb.is_some() && bt == BT_TREE {
             menu.actions.push((
-                format!("Chop down ({})", pleb_name),
-                ContextAction::Harvest(bx, by),
+                format!("Gather branches ({})", pleb_name),
+                ContextAction::GatherBranches(bx, by),
                 true,
+            ));
+            let has_axe = sel_pleb
+                .and_then(|pi| self.plebs.get(pi))
+                .map(|p| p.inventory.count_of(item_defs::ITEM_STONE_AXE) > 0)
+                .unwrap_or(false);
+            menu.actions.push((
+                format!(
+                    "Chop down ({}){}",
+                    pleb_name,
+                    if has_axe { "" } else { " [needs axe]" }
+                ),
+                ContextAction::Harvest(bx, by),
+                has_axe,
             ));
             has_actions = true;
         }
@@ -1100,31 +1109,26 @@ impl App {
             }
         }
 
-        // Dig clay on clay terrain (fresh dirt or shallow dug ground)
-        if sel_pleb.is_some()
-            && (bt == BT_DIRT
-                || (bt == BT_DUG_GROUND
-                    && ((self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF)
-                        < 3))
-        {
+        // Dig earth on undug dirt (one dig per tile, flat — no depression)
+        if sel_pleb.is_some() && bt == BT_DIRT {
             let tidx = (by as u32 * GRID_W + bx as u32) as usize;
-            if tidx < self.terrain_data.len()
-                && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY
-            {
+            let is_clay_terrain = tidx < self.terrain_data.len()
+                && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY;
+            let has_shovel = sel_pleb
+                .and_then(|pi| self.plebs.get(pi))
+                .map(|p| p.inventory.count_of(item_defs::ITEM_WOODEN_SHOVEL) > 0)
+                .unwrap_or(false);
+            if is_clay_terrain {
                 menu.title = "Clay Deposit".into();
-                let has_shovel = sel_pleb
-                    .and_then(|pi| self.plebs.get(pi))
-                    .map(|p| p.inventory.count_of(item_defs::ITEM_WOODEN_SHOVEL) > 0)
-                    .unwrap_or(false);
-                let label = if has_shovel {
-                    format!("Dig clay + shovel ({})", pleb_name)
-                } else {
-                    format!("Dig clay ({})", pleb_name)
-                };
-                menu.actions
-                    .push((label, ContextAction::DigClay(bx, by), true));
-                has_actions = true;
             }
+            let label = if has_shovel {
+                format!("Dig earth + shovel ({})", pleb_name)
+            } else {
+                format!("Dig earth ({})", pleb_name)
+            };
+            menu.actions
+                .push((label, ContextAction::DigClay(bx, by), true));
+            has_actions = true;
         }
 
         // Ground items at this position: eat + haul actions
@@ -1154,9 +1158,36 @@ impl App {
             }
         }
 
-        // Move to (fallback when pleb selected but no specific action)
-        if sel_pleb.is_some() && !has_actions {
-            menu.title = "Move".into();
+        // Hand-craft recipes — only when right-clicking ON or near the pleb
+        if let Some(pi) = sel_pleb {
+            if let Some(pleb) = self.plebs.get(pi) {
+                let near_pleb = (wx - pleb.x).abs() < 1.5 && (wy - pleb.y).abs() < 1.5;
+                if near_pleb {
+                    let idle = matches!(pleb.activity, PlebActivity::Idle | PlebActivity::Walking);
+                    let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                    let item_reg = item_defs::ItemRegistry::cached();
+                    for recipe in recipe_reg.for_station("hand") {
+                        let has_mats = idle
+                            && recipe
+                                .inputs
+                                .iter()
+                                .all(|ing| pleb.inventory.count_of(ing.item) >= ing.count as u32);
+                        let ing_text: Vec<String> = recipe
+                            .inputs
+                            .iter()
+                            .map(|ing| format!("{} {}", ing.count, item_reg.name(ing.item)))
+                            .collect();
+                        let label = format!("Craft {} ({})", recipe.name, ing_text.join(", "));
+                        menu.actions
+                            .push((label, ContextAction::HandCraft(recipe.id), has_mats));
+                        has_actions = true;
+                    }
+                }
+            }
+        }
+
+        // Move to (always available when pleb selected)
+        if sel_pleb.is_some() {
             menu.actions.push((
                 format!("Move here ({})", pleb_name),
                 ContextAction::MoveTo(wx, wy),

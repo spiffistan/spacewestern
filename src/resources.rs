@@ -167,7 +167,7 @@ impl PlebInventory {
     }
 
     pub fn wood(&self) -> u32 {
-        self.count_of(ITEM_WOOD)
+        self.count_of(ITEM_WOOD) + self.count_of(ITEM_LOG)
     }
 }
 

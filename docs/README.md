@@ -8,6 +8,7 @@
 | `MASTER_SPEC.md` | High-level vision and design pillars |
 | `PLAN.md` | Implementation roadmap and feature tracking |
 | `CRAFTING.md` | Crafting chain diagram and recipe flow |
+| `crafting-tree.md` | Mermaid diagram: full crafting/building dependency tree |
 | `AI_SYSTEM.md` | Pleb AI, pathfinding, needs, scheduling |
 | `PHYSICS_SYSTEM.md` | Thermal, fluid, electrical simulation details |
 
@@ -44,6 +45,7 @@ Early-stage design exploration. Not commitments — creative brainstorming for f
 | `DEEPER_SYSTEMS.md` | Food/cooking, medicine, knowledge/oral tradition, psychology, aesthetics, mapping, comms, endgame |
 | `PHILOSOPHY.md` | Design philosophy: permanence, silence, loneliness, scarcity as teacher, the colony as character |
 | `COMBAT.md` | Real-time tactical combat: RTwP, breaching, cover, suppression, weapons, enemy AI, wounds |
+| `ALIEN_FAUNA.md` | Nocturnal alien creatures: duskweavers, thermogasts, glintcrawlers, hollowcalls, mistmaws, borers. Sound sourcing, system integration. |
 
 ## Reference (`fluid_mechanics/`)
 

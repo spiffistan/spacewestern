@@ -2924,9 +2924,16 @@ impl App {
                 menu.screen_y / bp_ppp,
             ))
             .show(ctx, |ui| {
+                let shift_held = self.pressed_keys.contains(&KeyCode::ShiftLeft)
+                    || self.pressed_keys.contains(&KeyCode::ShiftRight);
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
                     for (label, action, enabled) in &menu.actions {
-                        let text = egui::RichText::new(label).size(11.0);
+                        let display = if shift_held {
+                            format!("{} [queue]", label)
+                        } else {
+                            label.clone()
+                        };
+                        let text = egui::RichText::new(display).size(11.0);
                         let text = if *enabled { text } else { text.weak() };
                         let btn = ui.add_enabled(*enabled, egui::Button::new(text));
                         if btn.clicked() {
@@ -2937,8 +2944,52 @@ impl App {
                 });
             });
 
-        // Execute chosen action
+        // Execute chosen action (shift = queue, otherwise immediate)
         if let Some(action) = chosen_action {
+            let shift_held = self.pressed_keys.contains(&KeyCode::ShiftLeft)
+                || self.pressed_keys.contains(&KeyCode::ShiftRight);
+
+            // Convert ContextAction to PlebCommand for queueing
+            let as_command = match &action {
+                ContextAction::Harvest(hx, hy) => Some(PlebCommand::Harvest(*hx, *hy)),
+                ContextAction::Haul(hx, hy) => Some(PlebCommand::Haul(*hx, *hy)),
+                ContextAction::MoveTo(wx, wy) => Some(PlebCommand::MoveTo(*wx, *wy)),
+                ContextAction::DigClay(dx, dy) => Some(PlebCommand::DigClay(*dx, *dy)),
+                ContextAction::HandCraft(rid) => Some(PlebCommand::HandCraft(*rid)),
+                ContextAction::GatherBranches(x, y) => Some(PlebCommand::GatherBranches(*x, *y)),
+                ContextAction::Eat(idx) => {
+                    // Convert item index to grid coords for stable queueing
+                    if *idx < self.ground_items.len() {
+                        let item = &self.ground_items[*idx];
+                        Some(PlebCommand::Eat(
+                            item.x.floor() as i32,
+                            item.y.floor() as i32,
+                        ))
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            // If shift held and pleb is busy, queue the command instead of executing
+            if shift_held {
+                if let Some(cmd) = as_command {
+                    if let Some(sel_idx) = self.selected_pleb {
+                        let pleb = &mut self.plebs[sel_idx];
+                        if !pleb.is_enemy && !pleb.activity.is_crisis() {
+                            pleb.command_queue.push(cmd);
+                        }
+                    }
+                    self.context_menu = None;
+                    return;
+                }
+            }
+
+            // Immediate execution — clear queue (new direct order replaces queued ones)
+            if let Some(sel_idx) = self.selected_pleb {
+                self.plebs[sel_idx].command_queue.clear();
+            }
+
             match action {
                 ContextAction::Harvest(hx, hy) => {
                     if let Some(sel_idx) = self.selected_pleb {
@@ -3074,8 +3125,6 @@ impl App {
                     }
                 }
                 ContextAction::DigClay(dx, dy) => {
-                    // Pleb walks to clay tile, digs it, drops clay
-                    // The pleb auto-fetches a bucket if they don't have one
                     if let Some(sel_idx) = self.selected_pleb {
                         let pleb = &mut self.plebs[sel_idx];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
@@ -3092,6 +3141,50 @@ impl App {
                             pleb.activity = PlebActivity::Walking;
                             pleb.work_target = Some((dx, dy));
                             pleb.harvest_target = None;
+                            pleb.haul_target = None;
+                        }
+                    }
+                }
+                ContextAction::HandCraft(recipe_id) => {
+                    if let Some(sel_idx) = self.selected_pleb {
+                        let pleb = &mut self.plebs[sel_idx];
+                        if !pleb.is_enemy && !pleb.activity.is_crisis() {
+                            let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                            if let Some(recipe) = recipe_reg.get(recipe_id) {
+                                let can = recipe.inputs.iter().all(|ing| {
+                                    pleb.inventory.count_of(ing.item) >= ing.count as u32
+                                });
+                                if can {
+                                    for ing in &recipe.inputs {
+                                        pleb.inventory.remove(ing.item, ing.count);
+                                    }
+                                    pleb.activity = PlebActivity::Crafting(recipe_id, 0.0);
+                                    pleb.path.clear();
+                                    pleb.path_idx = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+                ContextAction::GatherBranches(gx, gy) => {
+                    // Walk to tree, gather sticks (no axe, tree stays)
+                    if let Some(sel_idx) = self.selected_pleb {
+                        let pleb = &mut self.plebs[sel_idx];
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let adj = adjacent_walkable(&self.grid_data, gx, gy).unwrap_or((gx, gy));
+                        let path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            start,
+                            adj,
+                        );
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 0;
+                            pleb.activity = PlebActivity::Walking;
+                            pleb.work_target = Some((gx, gy));
+                            pleb.harvest_target = Some((gx, gy));
                             pleb.haul_target = None;
                         }
                     }
@@ -4155,62 +4248,43 @@ impl App {
                 } else {
                     egui::Color32::from_rgba_unmultiplied(60, 120, 220, 90)
                 };
-                // Thin wall blueprint: show wall sub-cells only
-                let bp_flags = (bp.block_data >> 16) & 0xFF;
-                let bp_thick_raw = (bp_flags >> 5) & 3;
-                let bp_bt = bp.block_data & 0xFF;
-                let is_thin_bp = bp_thick_raw != 0 && is_wall_block(bp_bt);
-                if is_thin_bp {
-                    let thick = 4 - bp_thick_raw;
-                    let wall_frac = thick as f32 * 0.25;
-                    let edge = (bp_flags >> 3) & 3;
-                    let is_corner = (bp_flags & 4) != 0;
+                // Wall blueprint: render each edge strip
+                if bp.is_wall() && bp.wall_thickness < 4 {
+                    let wall_frac = bp.wall_thickness as f32 * 0.25;
                     let tw = sx1 - sx0;
                     let th = sy1 - sy0;
-                    // Draw primary edge
-                    let wall_rect = match edge {
-                        0 => egui::Rect::from_min_size(
-                            egui::pos2(sx0, sy0),
-                            egui::vec2(tw, th * wall_frac),
-                        ),
-                        1 => egui::Rect::from_min_size(
-                            egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
-                            egui::vec2(tw * wall_frac, th),
-                        ),
-                        2 => egui::Rect::from_min_size(
-                            egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
-                            egui::vec2(tw, th * wall_frac),
-                        ),
-                        _ => egui::Rect::from_min_size(
-                            egui::pos2(sx0, sy0),
-                            egui::vec2(tw * wall_frac, th),
-                        ),
-                    };
-                    bp_painter.rect_filled(wall_rect, 0.0, tint);
-                    // Draw corner (next clockwise edge)
-                    if is_corner {
-                        let next_edge = (edge + 1) % 4;
-                        let corner_rect = match next_edge {
-                            0 => egui::Rect::from_min_size(
-                                egui::pos2(sx0, sy0),
-                                egui::vec2(tw, th * wall_frac),
-                            ),
-                            1 => egui::Rect::from_min_size(
-                                egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
-                                egui::vec2(tw * wall_frac, th),
-                            ),
-                            2 => egui::Rect::from_min_size(
-                                egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
-                                egui::vec2(tw, th * wall_frac),
-                            ),
-                            _ => egui::Rect::from_min_size(
-                                egui::pos2(sx0, sy0),
-                                egui::vec2(tw * wall_frac, th),
-                            ),
-                        };
-                        bp_painter.rect_filled(corner_rect, 0.0, tint);
+                    let edges = bp.wall_edges;
+                    // Draw each edge that's set
+                    for (bit, edge_idx) in [
+                        (WD_EDGE_N, 0u8),
+                        (WD_EDGE_E, 1),
+                        (WD_EDGE_S, 2),
+                        (WD_EDGE_W, 3),
+                    ] {
+                        if edges & bit != 0 {
+                            let edge_rect = match edge_idx {
+                                0 => egui::Rect::from_min_size(
+                                    egui::pos2(sx0, sy0),
+                                    egui::vec2(tw, th * wall_frac),
+                                ),
+                                1 => egui::Rect::from_min_size(
+                                    egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
+                                    egui::vec2(tw * wall_frac, th),
+                                ),
+                                2 => egui::Rect::from_min_size(
+                                    egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
+                                    egui::vec2(tw, th * wall_frac),
+                                ),
+                                _ => egui::Rect::from_min_size(
+                                    egui::pos2(sx0, sy0),
+                                    egui::vec2(tw * wall_frac, th),
+                                ),
+                            };
+                            bp_painter.rect_filled(edge_rect, 0.0, tint);
+                        }
                     }
                 } else {
+                    // Full-thickness wall or non-wall block
                     bp_painter.rect_filled(rect, 0.0, tint);
                 }
                 // Progress bar at bottom (construction progress)
@@ -4231,6 +4305,8 @@ impl App {
                     let res_text = if bp.wood_needed > 0
                         || bp.clay_needed > 0
                         || bp.plank_needed > 0
+                        || bp.rock_needed > 0
+                        || bp.rope_needed > 0
                     {
                         let color = if bp.resources_met() {
                             egui::Color32::from_rgb(80, 220, 80)
@@ -4244,10 +4320,23 @@ impl App {
                         if bp.plank_needed > 0 {
                             parts.push(format!("{}/{} plank", bp.plank_delivered, bp.plank_needed));
                         }
+                        if bp.rock_needed > 0 {
+                            parts.push(format!("{}/{} rock", bp.rock_delivered, bp.rock_needed));
+                        }
                         if bp.clay_needed > 0 {
                             parts.push(format!("{}/{} clay", bp.clay_delivered, bp.clay_needed));
                         }
+                        if bp.rope_needed > 0 {
+                            parts.push(format!("{}/{} rope", bp.rope_delivered, bp.rope_needed));
+                        }
                         Some((parts.join(" "), color))
+                    } else if bp.is_roof() {
+                        Some(("1 fiber".to_string(), egui::Color32::from_rgb(255, 160, 60)))
+                    } else if bp.is_campfire() {
+                        Some((
+                            "3 sticks".to_string(),
+                            egui::Color32::from_rgb(255, 160, 60),
+                        ))
                     } else {
                         None
                     };
@@ -4500,6 +4589,37 @@ impl App {
                         egui::Color32::from_rgba_unmultiplied(100, 255, 100, 200),
                     ),
                 );
+                // Draw queued command waypoints as dashed line + numbered markers
+                if !pleb.command_queue.is_empty() {
+                    let queue_color = egui::Color32::from_rgba_unmultiplied(255, 200, 100, 160); // orange
+                    let mut prev_q = end;
+                    for (qi, cmd) in pleb.command_queue.iter().enumerate() {
+                        let (tx, ty) = match cmd {
+                            PlebCommand::MoveTo(wx, wy) => {
+                                (wx.floor() as f32 + 0.5, wy.floor() as f32 + 0.5)
+                            }
+                            PlebCommand::Harvest(x, y)
+                            | PlebCommand::Haul(x, y)
+                            | PlebCommand::Eat(x, y)
+                            | PlebCommand::DigClay(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
+                            PlebCommand::HandCraft(_) => (pleb.x, pleb.y),
+                            PlebCommand::GatherBranches(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
+                        };
+                        let qp = to_screen(tx, ty);
+                        // Dashed line to next waypoint
+                        painter.line_segment([prev_q, qp], egui::Stroke::new(1.5, queue_color));
+                        // Numbered circle
+                        painter.circle_stroke(qp, 5.0, egui::Stroke::new(2.0, queue_color));
+                        painter.text(
+                            qp,
+                            egui::Align2::CENTER_CENTER,
+                            format!("{}", qi + 1),
+                            egui::FontId::proportional(8.0),
+                            queue_color,
+                        );
+                        prev_q = qp;
+                    }
+                }
             }
         }
 
@@ -5165,157 +5285,493 @@ impl App {
                 let n = item.stack.count;
                 let iid = item.stack.item_id;
                 if iid == item_defs::ITEM_BERRIES {
-                    // Berry basket: brown basket circle with purple berries on top
-                    let basket_col = egui::Color32::from_rgb(140, 100, 50);
-                    let berry_col = egui::Color32::from_rgb(120, 40, 140);
-                    item_painter.circle_filled(center, r, basket_col);
-                    let br = r * 0.4;
-                    for i in 0..(n as u32).min(4) {
-                        let angle = i as f32 * 1.6 + 0.3;
-                        let bx = center.x + angle.cos() * r * 0.45;
-                        let by = center.y + angle.sin() * r * 0.45;
-                        item_painter.circle_filled(egui::pos2(bx, by), br, berry_col);
+                    // Woven basket with clustered berries
+                    let basket = egui::Color32::from_rgb(155, 110, 55);
+                    let basket_dark = egui::Color32::from_rgb(120, 80, 35);
+                    let berry = egui::Color32::from_rgb(90, 20, 130);
+                    let berry_hi = egui::Color32::from_rgb(160, 60, 200);
+                    // Basket body
+                    item_painter.circle_filled(center, r * 0.85, basket);
+                    item_painter.circle_filled(
+                        egui::pos2(center.x, center.y + r * 0.15),
+                        r * 0.65,
+                        basket_dark,
+                    );
+                    // Weave lines
+                    for i in 0..3u32 {
+                        let y = center.y - r * 0.3 + i as f32 * r * 0.3;
+                        item_painter.line_segment(
+                            [
+                                egui::pos2(center.x - r * 0.7, y),
+                                egui::pos2(center.x + r * 0.7, y),
+                            ],
+                            egui::Stroke::new(r * 0.06, basket),
+                        );
+                    }
+                    // Berry cluster on top
+                    let count = (n as u32).min(5);
+                    for i in 0..count {
+                        let a = i as f32 * 1.25 + 0.5;
+                        let dist = if i == 0 { 0.0 } else { r * 0.3 };
+                        let bx = center.x + a.cos() * dist;
+                        let by = center.y - r * 0.15 + a.sin() * dist * 0.6;
+                        let br = r * 0.28;
+                        item_painter.circle_filled(egui::pos2(bx, by), br, berry);
+                        item_painter.circle_filled(
+                            egui::pos2(bx - br * 0.25, by - br * 0.25),
+                            br * 0.35,
+                            berry_hi,
+                        );
                     }
                 } else if iid == item_defs::ITEM_ROCK {
-                    let rock_col = egui::Color32::from_rgb(120, 120, 115);
-                    item_painter.circle_filled(center, r, rock_col);
+                    // Irregular rock pile — overlapping angular shapes
+                    let base = egui::Color32::from_rgb(105, 105, 100);
+                    let light = egui::Color32::from_rgb(140, 138, 130);
+                    let dark = egui::Color32::from_rgb(75, 75, 72);
+                    let count = (n as u32).min(3);
+                    for i in 0..count {
+                        let ox = (i as f32 - 0.5) * r * 0.4;
+                        let oy = (i as f32 - 0.5) * r * 0.25;
+                        let sz = r * (0.7 - i as f32 * 0.08);
+                        let rc = egui::pos2(center.x + ox, center.y + oy);
+                        // Main rock body
+                        item_painter.rect_filled(
+                            egui::Rect::from_center_size(rc, egui::vec2(sz * 1.3, sz)),
+                            sz * 0.35,
+                            base,
+                        );
+                        // Highlight (top-left)
+                        item_painter.circle_filled(
+                            egui::pos2(rc.x - sz * 0.2, rc.y - sz * 0.15),
+                            sz * 0.25,
+                            light,
+                        );
+                        // Shadow (bottom-right)
+                        item_painter.circle_filled(
+                            egui::pos2(rc.x + sz * 0.25, rc.y + sz * 0.2),
+                            sz * 0.2,
+                            dark,
+                        );
+                    }
                 } else if iid == item_defs::ITEM_WOOD {
-                    // Wood pile: brown logs
-                    let wood_col = egui::Color32::from_rgb(120, 80, 40);
-                    let log_w = r * 1.2;
-                    let log_h = r * 0.4;
-                    for i in 0..(n as u32).min(3) {
-                        let ly = center.y - log_h * 0.8 + i as f32 * log_h * 0.8;
+                    // Log pile with end-grain circles and bark texture
+                    let bark = egui::Color32::from_rgb(95, 60, 30);
+                    let inner = egui::Color32::from_rgb(170, 130, 75);
+                    let ring = egui::Color32::from_rgb(140, 105, 55);
+                    let count = (n as u32).min(3);
+                    for i in 0..count {
+                        let ly = center.y - r * 0.55 + i as f32 * r * 0.55;
+                        let lx = center.x + (i as f32 - 1.0) * r * 0.15;
+                        let log_w = r * 1.3;
+                        let log_h = r * 0.45;
+                        // Bark body
                         item_painter.rect_filled(
                             egui::Rect::from_center_size(
-                                egui::pos2(center.x, ly),
+                                egui::pos2(lx, ly),
                                 egui::vec2(log_w, log_h),
                             ),
-                            log_h * 0.3,
-                            wood_col,
+                            log_h * 0.4,
+                            bark,
+                        );
+                        // End-grain circle (right side)
+                        let end_x = lx + log_w * 0.42;
+                        item_painter.circle_filled(egui::pos2(end_x, ly), log_h * 0.45, inner);
+                        item_painter.circle_stroke(
+                            egui::pos2(end_x, ly),
+                            log_h * 0.25,
+                            egui::Stroke::new(r * 0.05, ring),
                         );
                     }
-                } else if iid == item_defs::ITEM_STONE_AXE || iid == item_defs::ITEM_STONE_PICK {
-                    // Stone tool: grey head + brown handle
-                    let handle_col = egui::Color32::from_rgb(110, 75, 35);
-                    let head_col = egui::Color32::from_rgb(130, 125, 115);
-                    // Handle: diagonal line
-                    let h_len = r * 1.1;
-                    let h_w = r * 0.25;
+                } else if iid == item_defs::ITEM_LOG {
+                    // Big heavy log — larger than normal items
+                    let bark = egui::Color32::from_rgb(85, 55, 28);
+                    let bark_hi = egui::Color32::from_rgb(110, 72, 35);
+                    let inner = egui::Color32::from_rgb(180, 140, 80);
+                    let ring = egui::Color32::from_rgb(150, 115, 60);
+                    let core = egui::Color32::from_rgb(130, 95, 50);
+                    let lr = r * 1.6; // bigger than other items
+                    let log_w = lr * 1.8;
+                    let log_h = lr * 0.7;
+                    // Bark body
                     item_painter.rect_filled(
-                        egui::Rect::from_center_size(
-                            egui::pos2(center.x - h_len * 0.15, center.y + h_len * 0.15),
-                            egui::vec2(h_len, h_w),
-                        ),
-                        h_w * 0.3,
-                        handle_col,
+                        egui::Rect::from_center_size(center, egui::vec2(log_w, log_h)),
+                        log_h * 0.45,
+                        bark,
                     );
-                    // Head: wider stone piece at top
-                    let head_w = r * 0.7;
-                    let head_h = r * 0.5;
-                    let head_off = if iid == item_defs::ITEM_STONE_AXE {
-                        -0.35
-                    } else {
-                        -0.25
-                    };
+                    // Bark highlight stripe
+                    item_painter.line_segment(
+                        [
+                            egui::pos2(center.x - log_w * 0.35, center.y - log_h * 0.2),
+                            egui::pos2(center.x + log_w * 0.35, center.y - log_h * 0.2),
+                        ],
+                        egui::Stroke::new(lr * 0.08, bark_hi),
+                    );
+                    // End-grain circle (right)
+                    let end_r = log_h * 0.45;
+                    let end_x = center.x + log_w * 0.4;
+                    item_painter.circle_filled(egui::pos2(end_x, center.y), end_r, inner);
+                    item_painter.circle_stroke(
+                        egui::pos2(end_x, center.y),
+                        end_r * 0.6,
+                        egui::Stroke::new(lr * 0.06, ring),
+                    );
+                    item_painter.circle_filled(egui::pos2(end_x, center.y), end_r * 0.2, core);
+                    // End-grain circle (left — cut face)
+                    let end_x2 = center.x - log_w * 0.4;
+                    item_painter.circle_filled(egui::pos2(end_x2, center.y), end_r, inner);
+                    item_painter.circle_stroke(
+                        egui::pos2(end_x2, center.y),
+                        end_r * 0.6,
+                        egui::Stroke::new(lr * 0.06, ring),
+                    );
+                    item_painter.circle_filled(egui::pos2(end_x2, center.y), end_r * 0.2, core);
+                } else if iid == item_defs::ITEM_STONE_AXE {
+                    // Stone axe: tapered handle + chipped stone head with binding
+                    let handle = egui::Color32::from_rgb(120, 82, 40);
+                    let head = egui::Color32::from_rgb(130, 128, 118);
+                    let head_hi = egui::Color32::from_rgb(160, 158, 148);
+                    let binding = egui::Color32::from_rgb(140, 120, 70);
+                    // Handle (diagonal)
+                    let h1 = egui::pos2(center.x - r * 0.5, center.y + r * 0.6);
+                    let h2 = egui::pos2(center.x + r * 0.3, center.y - r * 0.4);
+                    item_painter.line_segment([h1, h2], egui::Stroke::new(r * 0.22, handle));
+                    // Stone head (wedge shape)
+                    let hc = egui::pos2(center.x + r * 0.25, center.y - r * 0.35);
                     item_painter.rect_filled(
-                        egui::Rect::from_center_size(
-                            egui::pos2(center.x + r * 0.3, center.y + r * head_off),
-                            egui::vec2(head_w, head_h),
-                        ),
-                        2.0,
-                        head_col,
+                        egui::Rect::from_center_size(hc, egui::vec2(r * 0.55, r * 0.75)),
+                        r * 0.08,
+                        head,
                     );
-                } else if iid == item_defs::ITEM_WOODEN_SHOVEL {
-                    // Shovel: brown handle + darker scoop
-                    let handle_col = egui::Color32::from_rgb(110, 75, 35);
-                    let scoop_col = egui::Color32::from_rgb(85, 65, 40);
-                    // Handle
-                    let h_len = r * 1.2;
-                    let h_w = r * 0.2;
-                    item_painter.rect_filled(
-                        egui::Rect::from_center_size(center, egui::vec2(h_w, h_len)),
-                        h_w * 0.3,
-                        handle_col,
-                    );
-                    // Scoop at bottom
+                    // Highlight chip
                     item_painter.circle_filled(
-                        egui::pos2(center.x, center.y + r * 0.5),
-                        r * 0.4,
-                        scoop_col,
+                        egui::pos2(hc.x - r * 0.08, hc.y - r * 0.12),
+                        r * 0.12,
+                        head_hi,
+                    );
+                    // Binding wrap
+                    let bc = egui::pos2(center.x + r * 0.05, center.y - r * 0.05);
+                    for i in 0..3u32 {
+                        let by = bc.y - r * 0.08 + i as f32 * r * 0.08;
+                        item_painter.line_segment(
+                            [
+                                egui::pos2(bc.x - r * 0.12, by),
+                                egui::pos2(bc.x + r * 0.12, by),
+                            ],
+                            egui::Stroke::new(r * 0.06, binding),
+                        );
+                    }
+                } else if iid == item_defs::ITEM_STONE_PICK {
+                    // Stone pick: handle + narrow pointed head
+                    let handle = egui::Color32::from_rgb(120, 82, 40);
+                    let head = egui::Color32::from_rgb(125, 123, 115);
+                    let head_hi = egui::Color32::from_rgb(155, 152, 142);
+                    let binding = egui::Color32::from_rgb(140, 120, 70);
+                    // Handle
+                    let h1 = egui::pos2(center.x, center.y + r * 0.65);
+                    let h2 = egui::pos2(center.x, center.y - r * 0.2);
+                    item_painter.line_segment([h1, h2], egui::Stroke::new(r * 0.2, handle));
+                    // Horizontal pick head
+                    item_painter.rect_filled(
+                        egui::Rect::from_center_size(
+                            egui::pos2(center.x, center.y - r * 0.35),
+                            egui::vec2(r * 1.2, r * 0.35),
+                        ),
+                        r * 0.06,
+                        head,
+                    );
+                    // Pointed tips
+                    item_painter.circle_filled(
+                        egui::pos2(center.x - r * 0.55, center.y - r * 0.35),
+                        r * 0.1,
+                        head_hi,
+                    );
+                    item_painter.circle_filled(
+                        egui::pos2(center.x + r * 0.55, center.y - r * 0.35),
+                        r * 0.1,
+                        head_hi,
+                    );
+                    // Binding
+                    let bc = egui::pos2(center.x, center.y - r * 0.15);
+                    for i in 0..2u32 {
+                        let by = bc.y - r * 0.05 + i as f32 * r * 0.1;
+                        item_painter.line_segment(
+                            [
+                                egui::pos2(bc.x - r * 0.1, by),
+                                egui::pos2(bc.x + r * 0.1, by),
+                            ],
+                            egui::Stroke::new(r * 0.06, binding),
+                        );
+                    }
+                } else if iid == item_defs::ITEM_WOODEN_SHOVEL {
+                    // Shovel: tapered handle + rounded blade
+                    let handle = egui::Color32::from_rgb(120, 82, 40);
+                    let blade = egui::Color32::from_rgb(95, 70, 38);
+                    let blade_edge = egui::Color32::from_rgb(75, 55, 30);
+                    // Handle
+                    item_painter.line_segment(
+                        [
+                            egui::pos2(center.x, center.y - r * 0.7),
+                            egui::pos2(center.x, center.y + r * 0.2),
+                        ],
+                        egui::Stroke::new(r * 0.18, handle),
+                    );
+                    // Grip nub at top
+                    item_painter.circle_filled(
+                        egui::pos2(center.x, center.y - r * 0.7),
+                        r * 0.14,
+                        handle,
+                    );
+                    // Blade (rounded rectangle)
+                    let blade_center = egui::pos2(center.x, center.y + r * 0.45);
+                    item_painter.rect_filled(
+                        egui::Rect::from_center_size(blade_center, egui::vec2(r * 0.7, r * 0.55)),
+                        r * 0.2,
+                        blade,
+                    );
+                    // Edge highlight at bottom
+                    item_painter.line_segment(
+                        [
+                            egui::pos2(center.x - r * 0.3, center.y + r * 0.68),
+                            egui::pos2(center.x + r * 0.3, center.y + r * 0.68),
+                        ],
+                        egui::Stroke::new(r * 0.08, blade_edge),
                     );
                 } else if iid == item_defs::ITEM_FIBER {
-                    // Fiber: green wispy strands
-                    let fiber_col = egui::Color32::from_rgb(80, 140, 50);
-                    for i in 0..3u32 {
-                        let angle = (i as f32 - 1.0) * 0.4;
-                        let x1 = center.x + angle.sin() * r * 0.2;
-                        let y1 = center.y + r * 0.4;
-                        let x2 = center.x + angle.sin() * r * 0.5 + (i as f32 - 1.0) * r * 0.2;
-                        let y2 = center.y - r * 0.5;
+                    // Bundled plant fiber — twisted strands
+                    let green = egui::Color32::from_rgb(75, 135, 45);
+                    let light = egui::Color32::from_rgb(110, 170, 65);
+                    for i in 0..4u32 {
+                        let offset = (i as f32 - 1.5) * r * 0.18;
+                        let wave = (i as f32 * 1.3).sin() * r * 0.12;
+                        let col = if i % 2 == 0 { green } else { light };
                         item_painter.line_segment(
-                            [egui::pos2(x1, y1), egui::pos2(x2, y2)],
-                            egui::Stroke::new(r * 0.15, fiber_col),
+                            [
+                                egui::pos2(center.x + offset - wave, center.y + r * 0.55),
+                                egui::pos2(center.x + offset + wave, center.y - r * 0.55),
+                            ],
+                            egui::Stroke::new(r * 0.13, col),
                         );
                     }
+                    // Tie in middle
+                    item_painter.line_segment(
+                        [
+                            egui::pos2(center.x - r * 0.25, center.y),
+                            egui::pos2(center.x + r * 0.25, center.y),
+                        ],
+                        egui::Stroke::new(r * 0.08, egui::Color32::from_rgb(140, 120, 70)),
+                    );
                 } else if iid == item_defs::ITEM_SCRAP_WOOD {
-                    // Scrap wood: small jagged wood pieces
-                    let scrap_col = egui::Color32::from_rgb(130, 90, 45);
-                    let piece_w = r * 0.5;
-                    let piece_h = r * 0.25;
-                    for i in 0..3u32 {
-                        let ox = (i as f32 - 1.0) * piece_w * 0.6;
-                        let oy = (i as f32 - 1.0) * piece_h * 0.5;
-                        let angle = (i as f32 - 1.0) * 0.3;
-                        item_painter.rect_filled(
-                            egui::Rect::from_center_size(
-                                egui::pos2(center.x + ox, center.y + oy),
-                                egui::vec2(piece_w, piece_h),
-                            ),
-                            piece_h * 0.2,
-                            scrap_col,
+                    // Scattered sticks/twigs
+                    let colors = [
+                        egui::Color32::from_rgb(140, 95, 48),
+                        egui::Color32::from_rgb(125, 85, 40),
+                        egui::Color32::from_rgb(150, 105, 55),
+                    ];
+                    let count = (n as u32).min(4);
+                    for i in 0..count {
+                        let a = i as f32 * 0.8 + 0.3;
+                        let len = r * (0.7 + (i as f32 * 0.37).sin() * 0.3);
+                        let cx = center.x + (i as f32 - 1.0) * r * 0.15;
+                        let cy = center.y + (i as f32 - 1.0) * r * 0.1;
+                        item_painter.line_segment(
+                            [
+                                egui::pos2(cx - a.cos() * len * 0.5, cy - a.sin() * len * 0.5),
+                                egui::pos2(cx + a.cos() * len * 0.5, cy + a.sin() * len * 0.5),
+                            ],
+                            egui::Stroke::new(r * 0.14, colors[i as usize % 3]),
                         );
-                        let _ = angle; // rotation would need transform, keep simple
                     }
                 } else if iid == item_defs::ITEM_CLAY {
-                    // Clay: reddish-brown lump
-                    let clay_col = egui::Color32::from_rgb(150, 100, 60);
-                    item_painter.circle_filled(center, r * 0.8, clay_col);
-                    // Darker wet streak
+                    // Clay lump with wet sheen
+                    let base = egui::Color32::from_rgb(155, 100, 55);
+                    let mid = egui::Color32::from_rgb(135, 85, 45);
+                    let sheen = egui::Color32::from_rgb(180, 135, 85);
+                    // Main body (slightly flattened)
+                    item_painter.rect_filled(
+                        egui::Rect::from_center_size(center, egui::vec2(r * 1.4, r * 1.0)),
+                        r * 0.45,
+                        base,
+                    );
+                    // Depth shadow
                     item_painter.circle_filled(
-                        egui::pos2(center.x - r * 0.15, center.y - r * 0.1),
-                        r * 0.35,
-                        egui::Color32::from_rgb(120, 75, 45),
+                        egui::pos2(center.x + r * 0.1, center.y + r * 0.1),
+                        r * 0.45,
+                        mid,
+                    );
+                    // Wet highlight
+                    item_painter.circle_filled(
+                        egui::pos2(center.x - r * 0.2, center.y - r * 0.15),
+                        r * 0.2,
+                        sheen,
                     );
                 } else if iid == item_defs::ITEM_ROPE {
-                    // Rope: coiled tan circle
-                    let rope_col = egui::Color32::from_rgb(160, 140, 90);
+                    // Coiled rope with visible winds
+                    let outer = egui::Color32::from_rgb(165, 140, 85);
+                    let inner = egui::Color32::from_rgb(140, 115, 65);
+                    let highlight = egui::Color32::from_rgb(190, 170, 115);
+                    // Outer coil
+                    item_painter.circle_stroke(center, r * 0.6, egui::Stroke::new(r * 0.28, outer));
+                    // Inner coil
                     item_painter.circle_stroke(
                         center,
-                        r * 0.6,
-                        egui::Stroke::new(r * 0.25, rope_col),
+                        r * 0.35,
+                        egui::Stroke::new(r * 0.12, inner),
                     );
-                } else {
-                    // Generic item: colored circle
-                    let col = if item.stack.is_container() {
-                        egui::Color32::from_rgb(100, 80, 60) // brown for containers
-                    } else {
-                        egui::Color32::from_rgb(100, 100, 80)
-                    };
-                    item_painter.circle_filled(center, r, col);
-                    // Liquid fill indicator for containers
+                    // Highlight on top
+                    item_painter.circle_filled(
+                        egui::pos2(center.x - r * 0.15, center.y - r * 0.4),
+                        r * 0.12,
+                        highlight,
+                    );
+                    // Tail end
+                    item_painter.line_segment(
+                        [
+                            egui::pos2(center.x + r * 0.5, center.y + r * 0.35),
+                            egui::pos2(center.x + r * 0.7, center.y + r * 0.55),
+                        ],
+                        egui::Stroke::new(r * 0.12, outer),
+                    );
+                } else if iid == item_defs::ITEM_PLANK {
+                    // Stacked planks with wood grain
+                    let plank_col = egui::Color32::from_rgb(185, 150, 90);
+                    let grain = egui::Color32::from_rgb(160, 125, 70);
+                    let edge = egui::Color32::from_rgb(145, 110, 60);
+                    let count = (n as u32).min(4);
+                    for i in 0..count {
+                        let py = center.y - r * 0.4 + i as f32 * r * 0.3;
+                        let pw = r * 1.4;
+                        let ph = r * 0.25;
+                        let rect = egui::Rect::from_center_size(
+                            egui::pos2(center.x, py),
+                            egui::vec2(pw, ph),
+                        );
+                        item_painter.rect_filled(rect, ph * 0.15, plank_col);
+                        // Grain line
+                        item_painter.line_segment(
+                            [
+                                egui::pos2(center.x - pw * 0.4, py),
+                                egui::pos2(center.x + pw * 0.4, py),
+                            ],
+                            egui::Stroke::new(r * 0.03, grain),
+                        );
+                        // Bottom edge shadow
+                        item_painter.line_segment(
+                            [
+                                egui::pos2(rect.min.x, rect.max.y),
+                                egui::pos2(rect.max.x, rect.max.y),
+                            ],
+                            egui::Stroke::new(r * 0.04, edge),
+                        );
+                    }
+                } else if iid == item_defs::ITEM_WOODEN_BUCKET {
+                    // Bucket: tapered cylinder with handle
+                    let wood = egui::Color32::from_rgb(145, 105, 55);
+                    let dark = egui::Color32::from_rgb(110, 78, 38);
+                    let band = egui::Color32::from_rgb(90, 90, 85);
+                    // Body
+                    item_painter.rect_filled(
+                        egui::Rect::from_center_size(
+                            egui::pos2(center.x, center.y + r * 0.1),
+                            egui::vec2(r * 1.0, r * 1.1),
+                        ),
+                        r * 0.15,
+                        wood,
+                    );
+                    // Metal bands
+                    for y_off in [-0.2f32, 0.3] {
+                        item_painter.line_segment(
+                            [
+                                egui::pos2(center.x - r * 0.48, center.y + r * y_off),
+                                egui::pos2(center.x + r * 0.48, center.y + r * y_off),
+                            ],
+                            egui::Stroke::new(r * 0.08, band),
+                        );
+                    }
+                    // Handle
+                    item_painter.circle_stroke(
+                        egui::pos2(center.x, center.y - r * 0.5),
+                        r * 0.3,
+                        egui::Stroke::new(r * 0.08, dark),
+                    );
+                    // Liquid fill
                     if let Some((_, amt)) = item.stack.liquid {
                         let cap = item.stack.liquid_capacity();
-                        if cap > 0 {
+                        if cap > 0 && amt > 0 {
                             let fill = amt as f32 / cap as f32;
-                            let fill_r = r * fill;
-                            item_painter.circle_filled(
-                                center,
-                                fill_r,
-                                egui::Color32::from_rgb(60, 120, 200),
+                            let fill_h = r * 0.9 * fill;
+                            item_painter.rect_filled(
+                                egui::Rect::from_min_size(
+                                    egui::pos2(center.x - r * 0.4, center.y + r * 0.55 - fill_h),
+                                    egui::vec2(r * 0.8, fill_h),
+                                ),
+                                r * 0.08,
+                                egui::Color32::from_rgba_unmultiplied(60, 130, 210, 160),
                             );
                         }
                     }
+                } else if iid == item_defs::ITEM_CLAY_JUG || iid == item_defs::ITEM_UNFIRED_JUG {
+                    // Amphora/jug shape
+                    let col = if iid == item_defs::ITEM_CLAY_JUG {
+                        egui::Color32::from_rgb(165, 100, 55) // fired: warm terracotta
+                    } else {
+                        egui::Color32::from_rgb(140, 120, 100) // unfired: grey-clay
+                    };
+                    let dark = egui::Color32::from_rgb(
+                        (col.r() as i32 - 30).max(0) as u8,
+                        (col.g() as i32 - 25).max(0) as u8,
+                        (col.b() as i32 - 20).max(0) as u8,
+                    );
+                    // Body (wide)
+                    item_painter.rect_filled(
+                        egui::Rect::from_center_size(
+                            egui::pos2(center.x, center.y + r * 0.1),
+                            egui::vec2(r * 0.9, r * 0.9),
+                        ),
+                        r * 0.35,
+                        col,
+                    );
+                    // Neck (narrow)
+                    item_painter.rect_filled(
+                        egui::Rect::from_center_size(
+                            egui::pos2(center.x, center.y - r * 0.45),
+                            egui::vec2(r * 0.35, r * 0.4),
+                        ),
+                        r * 0.08,
+                        col,
+                    );
+                    // Rim
+                    item_painter.line_segment(
+                        [
+                            egui::pos2(center.x - r * 0.25, center.y - r * 0.6),
+                            egui::pos2(center.x + r * 0.25, center.y - r * 0.6),
+                        ],
+                        egui::Stroke::new(r * 0.1, dark),
+                    );
+                    // Liquid fill
+                    if let Some((_, amt)) = item.stack.liquid {
+                        let cap = item.stack.liquid_capacity();
+                        if cap > 0 && amt > 0 {
+                            let fill = amt as f32 / cap as f32;
+                            let fill_h = r * 0.7 * fill;
+                            item_painter.rect_filled(
+                                egui::Rect::from_min_size(
+                                    egui::pos2(center.x - r * 0.35, center.y + r * 0.45 - fill_h),
+                                    egui::vec2(r * 0.7, fill_h),
+                                ),
+                                r * 0.15,
+                                egui::Color32::from_rgba_unmultiplied(60, 130, 210, 140),
+                            );
+                        }
+                    }
+                } else {
+                    // Generic item: colored circle with highlight
+                    let col = egui::Color32::from_rgb(110, 105, 90);
+                    item_painter.circle_filled(center, r * 0.8, col);
+                    item_painter.circle_filled(
+                        egui::pos2(center.x - r * 0.15, center.y - r * 0.15),
+                        r * 0.25,
+                        egui::Color32::from_rgb(140, 135, 120),
+                    );
                 }
                 if tile_px > 6.0 {
                     let label = if item.stack.is_container() {
@@ -5331,6 +5787,32 @@ impl App {
                         9.0,
                         egui::Color32::WHITE,
                     );
+                }
+
+                // Tooltip on hover
+                let mouse = ctx.input(|i| i.pointer.hover_pos());
+                if let Some(mp) = mouse {
+                    let dx = mp.x - center.x;
+                    let dy = mp.y - center.y;
+                    if dx * dx + dy * dy < r * r * 2.0 {
+                        let item_reg = item_defs::ItemRegistry::cached();
+                        let name = item_reg.name(iid);
+                        let tip = if item.stack.is_container() {
+                            format!("{} ({})", name, item.stack.label())
+                        } else if n > 1 {
+                            format!("{} x{}", name, n)
+                        } else {
+                            name.to_string()
+                        };
+                        egui::show_tooltip_at_pointer(
+                            ctx,
+                            egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("item_tip")),
+                            egui::Id::new("item_tip_inner"),
+                            |ui| {
+                                ui.label(egui::RichText::new(tip).size(11.0));
+                            },
+                        );
+                    }
                 }
             }
         }

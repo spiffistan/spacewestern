@@ -37,6 +37,18 @@ pub enum MentalBreakKind {
     Collapse, // sits on ground, won't move
 }
 
+/// A queued player command for a pleb. Shift-click appends to this queue.
+#[derive(Clone, Debug)]
+pub enum PlebCommand {
+    MoveTo(f32, f32),
+    Harvest(i32, i32),
+    Haul(i32, i32),
+    Eat(i32, i32),
+    DigClay(i32, i32),
+    HandCraft(u16),
+    GatherBranches(i32, i32),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlebActivity {
     Idle,
@@ -225,8 +237,9 @@ pub struct Pleb {
     pub schedule: PlebSchedule,
     pub knockback_vx: f32, // explosion knockback velocity (decays over time)
     pub knockback_vy: f32,
-    pub is_dead: bool,            // corpse: stays in world but doesn't act
-    pub work_priorities: [u8; 4], // [haul, farm, build, craft] — 0=off, 1-3=priority
+    pub is_dead: bool,                   // corpse: stays in world but doesn't act
+    pub work_priorities: [u8; 4],        // [haul, farm, build, craft] — 0=off, 1-3=priority
+    pub command_queue: Vec<PlebCommand>, // shift-click queued commands
 }
 
 /// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
@@ -315,6 +328,7 @@ impl Pleb {
             knockback_vy: 0.0,
             is_dead: false,
             work_priorities: crate::zones::default_work_priorities(),
+            command_queue: Vec::new(),
         }
     }
 

@@ -20,13 +20,14 @@ pub mod recipe_defs;
 mod sprites;
 
 use grid::*;
+use item_defs::{ITEM_ROCK, ITEM_SCRAP_WOOD};
 use materials::{GpuMaterial, build_material_table};
 use sprites::generate_tree_sprites;
 
 mod pleb;
 use pleb::{
-    GpuPleb, MAX_PLEBS, MentalBreakKind, Pleb, PlebActivity, PlebShift, adjacent_walkable,
-    astar_path_terrain_wd, is_walkable_pos, is_walkable_pos_wd, random_name,
+    GpuPleb, MAX_PLEBS, MentalBreakKind, Pleb, PlebActivity, PlebCommand, PlebShift,
+    adjacent_walkable, astar_path_terrain_wd, is_walkable_pos, is_walkable_pos_wd, random_name,
 };
 
 mod needs;
@@ -207,8 +208,9 @@ struct App {
     show_schedule: bool,                                // show shift schedule window
     show_priorities: bool,                              // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
-    doors: Vec<Door>,  // physical hinged doors
-    doors_dirty: bool, // door angles changed, re-upload door_buffer
+    doors: Vec<Door>,     // physical hinged doors
+    doors_dirty: bool,    // door angles changed, re-upload door_buffer
+    roof_paid: Vec<bool>, // per-tile: has fiber been delivered for this roof tile?
     physics_bodies: Vec<PhysicsBody>,
     ground_items: Vec<resources::GroundItem>,
     blueprints: std::collections::HashMap<(i32, i32), Blueprint>,
@@ -471,7 +473,7 @@ impl App {
             start_time: Instant::now(),
             time_of_day: DAY_DURATION * (CAMERA_START_HOUR / 24.0),
             time_paused: false,
-            time_speed: 0.5,
+            time_speed: 0.25,
             last_frame_time: Instant::now(),
             last_click_frame: 0,
             last_click_pos: (-1, -1),
@@ -481,7 +483,7 @@ impl App {
             lightmap_frame: 0,
             build_tool: BuildTool::None,
             build_rotation: 0,
-            wall_thickness: 4,
+            wall_thickness: 1, // thin walls by default
             hover_world: (0.0, 0.0),
             fluid_params: FluidParams {
                 sim_w: FLUID_SIM_W as f32,
@@ -529,7 +531,7 @@ impl App {
             camera_pan_speed: 400.0,
             dye_w: FLUID_DYE_W,
             dye_h: FLUID_DYE_H,
-            sandbox_mode: true,
+            sandbox_mode: false,
             sandbox_tool: SandboxTool::None,
             drag_start: None,
             show_pipe_overlay: false,
@@ -570,8 +572,19 @@ impl App {
             pressed_keys: std::collections::HashSet::new(),
             doors: Vec::new(),
             doors_dirty: false,
+            roof_paid: vec![false; (GRID_W * GRID_H) as usize],
             physics_bodies: Vec::new(),
-            ground_items: Vec::new(),
+            ground_items: {
+                // Scatter starting resources near spawn for first tools
+                let cx = GRID_W as f32 / 2.0;
+                let cy = GRID_H as f32 / 2.0;
+                vec![
+                    resources::GroundItem::new(cx - 1.3, cy + 0.8, ITEM_SCRAP_WOOD, 3),
+                    resources::GroundItem::new(cx + 1.5, cy - 0.5, ITEM_SCRAP_WOOD, 2),
+                    resources::GroundItem::new(cx + 0.7, cy + 1.4, ITEM_ROCK, 3),
+                    resources::GroundItem::new(cx - 0.9, cy - 1.2, ITEM_ROCK, 2),
+                ]
+            },
             blueprints: std::collections::HashMap::new(),
             pleb_air_data: Vec::new(),
             pleb_air_readback_pending: false,
@@ -1550,6 +1563,37 @@ impl App {
 
         // Re-upload grid if dirty (door toggled etc.)
         if self.grid_dirty {
+            // Roof fiber cost: suppress roof_h on unpaid tiles, create blueprints
+            if !self.sandbox_mode {
+                let grid_size = (GRID_W * GRID_H) as usize;
+                for idx in 0..grid_size.min(self.grid_data.len()) {
+                    let roof_h = (self.grid_data[idx] >> 24) & 0xFF;
+                    if roof_h > 0 {
+                        if self.roof_paid[idx] {
+                            // Already paid, keep roof
+                        } else if !self.blueprints.contains_key(&(
+                            (idx % GRID_W as usize) as i32,
+                            (idx / GRID_W as usize) as i32,
+                        )) {
+                            // New roof tile — create blueprint requiring fiber
+                            let bx = (idx % GRID_W as usize) as i32;
+                            let by = (idx / GRID_W as usize) as i32;
+                            self.blueprints.insert((bx, by), Blueprint::new_roof());
+                            // Clear roof_h so shader sees no roof yet
+                            self.grid_data[idx] &= 0x00FFFFFF;
+                        } else {
+                            // Blueprint exists but not yet built — keep roof_h suppressed
+                            self.grid_data[idx] &= 0x00FFFFFF;
+                        }
+                    } else {
+                        // No roof here — reset paid state if it was set (wall removed)
+                        if self.roof_paid[idx] {
+                            self.roof_paid[idx] = false;
+                        }
+                    }
+                }
+            }
+
             gfx.queue
                 .write_buffer(&gfx.grid_buffer, 0, bytemuck::cast_slice(&self.grid_data));
             // Rebuild fluid obstacle field
