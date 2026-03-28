@@ -1,6 +1,7 @@
 /target
 /dist
 CONTEXT.md
+DISPATCH_*.md
 
 # Blender backups
 *.blend1
