@@ -178,15 +178,15 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
             let wy = f32(by) + 0.5;
             let phase = fire_hash(vec2(wx, wy)) * 6.28;
             let flicker = sin(params.time * 8.3 + phase) * 0.3 + 0.7;
-            // Smoke production scales with intensity
-            result.r += params.smoke_rate * flicker * fire_strength * 0.15;
-            // O2 consumption scales with intensity
-            result.g -= 0.015 * fire_strength;
+            // Smoke production (reduced for gentle campfire)
+            result.r += params.smoke_rate * flicker * fire_strength * 0.08;
+            // O2 consumption
+            result.g -= 0.010 * fire_strength;
             // CO2 production
-            result.b += 0.01 * fire_strength;
-            // Temperature injection: 100°C at intensity 0, up to 600°C at intensity 10
-            let fire_temp = 100.0 + fire_intensity * 500.0;
-            result.a = mix(result.a, fire_temp, fire_strength * 0.3 * flicker);
+            result.b += 0.008 * fire_strength;
+            // Temperature: gentle warmth, not a furnace. 40-80°C at the source tile.
+            let fire_temp = 40.0 + fire_intensity * 40.0;
+            result.a = mix(result.a, fire_temp, fire_strength * 0.15 * flicker);
         }
     }
 
@@ -407,20 +407,46 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Fire injects heat — realistic fireplace (~600°C flame, heats air gradually)
-    // Heat injection rate is moderate; enclosed rooms accumulate heat over time.
-    // The fire itself is very hot, but surrounding air heats gently via convection.
+    // Campfire heat — gentle warmth, not a furnace.
+    // Target ~35°C near the flame (comfortable warm, not dangerously hot).
+    // Heat spreads via the fluid sim's diffusion to warm nearby tiles.
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block_t = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         if (block_t & 0xFFu) == 6u {
+            let fire_level = f32((block_t >> 8u) & 0xFFu) / 10.0; // 0-1 intensity
+            let fire_str = max(fire_level, 0.3); // minimum ember glow
             let fire_o2_t = clamp(result.g * 3.0 - 0.5, 0.0, 1.0);
-            // Radiant heating: push air temperature toward fire temp (~80°C near flame)
-            // Rate depends on how cold the air currently is (diminishing returns)
-            let fire_target = 80.0 * fire_o2_t;
+            // Gentle target: 35°C at full strength (within comfortable range)
+            let fire_target = 35.0 * fire_str * fire_o2_t;
             let heat_deficit = max(fire_target - result.a, 0.0);
-            result.a += heat_deficit * 0.08 * fire_o2_t; // gradual approach
-            // Minimum temperature near an active fire
-            result.a = max(result.a, 30.0 * fire_o2_t);
+            result.a += heat_deficit * 0.05 * fire_o2_t; // slow approach
+            // Minimum warmth near active fire (~22°C = comfortable)
+            result.a = max(result.a, 22.0 * fire_str * fire_o2_t);
+        }
+    }
+
+    // Radiant heat from nearby fires: IR heats air directly in a radius.
+    // This is separate from the fire-tile injection above — it warms SURROUNDING air.
+    if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
+        for (var rdy: i32 = -5; rdy <= 5; rdy++) {
+            for (var rdx: i32 = -5; rdx <= 5; rdx++) {
+                let rx = bx + rdx;
+                let ry = by + rdy;
+                if rx < 0 || ry < 0 || rx >= i32(params.sim_w) || ry >= i32(params.sim_h) { continue; }
+                let dist_sq = f32(rdx * rdx + rdy * rdy);
+                if dist_sq < 0.5 || dist_sq > 25.0 { continue; }
+                let rb = grid[u32(ry) * u32(params.sim_w) + u32(rx)];
+                if (rb & 0xFFu) == 6u { // BT_FIREPLACE
+                    let rlevel = f32((rb >> 8u) & 0xFFu) / 10.0;
+                    let rstr = max(rlevel, 0.3);
+                    let ro2 = clamp(result.g * 3.0 - 0.5, 0.0, 1.0);
+                    // Inverse-square radiant warmth
+                    let radiance = rstr * ro2 * 12.0 / (1.0 + dist_sq * 0.3);
+                    let rtarget = 28.0; // comfortable warm
+                    let rdeficit = max(rtarget - result.a, 0.0);
+                    result.a += rdeficit * radiance * 0.005;
+                }
+            }
         }
     }
 

@@ -679,8 +679,10 @@ impl App {
                         .unwrap_or(false);
                     let path_done = pleb.path_idx >= pleb.path.len();
 
-                    // Phase 1: not carrying anything → pick up item at harvest_target
-                    if (path_done || at_pickup) && !pleb.inventory.is_carrying() {
+                    // Phase 1: at pickup location → pick up item
+                    // at_pickup required (not just path_done) so carrying plebs
+                    // redirected to fetch more don't skip pickup
+                    if at_pickup {
                         if let Some((rx, ry)) = pleb.harvest_target {
                             let ridx = (ry as u32 * GRID_W + rx as u32) as usize;
                             let is_rock =
@@ -755,8 +757,8 @@ impl App {
                             pleb.activity = PlebActivity::Idle;
                         }
                     }
-                    // Phase 2: carrying item → deliver at haul_target
-                    else if (path_done || at_delivery) && pleb.inventory.is_carrying() {
+                    // Phase 2: carrying item, at delivery location → deliver
+                    else if at_delivery && pleb.inventory.is_carrying() {
                         if let Some((cx, cy)) = pleb.haul_target {
                             let is_blueprint = self.blueprints.contains_key(&(cx, cy));
                             let bp_is_roof = self
@@ -876,9 +878,50 @@ impl App {
                                     pleb.work_target = Some((cx, cy));
                                     self.active_work.insert((cx, cy));
                                 } else {
-                                    // Not enough special materials yet — go idle but stay near
-                                    pleb.activity = PlebActivity::Idle;
-                                    pleb.work_target = None; // release so material fetch can re-assign
+                                    // Not enough special materials — fetch more immediately
+                                    let fetch_id = if bp_is_campfire {
+                                        ITEM_SCRAP_WOOD
+                                    } else {
+                                        ITEM_FIBER
+                                    };
+                                    // Find nearest matching ground item
+                                    let mut nearest: Option<(i32, i32, f32)> = None;
+                                    for gi in self.ground_items.iter() {
+                                        if gi.stack.item_id == fetch_id {
+                                            let d = (gi.x - cx as f32 - 0.5).powi(2)
+                                                + (gi.y - cy as f32 - 0.5).powi(2);
+                                            if nearest.map_or(true, |(_, _, bd)| d < bd) {
+                                                nearest = Some((
+                                                    gi.x.floor() as i32,
+                                                    gi.y.floor() as i32,
+                                                    d,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    if let Some((gx, gy, _)) = nearest {
+                                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                        let path = astar_path_terrain_wd(
+                                            &self.grid_data,
+                                            &self.wall_data,
+                                            &self.terrain_data,
+                                            start,
+                                            (gx, gy),
+                                        );
+                                        if !path.is_empty() {
+                                            pleb.path = path;
+                                            pleb.path_idx = 0;
+                                            pleb.activity = PlebActivity::Hauling;
+                                            pleb.harvest_target = Some((gx, gy));
+                                            pleb.haul_target = Some((cx, cy));
+                                        } else {
+                                            pleb.activity = PlebActivity::Idle;
+                                            pleb.work_target = None;
+                                        }
+                                    } else {
+                                        pleb.activity = PlebActivity::Idle;
+                                        pleb.work_target = None;
+                                    }
                                 }
                             } else if is_crate {
                                 // Deposit all carried items in crate (preserves liquid on containers)
@@ -963,8 +1006,31 @@ impl App {
                                 events.push(GameEventKind::Stored(pleb.name.clone()));
                             }
                         }
-                    } else if path_done {
-                        pleb.activity = PlebActivity::Idle;
+                    } else if pleb.path_idx >= pleb.path.len() && !at_pickup && !at_delivery {
+                        // Path ended but not at target — repath to the right destination
+                        let target = if pleb.inventory.is_carrying() {
+                            pleb.haul_target
+                        } else {
+                            pleb.harvest_target
+                        };
+                        if let Some((tx2, ty2)) = target {
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let path = astar_path_terrain_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                start,
+                                (tx2, ty2),
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                            } else {
+                                pleb.activity = PlebActivity::Idle;
+                            }
+                        } else {
+                            pleb.activity = PlebActivity::Idle;
+                        }
                     }
                 }
 
@@ -2180,7 +2246,12 @@ impl App {
                                             .to_string(),
                                     });
                                 } else {
-                                    self.grid_data[tidx] = bp.block_data;
+                                    let mut placed = bp.block_data;
+                                    // Campfire: default intensity 5 (height byte)
+                                    if (placed & 0xFF) as u32 == BT_FIREPLACE {
+                                        placed = (placed & 0xFFFF00FF) | (5 << 8);
+                                    }
+                                    self.grid_data[tidx] = placed;
                                     self.grid_dirty = true;
                                     events.push(GameEventKind::Built {
                                         pleb: pleb.name.clone(),
@@ -2426,8 +2497,8 @@ impl App {
                                 }
                             }
                         }
-                        // Also check crates for the material
-                        if best_item.is_none() {
+                        // Also check crates for the material (pick closest overall)
+                        {
                             for (&cidx, cinv) in self.crate_contents.iter() {
                                 if cinv.count_of(needed_id) > 0 {
                                     let cx2 = (cidx % GRID_W) as i32;
@@ -2478,7 +2549,7 @@ impl App {
                                 let dist = ((pleb.x - pickup_pos.0 as f32 - 0.5).powi(2)
                                     + (pleb.y - pickup_pos.1 as f32 - 0.5).powi(2))
                                 .sqrt();
-                                if dist < 50.0 && (best_pleb.map_or(true, |(_, bd)| dist < bd)) {
+                                if best_pleb.map_or(true, |(_, bd)| dist < bd) {
                                     best_pleb = Some((i, dist));
                                 }
                             }
@@ -3085,8 +3156,8 @@ fn tick_pleb_activity(
             pleb.path.clear();
             pleb.path_idx = 0;
         }
-    } else if pleb.needs.warmth < 0.12 && is_idle_or_walk && !pleb.activity.is_crisis() {
-        // CRISIS: Freezing — seek shelter (indoors or near fire)
+    } else if false && pleb.needs.warmth < 0.12 && is_idle_or_walk && !pleb.activity.is_crisis() {
+        // CRISIS: Freezing — disabled for now (plebs can work while cold)
         if env.is_indoors || env.near_fire {
             // Already sheltered, just wait it out
         } else if let Some((bx, by)) = env.nearest_bed {

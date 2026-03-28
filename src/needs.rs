@@ -407,8 +407,8 @@ pub fn tick_needs(
         needs.rest = (needs.rest - REST_DECAY_IDLE * t).max(0.0);
     }
 
-    // --- Warmth: driven by fluid sim temperature when available ---
-    let target_warmth = if let Some(air) = air {
+    // --- Warmth: fluid sim air temp + radiant heat from nearby fires ---
+    let base_warmth = if let Some(air) = air {
         let temp = air.temp;
         if temp >= TEMP_COMFORTABLE_LOW && temp <= TEMP_COMFORTABLE_HIGH {
             1.0
@@ -426,17 +426,31 @@ pub fn tick_needs(
                 WARMTH_INDOORS_FIRE
             } else {
                 0.6
-            } // fire outdoors helps but not as much
+            }
         } else if env.is_indoors {
             WARMTH_INDOORS
         } else if env.is_night {
-            WARMTH_NIGHT_OUTDOORS // dangerous cold
+            WARMTH_NIGHT_OUTDOORS
         } else if env.is_dusk {
-            WARMTH_DUSK_OUTDOORS // getting cold
+            WARMTH_DUSK_OUTDOORS
         } else {
             WARMTH_DAY_OUTDOORS
         }
     };
+
+    // Radiant heat: infrared from fire heats you directly (line-of-sight, inverse-square).
+    // This is independent of air temperature — you feel warm facing a fire even in cold air.
+    let radiant_bonus = if env.near_fire && env.fire_dist < 6.0 {
+        // Inverse-square falloff: strong up close, fading with distance
+        let intensity = 1.0 / (1.0 + env.fire_dist * env.fire_dist * 0.15);
+        // Indoors: radiant heat bounces off walls → more effective
+        let indoor_boost = if env.is_indoors { 1.3 } else { 1.0 };
+        (intensity * 0.5 * indoor_boost).min(0.4) // max +0.4 warmth from radiation
+    } else {
+        0.0
+    };
+
+    let target_warmth = (base_warmth + radiant_bonus).min(1.0);
     // Warming is slow, cooling is fast (hypothermia sets in quickly)
     let rate = if target_warmth > needs.warmth {
         0.2

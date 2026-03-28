@@ -114,13 +114,37 @@ fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_pipe = bt >= BT_PIPE && bt <= BT_INLET;
     if is_pipe { return; }
 
-    // Skip air/dirt floor with no thermal mass — their temperature is the air temperature
+    // Air/dirt tiles: blend air temp with accumulated radiant fire heat
     if mat.heat_capacity < 0.01 {
-        // Read air temperature from dye texture and store as block temp
-        // Scale grid coords to dye coords (dye is 2x grid resolution)
         let dye_pos = vec2<i32>(i32(gid.x) * 2 + 1, i32(gid.y) * 2 + 1);
         let air_temp = textureLoad(dye_tex, dye_pos, 0).a;
-        block_temps[idx] = air_temp;
+        // Start from previous frame's block temp (allows accumulation)
+        var temp = block_temp;
+        // Blend toward air temperature (cooling/heating from convection)
+        temp = mix(temp, air_temp, 0.3);
+        // Add radiant heat from nearby fires
+        let tbx = i32(gid.x);
+        let tby = i32(gid.y);
+        for (var fdy: i32 = -5; fdy <= 5; fdy++) {
+            for (var fdx: i32 = -5; fdx <= 5; fdx++) {
+                let fx = tbx + fdx;
+                let fy = tby + fdy;
+                if fx < 0 || fy < 0 || fx >= i32(gw) || fy >= i32(gh) { continue; }
+                let fidx = u32(fy) * gw + u32(fx);
+                let fb = grid[fidx];
+                if block_type(fb) == 6u {
+                    let fire_level = f32((fb >> 8u) & 0xFFu) / 10.0;
+                    let fire_str = max(fire_level, 0.3);
+                    let dist_sq = f32(fdx * fdx + fdy * fdy);
+                    if dist_sq < 0.5 { continue; }
+                    let radiance = fire_str * 10.0 / (1.0 + dist_sq * 0.3);
+                    let rad_target = 32.0;
+                    let deficit = max(rad_target - temp, 0.0);
+                    temp += deficit * radiance * 0.01;
+                }
+            }
+        }
+        block_temps[idx] = temp;
         return;
     }
 
@@ -130,6 +154,33 @@ fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !has_roof(block) && block_height(block) > 0u {
         let solar_heat = camera.sun_intensity * mat.solar_absorption * 0.005; // ~0.3°C/sec for stone
         block_temp += solar_heat;
+    }
+
+    // --- Radiant heat from nearby fires ---
+    // Infrared radiation heats surfaces directly (inverse-square, line-of-sight).
+    // Scan a small radius for fire blocks and add heat.
+    let rbx = i32(gid.x);
+    let rby = i32(gid.y);
+    for (var fdy: i32 = -5; fdy <= 5; fdy++) {
+        for (var fdx: i32 = -5; fdx <= 5; fdx++) {
+            let fx = rbx + fdx;
+            let fy = rby + fdy;
+            if fx < 0 || fy < 0 || fx >= i32(gw) || fy >= i32(gh) { continue; }
+            let fidx = u32(fy) * gw + u32(fx);
+            let fb = grid[fidx];
+            if block_type(fb) == 6u { // BT_FIREPLACE
+                let fire_level = f32((fb >> 8u) & 0xFFu) / 10.0;
+                let fire_str = max(fire_level, 0.3);
+                let dist_sq = f32(fdx * fdx + fdy * fdy);
+                if dist_sq < 0.5 { continue; } // skip self
+                // Inverse-square radiant intensity
+                let radiance = fire_str * 8.0 / (1.0 + dist_sq * 0.5);
+                // Target always above ambient
+                let radiant_target = 30.0;
+                let deficit = max(radiant_target - block_temp, 0.0);
+                block_temp += min(radiance * 0.02, deficit * 0.15);
+            }
+        }
     }
 
     // --- Radiative cooling ---
