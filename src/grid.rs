@@ -1017,17 +1017,17 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
                 continue;
             }
 
-            // --- ROCKS: geological clusters, independent of forest ---
-            let rock_score = if rock_val > 0.8 {
-                1.0 // rocky outcrop
-            } else if rock_val > 0.6 {
-                (rock_val - 0.6) / 0.2 // smooth ramp
+            // --- ROCKS: geological clusters + scattered everywhere ---
+            let rock_score = if rock_val > 0.7 {
+                1.0 // rocky outcrop — dense
+            } else if rock_val > 0.5 {
+                (rock_val - 0.5) / 0.2 // smooth ramp
             } else {
-                0.0 // no rocks
+                0.0
             };
-            // Scatter a few loose rocks everywhere for early-game pickup
-            let base_rocks = 1u32; // very rare lone rocks
-            let cluster_rocks = (rock_score * 25.0) as u32; // up to 25/4096 = 0.6% in clusters
+            // Scattered rocks everywhere + dense clusters on rocky terrain
+            let base_rocks = 8u32; // common scattered rocks (~0.2%)
+            let cluster_rocks = (rock_score * 80.0) as u32; // up to 80/4096 ≈ 2% in rocky areas
             let rock_threshold =
                 ((base_rocks + cluster_rocks) as f32 * spawn_factor.max(0.3)) as u32;
             if r_rock < rock_threshold && grid[idx] == make_block(2, 0, 0) {

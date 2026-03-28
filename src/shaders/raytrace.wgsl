@@ -110,6 +110,23 @@ fn sample_bush_sprite(variant: u32, fx: f32, fy: f32) -> vec4<f32> {
     return vec4(r, g, b, h);
 }
 
+// Rock sprites packed after bushes
+const ROCK_SPRITE_SIZE: u32 = 64u;
+const ROCK_SPRITE_VARIANTS: u32 = 32u;
+const ROCK_OFFSET: u32 = BUSH_OFFSET + BUSH_SPRITE_VARIANTS * BUSH_SPRITE_SIZE * BUSH_SPRITE_SIZE;
+
+fn sample_rock_sprite(variant: u32, fx: f32, fy: f32) -> vec4<f32> {
+    let lx = clamp(u32(fx * f32(ROCK_SPRITE_SIZE)), 0u, ROCK_SPRITE_SIZE - 1u);
+    let ly = clamp(u32(fy * f32(ROCK_SPRITE_SIZE)), 0u, ROCK_SPRITE_SIZE - 1u);
+    let idx = ROCK_OFFSET + variant * ROCK_SPRITE_SIZE * ROCK_SPRITE_SIZE + ly * ROCK_SPRITE_SIZE + lx;
+    let packed = sprites[idx];
+    let r = f32(packed & 0xFFu) / 255.0;
+    let g = f32((packed >> 8u) & 0xFFu) / 255.0;
+    let b = f32((packed >> 16u) & 0xFFu) / 255.0;
+    let h = f32((packed >> 24u) & 0xFFu) / 255.0;
+    return vec4(r, g, b, h);
+}
+
 // --- Wall data helpers (DN-008 wall edge layer) ---
 // wall_buf stores u16 per tile packed as u32 (two tiles per u32 entry).
 // Read a single u16 wall_data value for tile at grid index idx.
@@ -1190,20 +1207,54 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
     if dist_sq < 0.25 { return 1.0; } // 0.5^2
 
     let dist = sqrt(dist_sq);
-    let steps = i32(ceil(dist * 1.5)); // ~1.5 samples per block (was 2.0)
+    let steps = i32(ceil(dist * 3.0)); // 3 samples per tile for thin wall accuracy
     var vis = 1.0;
+    var prev_bx = i32(floor(x0));
+    var prev_by = i32(floor(y0));
 
     for (var i: i32 = 1; i < steps; i++) {
         let t = f32(i) / f32(steps);
         let sx = x0 + dx * t;
         let sy = y0 + dy * t;
-        let sb = get_block(i32(floor(sx)), i32(floor(sy)));
+        let sbx = i32(floor(sx));
+        let sby = i32(floor(sy));
+        let sb = get_block(sbx, sby);
         let sbt = block_type(sb);
         let sbh = block_height(sb);
 
         // Skip light source blocks
-        if get_material(sbt).light_intensity > 0.0 { continue; } // skip light sources
+        if get_material(sbt).light_intensity > 0.0 { prev_bx = sbx; prev_by = sby; continue; }
 
+        // Wall_data: check edges on tile boundary crossings (cardinal + diagonal)
+        if sbx >= 0 && sby >= 0 && sbx < i32(camera.grid_w) && sby < i32(camera.grid_h)
+            && prev_bx >= 0 && prev_by >= 0 && prev_bx < i32(camera.grid_w) && prev_by < i32(camera.grid_h) {
+            let sdx = sbx - prev_bx;
+            let sdy = sby - prev_by;
+            // X boundary crossing
+            if sdx != 0 {
+                let dir_a = select(3u, 1u, sdx > 0);
+                let dir_b = (dir_a + 2u) % 4u;
+                let a_wd = read_wall_data(u32(prev_by) * u32(camera.grid_w) + u32(prev_bx));
+                let b_wd = read_wall_data(u32(prev_by) * u32(camera.grid_w) + u32(sbx));
+                if ((a_wd & (1u << dir_a)) != 0u && !(wd_has_door(a_wd) && wd_door_open(a_wd)))
+                    || ((b_wd & (1u << dir_b)) != 0u && !(wd_has_door(b_wd) && wd_door_open(b_wd))) {
+                    return 0.0;
+                }
+            }
+            // Y boundary crossing
+            if sdy != 0 {
+                let dir_a = select(0u, 2u, sdy > 0);
+                let dir_b = (dir_a + 2u) % 4u;
+                let a_wd = read_wall_data(u32(prev_by) * u32(camera.grid_w) + u32(prev_bx));
+                let b_wd = read_wall_data(u32(sby) * u32(camera.grid_w) + u32(prev_bx));
+                if ((a_wd & (1u << dir_a)) != 0u && !(wd_has_door(a_wd) && wd_door_open(a_wd)))
+                    || ((b_wd & (1u << dir_b)) != 0u && !(wd_has_door(b_wd) && wd_door_open(b_wd))) {
+                    return 0.0;
+                }
+            }
+        }
+        prev_bx = sbx;
+        prev_by = sby;
         if sbh == 0u { continue; } // open floor
         if (sbt >= BT_PIPE && sbt <= BT_INLET) || sbt == BT_RESTRICTOR || sbt == BT_LIQUID_PIPE || sbt == BT_PIPE_BRIDGE || sbt == BT_LIQUID_INTAKE || sbt == BT_LIQUID_PUMP || sbt == BT_LIQUID_OUTPUT { continue; }
         if sbt == BT_WIRE_BRIDGE { continue; } // wire bridge
@@ -3502,43 +3553,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             color = ground;
         }
     } else if btype == BT_ROCK {
-        // Rock: dark natural stone on dirt, irregular shape with outline
-        let ground = vec3<f32>(0.42, 0.35, 0.22);
-        // Irregular shape: offset center + multi-frequency noise distortion
-        let rcx = fx - 0.48;
-        let rcy = fy - 0.52;
-        let n1 = fract(sin(world_x * 53.1 + world_y * 97.3) * 43758.5) * 0.06;
-        let n2 = fract(sin(world_x * 127.7 - world_y * 43.1) * 23421.6) * 0.04;
-        let n3 = fract(sin(world_x * 31.3 + world_y * 171.9) * 61283.1) * 0.03;
-        let angle_warp = n1 + n2 - 0.05;
-        let rock_dist = length(vec2<f32>(rcx * 1.4 + n3 - 0.015, rcy * 1.1 + angle_warp));
-        let outline_r = 0.30;
-        let fill_r = 0.26;
-        if rock_dist < outline_r {
-            if rock_dist < fill_r {
-                // Rock interior: dark gray with variation
-                let rvar = fract(sin(world_x * 127.1 + world_y * 311.7) * 43758.5) * 0.06 - 0.03;
-                let rvar2 = fract(sin(world_x * 73.7 + world_y * 199.3) * 17654.3) * 0.04 - 0.02;
-                color = vec3<f32>(0.32 + rvar, 0.30 + rvar + rvar2, 0.28 + rvar);
-                // Edge darkening (AO)
-                let edge_dark = smoothstep(fill_r, fill_r * 0.4, rock_dist);
-                color *= 0.7 + edge_dark * 0.3;
-                // Specular highlight (upper-left)
-                let spec_spot = length(vec2<f32>(rcx + 0.08, rcy + 0.10));
-                if spec_spot < 0.09 {
-                    color += vec3<f32>(0.08, 0.07, 0.06) * (1.0 - spec_spot / 0.09);
-                }
-                // Subtle cracks
-                let crack = abs(fract(rcx * 7.0 + rcy * 3.0 + n1 * 5.0) - 0.5);
-                if crack < 0.04 && rock_dist < fill_r * 0.8 {
-                    color *= 0.85;
-                }
-            } else {
-                // Dark outline ring
-                color = vec3<f32>(0.18, 0.17, 0.15);
-            }
+        // Rock: sprite-based rendering
+        let rock_id = floor(world_x) * 59.0 + floor(world_y) * 173.0;
+        let rock_hash = fract(sin(rock_id) * 43758.5453);
+        let rock_var = u32(rock_hash * f32(ROCK_SPRITE_VARIANTS)) % ROCK_SPRITE_VARIANTS;
+        let rock_su = fx;
+        let rock_sv = 1.0 - fy;
+        let rock_sp = sample_rock_sprite(rock_var, rock_su, rock_sv);
+        is_tree_pixel = rock_sp.w > 0.05;
+        if is_tree_pixel {
+            color = rock_sp.xyz * (0.85 + rock_hash * 0.2);
         } else {
-            color = ground;
+            color = block_base_color(BT_DIRT, 0u);
         }
     } else if btype == BT_WIRE || btype == BT_WIRE_BRIDGE {
         // Wire / Wire Bridge: copper conductor with directional segments
@@ -4460,8 +4486,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pdy = world_y - p.y;
         let pdist = length(vec2(pdx, pdy));
 
-        // Skip pleb lights on wall tops / elevated surfaces — light is at ground level
-        let is_elevated = effective_height > 0u;
+        // Skip pleb lights on elevated block tops (not walls — walls should receive light)
+        let is_elevated = effective_height > 0u && !is_wall_face && !is_wd_wall;
 
         // Torch: warm point light with wall occlusion
         if p.torch > 0.5 && pdist < 6.0 && !is_elevated {
