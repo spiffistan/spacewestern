@@ -93,6 +93,22 @@ struct Camera {
 @group(0) @binding(23) var<storage, read> terrain_buf: array<u32>;
 @group(0) @binding(24) var<storage, read> wall_buf: array<u32>; // u16 packed as u32 pairs
 @group(0) @binding(25) var<storage, read> door_buf: array<u32>; // [count, w0, angle, w0, angle, ...]
+// Bush sprites packed after tree sprites in the same buffer
+const BUSH_SPRITE_SIZE: u32 = 64u;
+const BUSH_SPRITE_VARIANTS: u32 = 16u;
+const BUSH_OFFSET: u32 = SPRITE_VARIANTS * SPRITE_SIZE * SPRITE_SIZE; // where bushes start
+
+fn sample_bush_sprite(variant: u32, fx: f32, fy: f32) -> vec4<f32> {
+    let lx = clamp(u32(fx * f32(BUSH_SPRITE_SIZE)), 0u, BUSH_SPRITE_SIZE - 1u);
+    let ly = clamp(u32(fy * f32(BUSH_SPRITE_SIZE)), 0u, BUSH_SPRITE_SIZE - 1u);
+    let idx = BUSH_OFFSET + variant * BUSH_SPRITE_SIZE * BUSH_SPRITE_SIZE + ly * BUSH_SPRITE_SIZE + lx;
+    let packed = sprites[idx]; // same buffer as trees
+    let r = f32(packed & 0xFFu) / 255.0;
+    let g = f32((packed >> 8u) & 0xFFu) / 255.0;
+    let b = f32((packed >> 16u) & 0xFFu) / 255.0;
+    let h = f32((packed >> 24u) & 0xFFu) / 255.0;
+    return vec4(r, g, b, h);
+}
 
 // --- Wall data helpers (DN-008 wall edge layer) ---
 // wall_buf stores u16 per tile packed as u32 (two tiles per u32 entry).
@@ -344,7 +360,7 @@ fn diag_dist_to_edge(fx: f32, fy: f32, variant: u32) -> f32 {
 
 // --- Sprite constants ---
 const SPRITE_SIZE: u32 = 256u;
-const SPRITE_VARIANTS: u32 = 8u;
+const SPRITE_VARIANTS: u32 = 24u; // 8 conifer + 16 oak
 
 // Sample a tree sprite. Returns vec4(r, g, b, height_normalized).
 // height_normalized: 0 = transparent (show ground), >0 = canopy/trunk.
@@ -2027,59 +2043,60 @@ fn render_table_lamp(fx: f32, fy: f32) -> vec4<f32> {
     return vec4<f32>(mix(outer, inner, t * t), 1.0);
 }
 
-fn render_tree(wx: f32, wy: f32, fx: f32, fy: f32, height: u32, flags: u32) -> vec4<f32> {
-    let is_large = (flags & 32u) != 0u;
-    let quadrant = (flags >> 3u) & 3u; // 0=TL, 1=TR, 2=BL, 3=BR
-
-    // For large (2x2) trees, compute UV across the 2x2 footprint
-    var sprite_u = fx;
-    var sprite_v = fy;
-    // Use the top-left corner for the tree ID hash (consistent across all 4 tiles)
-    var origin_x = floor(wx);
-    var origin_y = floor(wy);
-
-    if is_large {
-        // Offset origin to top-left tile of the 2x2 group
-        if (quadrant & 1u) != 0u { origin_x -= 1.0; } // TR or BR → shift left
-        if (quadrant & 2u) != 0u { origin_y -= 1.0; } // BL or BR → shift up
-
-        // Map fx/fy to 0..1 across the full 2x2 area
-        let qx = f32(quadrant & 1u); // 0 or 1
-        let qy = f32((quadrant >> 1u) & 1u); // 0 or 1
-        sprite_u = (qx + fx) * 0.5;
-        sprite_v = (qy + fy) * 0.5;
+fn render_tree(wx: f32, wy: f32, tree_tx: f32, tree_ty: f32, height: u32, flags: u32) -> vec4<f32> {
+    let tree_id = tree_tx * 137.0 + tree_ty * 311.0;
+    let id_hash = fract(sin(tree_id) * 43758.5453);
+    // Pick species: ~50% conifer (0-7), ~50% oak (8-23)
+    let species_hash = fract(sin(tree_id * 2.3 + 1.7) * 31415.9);
+    var variant: u32;
+    if species_hash < 0.5 {
+        variant = u32(id_hash * 8.0) % 8u; // conifer: variants 0-7
+    } else {
+        variant = 8u + u32(id_hash * 16.0) % 16u; // oak: variants 8-23
     }
 
-    // Pick variant and rotation from origin position hash
-    let tree_id = origin_x * 137.0 + origin_y * 311.0;
-    let id_hash = fract(sin(tree_id) * 43758.5453);
-    let variant = u32(id_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
+    // Size: tiles the sprite covers
+    let size_factor = select(
+        select(select(2.0, 2.8, height >= 3u), 3.5, height >= 4u),
+        4.0, height >= 5u
+    );
 
-    // Flip V (Blender renders top-down, shader Y increases downward)
-    sprite_v = 1.0 - sprite_v;
+    // Random offset ±0.25 tiles
+    let offset_x = (fract(sin(tree_id * 1.3 + 7.1) * 31415.9) - 0.5) * 0.5;
+    let offset_y = (fract(sin(tree_id * 2.7 + 3.9) * 27183.6) - 0.5) * 0.5;
+    let center_x = tree_tx + 0.5 + offset_x;
+    let center_y = tree_ty + 0.5 + offset_y;
 
-    // Zoom in to make trees larger (show center 70% of sprite)
-    let zoom = 0.7;
-    let margin = (1.0 - zoom) * 0.5;
-    sprite_u = margin + sprite_u * zoom;
-    sprite_v = margin + sprite_v * zoom;
+    // World pixel → sprite UV
+    let cu = 0.5 + (wx - center_x) / size_factor;
+    let cv = 0.5 - (wy - center_y) / size_factor;
 
-    let sprite = sample_sprite(variant, sprite_u, sprite_v);
+    if cu < 0.0 || cu > 1.0 || cv < 0.0 || cv > 1.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
 
-    // Threshold high enough to reject anti-aliasing fringe from Blender render
+    let sprite = sample_sprite(variant, cu, cv);
     if sprite.w < 0.05 {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
+    let is_oak = variant >= 8u;
     let is_trunk = sprite.w < 0.4;
-    let color = sprite.xyz * (0.85 + id_hash * 0.3);
-    if is_trunk {
-        // Trunk: darker, at ground level (low height doesn't cast shadows)
-        return vec4<f32>(color * 0.7, 0.05); // very low height = ground level
-    } else {
-        // Canopy: full color and height
-        return vec4<f32>(color, sprite.w);
+    var color = sprite.xyz;
+
+    if is_oak && !is_trunk {
+        // Oak canopy: boost saturation + darken to match conifers
+        let gray = dot(color, vec3(0.299, 0.587, 0.114));
+        color = mix(vec3(gray), color, 1.6);
+        color *= 0.65;
     }
+
+    color *= (0.88 + id_hash * 0.24);
+
+    if is_trunk {
+        return vec4<f32>(color * 0.6, 0.05);
+    }
+    return vec4<f32>(color, sprite.w);
 }
 
 fn compute_interior_light(wx: f32, wy: f32, sun_intensity: f32, sun_dir: vec2<f32>, window_amb: f32) -> vec4<f32> {
@@ -2835,7 +2852,104 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    if btype == BT_GLASS {
+    // Multi-tile tree rendering: check 3x3 neighborhood for trees whose
+    // sprites extend into this pixel (allows trees to visually cross tile boundaries)
+    // Track winning tree tile for hover outline
+    var tree_win_tx = 0.0;
+    var tree_win_ty = 0.0;
+    {
+        var best_tree = vec4(0.0);
+        for (var tdy: i32 = -2; tdy <= 2; tdy++) {
+            for (var tdx: i32 = -2; tdx <= 2; tdx++) {
+                let tx = bx + tdx;
+                let ty = by + tdy;
+                if tx < 0 || ty < 0 || tx >= i32(camera.grid_w) || ty >= i32(camera.grid_h) { continue; }
+                let tb = get_block(tx, ty);
+                if block_type(tb) != BT_TREE { continue; }
+                let tr = render_tree(world_x, world_y, f32(tx), f32(ty), block_height(tb), block_flags(tb));
+                if tr.w > best_tree.w {
+                    best_tree = tr;
+                    tree_win_tx = f32(tx);
+                    tree_win_ty = f32(ty);
+                }
+            }
+        }
+        if best_tree.w > 0.04 {
+            is_tree_pixel = true;
+            color = best_tree.xyz;
+        }
+    }
+
+    // Tree sprite shadow: silhouette anchored at trunk base, rotated opposite
+    // sun, stretched by sun elevation. Ray-based search (no clipping).
+    var tree_shadow = 1.0;
+    if !is_tree_pixel && camera.sun_intensity > 0.05 {
+        let elev = max(camera.sun_elevation, 0.08);
+        let shd = normalize(vec2(-camera.sun_dir_x, -camera.sun_dir_y));
+        let shd_p = vec2(-shd.y, shd.x);
+        let sun_n = normalize(vec2(camera.sun_dir_x, camera.sun_dir_y));
+        let stretch = 3.5 / elev;
+        // Ray trace TOWARD the sun from this pixel — check trees along the way
+        // Half-step ray: ensures no grid tiles are skipped at diagonal sun angles
+        let max_steps = i32(min(stretch * 2.0 + 8.0, 50.0));
+        for (var step: i32 = -4; step <= max_steps; step++) {
+            let t = f32(step) * 0.5;
+            let ray_x = world_x + sun_n.x * t;
+            let ray_y = world_y + sun_n.y * t;
+            for (var perp_off: i32 = -1; perp_off <= 1; perp_off++) {
+                let check_x = i32(floor(ray_x + sun_n.y * f32(perp_off)));
+                let check_y = i32(floor(ray_y - sun_n.x * f32(perp_off)));
+                if check_x < 0 || check_y < 0 || check_x >= i32(camera.grid_w) || check_y >= i32(camera.grid_h) { continue; }
+                let ttb = get_block(check_x, check_y);
+                if block_type(ttb) != BT_TREE { continue; }
+                let tid = f32(check_x) * 137.0 + f32(check_y) * 311.0;
+                let tih = fract(sin(tid) * 43758.5453);
+                let tsh = fract(sin(tid * 2.3 + 1.7) * 31415.9);
+                var tvar: u32;
+                if tsh < 0.5 { tvar = u32(tih * 8.0) % 8u; }
+                else { tvar = 8u + u32(tih * 16.0) % 16u; }
+                let th = block_height(ttb);
+                let tsz = select(select(select(2.0, 2.8, th >= 3u), 3.5, th >= 4u), 4.0, th >= 5u);
+                let tox = (fract(sin(tid * 1.3 + 7.1) * 31415.9) - 0.5) * 0.5;
+                let toy = (fract(sin(tid * 2.7 + 3.9) * 27183.6) - 0.5) * 0.5;
+                let tcx = f32(check_x) + 0.5 + tox;
+                let tcy = f32(check_y) + 0.5 + toy;
+
+                // Trunk base: slightly south of sprite center
+                let trunk_x = tcx;
+                let trunk_y = tcy + tsz * 0.15;
+
+                // Pixel offset from trunk base
+                let dx = world_x - trunk_x;
+                let dy = world_y - trunk_y;
+
+                // Decompose into shadow axes
+                let along = dx * shd.x + dy * shd.y;
+                let across = dx * shd_p.x + dy * shd_p.y;
+
+                // Shadow extends from trunk (along≈0) away from sun (along>0)
+                if along < -tsz * 0.15 { continue; }
+                if abs(across) > tsz * 0.55 { continue; }
+
+                // Map to sprite UV
+                let su = 0.5 + across / tsz;
+                let shadow_len = stretch * tsz * 0.4;
+                let sv = 0.1 + (along / shadow_len) * 0.8;
+
+                // Margin avoids sprite edge pixels (anti-aliasing fringe)
+                if su < 0.03 || su > 0.97 || sv < 0.03 || sv > 0.97 { continue; }
+                let sp = sample_sprite(tvar, su, sv);
+                if sp.w > 0.15 {
+                    let strength = smoothstep(0.1, 0.6, sp.w) * 0.45;
+                    tree_shadow = min(tree_shadow, 1.0 - strength);
+                }
+            }
+        }
+    }
+
+    if is_tree_pixel {
+        // Tree pixel already colored by multi-tile pre-pass — skip block-type switch
+    } else if btype == BT_GLASS {
         // Glass block: render with thin inset
         let glass_result = render_glass_block(world_x, world_y, fx, fy, bx, by);
         color = glass_result.xyz;
@@ -2846,16 +2960,6 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if btype == BT_CEILING_LIGHT {
         // Electric light: ceiling fixture rendering
         color = render_electric_light(world_x, world_y, fx, fy, camera.time);
-    } else if btype == BT_TREE {
-        // Tree: sprite-based rendering
-        let tree_result = render_tree(world_x, world_y, fx, fy, bheight, bflags);
-        is_tree_pixel = tree_result.w > 0.04;
-        if is_tree_pixel {
-            color = tree_result.xyz;
-        } else {
-            // Transparent pixel: match exactly what a BT_DIRT tile would show
-            color = block_base_color(BT_DIRT, 0u);
-        }
     } else if btype == BT_BENCH {
         // Bench
         color = render_bench(fx, fy, bflags);
@@ -3305,11 +3409,16 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Bed: 2-tile piece
         color = render_bed(fx, fy, bflags);
     } else if btype == BT_BERRY_BUSH {
-        // Berry bush: leafy mound with berries
-        let bush_result = render_berry_bush(fx, fy, world_x, world_y, camera.time);
-        is_tree_pixel = bush_result.w > 0.05;
+        // Berry bush: sprite-based rendering
+        let bush_id = floor(world_x) * 73.0 + floor(world_y) * 197.0;
+        let bush_hash = fract(sin(bush_id) * 43758.5453);
+        let bush_var = u32(bush_hash * f32(BUSH_SPRITE_VARIANTS)) % BUSH_SPRITE_VARIANTS;
+        let bush_su = fx;
+        let bush_sv = 1.0 - fy;
+        let bush_sp = sample_bush_sprite(bush_var, bush_su, bush_sv);
+        is_tree_pixel = bush_sp.w > 0.05;
         if is_tree_pixel {
-            color = bush_result.xyz;
+            color = bush_sp.xyz * (0.90 + bush_hash * 0.2);
         } else {
             color = block_base_color(BT_DIRT, 0u);
         }
@@ -4003,7 +4112,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_transparent_vegetation = (btype == BT_TREE || btype == BT_BERRY_BUSH) && !is_tree_pixel;
     let is_ground_tile = btype == BT_DIRT || btype == BT_AIR || btype == BT_DUG_GROUND
         || btype == BT_ROCK || is_transparent_vegetation;
-    if camera.enable_terrain_detail > 0.5 && (bheight == 0u || is_transparent_vegetation) && is_ground_tile && !is_scorched_dirt {
+    if camera.enable_terrain_detail > 0.5 && !is_tree_pixel && (bheight == 0u || is_transparent_vegetation) && is_ground_tile && !is_scorched_dirt {
         // Dirt / air (ground): full terrain detail with grass, flowers, pebbles
         let td_idx = u32(by) * u32(camera.grid_w) + u32(bx);
         let td_wt = water_table_buf[td_idx];
@@ -4033,7 +4142,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Elevation visual cues (ground-level blocks only) ---
     // Uses bilinear-interpolated elevation for smooth gradients (no tile-edge jaggies).
-    if camera.enable_terrain_detail > 0.5 && (bheight == 0u || is_transparent_vegetation) {
+    if camera.enable_terrain_detail > 0.5 && !is_tree_pixel && (bheight == 0u || is_transparent_vegetation) {
         let elev = sample_elevation(world_x, world_y);
 
         // 1. Altitude brightness: higher = lighter, lower = darker (topographic convention)
@@ -4090,7 +4199,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let wt_idx = u32(by) * 256u + u32(bx);
     let wt_depth = water_table_buf[wt_idx]; // negative = below ground, positive = spring
     let is_floor_tile = btype == BT_DIRT || btype == BT_WOOD_FLOOR || btype == BT_STONE_FLOOR || btype == BT_CONCRETE_FLOOR || btype == BT_ROUGH_FLOOR || btype == BT_DUG_GROUND;
-    if is_floor_tile && effective_height == 0u {
+    if is_floor_tile && !is_tree_pixel && effective_height == 0u {
         // Water table coloring: subtle moisture for high water table (even without surface water)
         let wt_moisture = clamp((wt_depth + 1.5) / 2.0, 0.0, 0.5); // 0 at -1.5, 0.5 at +0.5
         if wt_moisture > 0.02 && water_level < 0.1 {
@@ -4249,7 +4358,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     } else {
         // Normal block: apply shadow + additive point light
-        let lit = color * (ambient + sun_color * light_factor * 0.85 * shadow_tint);
+        let lit = color * (ambient + sun_color * light_factor * 0.85 * shadow_tint * tree_shadow);
         // Point light is additive (not multiplied by base color) so it illuminates
         // even when ambient/sun is very low (e.g. at night)
         let pl_mul = select(camera.light_bleed_mul, camera.indoor_glow_mul, is_indoor);
@@ -5011,6 +5120,70 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Fire is emissive — boost brightness above 1.0, not dimmed by shadows
             let emissive_fire = fire_ov.rgb * (1.2 + 0.8 * burn_i);
             color = mix(color, emissive_fire, fire_ov.a);
+        }
+    }
+
+    // Tree hover outline: silhouette detection on the hovered tree
+    if camera.hover_x >= 0.0 && is_tree_pixel {
+        // Find which tree the hover cursor is on
+        let hbx = i32(floor(camera.hover_x));
+        let hby = i32(floor(camera.hover_y));
+        var hover_tree_tx = -1.0;
+        var hover_tree_ty = -1.0;
+        var hover_best_w = 0.0;
+        for (var hdy: i32 = -2; hdy <= 2; hdy++) {
+            for (var hdx: i32 = -2; hdx <= 2; hdx++) {
+                let htx = hbx + hdx;
+                let hty = hby + hdy;
+                if htx < 0 || hty < 0 || htx >= i32(camera.grid_w) || hty >= i32(camera.grid_h) { continue; }
+                let htb = get_block(htx, hty);
+                if block_type(htb) != BT_TREE { continue; }
+                let hr = render_tree(camera.hover_x, camera.hover_y,
+                    f32(htx), f32(hty), block_height(htb), block_flags(htb));
+                if hr.w > hover_best_w {
+                    hover_best_w = hr.w;
+                    hover_tree_tx = f32(htx);
+                    hover_tree_ty = f32(hty);
+                }
+            }
+        }
+        // Only outline if THIS pixel belongs to the hovered tree
+        if hover_tree_tx >= 0.0 && tree_win_tx == hover_tree_tx && tree_win_ty == hover_tree_ty {
+            // Re-derive this tree's params for sprite-space edge detection
+            let ht_id = hover_tree_tx * 137.0 + hover_tree_ty * 311.0;
+            let ht_hash = fract(sin(ht_id) * 43758.5453);
+            let ht_var = u32(ht_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
+            let ht_block = get_block(i32(hover_tree_tx), i32(hover_tree_ty));
+            let ht_h = block_height(ht_block);
+            let ht_size = select(select(select(2.0, 2.8, ht_h >= 3u), 3.5, ht_h >= 4u), 4.0, ht_h >= 5u);
+            let ht_ox = (fract(sin(ht_id * 1.3 + 7.1) * 31415.9) - 0.5) * 0.5;
+            let ht_oy = (fract(sin(ht_id * 2.7 + 3.9) * 27183.6) - 0.5) * 0.5;
+            let ht_cx = hover_tree_tx + 0.5 + ht_ox;
+            let ht_cy = hover_tree_ty + 0.5 + ht_oy;
+            let ht_cu = 0.5 + (world_x - ht_cx) / ht_size;
+            let ht_cv = 0.5 - (world_y - ht_cy) / ht_size;
+
+            // Edge detection at 3 distances in sprite space
+            let ps1 = 2.0 / f32(SPRITE_SIZE);
+            let ps2 = 4.0 / f32(SPRITE_SIZE);
+            let ps3 = 6.0 / f32(SPRITE_SIZE);
+            let oc = vec3(0.0, 0.0, 0.0);
+            let e1 = sample_sprite(ht_var, ht_cu + ps1, ht_cv).w < 0.05
+                  || sample_sprite(ht_var, ht_cu - ps1, ht_cv).w < 0.05
+                  || sample_sprite(ht_var, ht_cu, ht_cv + ps1).w < 0.05
+                  || sample_sprite(ht_var, ht_cu, ht_cv - ps1).w < 0.05
+                  || ht_cu < ps1 || ht_cu > 1.0 - ps1 || ht_cv < ps1 || ht_cv > 1.0 - ps1;
+            let e2 = sample_sprite(ht_var, ht_cu + ps2, ht_cv).w < 0.05
+                  || sample_sprite(ht_var, ht_cu - ps2, ht_cv).w < 0.05
+                  || sample_sprite(ht_var, ht_cu, ht_cv + ps2).w < 0.05
+                  || sample_sprite(ht_var, ht_cu, ht_cv - ps2).w < 0.05;
+            let e3 = sample_sprite(ht_var, ht_cu + ps3, ht_cv).w < 0.05
+                  || sample_sprite(ht_var, ht_cu - ps3, ht_cv).w < 0.05
+                  || sample_sprite(ht_var, ht_cu, ht_cv + ps3).w < 0.05
+                  || sample_sprite(ht_var, ht_cu, ht_cv - ps3).w < 0.05;
+            if e1 { color = oc; }
+            else if e2 { color = mix(color, oc, 0.8); }
+            else if e3 { color = mix(color, oc, 0.4); }
         }
     }
 

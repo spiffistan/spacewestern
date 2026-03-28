@@ -933,74 +933,84 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
             let spawn_dist_sq = (fx - cx) * (fx - cx) + (fy - cy) * (fy - cy);
             let spawn_factor = (spawn_dist_sq / spawn_clear_radius_sq).min(1.0); // 0 at center, 1 at edge
 
-            // Three independent noise layers for different features
-            let forest = fbm(fx, fy, 0.06, 0); // forest clusters (~35-tile scale)
-            let rockiness = fbm(fx, fy, 0.04, 50000); // geological formations (~50-tile scale)
-            let moisture = fbm(fx, fy, 0.05, 100000); // berry/bush zones (~40-tile scale)
+            // Forest density: multi-octave noise for organic clusters
+            let forest = fbm(fx, fy, 0.06, 0);
+            // Small-scale jitter so trees don't form a grid even within clusters
+            let jitter = noise(fx * 0.3, fy * 0.3, 9999);
 
-            // Per-tile random (multiple independent streams via bit slicing)
-            let h = tile_hash(x, y);
-            let r_tree = (h >> 16) & 0xFFF; // 0..4095
-            let r_berry = (h >> 4) & 0xFFF; // 0..4095
-            let r_rock = (h >> 8) & 0xFFF; // 0..4095
+            // Match terrain gen noise EXACTLY (same seed offsets, same scales)
+            // Rocky: terrain gen uses noise_seeded(fx*0.04, fy*0.04, 50) + rockiness*0.2
+            //        threshold = 1.0 - params.rocky (= 0.92 for default 0.08)
+            let rock_val = noise(fx * 0.04, fy * 0.04, 50) + noise(fx * 0.04, fy * 0.04, 50) * 0.2;
+            // Chalky: noise_seeded(fx*0.05, fy*0.05, 40) + aridity*0.1, threshold 0.94
+            let chalky_val = noise(fx * 0.05, fy * 0.05, 40);
+            let arid_val = noise(fx * 0.025, fy * 0.025, 77777); // aridity noise
+            // Gravel: noise_seeded(fx*0.05, fy*0.05, 60) + rockiness*0.1, threshold 0.93
+            let gravel_val = noise(fx * 0.05, fy * 0.05, 60);
+            let moisture_val = noise(fx * 0.02, fy * 0.02, 88888);
 
-            // --- TREES: require forest density + suitable terrain ---
-            // Suppress trees on rocky/chalky terrain, boost on loam/moist
-            // Uses same noise fields as terrain generation for consistency
-            let aridity = fbm(fx, fy, 0.05, 200000); // matches terrain gen aridity noise
-            let terrain_suitability = if rockiness > 0.65 {
-                0.0 // rocky outcrops: no trees
-            } else if rockiness > 0.5 {
-                0.2 // gravelly: sparse scrub only
-            } else if aridity > 0.7 {
-                0.3 // arid/chalky: few trees
-            } else if moisture > 0.6 {
-                1.2 // moist/loam: lush growth
+            // Terrain suitability: zero on terrain types where trees can't grow
+            let is_rocky = rock_val > 0.85; // matches terrain rocky threshold ~0.92 with bias
+            let is_gravelly = gravel_val > 0.88;
+            let is_chalky = chalky_val + arid_val * 0.1 > 0.90;
+            let terrain_suitability = if is_rocky || is_gravelly {
+                0.0
+            } else if is_chalky {
+                0.1
+            } else if moisture_val > 0.55 {
+                1.3 // moist: lush
             } else {
-                1.0 // normal grassland
+                1.0
             };
 
-            let base_chance = if forest > 0.7 {
-                320u32 // dense forest
-            } else if forest > 0.55 {
-                120 // moderate
-            } else if forest > 0.45 {
-                30 // sparse treeline
+            // Per-tile random
+            let h = tile_hash(x, y);
+            let r_tree = (h >> 16) & 0xFFF; // 0..4095
+            let r_berry = (h >> 4) & 0xFFF;
+            let r_rock = (h >> 8) & 0xFFF;
+
+            // --- TREES: dense clusters with organic spacing ---
+            // Jitter adds randomness so threshold varies per-tile within a cluster
+            let cluster_density = forest + jitter * 0.15; // adds ±7.5% local variation
+            let base_chance = if cluster_density > 0.65 {
+                800u32 // dense forest: ~20% of tiles attempt a tree
+            } else if cluster_density > 0.50 {
+                400 // moderate: ~10%
+            } else if cluster_density > 0.40 {
+                80 // sparse treeline
             } else {
-                4 // rare lone tree
+                6 // rare lone tree
             };
             let tree_chance = (base_chance as f32 * terrain_suitability) as u32;
             let tree_threshold = (tree_chance as f32 * spawn_factor) as u32;
 
             if r_tree < tree_threshold {
-                if r_tree < tree_threshold / 6 {
-                    // Large 2x2 tree (dense forest only)
-                    if is_bare(&grid, x + 1, y)
-                        && is_bare(&grid, x, y + 1)
-                        && is_bare(&grid, x + 1, y + 1)
-                    {
-                        let tree_h = 4 + ((h >> 2) & 0x1) as u8;
-                        set(&mut grid, x, y, make_block(8, tree_h, 32 | 0));
-                        set(&mut grid, x + 1, y, make_block(8, tree_h, 32 | 8));
-                        set(&mut grid, x, y + 1, make_block(8, tree_h, 32 | 16));
-                        set(&mut grid, x + 1, y + 1, make_block(8, tree_h, 32 | 24));
-                    }
-                } else if r_tree < tree_threshold * 3 / 4 {
-                    // Medium tree
-                    let tree_h = 2 + ((h >> 2) & 0x3) as u8;
-                    grid[idx] = make_block(8, tree_h, 0);
-                } else {
-                    // Small bush/shrub
-                    let bush_h = 1 + ((h >> 2) & 0x1) as u8;
-                    grid[idx] = make_block(8, bush_h, 0);
+                // All trees 1x1 in the grid (collision only)
+                // Height encodes visual size: 2=small, 3=medium, 4=large, 5=huge
+                let size_bits = ((h >> 10) & 0x7) as u8; // 0-7
+                let tree_h: u8 = if size_bits < 2 {
+                    2
                 }
+                // ~25% small
+                else if size_bits < 5 {
+                    3
+                }
+                // ~37% medium
+                else if size_bits < 7 {
+                    4
+                }
+                // ~25% large
+                else {
+                    5
+                }; // ~13% huge
+                grid[idx] = make_block(8, tree_h, 0);
                 continue; // placed a tree, skip other features
             }
 
             // --- BERRY BUSHES: forest edges + moist areas, not on rock ---
             let berry_score = (1.0 - (forest - 0.45).abs() * 3.0).max(0.0)
-                * (moisture * 1.5).min(1.0)
-                * terrain_suitability.min(1.0); // suppress on rocky/arid
+                * (moisture_val * 1.5).min(1.0)
+                * terrain_suitability.min(1.0);
             let berry_threshold = (berry_score * 18.0 * spawn_factor) as u32;
             if r_berry < berry_threshold && grid[idx] == make_block(2, 0, 0) {
                 grid[idx] = make_block(31, 1, 0);
@@ -1008,11 +1018,10 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
             }
 
             // --- ROCKS: geological clusters, independent of forest ---
-            // rockiness: 0..1 — rocks cluster where rockiness > 0.6
-            let rock_score = if rockiness > 0.7 {
+            let rock_score = if rock_val > 0.8 {
                 1.0 // rocky outcrop
-            } else if rockiness > 0.55 {
-                (rockiness - 0.55) / 0.15 // smooth ramp
+            } else if rock_val > 0.6 {
+                (rock_val - 0.6) / 0.2 // smooth ramp
             } else {
                 0.0 // no rocks
             };
