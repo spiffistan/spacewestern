@@ -1620,12 +1620,12 @@ impl App {
                 &obs_data,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(GRID_W),
-                    rows_per_image: Some(GRID_H),
+                    bytes_per_row: Some(GRID_W * 2),
+                    rows_per_image: Some(GRID_H * 2),
                 },
                 wgpu::Extent3d {
-                    width: GRID_W,
-                    height: GRID_H,
+                    width: GRID_W * 2,
+                    height: GRID_H * 2,
                     depth_or_array_layers: 1,
                 },
             );

@@ -24,7 +24,7 @@ fn in_bounds(pos: vec2<i32>) -> bool {
 
 fn is_solid(pos: vec2<i32>) -> bool {
     if !in_bounds(pos) { return true; }
-    let obs_pos = vec2<i32>(pos.x * 256 / i32(params.sim_w), pos.y * 256 / i32(params.sim_h));
+    let obs_pos = vec2<i32>(pos.x * 512 / i32(params.sim_w), pos.y * 512 / i32(params.sim_h));
     return textureLoad(obstacle_tex, obs_pos, 0).r > 0.5;
 }
 

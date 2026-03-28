@@ -298,6 +298,20 @@ fn resource_counting_all_sources() {
 }
 
 // --- Fluid obstacle field ---
+// Obstacle is now 2x resolution: NW sub-cell of tile (x,y) is at obs[(y*2) * (GRID_W*2) + (x*2)]
+fn obs_idx(x: u32, y: u32) -> usize {
+    (y as usize * 2) * (GRID_W as usize * 2) + (x as usize * 2)
+}
+fn obs_is_solid(obs: &[u8], x: u32, y: u32) -> bool {
+    let i = obs_idx(x, y);
+    let ow = GRID_W as usize * 2;
+    obs[i] == 255 && obs[i + 1] == 255 && obs[i + ow] == 255 && obs[i + ow + 1] == 255
+}
+fn obs_is_open(obs: &[u8], x: u32, y: u32) -> bool {
+    let i = obs_idx(x, y);
+    let ow = GRID_W as usize * 2;
+    obs[i] == 0 && obs[i + 1] == 0 && obs[i + ow] == 0 && obs[i + ow + 1] == 0
+}
 
 #[test]
 fn obstacle_field_walls_are_solid() {
@@ -318,35 +332,12 @@ fn obstacle_field_walls_are_solid() {
     } // right
 
     let obs = build_obstacle_field(&grid, &[]);
-    // Walls should be solid (255)
-    assert_eq!(
-        obs[(10 * GRID_W + 10) as usize],
-        255,
-        "top-left wall should be solid"
-    );
-    assert_eq!(
-        obs[(10 * GRID_W + 12) as usize],
-        255,
-        "top wall should be solid"
-    );
-    assert_eq!(
-        obs[(12 * GRID_W + 10) as usize],
-        255,
-        "left wall should be solid"
-    );
-    // Interior should be open (0)
-    assert_eq!(
-        obs[(11 * GRID_W + 11) as usize],
-        0,
-        "interior should be open"
-    );
-    assert_eq!(
-        obs[(12 * GRID_W + 12) as usize],
-        0,
-        "interior should be open"
-    );
-    // Exterior should be open (0)
-    assert_eq!(obs[(5 * GRID_W + 5) as usize], 0, "exterior should be open");
+    assert!(obs_is_solid(&obs, 10, 10), "top-left wall should be solid");
+    assert!(obs_is_solid(&obs, 12, 10), "top wall should be solid");
+    assert!(obs_is_solid(&obs, 10, 12), "left wall should be solid");
+    assert!(obs_is_open(&obs, 11, 11), "interior should be open");
+    assert!(obs_is_open(&obs, 12, 12), "interior should be open");
+    assert!(obs_is_open(&obs, 5, 5), "exterior should be open");
 }
 
 #[test]
@@ -357,16 +348,8 @@ fn obstacle_field_doors_open_are_passable() {
     grid[(10 * GRID_W + 10) as usize] = make_block(1, 3, 5); // open door
     grid[(10 * GRID_W + 11) as usize] = make_block(1, 3, 1); // closed door
     let obs = build_obstacle_field(&grid, &[]);
-    assert_eq!(
-        obs[(10 * GRID_W + 10) as usize],
-        0,
-        "open door should be passable"
-    );
-    assert_eq!(
-        obs[(10 * GRID_W + 11) as usize],
-        255,
-        "closed door should be solid"
-    );
+    assert!(obs_is_open(&obs, 10, 10), "open door should be passable");
+    assert!(obs_is_solid(&obs, 11, 10), "closed door should be solid");
 }
 
 #[test]
@@ -377,21 +360,9 @@ fn obstacle_field_plants_are_passable() {
     grid[(10 * GRID_W + 11) as usize] = make_block(BT_BERRY_BUSH as u8, 1, 0);
     grid[(10 * GRID_W + 12) as usize] = make_block(BT_CROP as u8, 2, 0);
     let obs = build_obstacle_field(&grid, &[]);
-    assert_eq!(
-        obs[(10 * GRID_W + 10) as usize],
-        0,
-        "tree should be passable"
-    );
-    assert_eq!(
-        obs[(10 * GRID_W + 11) as usize],
-        0,
-        "berry bush should be passable"
-    );
-    assert_eq!(
-        obs[(10 * GRID_W + 12) as usize],
-        0,
-        "crop should be passable"
-    );
+    assert!(obs_is_open(&obs, 10, 10), "tree should be passable");
+    assert!(obs_is_open(&obs, 11, 10), "berry bush should be passable");
+    assert!(obs_is_open(&obs, 12, 10), "crop should be passable");
 }
 
 #[test]
@@ -399,24 +370,12 @@ fn obstacle_field_pipes_wires_passable() {
     use rayworld::fluid::build_obstacle_field;
     let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
     grid[(10 * GRID_W + 10) as usize] = make_block(BT_PIPE as u8, 1, 0);
-    grid[(10 * GRID_W + 11) as usize] = make_block(BT_WIRE as u8, 0xA0, 0); // wire with conn mask
+    grid[(10 * GRID_W + 11) as usize] = make_block(BT_WIRE as u8, 0xA0, 0);
     grid[(10 * GRID_W + 12) as usize] = make_block(BT_LIQUID_PIPE as u8, 1, 0);
     let obs = build_obstacle_field(&grid, &[]);
-    assert_eq!(
-        obs[(10 * GRID_W + 10) as usize],
-        0,
-        "gas pipe should be passable"
-    );
-    assert_eq!(
-        obs[(10 * GRID_W + 11) as usize],
-        0,
-        "wire should be passable"
-    );
-    assert_eq!(
-        obs[(10 * GRID_W + 12) as usize],
-        0,
-        "liquid pipe should be passable"
-    );
+    assert!(obs_is_open(&obs, 10, 10), "gas pipe should be passable");
+    assert!(obs_is_open(&obs, 11, 10), "wire should be passable");
+    assert!(obs_is_open(&obs, 12, 10), "liquid pipe should be passable");
 }
 
 #[test]
@@ -434,36 +393,22 @@ fn obstacle_field_complete_room_sealed() {
         grid[(y * GRID_W + 25) as usize] = make_block(1, 3, 0);
     }
     let obs = build_obstacle_field(&grid, &[]);
-    // Check every wall tile is solid
     for x in 20..26 {
-        assert_eq!(
-            obs[(20 * GRID_W + x) as usize],
-            255,
+        assert!(
+            obs_is_solid(&obs, x, 20),
             "top wall at x={} should be solid",
             x
         );
-        assert_eq!(
-            obs[(25 * GRID_W + x) as usize],
-            255,
-            "bottom wall at x={}",
-            x
-        );
+        assert!(obs_is_solid(&obs, x, 25), "bottom wall at x={}", x);
     }
     for y in 20..26 {
-        assert_eq!(obs[(y * GRID_W + 20) as usize], 255, "left wall at y={}", y);
-        assert_eq!(
-            obs[(y * GRID_W + 25) as usize],
-            255,
-            "right wall at y={}",
-            y
-        );
+        assert!(obs_is_solid(&obs, 20, y), "left wall at y={}", y);
+        assert!(obs_is_solid(&obs, 25, y), "right wall at y={}", y);
     }
-    // Interior all open
     for y in 21..25 {
         for x in 21..25 {
-            assert_eq!(
-                obs[(y * GRID_W + x) as usize],
-                0,
+            assert!(
+                obs_is_open(&obs, x, y),
                 "interior ({},{}) should be open",
                 x,
                 y

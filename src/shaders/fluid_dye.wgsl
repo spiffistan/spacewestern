@@ -28,17 +28,28 @@ fn sim_to_dye() -> vec2<f32> {
     return vec2(params.dye_w, params.dye_h) / vec2(params.sim_w, params.sim_h);
 }
 
-// Check if a sim-space cell is an obstacle.
-// Obstacle texture is always 256x256 (grid resolution); scale sim coords if hires.
+// Check obstacle at sim-space coords (coarse: maps to NW sub-cell only).
+// Used for velocity sampling which operates at sim resolution.
 fn is_obstacle(sim_pos: vec2<i32>) -> bool {
     let sw = i32(params.sim_w);
     let sh = i32(params.sim_h);
     if sim_pos.x < 0 || sim_pos.y < 0 || sim_pos.x >= sw || sim_pos.y >= sh {
         return true;
     }
-    // Scale sim coords to obstacle texture coords (obstacle is always 256x256)
-    let obs_x = sim_pos.x * 256 / sw;
-    let obs_y = sim_pos.y * 256 / sh;
+    let obs_x = sim_pos.x * 512 / sw;
+    let obs_y = sim_pos.y * 512 / sh;
+    return textureLoad(obstacle_tex, vec2<i32>(obs_x, obs_y), 0).r > 0.5;
+}
+
+// Check obstacle at dye-space coords (sub-cell accurate for thin walls).
+fn is_obstacle_dye(dye_pos: vec2<i32>) -> bool {
+    let dw = i32(params.dye_w);
+    let dh = i32(params.dye_h);
+    if dye_pos.x < 0 || dye_pos.y < 0 || dye_pos.x >= dw || dye_pos.y >= dh {
+        return true;
+    }
+    let obs_x = dye_pos.x * 512 / dw;
+    let obs_y = dye_pos.y * 512 / dh;
     return textureLoad(obstacle_tex, vec2<i32>(obs_x, obs_y), 0).r > 0.5;
 }
 
@@ -90,10 +101,10 @@ fn bilinear_dye(pos: vec2<f32>) -> vec4<f32> {
     var d01 = textureLoad(dye_in, p01, 0);
     var d11 = textureLoad(dye_in, p11, 0);
 
-    let obs00 = is_obstacle(vec2<i32>(vec2<f32>(p00) * scale));
-    let obs10 = is_obstacle(vec2<i32>(vec2<f32>(p10) * scale));
-    let obs01 = is_obstacle(vec2<i32>(vec2<f32>(p01) * scale));
-    let obs11 = is_obstacle(vec2<i32>(vec2<f32>(p11) * scale));
+    let obs00 = is_obstacle_dye(p00);
+    let obs10 = is_obstacle_dye(p10);
+    let obs01 = is_obstacle_dye(p01);
+    let obs11 = is_obstacle_dye(p11);
 
     // Compute average temperature of non-obstacle samples (Neumann BC).
     // Wall cells use this average instead of their stored ambient value,
@@ -131,10 +142,9 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     let scale = dye_to_sim();
     let inv_scale = sim_to_dye();
 
-    // Check if this dye texel is inside an obstacle — walls have no smoke, atmospheric O2
-    // Temperature: preserve previous frame's value (walls don't reset to ambient)
+    // Check if this dye texel is inside an obstacle (sub-cell accurate for thin walls)
     let sim_cell = vec2<i32>(vec2<f32>(gid.xy) * scale);
-    if is_obstacle(sim_cell) {
+    if is_obstacle_dye(vec2<i32>(gid.xy)) {
         let prev_temp = textureLoad(dye_in, vec2<i32>(gid.xy), 0).a;
         textureStore(dye_out, gid.xy, vec4(0.0, 1.0, 0.0, prev_temp));
         return;
@@ -151,7 +161,7 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // If backtrace crossed into an obstacle, clamp to current position
     let back_sim = vec2<i32>(back_pos * scale);
-    if is_obstacle(back_sim) {
+    if is_obstacle_dye(vec2<i32>(back_pos)) {
         back_pos = dye_pos;
     }
 
@@ -277,8 +287,9 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     result.b += diff.b * 0.08;
     // Temperature (A): very low diffusion, and only if no adjacent walls
     // (prevents heat leaking through walls via bilinear sampling across boundaries)
-    let has_adj_wall = is_obstacle(sim_cell + vec2(1, 0)) || is_obstacle(sim_cell + vec2(-1, 0))
-                    || is_obstacle(sim_cell + vec2(0, 1)) || is_obstacle(sim_cell + vec2(0, -1));
+    let dp = vec2<i32>(gid.xy);
+    let has_adj_wall = is_obstacle_dye(dp + vec2(1, 0)) || is_obstacle_dye(dp + vec2(-1, 0))
+                    || is_obstacle_dye(dp + vec2(0, 1)) || is_obstacle_dye(dp + vec2(0, -1));
     if !has_adj_wall {
         result.a += diff.a * 0.02;
     }

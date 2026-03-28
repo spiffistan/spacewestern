@@ -668,8 +668,8 @@ impl App {
         let fluid_obstacle_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("fluid-obstacle"),
             size: wgpu::Extent3d {
-                width: GRID_W,
-                height: GRID_H,
+                width: GRID_W * 2, // 2x resolution for thin wall sub-cells
+                height: GRID_H * 2,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -710,12 +710,12 @@ impl App {
             &obstacle_data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(FLUID_SIM_W),
-                rows_per_image: Some(FLUID_SIM_H),
+                bytes_per_row: Some(GRID_W * 2),
+                rows_per_image: Some(GRID_H * 2),
             },
             wgpu::Extent3d {
-                width: FLUID_SIM_W,
-                height: FLUID_SIM_H,
+                width: GRID_W * 2,
+                height: GRID_H * 2,
                 depth_or_array_layers: 1,
             },
         );

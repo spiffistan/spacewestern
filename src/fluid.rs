@@ -42,28 +42,31 @@ pub struct FluidParams {
 
 /// Build the obstacle field (256x256 u8) from the block grid.
 /// 255 = solid obstacle, 0 = open.
+/// Build 2x resolution obstacle field (512×512 for 256×256 grid).
+/// Each grid tile maps to 2×2 sub-cells. Thin walls only block the sub-cells
+/// they overlap, leaving the rest open for fluid flow.
 pub fn build_obstacle_field(grid: &[u32], wall_data: &[u16]) -> Vec<u8> {
-    grid.iter()
-        .enumerate()
-        .map(|(i, &b)| {
-            // Wall_data walls are full obstacles (unless open door)
-            if i < wall_data.len() && wall_data[i] != 0 {
-                let wd = wall_data[i];
-                let edges = wd & 0xF;
-                let is_wd_door_open = (wd & WD_HAS_DOOR) != 0 && (wd & WD_DOOR_OPEN) != 0;
-                // Full-thickness wall (all 4 edges) blocks gas completely
-                if edges == 0xF && !is_wd_door_open {
-                    return 255;
-                }
-                // Thin walls with edges: partial obstacle (treat as blocking for now)
-                if edges != 0 && !is_wd_door_open {
-                    return 255;
-                }
-            }
+    // Handle both full grids (256×256) and test grids (small)
+    let gw = if grid.len() >= (GRID_W * GRID_H) as usize {
+        GRID_W as usize
+    } else {
+        (grid.len() as f32).sqrt().ceil() as usize
+    };
+    let gh = if gw > 0 { grid.len() / gw } else { 0 };
+    let ow = gw * 2;
+    let oh = gh * 2;
+    let mut obs = vec![0u8; ow * oh];
+
+    for gy in 0..gh {
+        for gx in 0..gw {
+            let gi = gy * gw + gx;
+            let b = grid[gi];
             let bt = b & 0xFF;
             let bh = (b >> 8) & 0xFF;
             let is_door = (b >> 16) & 1 != 0;
-            let is_open = (b >> 16) & 4 != 0;
+            let is_open_door = (b >> 16) & 4 != 0;
+
+            // Determine base obstacle for this tile (from block grid)
             let passable = bt_is!(
                 bt,
                 BT_TREE,
@@ -87,13 +90,68 @@ pub fn build_obstacle_field(grid: &[u32], wall_data: &[u16]) -> Vec<u8> {
                 BT_RESTRICTOR
             ) || (bt >= BT_PIPE && bt <= BT_VALVE);
             let is_thin = bh > 0 && is_wall_block(bt) && thin_wall_is_walkable(b);
-            if bh > 0 && !passable && !is_thin && !(is_door && is_open) {
-                255
-            } else {
-                0
+            let block_solid = bh > 0 && !passable && !is_thin && !(is_door && is_open_door);
+
+            // 2×2 sub-cells: (0,0)=NW, (1,0)=NE, (0,1)=SW, (1,1)=SE
+            let ox = gx * 2;
+            let oy = gy * 2;
+
+            if block_solid {
+                // Full block obstacle: all 4 sub-cells solid
+                obs[oy * ow + ox] = 255;
+                obs[oy * ow + ox + 1] = 255;
+                obs[(oy + 1) * ow + ox] = 255;
+                obs[(oy + 1) * ow + ox + 1] = 255;
+                continue;
             }
-        })
-        .collect()
+
+            // Wall_data: thin walls block specific sub-cells
+            if gi < wall_data.len() && wall_data[gi] != 0 {
+                let wd = wall_data[gi] as u32;
+                let edges = wd & 0xF;
+                let has_door = (wd & 0x400) != 0;
+                let door_open = (wd & 0x800) != 0;
+
+                if edges != 0 && !(has_door && door_open) {
+                    let thickness = {
+                        let raw = (wd >> 4) & 3;
+                        if raw == 0 { 4u32 } else { 4 - raw }
+                    };
+
+                    if thickness >= 4 || edges == 0xF {
+                        // Full thickness or all edges: entire tile solid
+                        obs[oy * ow + ox] = 255;
+                        obs[oy * ow + ox + 1] = 255;
+                        obs[(oy + 1) * ow + ox] = 255;
+                        obs[(oy + 1) * ow + ox + 1] = 255;
+                    } else {
+                        // Thin walls: block sub-cells that overlap the wall strip
+                        // N edge (bit 0): blocks top row (NW, NE)
+                        if edges & 1 != 0 {
+                            obs[oy * ow + ox] = 255;
+                            obs[oy * ow + ox + 1] = 255;
+                        }
+                        // E edge (bit 1): blocks right column (NE, SE)
+                        if edges & 2 != 0 {
+                            obs[oy * ow + ox + 1] = 255;
+                            obs[(oy + 1) * ow + ox + 1] = 255;
+                        }
+                        // S edge (bit 2): blocks bottom row (SW, SE)
+                        if edges & 4 != 0 {
+                            obs[(oy + 1) * ow + ox] = 255;
+                            obs[(oy + 1) * ow + ox + 1] = 255;
+                        }
+                        // W edge (bit 3): blocks left column (NW, SW)
+                        if edges & 8 != 0 {
+                            obs[oy * ow + ox] = 255;
+                            obs[(oy + 1) * ow + ox] = 255;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    obs
 }
 
 /// Smoothstep interpolation.
@@ -143,55 +201,63 @@ mod tests {
     use super::*;
     use crate::grid::make_block;
 
+    // Helper: check all 4 sub-cells of a 1-tile obstacle field
+    fn all_solid(obs: &[u8]) -> bool {
+        obs.len() >= 4 && obs[0] == 255 && obs[1] == 255 && obs[2] == 255 && obs[3] == 255
+    }
+    fn all_open(obs: &[u8]) -> bool {
+        obs.len() >= 4 && obs[0] == 0 && obs[1] == 0 && obs[2] == 0 && obs[3] == 0
+    }
+
     #[test]
     fn test_obstacle_walls_block() {
-        let grid = vec![make_block(1, 3, 0)]; // stone wall height 3
+        let grid = vec![make_block(1, 3, 0)];
         let obs = build_obstacle_field(&grid, &[]);
-        assert_eq!(obs[0], 255, "stone wall should be obstacle");
+        assert!(all_solid(&obs), "stone wall should block all sub-cells");
     }
 
     #[test]
     fn test_obstacle_open_ground() {
-        let grid = vec![make_block(2, 0, 0)]; // dirt floor
+        let grid = vec![make_block(2, 0, 0)];
         let obs = build_obstacle_field(&grid, &[]);
-        assert_eq!(obs[0], 0, "dirt floor should not be obstacle");
+        assert!(all_open(&obs), "dirt floor should not be obstacle");
     }
 
     #[test]
     fn test_obstacle_open_door() {
-        let grid = vec![make_block(4, 1, 1 | 4)]; // door + open flags
+        let grid = vec![make_block(4, 1, 1 | 4)];
         let obs = build_obstacle_field(&grid, &[]);
-        assert_eq!(obs[0], 0, "open door should not be obstacle");
+        assert!(all_open(&obs), "open door should not be obstacle");
     }
 
     #[test]
     fn test_obstacle_closed_door() {
-        let grid = vec![make_block(4, 1, 1)]; // door flag only (closed)
+        let grid = vec![make_block(4, 1, 1)];
         let obs = build_obstacle_field(&grid, &[]);
-        assert_eq!(obs[0], 255, "closed door should be obstacle");
+        assert!(all_solid(&obs), "closed door should be obstacle");
     }
 
     #[test]
     fn test_obstacle_tree_not_blocking() {
-        let grid = vec![make_block(8, 3, 0)]; // tree
+        let grid = vec![make_block(8, 3, 0)];
         let obs = build_obstacle_field(&grid, &[]);
-        assert_eq!(obs[0], 0, "tree should not block fluid");
+        assert!(all_open(&obs), "tree should not block fluid");
     }
 
     #[test]
     fn test_obstacle_fire_not_blocking() {
-        let grid = vec![make_block(6, 1, 0)]; // fireplace
+        let grid = vec![make_block(6, 1, 0)];
         let obs = build_obstacle_field(&grid, &[]);
-        assert_eq!(obs[0], 0, "fireplace should not block fluid");
+        assert!(all_open(&obs), "fireplace should not block fluid");
     }
 
     #[test]
     fn test_obstacle_wall_data_blocks() {
         use crate::grid::pack_wall_data;
-        let grid = vec![make_block(2, 0, 0)]; // dirt floor
-        let wd = vec![pack_wall_data(0xF, 4, 0)]; // full wall in wall_data
+        let grid = vec![make_block(2, 0, 0)];
+        let wd = vec![pack_wall_data(0xF, 4, 0)];
         let obs = build_obstacle_field(&grid, &wd);
-        assert_eq!(obs[0], 255, "wall_data wall should be obstacle");
+        assert!(all_solid(&obs), "full wall_data should block all sub-cells");
     }
 
     #[test]
@@ -200,7 +266,22 @@ mod tests {
         let grid = vec![make_block(2, 0, 0)];
         let wd = vec![pack_wall_data(0xF, 4, 0) | WD_HAS_DOOR | WD_DOOR_OPEN];
         let obs = build_obstacle_field(&grid, &wd);
-        assert_eq!(obs[0], 0, "open wall_data door should not block fluid");
+        assert!(all_open(&obs), "open wall_data door should not block fluid");
+    }
+
+    #[test]
+    fn test_obstacle_thin_wall_north_partial() {
+        use crate::grid::pack_wall_data;
+        let grid = vec![make_block(2, 0, 0)];
+        // North edge thin wall (edge bit 0, thickness 1)
+        let wd = vec![pack_wall_data(0x1, 1, 0)];
+        let obs = build_obstacle_field(&grid, &wd);
+        // NW and NE sub-cells (top row) should be solid
+        assert_eq!(obs[0], 255, "NW should be solid (north wall)");
+        assert_eq!(obs[1], 255, "NE should be solid (north wall)");
+        // SW and SE sub-cells (bottom row) should be open
+        assert_eq!(obs[2], 0, "SW should be open");
+        assert_eq!(obs[3], 0, "SE should be open");
     }
 
     #[test]
