@@ -2,6 +2,16 @@
 
 use crate::grid::*;
 
+/// A contextual game hint shown to the player.
+#[derive(Clone, Debug)]
+pub struct GameHint {
+    pub text: String,
+    /// Item IDs to highlight on the map when hint is hovered
+    pub highlight_items: Vec<u16>,
+    /// Block types to highlight (e.g. BT_TREE for "gather branches")
+    pub highlight_blocks: Vec<u32>,
+}
+
 // --- Game State ---
 
 #[derive(Clone, Copy, Debug, PartialEq)]

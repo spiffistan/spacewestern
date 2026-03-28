@@ -73,6 +73,7 @@ impl App {
                 self.draw_world_labels(ctx, bp_cam);
                 self.draw_selection_info(ctx);
                 self.draw_notifications(ctx);
+                self.draw_hints(ctx, bp_cam, bp_ppp);
                 self.draw_conditions_bar(ctx);
                 self.draw_game_log(ctx);
                 self.draw_minimap(ctx);
@@ -3289,6 +3290,20 @@ impl App {
                         egui::FontId::proportional(9.0),
                         egui::Color32::from_gray(150),
                     );
+                    // Sun position indicator (yellow dot on compass rim)
+                    if self.camera.sun_intensity > 0.01 {
+                        let sun_x = self.camera.sun_dir_x;
+                        let sun_y = self.camera.sun_dir_y;
+                        let sun_len = (sun_x * sun_x + sun_y * sun_y).sqrt().max(0.001);
+                        let sun_pos = center
+                            + egui::Vec2::new(sun_x / sun_len, sun_y / sun_len) * (radius - 2.0);
+                        let sun_bright = (self.camera.sun_intensity * 255.0).min(255.0) as u8;
+                        painter.circle_filled(
+                            sun_pos,
+                            3.5,
+                            egui::Color32::from_rgb(255, sun_bright, 30),
+                        );
+                    }
                 });
         }
 
@@ -7499,5 +7514,107 @@ impl App {
                     egui::StrokeKind::Outside,
                 );
             });
+    }
+
+    fn draw_hints(&mut self, ctx: &egui::Context, bp_cam: (f32, f32, f32, f32, f32), bp_ppp: f32) {
+        if self.game_hints.is_empty() {
+            self.active_hint_idx = None;
+            return;
+        }
+
+        let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+
+        // Draw hint bar at top-center
+        egui::Area::new(egui::Id::new("game_hints"))
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 32.0])
+            .interactable(true)
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 25, 200))
+                    .rounding(6.0)
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        let mut hovered_idx = None;
+                        for (i, hint) in self.game_hints.iter().enumerate() {
+                            let label = ui.label(
+                                egui::RichText::new(&hint.text)
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(255, 200, 100)),
+                            );
+                            if label.hovered() {
+                                hovered_idx = Some(i);
+                            }
+                        }
+                        self.active_hint_idx = hovered_idx;
+                    });
+            });
+
+        // Highlight resources on map when hint is hovered
+        if let Some(idx) = self.active_hint_idx {
+            if idx < self.game_hints.len() {
+                let hint = &self.game_hints[idx];
+                let highlight_items = hint.highlight_items.clone();
+                let highlight_blocks = hint.highlight_blocks.clone();
+
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Tooltip,
+                    egui::Id::new("hint_highlight"),
+                ));
+
+                let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    egui::pos2(sx, sy)
+                };
+
+                let screen_rect = ctx.content_rect();
+                let pulse = (self.frame_count as f32 * 0.08).sin() * 0.3 + 0.7;
+                let highlight_col =
+                    egui::Color32::from_rgba_unmultiplied(255, 200, 50, (pulse * 120.0) as u8);
+                let tile_px = cam_zoom / self.render_scale / bp_ppp;
+
+                // Highlight matching ground items
+                for item in &self.ground_items {
+                    if highlight_items.contains(&item.stack.item_id) {
+                        let center = to_screen(item.x, item.y);
+                        if center.x > screen_rect.min.x - 20.0
+                            && center.x < screen_rect.max.x + 20.0
+                            && center.y > screen_rect.min.y - 20.0
+                            && center.y < screen_rect.max.y + 20.0
+                        {
+                            let r = (tile_px * 0.3).max(4.0);
+                            painter.circle_stroke(center, r, egui::Stroke::new(2.0, highlight_col));
+                        }
+                    }
+                }
+
+                // Highlight matching blocks (e.g. trees for "gather branches")
+                if !highlight_blocks.is_empty() {
+                    let min_x = ((cam_cx - cam_sw * 0.5 / cam_zoom) as i32 - 1).max(0) as u32;
+                    let max_x =
+                        ((cam_cx + cam_sw * 0.5 / cam_zoom) as i32 + 2).min(GRID_W as i32) as u32;
+                    let min_y = ((cam_cy - cam_sh * 0.5 / cam_zoom) as i32 - 1).max(0) as u32;
+                    let max_y =
+                        ((cam_cy + cam_sh * 0.5 / cam_zoom) as i32 + 2).min(GRID_H as i32) as u32;
+                    for y in min_y..max_y {
+                        for x in min_x..max_x {
+                            let idx2 = (y * GRID_W + x) as usize;
+                            if idx2 < self.grid_data.len() {
+                                let bt = (self.grid_data[idx2] & 0xFF) as u32;
+                                if highlight_blocks.contains(&bt) {
+                                    let center = to_screen(x as f32 + 0.5, y as f32 + 0.5);
+                                    let r = (tile_px * 0.4).max(3.0);
+                                    painter.circle_stroke(
+                                        center,
+                                        r,
+                                        egui::Stroke::new(1.5, highlight_col),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
