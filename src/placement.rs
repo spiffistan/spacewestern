@@ -1109,8 +1109,12 @@ impl App {
             }
         }
 
-        // Dig earth on undug dirt (one dig per tile, flat — no depression)
-        if sel_pleb.is_some() && bt == BT_DIRT {
+        // Dig earth (adds a hole, up to 7 per tile, no block change)
+        let can_dig = bt == BT_DIRT && {
+            let tidx = (by as u32 * GRID_W + bx as u32) as usize;
+            tidx < self.terrain_data.len() && terrain_dig_holes(self.terrain_data[tidx]) < 7
+        };
+        if sel_pleb.is_some() && can_dig {
             let tidx = (by as u32 * GRID_W + bx as u32) as usize;
             let is_clay_terrain = tidx < self.terrain_data.len()
                 && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY;

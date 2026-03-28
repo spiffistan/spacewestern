@@ -1586,14 +1586,16 @@ impl App {
                         .wrapping_add(k * 1013904223);
                     let idx = (hash as usize) % grid_size;
                     terrain_decay_compaction(&mut self.terrain_data[idx]);
-                    // Heal dug ground back to dirt when compaction reaches 0
-                    if idx < self.grid_data.len()
-                        && (self.grid_data[idx] & 0xFF) as u32 == BT_DUG_GROUND
-                        && terrain_compaction(self.terrain_data[idx]) == 0
-                    {
-                        let roof_h = self.grid_data[idx] & 0xFF000000;
-                        self.grid_data[idx] = make_block(BT_DIRT as u8, 0, 0) | roof_h;
-                        self.grid_dirty = true;
+                    // Slowly heal dig holes (1 in 8 chance per sample when raining, 1 in 30 otherwise)
+                    if terrain_dig_holes(self.terrain_data[idx]) > 0 {
+                        let heal_chance = if self.camera.rain_intensity > 0.3 {
+                            8
+                        } else {
+                            30
+                        };
+                        if (hash >> 8) % heal_chance == 0 {
+                            terrain_remove_dig_hole(&mut self.terrain_data[idx]);
+                        }
                     }
                 }
                 self.terrain_dirty = true;
@@ -2081,18 +2083,14 @@ impl App {
                             } else if tbt == BT_WELL {
                                 // Start drinking at well
                                 pleb.activity = PlebActivity::Drinking(0.0);
-                            } else if tbt == BT_DIRT {
-                                // Dig earth: mark tile as dug + add visual compaction
-                                let is_clay_terrain = tidx < self.terrain_data.len()
-                                    && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY;
-                                let roof_h = self.grid_data[tidx] & 0xFF000000;
-                                self.grid_data[tidx] =
-                                    make_block(BT_DUG_GROUND as u8, 0, 0) | roof_h;
-                                // Visual: heavy compaction mark (dark earth, heals over time)
-                                if tidx < self.terrain_data.len() {
-                                    terrain_add_compaction(&mut self.terrain_data[tidx], 20);
-                                }
-                                self.grid_dirty = true;
+                            } else if tbt == BT_DIRT
+                                && tidx < self.terrain_data.len()
+                                && terrain_dig_holes(self.terrain_data[tidx]) < 7
+                            {
+                                // Dig earth: add a hole (no elevation change, tile stays BT_DIRT)
+                                let is_clay_terrain =
+                                    terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY;
+                                terrain_add_dig_hole(&mut self.terrain_data[tidx]);
                                 self.terrain_dirty = true;
                                 let has_shovel = pleb.inventory.count_of(ITEM_WOODEN_SHOVEL) > 0;
                                 let base_yield: u16 = if is_clay_terrain { 4 } else { 2 };
@@ -2204,10 +2202,9 @@ impl App {
             self.place_wall_edge(tx, ty, edges, thickness, material);
         }
 
-        // Apply dig marks from mud wall auto-dig — mark nearest dirt tile
+        // Apply dig marks from mud wall auto-dig — add hole to nearest dirt tile
         for (wx, wy) in dig_marks {
-            // Search outward from wall for nearest dirt tile to "dig"
-            'dig_search: for radius in 0..4i32 {
+            'dig_search: for radius in 0..6i32 {
                 for dy in -radius..=radius {
                     for dx in -radius..=radius {
                         if dx.abs() != radius && dy.abs() != radius && radius > 0 {
@@ -2219,11 +2216,11 @@ impl App {
                             continue;
                         }
                         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
-                        if (self.grid_data[nidx] & 0xFF) as u32 == BT_DIRT {
-                            // Add dig compaction mark (visual darkening)
-                            if nidx < self.terrain_data.len() {
-                                terrain_add_compaction(&mut self.terrain_data[nidx], 8);
-                            }
+                        if (self.grid_data[nidx] & 0xFF) as u32 == BT_DIRT
+                            && nidx < self.terrain_data.len()
+                            && terrain_dig_holes(self.terrain_data[nidx]) < 7
+                        {
+                            terrain_add_dig_hole(&mut self.terrain_data[nidx]);
                             self.terrain_dirty = true;
                             break 'dig_search;
                         }

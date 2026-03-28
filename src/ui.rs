@@ -5257,6 +5257,67 @@ impl App {
             }
         }
 
+        // Render dig holes on terrain
+        {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            if tile_px > 3.0 {
+                let hole_painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Background,
+                    egui::Id::new("dig_holes"),
+                ));
+                let screen_rect = ctx.content_rect();
+                let to_scr = |wx: f32, wy: f32| -> egui::Pos2 {
+                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    egui::pos2(sx, sy)
+                };
+                // Scan visible tiles
+                let min_x = ((cam_cx - cam_sw * 0.5 / cam_zoom) as i32 - 1).max(0) as u32;
+                let max_x =
+                    ((cam_cx + cam_sw * 0.5 / cam_zoom) as i32 + 2).min(GRID_W as i32) as u32;
+                let min_y = ((cam_cy - cam_sh * 0.5 / cam_zoom) as i32 - 1).max(0) as u32;
+                let max_y =
+                    ((cam_cy + cam_sh * 0.5 / cam_zoom) as i32 + 2).min(GRID_H as i32) as u32;
+                let hole_dark = egui::Color32::from_rgba_unmultiplied(40, 30, 20, 140);
+                let hole_edge = egui::Color32::from_rgba_unmultiplied(60, 45, 30, 100);
+                for y in min_y..max_y {
+                    for x in min_x..max_x {
+                        let idx = (y * GRID_W + x) as usize;
+                        if idx >= self.terrain_data.len() {
+                            continue;
+                        }
+                        let holes = terrain_dig_holes(self.terrain_data[idx]);
+                        if holes == 0 {
+                            continue;
+                        }
+                        // Deterministic random hole positions within the tile
+                        let hole_r = (tile_px * 0.08).max(1.5);
+                        for h in 0..holes {
+                            // Hash-based position within tile (0.15..0.85 range)
+                            let seed = x.wrapping_mul(73856093)
+                                ^ y.wrapping_mul(19349663)
+                                ^ h.wrapping_mul(83492791);
+                            let hx = 0.15 + (((seed >> 0) & 0xFF) as f32 / 255.0) * 0.7;
+                            let hy = 0.15 + (((seed >> 8) & 0xFF) as f32 / 255.0) * 0.7;
+                            let hr = hole_r * (0.7 + ((seed >> 16) & 0xFF) as f32 / 255.0 * 0.6);
+                            let center = to_scr(x as f32 + hx, y as f32 + hy);
+                            if center.x < screen_rect.min.x - 5.0
+                                || center.x > screen_rect.max.x + 5.0
+                                || center.y < screen_rect.min.y - 5.0
+                                || center.y > screen_rect.max.y + 5.0
+                            {
+                                continue;
+                            }
+                            // Dark hole with slightly lighter edge
+                            hole_painter.circle_filled(center, hr * 1.3, hole_edge);
+                            hole_painter.circle_filled(center, hr, hole_dark);
+                        }
+                    }
+                }
+            }
+        }
+
         // Render ground items (harvest drops)
         if !self.ground_items.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;

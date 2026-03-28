@@ -1563,6 +1563,27 @@ pub fn terrain_decay_compaction(t: &mut u32) {
     }
 }
 
+/// Dig hole count stored in bits 29-31 (0-7).
+pub fn terrain_dig_holes(t: u32) -> u32 {
+    (t >> 29) & 0x7
+}
+
+/// Add a dig hole (max 7 per tile).
+pub fn terrain_add_dig_hole(t: &mut u32) {
+    let cur = (*t >> 29) & 0x7;
+    if cur < 7 {
+        *t = (*t & 0x1FFFFFFF) | ((cur + 1) << 29);
+    }
+}
+
+/// Remove a dig hole (healing).
+pub fn terrain_remove_dig_hole(t: &mut u32) {
+    let cur = (*t >> 29) & 0x7;
+    if cur > 0 {
+        *t = (*t & 0x1FFFFFFF) | ((cur - 1) << 29);
+    }
+}
+
 /// Parameters controlling terrain generation. Each weight (0.0-1.0) controls
 /// how much of that terrain type appears. Higher = more area coverage.
 #[derive(Clone, Debug)]
