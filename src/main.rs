@@ -310,8 +310,14 @@ struct App {
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
 const LIGHTMAP_W: u32 = GRID_W * LIGHTMAP_SCALE;
 const LIGHTMAP_H: u32 = GRID_H * LIGHTMAP_SCALE;
-const LIGHTMAP_PROP_ITERATIONS: u32 = 26; // more iterations for 2x res (covers ~13 tile radius)
+#[cfg(not(target_arch = "wasm32"))]
+const LIGHTMAP_PROP_ITERATIONS: u32 = 26; // covers ~13 tile radius
+#[cfg(target_arch = "wasm32")]
+const LIGHTMAP_PROP_ITERATIONS: u32 = 12; // reduced for browser perf
+#[cfg(not(target_arch = "wasm32"))]
 const LIGHTMAP_UPDATE_INTERVAL: u32 = 2; // recompute every N frames (~30fps lightmap at 60fps)
+#[cfg(target_arch = "wasm32")]
+const LIGHTMAP_UPDATE_INTERVAL: u32 = 4; // less frequent for browser perf
 #[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_RENDER_SCALE: f32 = 0.5;
 #[cfg(target_arch = "wasm32")]
@@ -534,7 +540,7 @@ impl App {
             fluid_speed: 1.0,
             enable_terrain_detail: true,
             terrain_ao_strength: 2.5,
-            enable_prox_glow: true,
+            enable_prox_glow: !cfg!(target_arch = "wasm32"),
             enable_dir_bleed: true,
             enable_temporal: true,
             enable_ricochets: true,
@@ -548,7 +554,7 @@ impl App {
             sound_speed: 0.3,
             sound_damping: 0.005,
             sound_coupling: 0.15,
-            sound_iters_per_frame: 4,
+            sound_iters_per_frame: if cfg!(target_arch = "wasm32") { 0 } else { 4 },
             camera_pan_speed: 400.0,
             dye_w: FLUID_DYE_W,
             dye_h: FLUID_DYE_H,
