@@ -1412,14 +1412,10 @@ impl App {
 
         // (Auto-close replaced by physical door tick above — doors swing shut via damping/latch)
 
-        // --- Drafted combat: auto-target enemies, aim, fire ---
-        // Fire actions are deferred to avoid borrowing self.plebs while mutating a pleb.
-        let fire_actions: Vec<(f32, f32, f32, f32, String)>;
+        // --- Combat: drafted friendlies + all enemies auto-target and fire ---
+        let fire_actions: Vec<(f32, f32, f32, f32, String, f32)>; // (x, y, dx, dy, name, spread)
         {
-            let aim_speed = 1.5; // seconds to full aim (0→1)
-            let max_range = 12.0; // tiles
-
-            // Collect enemy positions
+            // Collect positions by faction
             let enemies: Vec<(usize, f32, f32)> = self
                 .plebs
                 .iter()
@@ -1427,33 +1423,52 @@ impl App {
                 .filter(|(_, p)| p.is_enemy && !p.is_dead)
                 .map(|(i, p)| (i, p.x, p.y))
                 .collect();
+            let friendlies: Vec<(usize, f32, f32)> = self
+                .plebs
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !p.is_enemy && !p.is_dead)
+                .map(|(i, p)| (i, p.x, p.y))
+                .collect();
 
-            let mut pending_fires: Vec<(f32, f32, f32, f32, String)> = Vec::new();
+            let mut pending_fires: Vec<(f32, f32, f32, f32, String, f32)> = Vec::new();
 
-            // For each drafted friendly pleb, acquire and aim at nearest enemy
             for pi in 0..self.plebs.len() {
-                if self.plebs[pi].is_enemy || self.plebs[pi].is_dead || !self.plebs[pi].drafted {
+                if self.plebs[pi].is_dead {
                     continue;
                 }
 
-                // Find nearest enemy in range
+                let is_enemy = self.plebs[pi].is_enemy;
+                let is_drafted = self.plebs[pi].drafted;
+
+                // Friendlies only fight when drafted; enemies always fight
+                if !is_enemy && !is_drafted {
+                    continue;
+                }
+
+                // Config per faction
+                let combat_range = 25.0f32; // matches fog vision radius
+                let (targets, max_range, aim_speed, spread) = if is_enemy {
+                    (&friendlies, combat_range, 2.5f32, 0.22f32) // enemies: slower aim, less accurate
+                } else {
+                    (&enemies, combat_range, 1.5f32, 0.10f32) // friendlies: faster aim, better accuracy
+                };
+
                 let px = self.plebs[pi].x;
                 let py = self.plebs[pi].y;
                 let mut best: Option<(usize, f32, f32, f32)> = None;
-                for &(ei, ex, ey) in &enemies {
-                    let d = ((px - ex).powi(2) + (py - ey).powi(2)).sqrt();
+                for &(ti, tx, ty) in targets {
+                    let d = ((px - tx).powi(2) + (py - ty).powi(2)).sqrt();
                     if d < max_range && best.map_or(true, |(_, bd, _, _)| d < bd) {
-                        best = Some((ei, d, ex, ey));
+                        best = Some((ti, d, tx, ty));
                     }
                 }
 
                 if let Some((target_idx, _, tx, ty)) = best {
-                    // Face the target
                     let dx = tx - self.plebs[pi].x;
                     let dy = ty - self.plebs[pi].y;
                     self.plebs[pi].angle = dy.atan2(dx);
 
-                    // Aiming
                     if self.plebs[pi].aim_target == Some(target_idx) {
                         self.plebs[pi].aim_progress =
                             (self.plebs[pi].aim_progress + dt / aim_speed).min(1.0);
@@ -1462,13 +1477,12 @@ impl App {
                         self.plebs[pi].aim_progress = 0.0;
                     }
 
-                    // Fire when fully aimed
                     if self.plebs[pi].aim_progress >= 1.0 {
                         let fx = self.plebs[pi].x;
                         let fy = self.plebs[pi].y;
                         let name = self.plebs[pi].name.clone();
-                        pending_fires.push((fx, fy, dx, dy, name));
-                        self.plebs[pi].aim_progress = 0.0; // reset for next shot
+                        pending_fires.push((fx, fy, dx, dy, name, spread));
+                        self.plebs[pi].aim_progress = 0.0;
                     }
                 } else {
                     self.plebs[pi].aim_target = None;
@@ -1478,11 +1492,7 @@ impl App {
             fire_actions = pending_fires;
         }
         // Apply deferred fire actions (with accuracy spread)
-        for (fx, fy, dx, dy, name) in fire_actions {
-            // Accuracy: base spread reduced by shooting skill
-            // Spread in radians: 0.15 (poor) to 0.02 (excellent)
-            // TODO: use pleb's actual shooting skill once backstory is stored on Pleb
-            let base_spread = 0.10; // radians (~5.7°) — moderate accuracy
+        for (fx, fy, dx, dy, name, base_spread) in fire_actions {
             let rng_seed = (fx * 137.3 + fy * 311.7 + self.time_of_day * 1000.0) as u32;
             let rng_val = (rng_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
             let spread_angle = (rng_val - 0.5) * 2.0 * base_spread;
