@@ -111,10 +111,13 @@ fn cast_light(
             }
 
             // Within radius? Mark visible
-            if dx * dx + dy * dy <= radius_sq {
-                if mx >= 0 && my >= 0 && mx < GRID_W as i32 && my < GRID_H as i32 {
-                    visibility[(my as u32 * GRID_W + mx as u32) as usize] = 255;
-                }
+            if dx * dx + dy * dy <= radius_sq
+                && mx >= 0
+                && my >= 0
+                && mx < GRID_W as i32
+                && my < GRID_H as i32
+            {
+                visibility[(my as u32 * GRID_W + mx as u32) as usize] = 255;
             }
 
             // "From" cell: one step closer to origin along the row direction
@@ -222,7 +225,7 @@ pub fn update_fog(
     if current_tiles == *prev_tiles && !prev_tiles.is_empty() {
         return false; // no change
     }
-    *prev_tiles = current_tiles.clone();
+    *prev_tiles = current_tiles;
 
     // Clear visibility (recomputed from scratch)
     fog_visibility.iter_mut().for_each(|v| *v = 0);

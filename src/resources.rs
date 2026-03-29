@@ -42,11 +42,10 @@ impl CrateInventory {
             .get(item_id)
             .map(|d| d.liquid_capacity > 0)
             .unwrap_or(false);
-        if !is_container {
-            if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
-                stack.count += can_add;
-                return can_add;
-            }
+        if !is_container && let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id)
+        {
+            stack.count += can_add;
+            return can_add;
         }
         self.stacks.push(ItemStack::new(item_id, can_add));
         can_add
@@ -59,11 +58,11 @@ impl CrateInventory {
             return false;
         }
         let is_container = stack.is_container();
-        if !is_container {
-            if let Some(existing) = self.stacks.iter_mut().find(|s| s.item_id == stack.item_id) {
-                existing.count += stack.count;
-                return true;
-            }
+        if !is_container
+            && let Some(existing) = self.stacks.iter_mut().find(|s| s.item_id == stack.item_id)
+        {
+            existing.count += stack.count;
+            return true;
         }
         self.stacks.push(stack);
         true
@@ -109,11 +108,10 @@ impl PlebInventory {
             .get(item_id)
             .map(|d| d.liquid_capacity > 0)
             .unwrap_or(false);
-        if !is_container {
-            if let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id) {
-                stack.count += count;
-                return;
-            }
+        if !is_container && let Some(stack) = self.stacks.iter_mut().find(|s| s.item_id == item_id)
+        {
+            stack.count += count;
+            return;
         }
         self.stacks.push(ItemStack::new(item_id, count));
     }
@@ -123,11 +121,11 @@ impl PlebInventory {
         if stack.count == 0 {
             return;
         }
-        if !stack.is_container() {
-            if let Some(existing) = self.stacks.iter_mut().find(|s| s.item_id == stack.item_id) {
-                existing.count += stack.count;
-                return;
-            }
+        if !stack.is_container()
+            && let Some(existing) = self.stacks.iter_mut().find(|s| s.item_id == stack.item_id)
+        {
+            existing.count += stack.count;
+            return;
         }
         self.stacks.push(stack);
     }

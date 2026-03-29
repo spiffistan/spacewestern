@@ -137,9 +137,9 @@ impl App {
                         );
                         // Also pick up any legacy walls from grid
                         let extracted = extract_wall_data_from_grid(&self.grid_data);
-                        for i in 0..self.wall_data.len().min(extracted.len()) {
-                            if wd_edges(self.wall_data[i]) == 0 && wd_edges(extracted[i]) != 0 {
-                                self.wall_data[i] = extracted[i];
+                        for (wd, &ext) in self.wall_data.iter_mut().zip(extracted.iter()) {
+                            if wd_edges(*wd) == 0 && wd_edges(ext) != 0 {
+                                *wd = ext;
                             }
                         }
                         compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
@@ -1232,7 +1232,7 @@ impl App {
                         ui.add(egui::Slider::new(&mut lm_iter, 4..=40).text("Propagation steps"));
                         self.lightmap_iterations = lm_iter as u32;
                         // Keep odd to ensure correct ping-pong final output
-                        if self.lightmap_iterations % 2 == 0 {
+                        if self.lightmap_iterations.is_multiple_of(2) {
                             self.lightmap_iterations += 1;
                         }
 
@@ -1250,7 +1250,7 @@ impl App {
                         ui.add(egui::Slider::new(&mut fp, 5..=50).text("Pressure iterations"));
                         self.fluid_pressure_iters = fp as u32;
                         // Keep odd for correct ping-pong output
-                        if self.fluid_pressure_iters % 2 == 0 {
+                        if self.fluid_pressure_iters.is_multiple_of(2) {
                             self.fluid_pressure_iters += 1;
                         }
                     });
@@ -1267,7 +1267,7 @@ impl App {
 
                 // Debug menu
                 egui::containers::menu::MenuButton::new("Debug")
-                    .config(keep_open.clone())
+                    .config(keep_open)
                     .ui(ui, |ui| {
                         if ui
                             .selectable_label(self.enable_ricochets, "Bullet Ricochets")
@@ -1301,19 +1301,18 @@ impl App {
                             self.fog_dirty = true;
                         }
                     }
-                    if self.fog_enabled {
-                        if ui
+                    if self.fog_enabled
+                        && ui
                             .selectable_label(self.fog_start_explored, "Pre-revealed Map")
                             .clicked()
-                        {
-                            self.fog_start_explored = !self.fog_start_explored;
-                            if self.fog_start_explored {
-                                self.fog_explored.iter_mut().for_each(|v| *v = 255);
-                            }
-                            // Force recompute
-                            self.fog_prev_tiles.clear();
-                            self.fog_dirty = true;
+                    {
+                        self.fog_start_explored = !self.fog_start_explored;
+                        if self.fog_start_explored {
+                            self.fog_explored.iter_mut().for_each(|v| *v = 255);
                         }
+                        // Force recompute
+                        self.fog_prev_tiles.clear();
+                        self.fog_dirty = true;
                     }
                     ui.separator();
                     let pleb_label = format!("Add Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
@@ -1592,14 +1591,14 @@ impl App {
                                             if prev == clicked {
                                                 self.inv_selected_slot = None;
                                             } else {
-                                                if let Some(sel_idx) = self.selected_pleb {
-                                                    if let Some(pleb) = self.plebs.get_mut(sel_idx) {
-                                                        while pleb.inventory.stacks.len() <= prev.max(clicked) {
-                                                            pleb.inventory.stacks.push(item_defs::ItemStack::new(0, 0));
-                                                        }
-                                                        pleb.inventory.stacks.swap(prev, clicked);
-                                                        pleb.inventory.stacks.retain(|s| s.count > 0);
+                                                if let Some(sel_idx) = self.selected_pleb
+                                                    && let Some(pleb) = self.plebs.get_mut(sel_idx)
+                                                {
+                                                    while pleb.inventory.stacks.len() <= prev.max(clicked) {
+                                                        pleb.inventory.stacks.push(item_defs::ItemStack::new(0, 0));
                                                     }
+                                                    pleb.inventory.stacks.swap(prev, clicked);
+                                                    pleb.inventory.stacks.retain(|s| s.count > 0);
                                                 }
                                                 self.inv_selected_slot = None;
                                             }
@@ -1615,20 +1614,19 @@ impl App {
                                             && selected.map(|s| stacks.get(s).and_then(|x| x.as_ref()).is_some()).unwrap_or(false);
                                         if ui.add_enabled(has_sel, egui::Button::new(
                                             egui::RichText::new("\u{2b07} Drop").size(10.0)
-                                        )).clicked() {
-                                            if let Some(slot) = selected {
-                                                if let Some(sel_idx) = self.selected_pleb {
-                                                    if let Some(pleb) = self.plebs.get_mut(sel_idx) {
-                                                        if slot < pleb.inventory.stacks.len() {
-                                                            let stack = pleb.inventory.stacks.remove(slot);
-                                                            self.ground_items.push(resources::GroundItem {
-                                                                x: pleb.x, y: pleb.y, stack,
-                                                            });
-                                                        }
-                                                    }
-                                                }
-                                                self.inv_selected_slot = None;
+                                        )).clicked()
+                                            && let Some(slot) = selected
+                                        {
+                                            if let Some(sel_idx) = self.selected_pleb
+                                                && let Some(pleb) = self.plebs.get_mut(sel_idx)
+                                                && slot < pleb.inventory.stacks.len()
+                                            {
+                                                let stack = pleb.inventory.stacks.remove(slot);
+                                                self.ground_items.push(resources::GroundItem {
+                                                    x: pleb.x, y: pleb.y, stack,
+                                                });
                                             }
+                                            self.inv_selected_slot = None;
                                         }
                                         // Eat button (if selected item is food)
                                         let is_food = selected.and_then(|s| stacks.get(s))
@@ -1638,18 +1636,16 @@ impl App {
                                         if ui.add_enabled(is_food, egui::Button::new(
                                             egui::RichText::new("\u{1f374} Eat").size(10.0)
                                         )).clicked() {
-                                            if let Some(sel_idx) = self.selected_pleb {
-                                                if let Some(pleb) = self.plebs.get_mut(sel_idx) {
-                                                    if let Some(slot) = selected {
-                                                        if slot < pleb.inventory.stacks.len() {
-                                                            let nutr = item_reg.nutrition(pleb.inventory.stacks[slot].item_id);
-                                                            pleb.needs.hunger = (pleb.needs.hunger + nutr).min(1.0);
-                                                            pleb.inventory.stacks[slot].count -= 1;
-                                                            if pleb.inventory.stacks[slot].count == 0 {
-                                                                pleb.inventory.stacks.remove(slot);
-                                                            }
-                                                        }
-                                                    }
+                                            if let Some(sel_idx) = self.selected_pleb
+                                                && let Some(pleb) = self.plebs.get_mut(sel_idx)
+                                                && let Some(slot) = selected
+                                                && slot < pleb.inventory.stacks.len()
+                                            {
+                                                let nutr = item_reg.nutrition(pleb.inventory.stacks[slot].item_id);
+                                                pleb.needs.hunger = (pleb.needs.hunger + nutr).min(1.0);
+                                                pleb.inventory.stacks[slot].count -= 1;
+                                                if pleb.inventory.stacks[slot].count == 0 {
+                                                    pleb.inventory.stacks.remove(slot);
                                                 }
                                             }
                                             self.inv_selected_slot = None;
@@ -1797,7 +1793,7 @@ impl App {
                                 _ => 5,
                             };
                             let items_per_row = if item_count > 10 {
-                                (item_count + 1) / 2
+                                item_count.div_ceil(2)
                             } else {
                                 item_count
                             };
@@ -1859,7 +1855,7 @@ impl App {
                                             }
                                             let c = col_counter.get() + 1;
                                             col_counter.set(c);
-                                            if c % items_per_row == 0 {
+                                            if c.is_multiple_of(items_per_row) {
                                                 ui.end_row();
                                             }
                                         };
@@ -2367,7 +2363,7 @@ impl App {
                                         format!("Q/E [{}]", r)
                                     }
                                     BuildTool::Place(41) => {
-                                        let d = if self.build_rotation % 2 == 0 {
+                                        let d = if self.build_rotation.is_multiple_of(2) {
                                             "N↔S wind"
                                         } else {
                                             "E↔W wind"
@@ -2467,8 +2463,6 @@ impl App {
                                 PlebActivity::Walking => {
                                     if p.work_target.is_some() {
                                         "Walking to task".to_string()
-                                    } else if !p.path.is_empty() {
-                                        "Walking".to_string()
                                     } else {
                                         "Walking".to_string()
                                     }
@@ -2777,14 +2771,14 @@ impl App {
                                 );
                             }
                             // Click to toggle individual hours
-                            if bar_response.clicked() {
-                                if let Some(pos) = bar_response.interact_pointer_pos() {
-                                    let h = ((pos.x - bar_rect.min.x) / cell_w) as usize;
-                                    if h < 24 {
-                                        self.plebs[pi].schedule.hours[h] =
-                                            !self.plebs[pi].schedule.hours[h];
-                                        self.plebs[pi].schedule.preset = PlebShift::Custom;
-                                    }
+                            if bar_response.clicked()
+                                && let Some(pos) = bar_response.interact_pointer_pos()
+                            {
+                                let h = ((pos.x - bar_rect.min.x) / cell_w) as usize;
+                                if h < 24 {
+                                    self.plebs[pi].schedule.hours[h] =
+                                        !self.plebs[pi].schedule.hours[h];
+                                    self.plebs[pi].schedule.preset = PlebShift::Custom;
                                 }
                             }
                             // Current time marker
@@ -2910,12 +2904,11 @@ impl App {
                     || self.pressed_keys.contains(&KeyCode::ShiftRight);
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
                     for (label, action, enabled) in &menu.actions {
-                        let display = if shift_held {
-                            format!("{} [queue]", label)
+                        let text = if shift_held {
+                            egui::RichText::new(format!("{} [queue]", label)).size(11.0)
                         } else {
-                            label.clone()
+                            egui::RichText::new(label.as_str()).size(11.0)
                         };
-                        let text = egui::RichText::new(display).size(11.0);
                         let text = if *enabled { text } else { text.weak() };
                         let btn = ui.add_enabled(*enabled, egui::Button::new(text));
                         if btn.clicked() {
@@ -2954,17 +2947,15 @@ impl App {
             };
 
             // If shift held and pleb is busy, queue the command instead of executing
-            if shift_held {
-                if let Some(cmd) = as_command {
-                    if let Some(sel_idx) = self.selected_pleb {
-                        let pleb = &mut self.plebs[sel_idx];
-                        if !pleb.is_enemy && !pleb.activity.is_crisis() {
-                            pleb.command_queue.push(cmd);
-                        }
+            if shift_held && let Some(cmd) = as_command {
+                if let Some(sel_idx) = self.selected_pleb {
+                    let pleb = &mut self.plebs[sel_idx];
+                    if !pleb.is_enemy && !pleb.activity.is_crisis() {
+                        pleb.command_queue.push(cmd);
                     }
-                    self.context_menu = None;
-                    return;
                 }
+                self.context_menu = None;
+                return;
             }
 
             // Immediate execution — clear queue (new direct order replaces queued ones)
@@ -3044,41 +3035,41 @@ impl App {
                     }
                 }
                 ContextAction::Eat(item_idx) => {
-                    if let Some(sel_idx) = self.selected_pleb {
-                        if item_idx < self.ground_items.len() {
-                            let item = &self.ground_items[item_idx];
-                            let ix = item.x.floor() as i32;
-                            let iy = item.y.floor() as i32;
-                            let pleb = &mut self.plebs[sel_idx];
-                            if !pleb.is_enemy && !pleb.activity.is_crisis() {
-                                let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                let dist = ((pleb.x - ix as f32 - 0.5).powi(2)
-                                    + (pleb.y - iy as f32 - 0.5).powi(2))
-                                .sqrt();
-                                if dist < 1.5 {
-                                    // Close enough — eat directly
+                    if let Some(sel_idx) = self.selected_pleb
+                        && item_idx < self.ground_items.len()
+                    {
+                        let item = &self.ground_items[item_idx];
+                        let ix = item.x.floor() as i32;
+                        let iy = item.y.floor() as i32;
+                        let pleb = &mut self.plebs[sel_idx];
+                        if !pleb.is_enemy && !pleb.activity.is_crisis() {
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let dist = ((pleb.x - ix as f32 - 0.5).powi(2)
+                                + (pleb.y - iy as f32 - 0.5).powi(2))
+                            .sqrt();
+                            if dist < 1.5 {
+                                // Close enough — eat directly
+                                pleb.harvest_target = Some((ix, iy));
+                                pleb.activity = PlebActivity::Eating;
+                                pleb.work_target = None;
+                                pleb.haul_target = None;
+                                pleb.path.clear();
+                            } else {
+                                // Walk there first, eat on arrival
+                                let path = astar_path_terrain_wd(
+                                    &self.grid_data,
+                                    &self.wall_data,
+                                    &self.terrain_data,
+                                    start,
+                                    (ix, iy),
+                                );
+                                if !path.is_empty() {
+                                    pleb.path = path;
+                                    pleb.path_idx = 0;
+                                    pleb.activity = PlebActivity::Walking;
                                     pleb.harvest_target = Some((ix, iy));
-                                    pleb.activity = PlebActivity::Eating;
                                     pleb.work_target = None;
                                     pleb.haul_target = None;
-                                    pleb.path.clear();
-                                } else {
-                                    // Walk there first, eat on arrival
-                                    let path = astar_path_terrain_wd(
-                                        &self.grid_data,
-                                        &self.wall_data,
-                                        &self.terrain_data,
-                                        start,
-                                        (ix, iy),
-                                    );
-                                    if !path.is_empty() {
-                                        pleb.path = path;
-                                        pleb.path_idx = 0;
-                                        pleb.activity = PlebActivity::Walking;
-                                        pleb.harvest_target = Some((ix, iy));
-                                        pleb.work_target = None;
-                                        pleb.haul_target = None;
-                                    }
                                 }
                             }
                         }
@@ -3262,7 +3253,7 @@ impl App {
                     if wind_mag > 0.1 {
                         let dir_x = wx / wind_mag;
                         let dir_y = wy / wind_mag;
-                        let arrow_len = (radius - 6.0) * (wind_mag / 20.0).min(1.0).max(0.3);
+                        let arrow_len = (radius - 6.0) * (wind_mag / 20.0).clamp(0.3, 1.0);
                         let tip = center + egui::Vec2::new(dir_x * arrow_len, dir_y * arrow_len);
                         let tail = center
                             - egui::Vec2::new(dir_x * arrow_len * 0.3, dir_y * arrow_len * 0.3);
@@ -3450,7 +3441,7 @@ impl App {
                                     || bt == 4
                                     || bt == 5
                                     || bt == 14
-                                    || (bt >= 21 && bt <= 25)
+                                    || (21..=25).contains(&bt)
                                     || bt == 35);
                             let is_pipe = pipes::is_pipe_component(bt);
                             ui.separator();
@@ -3528,13 +3519,13 @@ impl App {
                                         row(ui, "CO\u{2082}", format!("{:.3}", cell.gas[2]));
                                     }
                                 }
-                            } else if is_liq {
-                                if let Some(cell) = self.liquid_network.cells.get(&pidx) {
-                                    ui.separator();
-                                    heading(ui, "\u{1f4a7}", "Liquid Pipe");
-                                    row(ui, "Pressure", format!("{:.2}", cell.pressure));
-                                    row(ui, "Temp", format!("{:.1}\u{b0}C", cell.gas[3]));
-                                }
+                            } else if is_liq
+                                && let Some(cell) = self.liquid_network.cells.get(&pidx)
+                            {
+                                ui.separator();
+                                heading(ui, "\u{1f4a7}", "Liquid Pipe");
+                                row(ui, "Pressure", format!("{:.2}", cell.pressure));
+                                row(ui, "Temp", format!("{:.1}\u{b0}C", cell.gas[3]));
                             }
                         }
 
@@ -3726,104 +3717,95 @@ impl App {
         }
 
         // Drag shape preview (walls=hollow rect, pipes=line, destroy=filled rect)
-        if let Some((sx, sy)) = self.drag_start {
-            if self.mouse_dragged {
-                let (hwx, hwy) = self.hover_world;
-                let (ex, ey) = (hwx.floor() as i32, hwy.floor() as i32);
-                let tiles = match self.build_tool {
-                    BuildTool::Destroy
-                    | BuildTool::Roof
-                    | BuildTool::RemoveFloor
-                    | BuildTool::RemoveRoof => Self::filled_rect_tiles(sx, sy, ex, ey),
-                    BuildTool::Place(id) => {
-                        let reg = crate::block_defs::BlockRegistry::cached();
-                        let shape = reg
-                            .get(id)
-                            .and_then(|d| d.placement.as_ref())
-                            .and_then(|p| p.drag.as_ref());
-                        match shape {
-                            Some(crate::block_defs::DragShape::Line) => {
-                                Self::line_tiles(sx, sy, ex, ey)
-                            }
-                            Some(crate::block_defs::DragShape::FilledRect) => {
-                                Self::filled_rect_tiles(sx, sy, ex, ey)
-                            }
-                            Some(crate::block_defs::DragShape::HollowRect) => {
-                                let pleb_pos = self
-                                    .selected_pleb
-                                    .and_then(|pi| self.plebs.get(pi).map(|p| (p.x, p.y)));
-                                Self::hollow_rect_tiles_with_entry(sx, sy, ex, ey, pleb_pos).0
-                            }
-                            _ => Vec::new(),
+        if let Some((sx, sy)) = self.drag_start
+            && self.mouse_dragged
+        {
+            let (hwx, hwy) = self.hover_world;
+            let (ex, ey) = (hwx.floor() as i32, hwy.floor() as i32);
+            let tiles = match self.build_tool {
+                BuildTool::Destroy
+                | BuildTool::Roof
+                | BuildTool::RemoveFloor
+                | BuildTool::RemoveRoof => Self::filled_rect_tiles(sx, sy, ex, ey),
+                BuildTool::Place(id) => {
+                    let reg = crate::block_defs::BlockRegistry::cached();
+                    let shape = reg
+                        .get(id)
+                        .and_then(|d| d.placement.as_ref())
+                        .and_then(|p| p.drag.as_ref());
+                    match shape {
+                        Some(crate::block_defs::DragShape::Line) => {
+                            Self::line_tiles(sx, sy, ex, ey)
                         }
+                        Some(crate::block_defs::DragShape::FilledRect) => {
+                            Self::filled_rect_tiles(sx, sy, ex, ey)
+                        }
+                        Some(crate::block_defs::DragShape::HollowRect) => {
+                            let pleb_pos = self
+                                .selected_pleb
+                                .and_then(|pi| self.plebs.get(pi).map(|p| (p.x, p.y)));
+                            Self::hollow_rect_tiles_with_entry(sx, sy, ex, ey, pleb_pos).0
+                        }
+                        _ => Vec::new(),
                     }
-                    _ => Vec::new(),
-                };
-                if !tiles.is_empty() {
-                    let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
-                    let painter = ctx.layer_painter(egui::LayerId::new(
-                        egui::Order::Background,
-                        egui::Id::new("drag_preview"),
-                    ));
-                    let is_destroy = self.build_tool == BuildTool::Destroy;
-                    let is_remove_floor = self.build_tool == BuildTool::RemoveFloor;
-                    let is_remove_roof = self.build_tool == BuildTool::RemoveRoof;
-                    let is_roof = self.build_tool == BuildTool::Roof;
-                    for (tx, ty) in &tiles {
-                        let color = if is_destroy {
-                            egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
-                        } else if is_remove_floor {
-                            let valid = if *tx < 0
-                                || *ty < 0
-                                || *tx >= GRID_W as i32
-                                || *ty >= GRID_H as i32
-                            {
+                }
+                _ => Vec::new(),
+            };
+            if !tiles.is_empty() {
+                let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Background,
+                    egui::Id::new("drag_preview"),
+                ));
+                let is_destroy = self.build_tool == BuildTool::Destroy;
+                let is_remove_floor = self.build_tool == BuildTool::RemoveFloor;
+                let is_remove_roof = self.build_tool == BuildTool::RemoveRoof;
+                let is_roof = self.build_tool == BuildTool::Roof;
+                for (tx, ty) in &tiles {
+                    let color = if is_destroy {
+                        egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
+                    } else if is_remove_floor {
+                        let valid =
+                            if *tx < 0 || *ty < 0 || *tx >= GRID_W as i32 || *ty >= GRID_H as i32 {
                                 false
                             } else {
                                 let tidx = (*ty as u32 * GRID_W + *tx as u32) as usize;
                                 let tb = self.grid_data[tidx];
                                 let tbt = tb & 0xFF;
-                                matches!(tbt, 26 | 27 | 28)
+                                matches!(tbt, 26..=28)
                             };
-                            if valid {
-                                egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
-                            } else {
-                                egui::Color32::from_rgba_unmultiplied(255, 60, 60, 40)
-                            }
-                        } else if is_remove_roof {
-                            let valid = if *tx < 0
-                                || *ty < 0
-                                || *tx >= GRID_W as i32
-                                || *ty >= GRID_H as i32
-                            {
+                        if valid {
+                            egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(255, 60, 60, 40)
+                        }
+                    } else if is_remove_roof {
+                        let valid =
+                            if *tx < 0 || *ty < 0 || *tx >= GRID_W as i32 || *ty >= GRID_H as i32 {
                                 false
                             } else {
                                 let tidx = (*ty as u32 * GRID_W + *tx as u32) as usize;
                                 let tb = self.grid_data[tidx];
                                 (tb >> 16) & 2 != 0
                             };
-                            if valid {
-                                egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
-                            } else {
-                                egui::Color32::from_rgba_unmultiplied(255, 60, 60, 40)
-                            }
-                        } else if is_roof {
-                            // Roof preview: blue=valid support, red=no support
-                            if Self::can_support_roof_wd(&self.grid_data, &self.wall_data, *tx, *ty)
-                            {
-                                egui::Color32::from_rgba_unmultiplied(100, 160, 255, 100)
-                            } else {
-                                egui::Color32::from_rgba_unmultiplied(255, 60, 60, 80)
-                            }
+                        if valid {
+                            egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
                         } else {
-                            // Validate each tile individually
-                            let is_wire_tool = matches!(self.build_tool, BuildTool::Place(36));
-                            let is_pipe_tool = matches!(self.build_tool, BuildTool::Place(15));
-                            let valid = if *tx < 0
-                                || *ty < 0
-                                || *tx >= GRID_W as i32
-                                || *ty >= GRID_H as i32
-                            {
+                            egui::Color32::from_rgba_unmultiplied(255, 60, 60, 40)
+                        }
+                    } else if is_roof {
+                        // Roof preview: blue=valid support, red=no support
+                        if Self::can_support_roof_wd(&self.grid_data, &self.wall_data, *tx, *ty) {
+                            egui::Color32::from_rgba_unmultiplied(100, 160, 255, 100)
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(255, 60, 60, 80)
+                        }
+                    } else {
+                        // Validate each tile individually
+                        let is_wire_tool = matches!(self.build_tool, BuildTool::Place(36));
+                        let is_pipe_tool = matches!(self.build_tool, BuildTool::Place(15));
+                        let valid =
+                            if *tx < 0 || *ty < 0 || *tx >= GRID_W as i32 || *ty >= GRID_H as i32 {
                                 false
                             } else if is_wire_tool {
                                 true // wire can go anywhere
@@ -3835,48 +3817,69 @@ impl App {
                                 // Allow placement on empty ground OR on existing same-type block
                                 ((tbt == 0 || tbt == 2) && tbh == 0) || (is_pipe_tool && tbt == 15) // pipe on pipe = merge connections
                             };
-                            if valid {
-                                egui::Color32::from_rgba_unmultiplied(60, 140, 255, 120)
-                            } else {
-                                egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
-                            }
-                        };
-                        let wx0 = *tx as f32;
-                        let wy0 = *ty as f32;
-                        let sx0 =
-                            ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                        let sy0 =
-                            ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                        let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
-                            / self.render_scale
-                            / bp_ppp;
-                        let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
-                            / self.render_scale
-                            / bp_ppp;
-                        let tile_rect =
-                            egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1));
+                        if valid {
+                            egui::Color32::from_rgba_unmultiplied(60, 140, 255, 120)
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(255, 50, 50, 100)
+                        }
+                    };
+                    let wx0 = *tx as f32;
+                    let wy0 = *ty as f32;
+                    let sx0 =
+                        ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                    let sy0 =
+                        ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                    let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                        / self.render_scale
+                        / bp_ppp;
+                    let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                        / self.render_scale
+                        / bp_ppp;
+                    let tile_rect =
+                        egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1));
 
-                        // Thin wall preview: show sub-grid pattern
-                        let is_wall_tool =
-                            matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id));
-                        if is_wall_tool && self.wall_thickness < 4 && !is_destroy {
-                            let (min_x, max_x) = (sx.min(ex), sx.max(ex));
-                            let (min_y, max_y) = (sy.min(ey), sy.max(ey));
-                            let (edge, is_corner) = Self::thin_wall_edge_for_rect(
-                                *tx,
-                                *ty,
-                                min_x,
-                                max_x,
-                                min_y,
-                                max_y,
-                                self.build_rotation,
-                            );
-                            let thick = self.wall_thickness;
-                            let wall_frac = thick as f32 * 0.25;
-                            let tw = sx1 - sx0;
-                            let th = sy1 - sy0;
-                            // Draw primary edge sub-rect
-                            let primary_rect = match edge {
+                    // Thin wall preview: show sub-grid pattern
+                    let is_wall_tool =
+                        matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id));
+                    if is_wall_tool && self.wall_thickness < 4 && !is_destroy {
+                        let (min_x, max_x) = (sx.min(ex), sx.max(ex));
+                        let (min_y, max_y) = (sy.min(ey), sy.max(ey));
+                        let (edge, is_corner) = Self::thin_wall_edge_for_rect(
+                            *tx,
+                            *ty,
+                            min_x,
+                            max_x,
+                            min_y,
+                            max_y,
+                            self.build_rotation,
+                        );
+                        let thick = self.wall_thickness;
+                        let wall_frac = thick as f32 * 0.25;
+                        let tw = sx1 - sx0;
+                        let th = sy1 - sy0;
+                        // Draw primary edge sub-rect
+                        let primary_rect = match edge {
+                            0 => egui::Rect::from_min_size(
+                                egui::pos2(sx0, sy0),
+                                egui::vec2(tw, th * wall_frac),
+                            ),
+                            1 => egui::Rect::from_min_size(
+                                egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
+                                egui::vec2(tw * wall_frac, th),
+                            ),
+                            2 => egui::Rect::from_min_size(
+                                egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
+                                egui::vec2(tw, th * wall_frac),
+                            ),
+                            _ => egui::Rect::from_min_size(
+                                egui::pos2(sx0, sy0),
+                                egui::vec2(tw * wall_frac, th),
+                            ),
+                        };
+                        painter.rect_filled(primary_rect, 0.0, color);
+                        if is_corner {
+                            let next_edge = (edge + 1) % 4;
+                            let corner_rect = match next_edge {
                                 0 => egui::Rect::from_min_size(
                                     egui::pos2(sx0, sy0),
                                     egui::vec2(tw, th * wall_frac),
@@ -3894,80 +3897,55 @@ impl App {
                                     egui::vec2(tw * wall_frac, th),
                                 ),
                             };
-                            painter.rect_filled(primary_rect, 0.0, color);
-                            if is_corner {
-                                let next_edge = (edge + 1) % 4;
-                                let corner_rect = match next_edge {
-                                    0 => egui::Rect::from_min_size(
-                                        egui::pos2(sx0, sy0),
-                                        egui::vec2(tw, th * wall_frac),
-                                    ),
-                                    1 => egui::Rect::from_min_size(
-                                        egui::pos2(sx0 + tw * (1.0 - wall_frac), sy0),
-                                        egui::vec2(tw * wall_frac, th),
-                                    ),
-                                    2 => egui::Rect::from_min_size(
-                                        egui::pos2(sx0, sy0 + th * (1.0 - wall_frac)),
-                                        egui::vec2(tw, th * wall_frac),
-                                    ),
-                                    _ => egui::Rect::from_min_size(
-                                        egui::pos2(sx0, sy0),
-                                        egui::vec2(tw * wall_frac, th),
-                                    ),
-                                };
-                                painter.rect_filled(corner_rect, 0.0, color);
-                            }
-                        } else {
-                            painter.rect_filled(tile_rect, 0.0, color);
+                            painter.rect_filled(corner_rect, 0.0, color);
                         }
+                    } else {
+                        painter.rect_filled(tile_rect, 0.0, color);
                     }
-                    // Draw direction arrows on pipe/wire line tiles
-                    let is_line =
-                        matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(36));
-                    if is_line && tiles.len() > 1 {
-                        let arrow_col = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 160);
-                        for ti in 0..tiles.len() {
-                            let (tx, ty) = tiles[ti];
-                            let wx0 = tx as f32;
-                            let wy0 = ty as f32;
-                            let sx0 = ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5)
-                                / self.render_scale
-                                / bp_ppp;
-                            let sy0 = ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5)
-                                / self.render_scale
-                                / bp_ppp;
-                            let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
-                                / self.render_scale
-                                / bp_ppp;
-                            let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
-                                / self.render_scale
-                                / bp_ppp;
-                            let center = egui::pos2((sx0 + sx1) * 0.5, (sy0 + sy1) * 0.5);
-                            let tile_sz = (sx1 - sx0).max(1.0);
-                            // Arrow: toward next tile, or same direction as previous for last tile
-                            let has_next = ti + 1 < tiles.len();
-                            let has_prev = ti > 0;
-                            let (adx, ady) = if has_next {
-                                let (nx, ny) = tiles[ti + 1];
-                                ((nx - tx) as f32, (ny - ty) as f32)
-                            } else if has_prev {
-                                let (px, py) = tiles[ti - 1];
-                                ((tx - px) as f32, (ty - py) as f32)
-                            } else {
-                                (0.0, 0.0)
-                            };
-                            if adx != 0.0 || ady != 0.0 {
-                                let alen = tile_sz * 0.3;
-                                let tip = center + egui::Vec2::new(adx * alen, ady * alen);
-                                let perp = egui::Vec2::new(-ady, adx) * alen * 0.4;
-                                let base =
-                                    center + egui::Vec2::new(adx * alen * 0.2, ady * alen * 0.2);
-                                painter.add(egui::Shape::convex_polygon(
-                                    vec![tip, base + perp, base - perp],
-                                    arrow_col,
-                                    egui::Stroke::NONE,
-                                ));
-                            }
+                }
+                // Draw direction arrows on pipe/wire line tiles
+                let is_line =
+                    matches!(self.build_tool, BuildTool::Place(15) | BuildTool::Place(36));
+                if is_line && tiles.len() > 1 {
+                    let arrow_col = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 160);
+                    for ti in 0..tiles.len() {
+                        let (tx, ty) = tiles[ti];
+                        let wx0 = tx as f32;
+                        let wy0 = ty as f32;
+                        let sx0 =
+                            ((wx0 - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                        let sy0 =
+                            ((wy0 - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                        let sx1 = ((wx0 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                            / self.render_scale
+                            / bp_ppp;
+                        let sy1 = ((wy0 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                            / self.render_scale
+                            / bp_ppp;
+                        let center = egui::pos2((sx0 + sx1) * 0.5, (sy0 + sy1) * 0.5);
+                        let tile_sz = (sx1 - sx0).max(1.0);
+                        // Arrow: toward next tile, or same direction as previous for last tile
+                        let has_next = ti + 1 < tiles.len();
+                        let has_prev = ti > 0;
+                        let (adx, ady) = if has_next {
+                            let (nx, ny) = tiles[ti + 1];
+                            ((nx - tx) as f32, (ny - ty) as f32)
+                        } else if has_prev {
+                            let (px, py) = tiles[ti - 1];
+                            ((tx - px) as f32, (ty - py) as f32)
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        if adx != 0.0 || ady != 0.0 {
+                            let alen = tile_sz * 0.3;
+                            let tip = center + egui::Vec2::new(adx * alen, ady * alen);
+                            let perp = egui::Vec2::new(-ady, adx) * alen * 0.4;
+                            let base = center + egui::Vec2::new(adx * alen * 0.2, ady * alen * 0.2);
+                            painter.add(egui::Shape::convex_polygon(
+                                vec![tip, base + perp, base - perp],
+                                arrow_col,
+                                egui::Stroke::NONE,
+                            ));
                         }
                     }
                 }
@@ -3991,7 +3969,7 @@ impl App {
                 egui::Order::Background,
                 egui::Id::new("grid_lines"),
             ));
-            let screen_rect = ctx.screen_rect();
+            let _screen_rect = ctx.screen_rect();
             // Dark lines during day (contrast against bright ground), light at night
             let sun = self.camera.sun_intensity;
             let brightness = (200.0 * (1.0 - sun * 0.9)) as u8;
@@ -4087,9 +4065,9 @@ impl App {
                 r.left_bottom(),
                 r.left_top(),
             ];
-            for i in 0..4 {
+            for pair in pts.windows(2) {
                 sel_drag_painter.line_segment(
-                    [pts[i], pts[i + 1]],
+                    [pair[0], pair[1]],
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 180, 255)),
                 );
             }
@@ -4283,7 +4261,7 @@ impl App {
                             bp_painter.rect_filled(edge_rect, 0.0, tint);
                         }
                     }
-                } else if (bp.block_data & 0xFF) as u32 == BT_CAMPFIRE {
+                } else if (bp.block_data & 0xFF) == BT_CAMPFIRE {
                     // Campfire blueprint: draw only the 2x2 subtile area
                     let bp_flags = ((bp.block_data >> 16) & 0xFF) as u8;
                     let sub_x = (bp_flags >> 3) & 3;
@@ -4328,7 +4306,7 @@ impl App {
                         } else {
                             egui::Color32::from_rgb(255, 160, 60)
                         };
-                        let mut parts = Vec::new();
+                        let mut parts = Vec::with_capacity(5);
                         if bp.wood_needed > 0 {
                             parts.push(format!("{}/{} wood", bp.wood_delivered, bp.wood_needed));
                         }
@@ -4460,7 +4438,7 @@ impl App {
                         (sy0 + sy1) / 2.0 + (sy1 - sy0) * 0.5,
                     );
                     let tile_size = (sx1 - sx0).max(1.0);
-                    let (adx, ady) = if self.build_rotation % 2 == 0 {
+                    let (adx, ady) = if self.build_rotation.is_multiple_of(2) {
                         (0.0f32, -1.0f32) // N-S wind (blades face E-W)
                     } else {
                         (1.0f32, 0.0f32) // E-W wind (blades face N-S)
@@ -4551,106 +4529,106 @@ impl App {
 
         // Draw selected pleb A* path line
         let sel_pleb_ref = self.selected_pleb.and_then(|i| self.plebs.get(i));
-        if let Some(pleb) = sel_pleb_ref {
-            if pleb.path_idx < pleb.path.len() {
-                let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
-                let painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Background,
-                    egui::Id::new("pleb_path"),
-                ));
-                let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
-                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                    egui::pos2(sx, sy)
-                };
-                // Draw from pleb's current position through remaining path
-                // Color by elevation cost: green=flat, yellow=slight slope, red=steep uphill, blue=downhill
-                let mut prev = to_screen(pleb.x, pleb.y);
-                let mut prev_pos = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                for i in pleb.path_idx..pleb.path.len() {
-                    let (px, py) = pleb.path[i];
-                    let next = to_screen(px as f32 + 0.5, py as f32 + 0.5);
-                    // Compute elevation difference for color
-                    let seg_color = if !self.elevation_data.is_empty() {
-                        let prev_idx = (prev_pos.1 as u32 * GRID_W + prev_pos.0 as u32) as usize;
-                        let next_idx = (py as u32 * GRID_W + px as u32) as usize;
-                        let elev_diff = if prev_idx < self.elevation_data.len()
-                            && next_idx < self.elevation_data.len()
-                        {
-                            self.elevation_data[next_idx] - self.elevation_data[prev_idx]
-                        } else {
-                            0.0
-                        };
-                        if elev_diff > 0.3 {
-                            // Uphill: yellow → red
-                            let t = ((elev_diff - 0.3) / 1.5).min(1.0);
-                            egui::Color32::from_rgba_unmultiplied(
-                                (255.0) as u8,
-                                (255.0 - t * 200.0) as u8,
-                                (100.0 - t * 100.0) as u8,
-                                180,
-                            )
-                        } else if elev_diff < -0.3 {
-                            // Downhill: cyan
-                            let t = ((-elev_diff - 0.3) / 1.5).min(1.0);
-                            egui::Color32::from_rgba_unmultiplied(
-                                (100.0 - t * 50.0) as u8,
-                                (200.0 + t * 55.0) as u8,
-                                255,
-                                180,
-                            )
-                        } else {
-                            // Flat: green
-                            egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)
-                        }
+        if let Some(pleb) = sel_pleb_ref
+            && pleb.path_idx < pleb.path.len()
+        {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::new("pleb_path"),
+            ));
+            let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                egui::pos2(sx, sy)
+            };
+            // Draw from pleb's current position through remaining path
+            // Color by elevation cost: green=flat, yellow=slight slope, red=steep uphill, blue=downhill
+            let mut prev = to_screen(pleb.x, pleb.y);
+            let mut prev_pos = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+            for i in pleb.path_idx..pleb.path.len() {
+                let (px, py) = pleb.path[i];
+                let next = to_screen(px as f32 + 0.5, py as f32 + 0.5);
+                // Compute elevation difference for color
+                let seg_color = if !self.elevation_data.is_empty() {
+                    let prev_idx = (prev_pos.1 as u32 * GRID_W + prev_pos.0 as u32) as usize;
+                    let next_idx = (py as u32 * GRID_W + px as u32) as usize;
+                    let elev_diff = if prev_idx < self.elevation_data.len()
+                        && next_idx < self.elevation_data.len()
+                    {
+                        self.elevation_data[next_idx] - self.elevation_data[prev_idx]
                     } else {
-                        egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)
+                        0.0
                     };
-                    painter.line_segment([prev, next], egui::Stroke::new(2.0, seg_color));
-                    prev = next;
-                    prev_pos = (px, py);
-                }
-                // Draw target marker at end
-                let last = pleb.path.last().unwrap();
-                let end = to_screen(last.0 as f32 + 0.5, last.1 as f32 + 0.5);
-                painter.circle_stroke(
-                    end,
-                    4.0,
-                    egui::Stroke::new(
-                        2.0,
-                        egui::Color32::from_rgba_unmultiplied(100, 255, 100, 200),
-                    ),
-                );
-                // Draw queued command waypoints as dashed line + numbered markers
-                if !pleb.command_queue.is_empty() {
-                    let queue_color = egui::Color32::from_rgba_unmultiplied(255, 200, 100, 160); // orange
-                    let mut prev_q = end;
-                    for (qi, cmd) in pleb.command_queue.iter().enumerate() {
-                        let (tx, ty) = match cmd {
-                            PlebCommand::MoveTo(wx, wy) => {
-                                (wx.floor() as f32 + 0.5, wy.floor() as f32 + 0.5)
-                            }
-                            PlebCommand::Harvest(x, y)
-                            | PlebCommand::Haul(x, y)
-                            | PlebCommand::Eat(x, y)
-                            | PlebCommand::DigClay(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
-                            PlebCommand::HandCraft(_) => (pleb.x, pleb.y),
-                            PlebCommand::GatherBranches(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
-                        };
-                        let qp = to_screen(tx, ty);
-                        // Dashed line to next waypoint
-                        painter.line_segment([prev_q, qp], egui::Stroke::new(1.5, queue_color));
-                        // Numbered circle
-                        painter.circle_stroke(qp, 5.0, egui::Stroke::new(2.0, queue_color));
-                        painter.text(
-                            qp,
-                            egui::Align2::CENTER_CENTER,
-                            format!("{}", qi + 1),
-                            egui::FontId::proportional(8.0),
-                            queue_color,
-                        );
-                        prev_q = qp;
+                    if elev_diff > 0.3 {
+                        // Uphill: yellow → red
+                        let t = ((elev_diff - 0.3) / 1.5).min(1.0);
+                        egui::Color32::from_rgba_unmultiplied(
+                            (255.0) as u8,
+                            (255.0 - t * 200.0) as u8,
+                            (100.0 - t * 100.0) as u8,
+                            180,
+                        )
+                    } else if elev_diff < -0.3 {
+                        // Downhill: cyan
+                        let t = ((-elev_diff - 0.3) / 1.5).min(1.0);
+                        egui::Color32::from_rgba_unmultiplied(
+                            (100.0 - t * 50.0) as u8,
+                            (200.0 + t * 55.0) as u8,
+                            255,
+                            180,
+                        )
+                    } else {
+                        // Flat: green
+                        egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)
                     }
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(100, 255, 100, 150)
+                };
+                painter.line_segment([prev, next], egui::Stroke::new(2.0, seg_color));
+                prev = next;
+                prev_pos = (px, py);
+            }
+            // Draw target marker at end
+            let Some(last) = pleb.path.last() else {
+                return;
+            };
+            let end = to_screen(last.0 as f32 + 0.5, last.1 as f32 + 0.5);
+            painter.circle_stroke(
+                end,
+                4.0,
+                egui::Stroke::new(
+                    2.0,
+                    egui::Color32::from_rgba_unmultiplied(100, 255, 100, 200),
+                ),
+            );
+            // Draw queued command waypoints as dashed line + numbered markers
+            if !pleb.command_queue.is_empty() {
+                let queue_color = egui::Color32::from_rgba_unmultiplied(255, 200, 100, 160); // orange
+                let mut prev_q = end;
+                for (qi, cmd) in pleb.command_queue.iter().enumerate() {
+                    let (tx, ty) = match cmd {
+                        PlebCommand::MoveTo(wx, wy) => (wx.floor() + 0.5, wy.floor() + 0.5),
+                        PlebCommand::Harvest(x, y)
+                        | PlebCommand::Haul(x, y)
+                        | PlebCommand::Eat(x, y)
+                        | PlebCommand::DigClay(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
+                        PlebCommand::HandCraft(_) => (pleb.x, pleb.y),
+                        PlebCommand::GatherBranches(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
+                    };
+                    let qp = to_screen(tx, ty);
+                    // Dashed line to next waypoint
+                    painter.line_segment([prev_q, qp], egui::Stroke::new(1.5, queue_color));
+                    // Numbered circle
+                    painter.circle_stroke(qp, 5.0, egui::Stroke::new(2.0, queue_color));
+                    painter.text(
+                        qp,
+                        egui::Align2::CENTER_CENTER,
+                        format!("{}", qi + 1),
+                        egui::FontId::proportional(8.0),
+                        queue_color,
+                    );
+                    prev_q = qp;
                 }
             }
         }
@@ -4818,32 +4796,30 @@ impl App {
                             210,
                         )
                     }
+                } else if norm_mag < 0.33 {
+                    let t = norm_mag / 0.33;
+                    egui::Color32::from_rgba_unmultiplied(
+                        (30.0 + t * 50.0) as u8,
+                        (100.0 + t * 155.0) as u8,
+                        255,
+                        200,
+                    )
+                } else if norm_mag < 0.66 {
+                    let t = (norm_mag - 0.33) / 0.33;
+                    egui::Color32::from_rgba_unmultiplied(
+                        (80.0 + t * 175.0) as u8,
+                        255,
+                        (255.0 - t * 155.0) as u8,
+                        200,
+                    )
                 } else {
-                    if norm_mag < 0.33 {
-                        let t = norm_mag / 0.33;
-                        egui::Color32::from_rgba_unmultiplied(
-                            (30.0 + t * 50.0) as u8,
-                            (100.0 + t * 155.0) as u8,
-                            255,
-                            200,
-                        )
-                    } else if norm_mag < 0.66 {
-                        let t = (norm_mag - 0.33) / 0.33;
-                        egui::Color32::from_rgba_unmultiplied(
-                            (80.0 + t * 175.0) as u8,
-                            255,
-                            (255.0 - t * 155.0) as u8,
-                            200,
-                        )
-                    } else {
-                        let t = (norm_mag - 0.66) / 0.34;
-                        egui::Color32::from_rgba_unmultiplied(
-                            255,
-                            (255.0 - t * 155.0) as u8,
-                            (100.0 - t * 100.0) as u8,
-                            200,
-                        )
-                    }
+                    let t = (norm_mag - 0.66) / 0.34;
+                    egui::Color32::from_rgba_unmultiplied(
+                        255,
+                        (255.0 - t * 155.0) as u8,
+                        (100.0 - t * 100.0) as u8,
+                        200,
+                    )
                 };
                 let tip = egui::pos2(center.x + dir_x * arrow_len, center.y + dir_y * arrow_len);
                 let tail = egui::pos2(
@@ -4867,7 +4843,7 @@ impl App {
                 painter.line_segment([tip, h2], egui::Stroke::new(stroke_w, color));
                 if let Some(lbl) = label {
                     Self::world_label(
-                        &painter,
+                        painter,
                         egui::pos2(center.x, center.y + tile_px * 0.3),
                         egui::Align2::CENTER_TOP,
                         &lbl,
@@ -4974,7 +4950,7 @@ impl App {
                         let bt = b & 0xFF;
                         let fl = (b >> 16) & 0xFF;
                         // Skip pipe tiles (already drawn above)
-                        if bt >= 15 && bt <= 20 {
+                        if (15..=20).contains(&bt) {
                             continue;
                         }
                         let is_cond = is_conductor_rs(bt, fl as u8);
@@ -5255,7 +5231,7 @@ impl App {
                                 let widx = (wy as u32 * GRID_W + wx as u32) as usize;
                                 if (self.grid_data[widx] & 0xFF) == 36 {
                                     let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
-                                    if best_wire.is_none() || dist < best_wire.unwrap().2 {
+                                    if best_wire.is_none_or(|(_, _, d)| dist < d) {
                                         best_wire = Some((wx, wy, dist));
                                     }
                                 }
@@ -5381,7 +5357,7 @@ impl App {
                             let seed = x.wrapping_mul(73856093)
                                 ^ y.wrapping_mul(19349663)
                                 ^ h.wrapping_mul(83492791);
-                            let hx = 0.15 + (((seed >> 0) & 0xFF) as f32 / 255.0) * 0.7;
+                            let hx = 0.15 + ((seed & 0xFF) as f32 / 255.0) * 0.7;
                             let hy = 0.15 + (((seed >> 8) & 0xFF) as f32 / 255.0) * 0.7;
                             let hr = hole_r * (0.7 + ((seed >> 16) & 0xFF) as f32 / 255.0 * 0.6);
                             let center = to_scr(x as f32 + hx, y as f32 + hy);
@@ -6214,7 +6190,7 @@ impl App {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                             ui.label(egui::RichText::new(title).strong().size(11.0));
                             let display = if dbt == 6 {
-                                let temp = 100 + level as i32 * 50; // 100°C at 0, 600°C at 10
+                                let temp = 100 + level * 50; // 100°C at 0, 600°C at 10
                                 format!("{}°C ({:.0}%)", temp, level as f32 * 10.0)
                             } else if dbt == 46 {
                                 format!("{:.0}% open", level as f32 * 10.0)
@@ -6523,9 +6499,9 @@ impl App {
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                             if tidx < self.grid_data.len() {
                                 let tbt = self.grid_data[tidx] & 0xFF;
-                                if tbt as u32 == BT_WORKBENCH || tbt as u32 == BT_KILN {
+                                if tbt == BT_WORKBENCH || tbt == BT_KILN {
                                     "Crafting"
-                                } else if tbt as u32 == BT_WELL {
+                                } else if tbt == BT_WELL {
                                     "Drinking"
                                 } else if tbt == BT_CROP || tbt == BT_BERRY_BUSH {
                                     "Harvesting"
@@ -6638,22 +6614,20 @@ impl App {
                         }
 
                         // Work target line: show where pleb is heading (selected pleb only)
-                        let is_selected = self.selected_pleb.map_or(false, |si| {
+                        let is_selected = self.selected_pleb.is_some_and(|si| {
                             si < self.plebs.len() && std::ptr::eq(&self.plebs[si], pleb)
                         });
-                        if is_selected {
-                            if let Some((tx, ty)) = pleb.work_target {
-                                let target_pos = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
-                                let pleb_pos = to_screen(pleb.x, pleb.y);
-                                label_painter.line_segment(
-                                    [pleb_pos, target_pos],
-                                    egui::Stroke::new(
-                                        1.0,
-                                        egui::Color32::from_rgba_unmultiplied(80, 200, 80, 100),
-                                    ),
-                                );
-                            }
-                        } // is_selected
+                        if is_selected && let Some((tx, ty)) = pleb.work_target {
+                            let target_pos = to_screen(tx as f32 + 0.5, ty as f32 + 0.5);
+                            let pleb_pos = to_screen(pleb.x, pleb.y);
+                            label_painter.line_segment(
+                                [pleb_pos, target_pos],
+                                egui::Stroke::new(
+                                    1.0,
+                                    egui::Color32::from_rgba_unmultiplied(80, 200, 80, 100),
+                                ),
+                            );
+                        }
                         // Crisis reason
                         if let Some(reason) = pleb.activity.crisis_reason() {
                             let crisis_pos = to_screen(pleb.x, pleb.y + 0.95);
@@ -6670,46 +6644,43 @@ impl App {
                 }
 
                 // Fire mode indicator above selected pleb
-                if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
-                    if !pleb.is_enemy {
-                        let mode_pos = to_screen(pleb.x, pleb.y - 0.8);
-                        let mode_text = if self.burst_mode { "BURST" } else { "SINGLE" };
-                        Self::world_label(
-                            &label_painter,
-                            mode_pos,
-                            egui::Align2::CENTER_BOTTOM,
-                            mode_text,
-                            9.0,
-                            egui::Color32::from_rgb(180, 180, 100),
-                        );
-                    }
+                if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i))
+                    && !pleb.is_enemy
+                {
+                    let mode_pos = to_screen(pleb.x, pleb.y - 0.8);
+                    let mode_text = if self.burst_mode { "BURST" } else { "SINGLE" };
+                    Self::world_label(
+                        &label_painter,
+                        mode_pos,
+                        egui::Align2::CENTER_BOTTOM,
+                        mode_text,
+                        9.0,
+                        egui::Color32::from_rgb(180, 180, 100),
+                    );
                 }
 
                 // Grenade charge bar above selected pleb
-                if self.grenade_charging {
-                    if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
-                        let bar_pos = to_screen(pleb.x - 0.4, pleb.y - 0.6);
-                        let bar_w = tile_px * 0.8;
-                        let bar_h = tile_px * 0.08;
-                        let charge = self.grenade_charge.clamp(0.0, 1.0);
-                        // Background
-                        label_painter.rect_filled(
-                            egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w, bar_h)),
-                            1.0,
-                            egui::Color32::from_rgb(30, 30, 30),
-                        );
-                        // Fill (green to red as charge increases)
-                        let r = (charge * 255.0) as u8;
-                        let g = ((1.0 - charge) * 200.0) as u8;
-                        label_painter.rect_filled(
-                            egui::Rect::from_min_size(
-                                bar_pos,
-                                egui::Vec2::new(bar_w * charge, bar_h),
-                            ),
-                            1.0,
-                            egui::Color32::from_rgb(r, g, 40),
-                        );
-                    }
+                if self.grenade_charging
+                    && let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i))
+                {
+                    let bar_pos = to_screen(pleb.x - 0.4, pleb.y - 0.6);
+                    let bar_w = tile_px * 0.8;
+                    let bar_h = tile_px * 0.08;
+                    let charge = self.grenade_charge.clamp(0.0, 1.0);
+                    // Background
+                    label_painter.rect_filled(
+                        egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w, bar_h)),
+                        1.0,
+                        egui::Color32::from_rgb(30, 30, 30),
+                    );
+                    // Fill (green to red as charge increases)
+                    let r = (charge * 255.0) as u8;
+                    let g = ((1.0 - charge) * 200.0) as u8;
+                    label_painter.rect_filled(
+                        egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w * charge, bar_h)),
+                        1.0,
+                        egui::Color32::from_rgb(r, g, 40),
+                    );
                 }
             }
         }
@@ -6731,7 +6702,7 @@ impl App {
         // Determine common properties
         let all_removable = items
             .iter()
-            .all(|item| reg.get(item.block_type).map_or(false, |d| d.is_removable));
+            .all(|item| reg.get(item.block_type).is_some_and(|d| d.is_removable));
         let all_same_type = items
             .iter()
             .all(|item| item.block_type == items[0].block_type);
@@ -6741,16 +6712,16 @@ impl App {
 
         // Label
         let label = if count == 1 && items[0].pleb_idx.is_some() {
-            let pi = items[0].pleb_idx.unwrap();
-            self.plebs
-                .get(pi)
+            items[0]
+                .pleb_idx
+                .and_then(|pi| self.plebs.get(pi))
                 .map_or("Pleb".to_string(), |p| p.name.clone())
         } else if count == 1 {
             reg.name(items[0].block_type).to_string()
         } else if all_same_type && items[0].pleb_idx.is_none() {
             format!("{}x {}", count, reg.name(items[0].block_type))
         } else {
-            let mut parts = Vec::new();
+            let mut parts = Vec::with_capacity(2);
             if pleb_count > 0 {
                 parts.push(format!(
                     "{} pleb{}",
@@ -6770,12 +6741,12 @@ impl App {
 
         // Action buttons: square icons with labels, same style as build bar
         // Collect available actions as (icon, label, id)
-        let mut actions: Vec<(&str, &str, u32)> = Vec::new();
+        let mut actions: Vec<(&str, &str, u32)> = Vec::with_capacity(4);
         if all_removable {
             actions.push(("\u{274c}", "Destroy", 0));
         }
         let any_harvestable = items.iter().any(|item| {
-            item.pleb_idx.is_none() && reg.get(item.block_type).map_or(false, |d| d.is_harvestable)
+            item.pleb_idx.is_none() && reg.get(item.block_type).is_some_and(|d| d.is_harvestable)
         });
         if any_harvestable {
             actions.push(("\u{1f33e}", "Harvest", 1));
@@ -6847,7 +6818,7 @@ impl App {
                             if item.pleb_idx.is_some() {
                                 continue;
                             }
-                            if reg.get(item.block_type).map_or(false, |d| d.is_harvestable) {
+                            if reg.get(item.block_type).is_some_and(|d| d.is_harvestable) {
                                 self.manual_tasks
                                     .push(zones::WorkTask::Harvest(item.x, item.y));
                             }
@@ -6914,7 +6885,7 @@ impl App {
                     bp.text(
                         bar_rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        &format!("{} {:.0}%", cs.stage_name, total_progress * 100.0),
+                        format!("{} {:.0}%", cs.stage_name, total_progress * 100.0),
                         egui::FontId::proportional(7.0),
                         egui::Color32::WHITE,
                     );
@@ -6991,7 +6962,7 @@ impl App {
                     }
                 } else {
                     {
-                        let mut parts = Vec::new();
+                        let mut parts = Vec::with_capacity(3);
                         if bp.wood_needed > 0 {
                             parts.push(format!("{}/{} wood", bp.wood_delivered, bp.wood_needed));
                         }
@@ -7010,26 +6981,29 @@ impl App {
             // Pipe/liquid network pressure detail
             let pidx = item.y as u32 * GRID_W + item.x as u32;
             let pbt = item.block_type & 0xFF;
-            if pipes::is_gas_pipe_component(pbt) {
-                if let Some(cell) = self.pipe_network.cells.get(&pidx) {
-                    ui.separator();
-                    ui.label(egui::RichText::new(format!(
-                                    "Gas: P={:.2}  Smoke={:.2}  O\u{2082}={:.2}  CO\u{2082}={:.2}  T={:.1}°C",
-                                    cell.pressure, cell.gas[0], cell.gas[1], cell.gas[2], cell.gas[3]
-                                )).size(9.0));
-                }
+            if pipes::is_gas_pipe_component(pbt)
+                && let Some(cell) = self.pipe_network.cells.get(&pidx)
+            {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Gas: P={:.2}  Smoke={:.2}  O\u{2082}={:.2}  CO\u{2082}={:.2}  T={:.1}°C",
+                        cell.pressure, cell.gas[0], cell.gas[1], cell.gas[2], cell.gas[3]
+                    ))
+                    .size(9.0),
+                );
             }
-            if pipes::is_liquid_pipe_component(pbt) {
-                if let Some(cell) = self.liquid_network.cells.get(&pidx) {
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Liquid: P={:.2}  T={:.1}°C",
-                            cell.pressure, cell.gas[3]
-                        ))
-                        .size(9.0),
-                    );
-                }
+            if pipes::is_liquid_pipe_component(pbt)
+                && let Some(cell) = self.liquid_network.cells.get(&pidx)
+            {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Liquid: P={:.2}  T={:.1}°C",
+                        cell.pressure, cell.gas[3]
+                    ))
+                    .size(9.0),
+                );
             }
         }
     }
@@ -7104,10 +7078,10 @@ impl App {
                     }
                 });
         }
-        if let Some(id) = dismiss_id {
-            if let Some(n) = self.notifications.iter_mut().find(|n| n.id == id) {
-                n.dismissed = true;
-            }
+        if let Some(id) = dismiss_id
+            && let Some(n) = self.notifications.iter_mut().find(|n| n.id == id)
+        {
+            n.dismissed = true;
         }
     }
 
@@ -7276,7 +7250,7 @@ impl App {
                         egui::pos2(x, y),
                         egui::Align2::LEFT_TOP,
                         &format!("\u{1f3d7} {} pending", bp_count),
-                        font.clone(),
+                        font,
                         egui::Color32::from_gray(160),
                     );
                 }
@@ -7632,66 +7606,66 @@ impl App {
             });
 
         // Highlight resources on map when hint is hovered
-        if let Some(idx) = self.active_hint_idx {
-            if idx < self.game_hints.len() {
-                let hint = &self.game_hints[idx];
-                let highlight_items = hint.highlight_items.clone();
-                let highlight_blocks = hint.highlight_blocks.clone();
+        if let Some(idx) = self.active_hint_idx
+            && idx < self.game_hints.len()
+        {
+            let hint = &self.game_hints[idx];
+            let highlight_items = hint.highlight_items.clone();
+            let highlight_blocks = hint.highlight_blocks.clone();
 
-                let painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Tooltip,
-                    egui::Id::new("hint_highlight"),
-                ));
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip,
+                egui::Id::new("hint_highlight"),
+            ));
 
-                let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
-                    let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
-                    let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
-                    egui::pos2(sx, sy)
-                };
+            let to_screen = |wx: f32, wy: f32| -> egui::Pos2 {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                egui::pos2(sx, sy)
+            };
 
-                let screen_rect = ctx.content_rect();
-                let pulse = (self.frame_count as f32 * 0.08).sin() * 0.3 + 0.7;
-                let highlight_col =
-                    egui::Color32::from_rgba_unmultiplied(255, 200, 50, (pulse * 120.0) as u8);
-                let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            let screen_rect = ctx.content_rect();
+            let pulse = (self.frame_count as f32 * 0.08).sin() * 0.3 + 0.7;
+            let highlight_col =
+                egui::Color32::from_rgba_unmultiplied(255, 200, 50, (pulse * 120.0) as u8);
+            let tile_px = cam_zoom / self.render_scale / bp_ppp;
 
-                // Highlight matching ground items
-                for item in &self.ground_items {
-                    if highlight_items.contains(&item.stack.item_id) {
-                        let center = to_screen(item.x, item.y);
-                        if center.x > screen_rect.min.x - 20.0
-                            && center.x < screen_rect.max.x + 20.0
-                            && center.y > screen_rect.min.y - 20.0
-                            && center.y < screen_rect.max.y + 20.0
-                        {
-                            let r = (tile_px * 0.3).max(4.0);
-                            painter.circle_stroke(center, r, egui::Stroke::new(2.0, highlight_col));
-                        }
+            // Highlight matching ground items
+            for item in &self.ground_items {
+                if highlight_items.contains(&item.stack.item_id) {
+                    let center = to_screen(item.x, item.y);
+                    if center.x > screen_rect.min.x - 20.0
+                        && center.x < screen_rect.max.x + 20.0
+                        && center.y > screen_rect.min.y - 20.0
+                        && center.y < screen_rect.max.y + 20.0
+                    {
+                        let r = (tile_px * 0.3).max(4.0);
+                        painter.circle_stroke(center, r, egui::Stroke::new(2.0, highlight_col));
                     }
                 }
+            }
 
-                // Highlight matching blocks (e.g. trees for "gather branches")
-                if !highlight_blocks.is_empty() {
-                    let min_x = ((cam_cx - cam_sw * 0.5 / cam_zoom) as i32 - 1).max(0) as u32;
-                    let max_x =
-                        ((cam_cx + cam_sw * 0.5 / cam_zoom) as i32 + 2).min(GRID_W as i32) as u32;
-                    let min_y = ((cam_cy - cam_sh * 0.5 / cam_zoom) as i32 - 1).max(0) as u32;
-                    let max_y =
-                        ((cam_cy + cam_sh * 0.5 / cam_zoom) as i32 + 2).min(GRID_H as i32) as u32;
-                    for y in min_y..max_y {
-                        for x in min_x..max_x {
-                            let idx2 = (y * GRID_W + x) as usize;
-                            if idx2 < self.grid_data.len() {
-                                let bt = (self.grid_data[idx2] & 0xFF) as u32;
-                                if highlight_blocks.contains(&bt) {
-                                    let center = to_screen(x as f32 + 0.5, y as f32 + 0.5);
-                                    let r = (tile_px * 0.4).max(3.0);
-                                    painter.circle_stroke(
-                                        center,
-                                        r,
-                                        egui::Stroke::new(1.5, highlight_col),
-                                    );
-                                }
+            // Highlight matching blocks (e.g. trees for "gather branches")
+            if !highlight_blocks.is_empty() {
+                let min_x = ((cam_cx - cam_sw * 0.5 / cam_zoom) as i32 - 1).max(0) as u32;
+                let max_x =
+                    ((cam_cx + cam_sw * 0.5 / cam_zoom) as i32 + 2).min(GRID_W as i32) as u32;
+                let min_y = ((cam_cy - cam_sh * 0.5 / cam_zoom) as i32 - 1).max(0) as u32;
+                let max_y =
+                    ((cam_cy + cam_sh * 0.5 / cam_zoom) as i32 + 2).min(GRID_H as i32) as u32;
+                for y in min_y..max_y {
+                    for x in min_x..max_x {
+                        let idx2 = (y * GRID_W + x) as usize;
+                        if idx2 < self.grid_data.len() {
+                            let bt = self.grid_data[idx2] & 0xFF;
+                            if highlight_blocks.contains(&bt) {
+                                let center = to_screen(x as f32 + 0.5, y as f32 + 0.5);
+                                let r = (tile_px * 0.4).max(3.0);
+                                painter.circle_stroke(
+                                    center,
+                                    r,
+                                    egui::Stroke::new(1.5, highlight_col),
+                                );
                             }
                         }
                     }

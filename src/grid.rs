@@ -240,7 +240,7 @@ pub fn wall_block_to_material(bt: u32) -> u16 {
 /// Pack wall data into u16
 pub fn pack_wall_data(edges: u16, thickness: u16, material: u16) -> u16 {
     (edges & WD_EDGE_MASK)
-        | (((if thickness >= 4 { 0u16 } else { 4 - thickness }) & 3) << WD_THICK_SHIFT)
+        | ((4u16.saturating_sub(thickness) & 3) << WD_THICK_SHIFT)
         | ((material & 0xF) << WD_MAT_SHIFT)
 }
 
@@ -475,24 +475,23 @@ pub fn wd_blocks_movement(wd: u16, doors_passable: bool) -> bool {
 /// Scan wall_data for tiles with WD_HAS_DOOR and create Door structs.
 /// Used after world generation to populate the doors list.
 pub fn extract_doors_from_wall_data(wall_data: &[u16]) -> Vec<Door> {
-    let mut doors = Vec::new();
-    for i in 0..wall_data.len() {
-        let wd = wall_data[i];
-        if (wd & WD_HAS_DOOR) == 0 {
-            continue;
-        }
-        let x = (i % GRID_W as usize) as i32;
-        let y = (i / GRID_W as usize) as i32;
-        let edge = wd_first_edge(wd);
-        let material = wd_material(wd) as u8;
-        let is_open = (wd & WD_DOOR_OPEN) != 0;
-        let mut door = Door::new(x, y, edge, 0, material);
-        if is_open {
-            door.angle = DOOR_OPEN_THRESHOLD + 0.1;
-        }
-        doors.push(door);
-    }
-    doors
+    wall_data
+        .iter()
+        .enumerate()
+        .filter(|(_, wd)| (**wd & WD_HAS_DOOR) != 0)
+        .map(|(i, wd)| {
+            let wd = *wd;
+            let x = (i % GRID_W as usize) as i32;
+            let y = (i / GRID_W as usize) as i32;
+            let edge = wd_first_edge(wd);
+            let material = wd_material(wd) as u8;
+            let mut door = Door::new(x, y, edge, 0, material);
+            if (wd & WD_DOOR_OPEN) != 0 {
+                door.angle = DOOR_OPEN_THRESHOLD + 0.1;
+            }
+            door
+        })
+        .collect()
 }
 
 // =============================================================
@@ -511,7 +510,7 @@ pub fn extract_doors_from_wall_data(wall_data: &[u16]) -> Vec<Door> {
 ///
 /// This encoding supports any combination of edges (T-junctions, crosses,
 /// single edges, corners, opposite pairs) using 4 independent bits.
-
+///
 /// Edge bitmask constants for wall height byte
 pub const WALL_EDGE_N: u8 = 0x10; // bit 4
 pub const WALL_EDGE_E: u8 = 0x20; // bit 5
@@ -540,7 +539,7 @@ pub fn wall_edge_mask(height_byte: u8) -> u8 {
 
 /// Create thin wall flags (flags byte): thickness + roof/door flags
 pub fn make_thin_wall_flags(roof_flag: u8, edge: u8, thickness: u8) -> (u8, u8) {
-    let thick_bits = if thickness >= 4 { 0u8 } else { 4 - thickness };
+    let thick_bits = 4u8.saturating_sub(thickness);
     let flags = roof_flag | ((thick_bits & 3) << 5);
     let edge_mask = edge_to_mask(edge);
     (flags, edge_mask)
@@ -548,7 +547,7 @@ pub fn make_thin_wall_flags(roof_flag: u8, edge: u8, thickness: u8) -> (u8, u8) 
 
 /// Create thin wall corner flags: two adjacent edges
 pub fn make_thin_wall_corner_flags(roof_flag: u8, edge: u8, thickness: u8) -> (u8, u8) {
-    let thick_bits = if thickness >= 4 { 0u8 } else { 4 - thickness };
+    let thick_bits = 4u8.saturating_sub(thickness);
     let flags = roof_flag | ((thick_bits & 3) << 5);
     let edge_mask = edge_to_mask(edge) | edge_to_mask((edge + 1) & 3);
     (flags, edge_mask)
@@ -744,12 +743,12 @@ pub fn is_door_rs(b: u32) -> bool {
 /// Precompute roof heights and store in bits 24-31 of each block.
 /// For every tile that's part of a roofed building, find the max wall height
 /// in a large radius. This runs once at grid generation.
-pub fn compute_roof_heights(grid: &mut Vec<u32>) {
+pub fn compute_roof_heights(grid: &mut [u32]) {
     compute_roof_heights_wd(grid, &[]);
 }
 
 /// Compute roof heights using both grid and wall_data.
-pub fn compute_roof_heights_wd(grid: &mut Vec<u32>, wall_data: &[u16]) {
+pub fn compute_roof_heights_wd(grid: &mut [u32], wall_data: &[u16]) {
     let w = GRID_W as i32;
     let h = GRID_H as i32;
 
@@ -880,11 +879,14 @@ pub fn compute_roof_heights_wd(grid: &mut Vec<u32>, wall_data: &[u16]) {
                     for dx2 in -1i32..=1 {
                         let nx = x + dx2;
                         let ny = y + dy2;
-                        if nx >= 0 && ny >= 0 && nx < w && ny < h {
-                            if is_building[(ny * w + nx) as usize] {
-                                is_building[idx] = true;
-                                break;
-                            }
+                        if nx >= 0
+                            && ny >= 0
+                            && nx < w
+                            && ny < h
+                            && is_building[(ny * w + nx) as usize]
+                        {
+                            is_building[idx] = true;
+                            break;
                         }
                     }
                     if is_building[idx] {
@@ -971,10 +973,11 @@ pub fn compute_roof_heights_wd(grid: &mut Vec<u32>, wall_data: &[u16]) {
 
 /// Generate a natural world with trees, bushes, and rocks.
 pub fn generate_world(seed: u32) -> Vec<u32> {
-    let mut grid = vec![make_block(2, 0, 0); (GRID_W * GRID_H) as usize];
+    let dirt_block = make_block(BT_DIRT as u8, 0, 0);
+    let mut grid = vec![dirt_block; (GRID_W * GRID_H) as usize];
     let w = GRID_W;
 
-    let set = |grid: &mut Vec<u32>, x: u32, y: u32, b: u32| {
+    let _set = |grid: &mut [u32], x: u32, y: u32, b: u32| {
         if x < GRID_W && y < GRID_H {
             grid[(y * w + x) as usize] = b;
         }
@@ -1013,11 +1016,11 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
         (n1 + n2 * 0.5) / 1.5 // normalize to 0..1
     };
 
-    let is_bare = |grid: &[u32], x: u32, y: u32| -> bool {
+    let _is_bare = |grid: &[u32], x: u32, y: u32| -> bool {
         if x >= GRID_W || y >= GRID_H {
             return false;
         }
-        grid[(y * w + x) as usize] == make_block(2, 0, 0)
+        grid[(y * w + x) as usize] == dirt_block
     };
 
     // Per-tile deterministic random hash
@@ -1035,7 +1038,7 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
     for y in 0..GRID_H {
         for x in 0..GRID_W {
             let idx = (y * w + x) as usize;
-            if grid[idx] != make_block(2, 0, 0) {
+            if grid[idx] != dirt_block {
                 continue;
             }
 
@@ -1116,7 +1119,7 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
                 else {
                     5
                 }; // ~13% huge
-                grid[idx] = make_block(8, tree_h, 0);
+                grid[idx] = make_block(BT_TREE as u8, tree_h, 0);
                 continue; // placed a tree, skip other features
             }
 
@@ -1125,8 +1128,8 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
                 * (moisture_val * 1.5).min(1.0)
                 * terrain_suitability.min(1.0);
             let berry_threshold = (berry_score * 18.0 * spawn_factor) as u32;
-            if r_berry < berry_threshold && grid[idx] == make_block(2, 0, 0) {
-                grid[idx] = make_block(31, 1, 0);
+            if r_berry < berry_threshold && grid[idx] == dirt_block {
+                grid[idx] = make_block(BT_BERRY_BUSH as u8, 1, 0);
                 continue;
             }
 
@@ -1143,8 +1146,8 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
             let cluster_rocks = (rock_score * 80.0) as u32; // up to 80/4096 ≈ 2% in rocky areas
             let rock_threshold =
                 ((base_rocks + cluster_rocks) as f32 * spawn_factor.max(0.3)) as u32;
-            if r_rock < rock_threshold && grid[idx] == make_block(2, 0, 0) {
-                grid[idx] = make_block(34, 0, 0);
+            if r_rock < rock_threshold && grid[idx] == dirt_block {
+                grid[idx] = make_block(BT_ROCK as u8, 0, 0);
             }
         }
     }
@@ -1431,8 +1434,7 @@ pub fn generate_water_table_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
             let depth = -3.0 + base * 2.0; // range: -3.0 to -0.2
 
             // Boost near dug ground
-            let block = grid[idx];
-            let bt = block & 0xFF;
+            let bt = block_type_rs(grid[idx]);
             let dug_boost = if bt == BT_DUG_GROUND { 1.0 } else { 0.0 };
 
             table[idx] = (depth + dug_boost).min(0.5);
@@ -1556,11 +1558,9 @@ pub fn compute_terrain_ao(elevation: &[f32]) -> Vec<f32> {
 /// Adjust water table based on elevation — hilltops are drier, valleys wetter.
 /// Call after both water_table and elevation are generated.
 pub fn adjust_water_table_for_elevation(water_table: &mut [f32], elevation: &[f32]) {
-    for i in 0..water_table.len().min(elevation.len()) {
-        // Higher elevation = lower effective water table (drier hilltops)
-        // Lower elevation = higher effective water table (wet valleys)
-        water_table[i] -= elevation[i] * 0.4; // 0.4 units drier per elevation unit
-        water_table[i] = water_table[i].clamp(-3.0, 0.5);
+    for (wt, &elev) in water_table.iter_mut().zip(elevation.iter()) {
+        *wt -= elev * 0.4;
+        *wt = wt.clamp(-3.0, 0.5);
     }
 }
 
@@ -1618,7 +1618,7 @@ pub fn generate_elevation_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
             let micro = noise(fx * 0.08 + 150.0, fy * 0.08 + 250.0) * 0.15;
 
             // Suppress near water
-            let bt = grid[idx] & 0xFF;
+            let bt = block_type_rs(grid[idx]);
             let water_suppress = if bt == BT_WATER { 0.0 } else { 1.0 };
 
             // Edge fade: flatten near map edges (10 tile border)
@@ -1832,9 +1832,7 @@ pub fn generate_terrain_with_params(
             //
             // threshold = 1.0 - weight (so weight=0.40 → threshold=0.60, needs noise>0.60)
             // Environmental biases nudge the noise ±0.15 to steer terrain to suitable spots.
-            let terrain_type = if pond_factor > pond_thresh + 0.1 {
-                TERRAIN_MARSH
-            } else if pond_factor > pond_thresh {
+            let terrain_type = if pond_factor > pond_thresh {
                 TERRAIN_MARSH
             } else if pond_factor > pond_thresh - 0.15 && params.clay > 0.01 {
                 TERRAIN_CLAY

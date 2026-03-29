@@ -143,9 +143,9 @@ pub fn crop_status(
     let sun_curve = (sun_t * std::f32::consts::PI).sin();
     let approx_temp = TEMP_MIN + TEMP_RANGE * sun_curve;
 
-    let temp_factor = if approx_temp < CROP_TEMP_MIN || approx_temp > CROP_TEMP_MAX {
+    let temp_factor = if !(CROP_TEMP_MIN..=CROP_TEMP_MAX).contains(&approx_temp) {
         0.0
-    } else if approx_temp >= CROP_OPTIMAL_LOW && approx_temp <= CROP_OPTIMAL_HIGH {
+    } else if (CROP_OPTIMAL_LOW..=CROP_OPTIMAL_HIGH).contains(&approx_temp) {
         1.0
     } else if approx_temp < CROP_OPTIMAL_LOW {
         (approx_temp - CROP_TEMP_MIN) / (CROP_OPTIMAL_LOW - CROP_TEMP_MIN)

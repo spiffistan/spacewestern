@@ -174,8 +174,8 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
         false
     };
 
-    let is_night = day_frac < NIGHT_END_FRAC || day_frac > NIGHT_START_FRAC;
-    let is_dusk = !is_night && (day_frac > 0.75 || day_frac < 0.20); // dusk/dawn transition
+    let is_night = !(NIGHT_END_FRAC..=NIGHT_START_FRAC).contains(&day_frac);
+    let is_dusk = !is_night && !(0.20..=0.75).contains(&day_frac); // dusk/dawn transition
 
     let mut near_fire = false;
     let mut near_heater = false;
@@ -410,7 +410,7 @@ pub fn tick_needs(
     // --- Warmth: fluid sim air temp + radiant heat from nearby fires ---
     let base_warmth = if let Some(air) = air {
         let temp = air.temp;
-        if temp >= TEMP_COMFORTABLE_LOW && temp <= TEMP_COMFORTABLE_HIGH {
+        if (TEMP_COMFORTABLE_LOW..=TEMP_COMFORTABLE_HIGH).contains(&temp) {
             1.0
         } else if temp > TEMP_COMFORTABLE_HIGH {
             (1.0 - (temp - TEMP_COMFORTABLE_HIGH) / TEMP_HOT_RANGE).max(0.2)
@@ -1158,9 +1158,8 @@ mod tests {
         );
 
         needs.oxygen = 0.1;
-        let crit = critical_need(&needs);
-        assert!(crit.is_some());
-        assert_eq!(crit.unwrap().0, "oxygen");
+        let (name, _) = critical_need(&needs).expect("should have critical need");
+        assert_eq!(name, "oxygen");
     }
 
     #[test]
@@ -1222,9 +1221,8 @@ mod tests {
             }
         }
         // Standing inside at (11, 11), should find outdoor tile nearby
-        let result = find_breathable_tile(&grid, 11, 11, 10);
-        assert!(result.is_some(), "should find a breathable tile");
-        let (rx, ry) = result.unwrap();
+        let (rx, ry) =
+            find_breathable_tile(&grid, 11, 11, 10).expect("should find a breathable tile");
         // Should be just outside the indoor area
         let dist = ((rx - 11) as f32).hypot((ry - 11) as f32);
         assert!(

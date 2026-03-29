@@ -97,7 +97,7 @@ pub struct PlacementDef {
     pub extra_flags: u8,
 }
 
-#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ClickMode {
     #[default]
@@ -109,7 +109,7 @@ pub enum ClickMode {
     WallAdjacent,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum DragShape {
     HollowRect,

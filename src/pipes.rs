@@ -200,6 +200,7 @@ fn uses_connection_mask(bt: u32) -> bool {
 }
 
 /// The pipe network state, rebuilt when grid changes.
+#[derive(Default)]
 pub struct PipeNetwork {
     pub cells: std::collections::HashMap<u32, PipeCell>,
     scratch_indices: Vec<u32>,
@@ -209,12 +210,7 @@ pub struct PipeNetwork {
 
 impl PipeNetwork {
     pub fn new() -> Self {
-        PipeNetwork {
-            cells: std::collections::HashMap::new(),
-            scratch_indices: Vec::new(),
-            scratch_gas_delta: std::collections::HashMap::new(),
-            scratch_flow_accum: std::collections::HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Rebuild the network from the grid using a component predicate.
@@ -225,12 +221,14 @@ impl PipeNetwork {
             for x in 0..GRID_W {
                 let idx = y * GRID_W + x;
                 let bt = block_type_rs(grid[idx as usize]);
-                if is_component(bt) && !self.cells.contains_key(&idx) {
-                    let mut cell = PipeCell::default();
-                    if bt == BT_TANK {
-                        cell.volume = TANK_VOLUME;
-                    }
-                    self.cells.insert(idx, cell);
+                if is_component(bt) {
+                    self.cells.entry(idx).or_insert_with(|| {
+                        let mut cell = PipeCell::default();
+                        if bt == BT_TANK {
+                            cell.volume = TANK_VOLUME;
+                        }
+                        cell
+                    });
                 }
             }
         }
@@ -287,10 +285,10 @@ impl PipeNetwork {
                 }
 
                 // Outlets: drain toward 0
-                if bt_is!(bt, BT_OUTLET, BT_LIQUID_OUTPUT) {
-                    if let Some(cell) = self.cells.get_mut(&idx) {
-                        cell.pressure *= OUTLET_DRAIN_FACTOR;
-                    }
+                if bt_is!(bt, BT_OUTLET, BT_LIQUID_OUTPUT)
+                    && let Some(cell) = self.cells.get_mut(&idx)
+                {
+                    cell.pressure *= OUTLET_DRAIN_FACTOR;
                 }
 
                 // --- Neighbor pressure relaxation ---
@@ -304,13 +302,13 @@ impl PipeNetwork {
                 let mut neighbor_count = 0.0f32;
 
                 // Bridge teleport
-                if is_bridge && (bridge_seg == 0 || bridge_seg == 2) {
-                    if let Some(pidx) = bridge_partner(grid, idx) {
-                        if let Some(p) = self.cells.get(&pidx) {
-                            neighbor_sum += p.pressure;
-                            neighbor_count += 1.0;
-                        }
-                    }
+                if is_bridge
+                    && (bridge_seg == 0 || bridge_seg == 2)
+                    && let Some(pidx) = bridge_partner(grid, idx)
+                    && let Some(p) = self.cells.get(&pidx)
+                {
+                    neighbor_sum += p.pressure;
+                    neighbor_count += 1.0;
                 }
 
                 for &(dx, dy, dmask) in &DIR_MASKS {
@@ -418,8 +416,10 @@ impl PipeNetwork {
                     let rate = (adv_rate + diff_rate).min(MAX_TRANSFER_RATE);
                     if rate > MIN_TRANSFER_RATE {
                         let gd = gas_delta.entry(nidx).or_insert([0.0; 4]);
-                        for i in 0..4 {
-                            gd[i] += (cell.gas[i] - neighbor.gas[i]) * rate;
+                        for (g, (&cg, &ng)) in
+                            gd.iter_mut().zip(cell.gas.iter().zip(neighbor.gas.iter()))
+                        {
+                            *g += (cg - ng) * rate;
                         }
                     }
                 }
@@ -429,8 +429,8 @@ impl PipeNetwork {
             if bt == BT_INLET {
                 let env_gas = self.sample_inlet_environment(grid, x, y);
                 let gd = gas_delta.entry(idx).or_insert([0.0; 4]);
-                for i in 0..4 {
-                    gd[i] += (env_gas[i] - cell.gas[i]) * INLET_ABSORPTION_RATE * dt;
+                for (g, (&eg, &cg)) in gd.iter_mut().zip(env_gas.iter().zip(cell.gas.iter())) {
+                    *g += (eg - cg) * INLET_ABSORPTION_RATE * dt;
                 }
             }
 
@@ -440,8 +440,9 @@ impl PipeNetwork {
                 let has_water = seg == 1 || self.check_adjacent_water(grid, x, y);
                 if has_water {
                     let gd = gas_delta.entry(idx).or_insert([0.0; 4]);
-                    for i in 0..4 {
-                        gd[i] += (WATER_GAS[i] - cell.gas[i]) * INTAKE_ABSORPTION_RATE * dt;
+                    for (g, (&wg, &cg)) in gd.iter_mut().zip(WATER_GAS.iter().zip(cell.gas.iter()))
+                    {
+                        *g += (wg - cg) * INTAKE_ABSORPTION_RATE * dt;
                     }
                 }
             }
@@ -450,8 +451,8 @@ impl PipeNetwork {
         // Apply gas deltas
         for (&idx, gd) in &gas_delta {
             if let Some(cell) = self.cells.get_mut(&idx) {
-                for i in 0..4 {
-                    cell.gas[i] = (cell.gas[i] + gd[i]).max(0.0);
+                for (g, &d) in cell.gas.iter_mut().zip(gd.iter()) {
+                    *g = (*g + d).max(0.0);
                 }
                 cell.gas[GAS_SMOKE] = cell.gas[GAS_SMOKE].min(MAX_SMOKE);
                 cell.gas[GAS_O2] = cell.gas[GAS_O2].min(MAX_O2);
@@ -485,16 +486,15 @@ impl PipeNetwork {
                 continue;
             }
             let bt = block_type_rs(grid[idx as usize]);
-            if bt_is!(bt, BT_OUTLET, BT_LIQUID_OUTPUT) {
-                if let Some(cell) = self.cells.get_mut(&idx) {
-                    if cell.pressure > OUTLET_EMISSION_THRESHOLD {
-                        let drain = cell.pressure * OUTLET_DRAIN_FACTOR;
-                        cell.pressure -= drain;
-                        let wx = (idx % GRID_W) as f32 + 0.5;
-                        let wy = (idx / GRID_W) as f32 + 0.5;
-                        outlet_injections.push((wx, wy, cell.gas, drain));
-                    }
-                }
+            if bt_is!(bt, BT_OUTLET, BT_LIQUID_OUTPUT)
+                && let Some(cell) = self.cells.get_mut(&idx)
+                && cell.pressure > OUTLET_EMISSION_THRESHOLD
+            {
+                let drain = cell.pressure * OUTLET_DRAIN_FACTOR;
+                cell.pressure -= drain;
+                let wx = (idx % GRID_W) as f32 + 0.5;
+                let wy = (idx / GRID_W) as f32 + 0.5;
+                outlet_injections.push((wx, wy, cell.gas, drain));
             }
         }
 

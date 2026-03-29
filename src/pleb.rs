@@ -285,8 +285,8 @@ pub enum PlebShift {
 impl PlebShift {
     pub fn is_sleep_hour(&self, h: usize) -> bool {
         match self {
-            PlebShift::Day => h >= 22 || h < 6,
-            PlebShift::Night => h >= 10 && h < 18,
+            PlebShift::Day => !(6..22).contains(&h),
+            PlebShift::Night => (10..18).contains(&h),
             PlebShift::Custom => false, // custom uses the hours array directly
         }
     }
@@ -407,20 +407,19 @@ pub fn is_walkable_pos_wd(grid: &[u32], wall_data: &[u16], x: f32, y: f32) -> bo
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
         let is_dug_shallow = bt == BT_DUG_GROUND && bh <= 1;
-        let bt32 = bt as u32;
-        let is_pipe = ((bt32 >= 15 && bt32 <= 20)
-            || bt32 == BT_RESTRICTOR
-            || bt32 == BT_LIQUID_PIPE
-            || bt32 == BT_PIPE_BRIDGE
-            || bt32 == BT_LIQUID_INTAKE
-            || bt32 == BT_LIQUID_PUMP
-            || bt32 == BT_LIQUID_OUTPUT)
+        let is_pipe = ((15..=20).contains(&bt)
+            || bt == BT_RESTRICTOR
+            || bt == BT_LIQUID_PIPE
+            || bt == BT_PIPE_BRIDGE
+            || bt == BT_LIQUID_INTAKE
+            || bt == BT_LIQUID_PUMP
+            || bt == BT_LIQUID_OUTPUT)
             && bh <= 1;
         // Wire/power equipment: height byte is connection mask, not visual height
-        let is_wire = is_wire_block(bt32);
+        let is_wire = is_wire_block(bt);
         // Diagonal wall: check which side of the diagonal this corner is on
         if bt == BT_DIAGONAL {
-            let variant = ((b >> 19) & 3) as u32;
+            let variant = (b >> 19) & 3;
             let lfx = cx - (cx.floor());
             let lfy = cy - (cy.floor());
             let on_wall = match variant {
@@ -435,7 +434,7 @@ pub fn is_walkable_pos_wd(grid: &[u32], wall_data: &[u16], x: f32, y: f32) -> bo
             continue; // open half is walkable
         }
         // Thin walls: walkable in open sub-cells
-        let is_thin = is_wall_block(bt32) && bh > 0 && thin_wall_is_walkable(b);
+        let is_thin = is_wall_block(bt) && bh > 0 && thin_wall_is_walkable(b);
         if !is_door
             && !is_thin
             && !is_dug_shallow
@@ -526,23 +525,22 @@ pub fn astar_path_wd(
         let bt = b & 0xFF;
         let bh = (b >> 8) & 0xFF;
         let is_door = (b >> 16) & 1 != 0;
-        let bt32 = bt as u32;
-        let is_any_pipe = (bt32 >= 15 && bt32 <= 20)
-            || bt32 == BT_RESTRICTOR
-            || bt32 == BT_LIQUID_PIPE
-            || bt32 == BT_PIPE_BRIDGE
-            || bt32 == BT_LIQUID_INTAKE
-            || bt32 == BT_LIQUID_PUMP
-            || bt32 == BT_LIQUID_OUTPUT;
-        let is_wire = is_wire_block(bt32);
-        let is_thin = is_wall_block(bt32) && bh > 0 && thin_wall_is_walkable(b);
+        let is_any_pipe = (15..=20).contains(&bt)
+            || bt == BT_RESTRICTOR
+            || bt == BT_LIQUID_PIPE
+            || bt == BT_PIPE_BRIDGE
+            || bt == BT_LIQUID_INTAKE
+            || bt == BT_LIQUID_PUMP
+            || bt == BT_LIQUID_OUTPUT;
+        let is_wire = is_wire_block(bt);
+        let is_thin = is_wall_block(bt) && bh > 0 && thin_wall_is_walkable(b);
         is_door
             || is_thin
             || (bh == 0 && is_type_walkable(bt))
             || (bt == BT_DUG_GROUND && bh <= 1)
             || (is_any_pipe && bh <= 1)
             || is_wire
-            || bt32 == BT_DIAGONAL
+            || bt == BT_DIAGONAL
     };
 
     if !is_walk(goal.0, goal.1) {

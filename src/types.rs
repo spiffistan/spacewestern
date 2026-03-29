@@ -552,7 +552,7 @@ impl Blueprint {
     pub fn new(block_data: u32) -> Self {
         let bt = block_data & 0xFF;
         //                          (time, wood, clay, planks, rock, rope)
-        let (build_time, wood, clay, planks, rock, rope) = match bt as u32 {
+        let (build_time, wood, clay, planks, rock, rope) = match bt {
             //                     time  wood clay plnk rock rope
             // --- Floors ---
             BT_ROUGH_FLOOR => (0.8, 1, 0, 0, 0, 0),
@@ -666,7 +666,7 @@ impl Blueprint {
     }
 
     pub fn is_campfire(&self) -> bool {
-        let bt = (self.block_data & 0xFF) as u32;
+        let bt = self.block_data & 0xFF;
         (bt == BT_FIREPLACE || bt == BT_CAMPFIRE) && self.wall_edges == 0
     }
 

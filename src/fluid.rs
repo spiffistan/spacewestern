@@ -89,8 +89,9 @@ pub fn build_obstacle_field(grid: &[u32], wall_data: &[u16]) -> Vec<u8> {
                 BT_BREAKER,
                 BT_WIRE_BRIDGE,
                 BT_RESTRICTOR
-            ) || (bt >= BT_PIPE && bt <= BT_VALVE);
+            ) || (BT_PIPE..=BT_VALVE).contains(&bt);
             let is_thin = bh > 0 && is_wall_block(bt) && thin_wall_is_walkable(b);
+            #[allow(clippy::nonminimal_bool)]
             let block_solid = bh > 0 && !passable && !is_thin && !(is_door && is_open_door);
 
             // 2×2 sub-cells: (0,0)=NW, (1,0)=NE, (0,1)=SW, (1,1)=SE

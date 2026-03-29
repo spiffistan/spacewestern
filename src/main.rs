@@ -709,7 +709,7 @@ impl App {
                 }
                 let bnidx = (bny as u32 * GRID_W + bnx as u32) as usize;
                 let cb = self.grid_data[bnidx];
-                if (cb & 0xFF) as u32 == BT_BREAKER && ((cb >> 16) & 4) != 0 {
+                if (cb & 0xFF) == BT_BREAKER && ((cb >> 16) & 4) != 0 {
                     self.grid_data[bnidx] = cb & !(4u32 << 16);
                     self.grid_dirty = true;
                 }
@@ -1477,7 +1477,7 @@ impl App {
         let dt = self.update_simulation();
 
         // Generate hints every 30 frames
-        if self.frame_count % 30 == 0 {
+        if self.frame_count.is_multiple_of(30) {
             self.generate_hints();
         }
 
@@ -1520,11 +1520,11 @@ impl App {
 
         // Lightning voltage surge: handle natural lightning (heavy rain) via deferred injection
         // (must run before gfx borrow since it needs &mut self)
-        if let Some((lx, ly)) = self.lightning_strike {
-            if !self.lightning_surge_done {
-                self.lightning_surge_done = true;
-                self.lightning_surge(lx.floor() as i32, ly.floor() as i32);
-            }
+        if let Some((lx, ly)) = self.lightning_strike
+            && !self.lightning_surge_done
+        {
+            self.lightning_surge_done = true;
+            self.lightning_surge(lx.floor() as i32, ly.floor() as i32);
         }
 
         // --- Fire system tick (before gfx borrow so we can mutate self) ---
@@ -1624,7 +1624,7 @@ impl App {
                                     if self
                                         .blueprints
                                         .get(&(nx, ny))
-                                        .map_or(false, |bp| bp.is_wall())
+                                        .is_some_and(|bp| bp.is_wall())
                                     {
                                         walls_complete = false;
                                         break 'dir_loop;
@@ -1687,12 +1687,12 @@ impl App {
             );
             // Merge wall data: extract from grid (legacy walls) + keep existing wall_data edges
             let extracted = extract_wall_data_from_grid(&self.grid_data);
-            for i in 0..self.wall_data.len().min(extracted.len()) {
+            for (cur, &ext) in self.wall_data.iter_mut().zip(extracted.iter()) {
                 // OR the edges from both sources; keep thickness/material from whichever has edges
-                let ext_edges = wd_edges(extracted[i]);
-                let cur_edges = wd_edges(self.wall_data[i]);
+                let ext_edges = wd_edges(ext);
+                let cur_edges = wd_edges(*cur);
                 if ext_edges != 0 && cur_edges == 0 {
-                    self.wall_data[i] = extracted[i]; // legacy wall, use extracted
+                    *cur = ext; // legacy wall, use extracted
                 }
                 // If cur_edges != 0, keep existing wall_data (placed via place_wall_edge)
                 // If both have edges, keep wall_data (it's the authority)
@@ -1860,52 +1860,50 @@ impl App {
         self.fluid_params.dye_h = self.dye_h as f32;
         self.fluid_params.time = self.time_of_day;
         self.fluid_params.dt = (1.0 / 60.0) * self.fluid_speed;
-        self.fluid_params.splat_active = if false { 1.0 } else { 0.0 };
+        self.fluid_params.splat_active = 0.0; // splat disabled
 
         // Sound→Gas coupling: override splat with sound source velocity if no mouse active
         if self.sound_enabled
             && self.sound_coupling > 0.001
             && !self.sound_sources.is_empty()
-            && !false
-        {
-            if let Some(src) = self.sound_sources.iter().max_by(|a, b| {
+            && let Some(src) = self.sound_sources.iter().max_by(|a, b| {
                 a.amplitude
                     .abs()
                     .partial_cmp(&b.amplitude.abs())
                     .unwrap_or(std::cmp::Ordering::Equal)
-            }) {
-                let coupling = self.sound_coupling;
-                let fx = src.x / GRID_W as f32 * fluid_res as f32;
-                let fy = src.y / GRID_H as f32 * fluid_res as f32;
-                let strength = src.amplitude * coupling * 60.0;
+            })
+        {
+            let coupling = self.sound_coupling;
+            let fx = src.x / GRID_W as f32 * fluid_res as f32;
+            let fy = src.y / GRID_H as f32 * fluid_res as f32;
+            let strength = src.amplitude * coupling * 60.0;
 
-                // Use divergent splat: four cardinal splats creating outward expansion
-                // The splat shader only supports one point, so we cycle through 4 offset
-                // positions around the source, each pushing outward. Over 4 frames this
-                // creates a symmetric expansion.
-                let frame_dir = (self.frame_count % 4) as usize;
-                let dirs: [(f32, f32); 4] = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
-                let (dx, dy) = dirs[frame_dir];
-                let offset = 1.5; // offset from source center
+            // Use divergent splat: four cardinal splats creating outward expansion
+            // The splat shader only supports one point, so we cycle through 4 offset
+            // positions around the source, each pushing outward. Over 4 frames this
+            // creates a symmetric expansion.
+            let frame_dir = (self.frame_count % 4) as usize;
+            let dirs: [(f32, f32); 4] = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
+            let (dx, dy) = dirs[frame_dir];
+            let offset = 1.5; // offset from source center
 
-                let push = match src.pattern {
-                    0 => strength * 30.0, // impulse: strong constant push
-                    1 => {
-                        // Bell: slow oscillation (use phase / frequency to get slow cycle)
-                        let slow_phase = src.phase / src.frequency.max(1.0_f32);
-                        slow_phase.sin() * strength * 15.0
-                    }
-                    _ => strength * 10.0,
-                };
-
-                if push.abs() > 0.1 {
-                    self.fluid_params.splat_x = fx + dx * offset;
-                    self.fluid_params.splat_y = fy + dy * offset;
-                    self.fluid_params.splat_vx = dx * push;
-                    self.fluid_params.splat_vy = dy * push;
-                    self.fluid_params.splat_radius = 4.0 + src.amplitude * 3.0;
-                    self.fluid_params.splat_active = 2.0; // velocity-only (no smoke)
+            let push = match src.pattern {
+                0 => strength * 30.0, // impulse: strong constant push
+                1 => {
+                    // Bell: slow oscillation (use phase / frequency to get slow cycle)
+                    let slow_phase = src.phase / src.frequency.max(1.0_f32);
+                    slow_phase.sin() * strength * 15.0
                 }
+                _ => strength * 10.0,
+            };
+
+            if push.abs() > 0.1 {
+                self.fluid_params.splat_x = fx + dx * offset;
+                self.fluid_params.splat_y = fy + dy * offset;
+                self.fluid_params.splat_vx = dx * push;
+                self.fluid_params.splat_vy = dy * push;
+                self.fluid_params.splat_radius = 4.0 + src.amplitude * 3.0;
+                self.fluid_params.splat_active = 2.0; // velocity-only (no smoke)
             }
         }
 
@@ -2016,13 +2014,14 @@ impl App {
                 None
             };
             // Diagonal wall drag: compute per-tile variants for triangle preview
-            let diag_drag_tiles: Vec<(i32, i32, u8)> =
-                if self.drag_start.is_some() && self.build_tool == BuildTool::Place(44) {
-                    let (sx, sy) = self.drag_start.unwrap();
-                    Self::diagonal_wall_tiles(sx, sy, hbx, hby, self.build_rotation)
-                } else {
-                    Vec::new()
-                };
+            let diag_drag_tiles: Vec<(i32, i32, u8)> = if let Some((sx, sy)) = self
+                .drag_start
+                .filter(|_| self.build_tool == BuildTool::Place(44))
+            {
+                Self::diagonal_wall_tiles(sx, sy, hbx, hby, self.build_rotation)
+            } else {
+                Vec::new()
+            };
 
             self.diag_preview = diag_drag_tiles.clone();
             let tiles: Vec<(i32, i32)> = if !diag_drag_tiles.is_empty() {
@@ -2151,21 +2150,10 @@ impl App {
                                     ) && bbh > 0
                                 } else if matches!(
                                     self.build_tool,
-                                    BuildTool::Place(19) | BuildTool::Place(20)
+                                    BuildTool::Place(19)
+                                        | BuildTool::Place(20)
+                                        | BuildTool::Place(12)
                                 ) {
-                                    bt_is!(
-                                        bbt,
-                                        BT_STONE,
-                                        BT_WALL,
-                                        BT_GLASS,
-                                        BT_INSULATED,
-                                        BT_WOOD_WALL,
-                                        BT_STEEL_WALL,
-                                        BT_SANDSTONE,
-                                        BT_GRANITE,
-                                        BT_LIMESTONE
-                                    ) && bbh > 0
-                                } else if self.build_tool == BuildTool::Place(12) {
                                     bt_is!(
                                         bbt,
                                         BT_STONE,
@@ -2359,11 +2347,15 @@ impl App {
                                     } else {
                                         1 // blue: new placement on empty ground
                                     }
+                                } else if base_ok {
+                                    1
                                 } else {
-                                    if base_ok { 1 } else { 0 }
+                                    0
                                 }
+                            } else if base_ok {
+                                1
                             } else {
-                                if base_ok { 1 } else { 0 }
+                                0
                             };
                             ((tx, ty), wall_state)
                         }
@@ -2430,8 +2422,8 @@ impl App {
             || self.camera.force_refresh > 0.5;
         if need_lightmap {
             self.lightmap_frame = 0;
-            let lm_wg_x = (LIGHTMAP_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-            let lm_wg_y = (LIGHTMAP_H + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let lm_wg_x = LIGHTMAP_W.div_ceil(WORKGROUP_SIZE);
+            let lm_wg_y = LIGHTMAP_H.div_ceil(WORKGROUP_SIZE);
 
             // Seed pass: write to both textures (ensures clean state for ping-pong)
             {
@@ -2466,11 +2458,11 @@ impl App {
         }
 
         // --- Fluid simulation (every frame) ---
-        let fluid_wg = (fluid_res + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let fluid_wg = fluid_res.div_ceil(WORKGROUP_SIZE);
         let dye_w = self.dye_w;
         let dye_h = self.dye_h;
-        let dye_wg_x = (dye_w + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        let dye_wg_y = (dye_h + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let dye_wg_x = dye_w.div_ceil(WORKGROUP_SIZE);
+        let dye_wg_y = dye_h.div_ceil(WORKGROUP_SIZE);
 
         // 1. Curl
         {
@@ -2571,8 +2563,8 @@ impl App {
                 label: Some("thermal"),
                 timestamp_writes: None,
             });
-            let tw = (GRID_W + 7) / 8;
-            let th = (GRID_H + 7) / 8;
+            let tw = GRID_W.div_ceil(8);
+            let th = GRID_H.div_ceil(8);
             p.set_pipeline(&gfx.thermal_pipeline);
             p.set_bind_group(0, &gfx.thermal_bind_group, &[]);
             p.dispatch_workgroups(tw, th, 1);
@@ -2584,8 +2576,8 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         let power_iters = 8;
         {
-            let tw = (GRID_W + 7) / 8;
-            let th = (GRID_H + 7) / 8;
+            let tw = GRID_W.div_ceil(8);
+            let th = GRID_H.div_ceil(8);
             for _ in 0..power_iters {
                 let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("power"),
@@ -2599,9 +2591,9 @@ impl App {
 
         // 12. Ground water simulation (256x256, every 4 frames)
         self.water_frame += 1;
-        if self.water_frame % 4 == 0 && !self.time_paused {
-            let tw = (GRID_W + 7) / 8;
-            let th = (GRID_H + 7) / 8;
+        if self.water_frame.is_multiple_of(4) && !self.time_paused {
+            let tw = GRID_W.div_ceil(8);
+            let th = GRID_H.div_ceil(8);
             let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("water"),
                 timestamp_writes: None,
@@ -2806,8 +2798,8 @@ impl App {
             // Dispatch wave equation iterations (ensure even count so result lands in texture A)
             let iters = (self.sound_iters_per_frame / 2) * 2; // round down to even
             let iters = iters.max(2);
-            let sw = (GRID_W + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-            let sh = (GRID_H + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let sw = GRID_W.div_ceil(WORKGROUP_SIZE);
+            let sh = GRID_H.div_ceil(WORKGROUP_SIZE);
             for _ in 0..iters {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("sound-pass"),
@@ -2836,8 +2828,8 @@ impl App {
                 &gfx.compute_bind_groups[self.fluid_dye_phase * 2 + self.output_phase],
                 &[],
             );
-            let wg_x = (rt_w + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-            let wg_y = (rt_h + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let wg_x = rt_w.div_ceil(WORKGROUP_SIZE);
+            let wg_y = rt_h.div_ceil(WORKGROUP_SIZE);
             cpass.dispatch_workgroups(wg_x, wg_y, 1);
         }
 
@@ -3023,8 +3015,8 @@ impl App {
                         .ok();
                     let data = buffer_slice.get_mapped_range();
                     let f16_data: &[u16] = bytemuck::cast_slice(&data);
-                    for i in 0..4 {
-                        self.debug.fluid_density[i] = half_to_f32(f16_data[i]);
+                    for (i, &val) in f16_data.iter().enumerate().take(4) {
+                        self.debug.fluid_density[i] = half_to_f32(val);
                     }
                     drop(data);
                     gfx.debug_readback_buffer.unmap();
@@ -3358,16 +3350,12 @@ impl ApplicationHandler for App {
                         }
                     } else {
                         // Mouse released
-                        if self.mouse_dragged && self.drag_start.is_some() {
-                            // Apply the drag shape
-                            let (sx, sy) = self.drag_start.unwrap();
+                        if let Some((sx, sy)) = self.drag_start.filter(|_| self.mouse_dragged) {
                             let (wx, wy) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             let (ex, ey) = (wx.floor() as i32, wy.floor() as i32);
                             self.apply_drag_shape(sx, sy, ex, ey);
-                        } else if self.select_drag_start.is_some() {
-                            // Complete selection rectangle — find individual items
-                            let (sx, sy) = self.select_drag_start.unwrap();
+                        } else if let Some((sx, sy)) = self.select_drag_start {
                             let (ex, ey) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             let min_x = sx.min(ex).floor() as i32;
@@ -3389,18 +3377,18 @@ impl ApplicationHandler for App {
                                     let b = self.grid_data[bidx];
                                     let bbt = block_type_rs(b);
                                     let bflags = block_flags_rs(b);
-                                    let is_gnd = is_ground_block(bbt as u32);
+                                    let is_gnd = is_ground_block(bbt);
                                     // Include blueprints even on ground tiles
-                                    let has_blueprint = self.blueprints.contains_key(&(gx, gy));
-                                    if is_gnd && !has_blueprint {
+                                    let bp = self.blueprints.get(&(gx, gy));
+                                    if is_gnd && bp.is_none() {
                                         continue;
                                     }
-                                    let bt_for_sel = if has_blueprint {
-                                        (self.blueprints[&(gx, gy)].block_data & 0xFF) as u32
+                                    let bt_for_sel = if let Some(bp) = bp {
+                                        bp.block_data & 0xFF
                                     } else {
-                                        bbt as u32
+                                        bbt
                                     };
-                                    let (ox, oy, ow, oh) = if has_blueprint {
+                                    let (ox, oy, ow, oh) = if bp.is_some() {
                                         (gx, gy, 1, 1)
                                     } else {
                                         self.get_block_bounds(gx, gy, bbt, bflags)

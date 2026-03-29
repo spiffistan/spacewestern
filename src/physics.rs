@@ -201,7 +201,7 @@ static PROJECTILE_DEFS: OnceLock<Vec<ProjectileDef>> = OnceLock::new();
 
 pub fn projectile_def(id: ProjectileId) -> &'static ProjectileDef {
     let defs = PROJECTILE_DEFS.get_or_init(build_projectile_defs);
-    &defs[id as usize]
+    defs.get(id as usize).unwrap_or(&defs[0])
 }
 
 /// A physics body in the world (continuous position, not grid-aligned).
@@ -567,6 +567,7 @@ fn dda_bullet_trace(
         );
         // Thin walls: passable through open sub-cells
         let is_thin = is_wall_block(bt) && bh > 0 && thin_wall_is_walkable(block);
+        #[allow(clippy::nonminimal_bool)]
         if bh > 0 && !passable && !is_thin && !(is_door && is_open) {
             let t = t_max_x.min(t_max_y).max(0.0);
             let hit_x = t_max_x <= t_max_y;
@@ -908,40 +909,42 @@ pub fn tick_bodies(
         let def = projectile_def(body.kind);
 
         // One-time explosion on first landing
-        if !body.has_landed && body.on_ground() {
-            if let Some(expl) = &def.impact.explosion {
-                body.has_landed = true;
-                explosions.push(ExplosionEvent {
-                    x: body.x,
-                    y: body.y,
-                    def: expl.clone(),
-                });
-            }
+        if !body.has_landed
+            && body.on_ground()
+            && let Some(expl) = &def.impact.explosion
+        {
+            body.has_landed = true;
+            explosions.push(ExplosionEvent {
+                x: body.x,
+                y: body.y,
+                def: expl.clone(),
+            });
         }
 
         // Continuous fuse emission while grounded
-        if let Some(fuse) = &def.fuse {
-            if body.on_ground() && body.fuse_timer > 0.0 {
-                body.fuse_timer -= dt;
-                if fuse.freeze_on_ground {
-                    body.vx = 0.0;
-                    body.vy = 0.0;
-                }
-                impacts.push(Impact {
-                    x: body.x,
-                    y: body.y,
-                    block_x: body.x.floor() as i32,
-                    block_y: body.y.floor() as i32,
-                    kinetic_energy: 0.0,
-                    destroy_block: false,
-                    projectile_id: body.kind,
-                });
+        if let Some(fuse) = &def.fuse
+            && body.on_ground()
+            && body.fuse_timer > 0.0
+        {
+            body.fuse_timer -= dt;
+            if fuse.freeze_on_ground {
+                body.vx = 0.0;
+                body.vy = 0.0;
             }
+            impacts.push(Impact {
+                x: body.x,
+                y: body.y,
+                block_x: body.x.floor() as i32,
+                block_y: body.y.floor() as i32,
+                kinetic_energy: 0.0,
+                destroy_block: false,
+                projectile_id: body.kind,
+            });
         }
     }
 
     // --- Bullet-pleb collision (before retain removes stopped bullets) ---
-    let mut bullet_hits = Vec::new();
+    let mut bullet_hits = Vec::with_capacity(all_plebs.len());
     let hit_radius = 0.45f32;
     let mut bullets_hit = std::collections::HashSet::new();
     for (bi, body) in bodies.iter().enumerate() {

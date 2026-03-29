@@ -53,7 +53,7 @@ impl App {
                             continue;
                         }
                         let strength = 1.0 - dist / (radius as f32 + 0.5);
-                        let water_val = (strength * 2.0) as f32;
+                        let water_val = strength * 2.0;
                         let pixel = water_val.to_le_bytes();
                         // Write to both ping-pong textures
                         for ti in 0..2 {
@@ -101,23 +101,23 @@ impl App {
             let block = self.grid_data[idx];
             let bt = block_type_rs(block);
             let reg = block_defs::BlockRegistry::cached();
-            if let Some(def) = reg.get(bt) {
-                if def.is_flammable {
-                    let ignite_temp = def.ignition_temp + 150.0 * self.fire_intensity;
-                    // Write high temperature to GPU block_temps buffer
-                    if let Some(gfx) = &self.gfx {
-                        gfx.queue.write_buffer(
-                            &gfx.block_temp_buffer,
-                            (idx as u64) * 4,
-                            bytemuck::bytes_of(&ignite_temp),
-                        );
-                    }
-                    self.burn_progress.insert(idx, 0.0);
-                    self.log_event(
-                        EventCategory::Weather,
-                        format!("Fire! {} ignited at ({}, {})", def.name, bx, by),
+            if let Some(def) = reg.get(bt)
+                && def.is_flammable
+            {
+                let ignite_temp = def.ignition_temp + 150.0 * self.fire_intensity;
+                // Write high temperature to GPU block_temps buffer
+                if let Some(gfx) = &self.gfx {
+                    gfx.queue.write_buffer(
+                        &gfx.block_temp_buffer,
+                        (idx as u64) * 4,
+                        bytemuck::bytes_of(&ignite_temp),
                     );
                 }
+                self.burn_progress.insert(idx, 0.0);
+                self.log_event(
+                    EventCategory::Weather,
+                    format!("Fire! {} ignited at ({}, {})", def.name, bx, by),
+                );
             }
             return;
         }
@@ -172,16 +172,15 @@ impl App {
                 self.block_sel.cannon = Some(cannon_idx);
                 self.selected_pleb = None;
                 // Initialize angle from block direction bits if not yet set
-                if !self.cannon_angles.contains_key(&cannon_idx) {
+                self.cannon_angles.entry(cannon_idx).or_insert_with(|| {
                     let dir_bits = (flags >> 3) & 3;
-                    let angle = match dir_bits {
+                    match dir_bits {
                         0 => -std::f32::consts::FRAC_PI_2, // north
                         1 => 0.0,                          // east
                         2 => std::f32::consts::FRAC_PI_2,  // south
                         _ => std::f32::consts::PI,         // west
-                    };
-                    self.cannon_angles.insert(cannon_idx, angle);
-                }
+                    }
+                });
                 log::info!("Selected cannon at ({}, {})", bx, by);
             }
             return;
@@ -227,13 +226,10 @@ impl App {
         // Pleb interaction (before build tools)
         if self.build_tool == BuildTool::None {
             // Check if clicking on any pleb
-            let mut clicked_pleb = None;
-            for (i, p) in self.plebs.iter().enumerate() {
-                if ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt() < PLEB_CLICK_RADIUS {
-                    clicked_pleb = Some(i);
-                    break;
-                }
-            }
+            let clicked_pleb = self
+                .plebs
+                .iter()
+                .position(|p| ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt() < PLEB_CLICK_RADIUS);
 
             if let Some(idx) = clicked_pleb {
                 // Clicking a pleb selects it (deselects everything else)
@@ -260,10 +256,10 @@ impl App {
 
             // Single-click on non-ground: select block (deselects pleb)
             let is_ground = is_ground_block(bt);
-            let has_bp = self.blueprints.contains_key(&(bx, by));
-            if !is_ground || has_bp {
-                let (sel_x, sel_y, sel_w, sel_h, sel_bt) = if has_bp {
-                    let bp_bt = (self.blueprints[&(bx, by)].block_data & 0xFF) as u32;
+            let bp = self.blueprints.get(&(bx, by));
+            if !is_ground || bp.is_some() {
+                let (sel_x, sel_y, sel_w, sel_h, sel_bt) = if let Some(bp) = bp {
+                    let bp_bt = bp.block_data & 0xFF;
                     (bx, by, 1, 1, bp_bt)
                 } else {
                     let (sx, sy, sw, sh) = self.get_block_bounds(bx, by, bt, flags);
@@ -307,7 +303,6 @@ impl App {
         // Build tool placement (delegated to keep handle_click manageable)
         if self.build_tool != BuildTool::None {
             self.handle_build_placement(wx, wy, bx, by, idx, block, bt, flags);
-            return;
         }
     }
 
@@ -454,7 +449,9 @@ impl App {
                         } else {
                             self.camera.show_roofs = 0.0;
                         }
-                        self.window.as_ref().unwrap().request_redraw();
+                        if let Some(w) = self.window.as_ref() {
+                            w.request_redraw();
+                        }
                     } else if self.selected_pleb.is_none() && self.wall_thickness > 1 {
                         // R: decrease wall thickness
                         self.wall_thickness -= 1;
@@ -564,10 +561,10 @@ impl App {
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyT) => {
-                    if let Some(idx) = self.selected_pleb {
-                        if let Some(pleb) = self.plebs.get_mut(idx) {
-                            pleb.torch_on = !pleb.torch_on;
-                        }
+                    if let Some(idx) = self.selected_pleb
+                        && let Some(pleb) = self.plebs.get_mut(idx)
+                    {
+                        pleb.torch_on = !pleb.torch_on;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyG) => {
@@ -622,22 +619,21 @@ impl App {
             }
         }
         // Key release: throw grenade on B release
-        if !event.state.is_pressed() {
-            if let PhysicalKey::Code(KeyCode::KeyB) = event.physical_key {
-                if self.grenade_charging {
-                    self.grenade_charging = false;
-                    if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
-                        let dx = pleb.angle.cos();
-                        let dy = pleb.angle.sin();
-                        let spawn_x = pleb.x + dx * 0.5;
-                        let spawn_y = pleb.y + dy * 0.5;
-                        let power = self.grenade_charge.clamp(0.0, 1.0);
-                        self.physics_bodies
-                            .push(PhysicsBody::new_grenade(spawn_x, spawn_y, dx, dy, power));
-                    }
-                    self.grenade_charge = 0.0;
-                }
+        if !event.state.is_pressed()
+            && let PhysicalKey::Code(KeyCode::KeyB) = event.physical_key
+            && self.grenade_charging
+        {
+            self.grenade_charging = false;
+            if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                let dx = pleb.angle.cos();
+                let dy = pleb.angle.sin();
+                let spawn_x = pleb.x + dx * 0.5;
+                let spawn_y = pleb.y + dy * 0.5;
+                let power = self.grenade_charge.clamp(0.0, 1.0);
+                self.physics_bodies
+                    .push(PhysicsBody::new_grenade(spawn_x, spawn_y, dx, dy, power));
             }
+            self.grenade_charge = 0.0;
         }
     }
 }

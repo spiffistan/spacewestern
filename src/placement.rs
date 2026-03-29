@@ -74,8 +74,7 @@ impl App {
             return (None, None);
         }
         let bt = |i: usize| -> u32 {
-            (self.grid_data[(tiles[i].1 as u32 * GRID_W + tiles[i].0 as u32) as usize] & 0xFF)
-                as u32
+            self.grid_data[(tiles[i].1 as u32 * GRID_W + tiles[i].0 as u32) as usize] & 0xFF
         };
         let is_water = |b: u32| b == BT_WATER || b == BT_DUG_GROUND;
         let is_ground = |i: usize| self.can_place_at(tiles[i].0, tiles[i].1);
@@ -93,7 +92,7 @@ impl App {
     pub(crate) fn find_wall_neighbors(&self, x: i32, y: i32) -> Vec<u32> {
         let dirs: [(i32, i32, u32); 4] = [(0, -1, 0), (1, 0, 1), (0, 1, 2), (-1, 0, 3)];
         let reg = block_defs::BlockRegistry::cached();
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(4);
         for &(dx, dy, dir) in &dirs {
             let nx = x + dx;
             let ny = y + dy;
@@ -256,10 +255,10 @@ impl App {
                 let dest_flags = (dest >> 16) & 0xFF;
 
                 // Replace old position with floor (preserve roof flag)
-                self.grid_data[old_idx] = make_block(2, 0, (light_flags & 2) as u8);
+                self.grid_data[old_idx] = make_block(2, 0, light_flags & 2);
 
                 // Place light at new position (preserve destination roof flag)
-                let new_block = (light_block & 0x0000FFFF) | ((dest_flags as u32) << 16);
+                let new_block = (light_block & 0x0000FFFF) | (dest_flags << 16);
                 // Also preserve the precomputed roof height from destination
                 let dest_roof_h = (dest >> 24) & 0xFF;
                 self.grid_data[new_idx] = (new_block & 0x00FFFFFF) | (dest_roof_h << 24);
@@ -481,7 +480,8 @@ impl App {
             None // too small for entryway
         };
 
-        let mut tiles = Vec::new();
+        let perimeter = 2 * ((max_x - min_x + 1) + (max_y - min_y + 1).saturating_sub(2)) as usize;
+        let mut tiles = Vec::with_capacity(perimeter);
         for x in min_x..=max_x {
             if entry != Some((x, min_y)) {
                 tiles.push((x, min_y));
@@ -515,7 +515,8 @@ impl App {
     pub(crate) fn line_tiles(x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<(i32, i32)> {
         let dx = (x1 - x0).abs();
         let dy = (y1 - y0).abs();
-        let mut tiles = Vec::new();
+        let len = dx.max(dy) as usize + 1;
+        let mut tiles = Vec::with_capacity(len);
         if dx >= dy {
             // Horizontal line (ordered in drag direction)
             let step = if x1 >= x0 { 1 } else { -1 };
@@ -548,7 +549,9 @@ impl App {
         let max_x = x0.max(x1);
         let min_y = y0.min(y1);
         let max_y = y0.max(y1);
-        let mut tiles = Vec::new();
+        let w = (max_x - min_x + 1) as usize;
+        let h = (max_y - min_y + 1) as usize;
+        let mut tiles = Vec::with_capacity(w * h);
         for y in min_y..=max_y {
             for x in min_x..=max_x {
                 tiles.push((x, y));
@@ -798,21 +801,20 @@ impl App {
                 let bt = block_type_rs(block);
                 let bh = block_height_rs(block) as u32;
                 let wire_anywhere = bid == BT_WIRE;
-                let btu = bt as u32;
                 let gas_pipe_compat = bt_is!(bid, BT_PIPE, BT_RESTRICTOR)
-                    && bt_is!(btu, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
+                    && bt_is!(bt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
                 let liquid_pipe_compat =
-                    bid == BT_LIQUID_PIPE && bt_is!(btu, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
+                    bid == BT_LIQUID_PIPE && bt_is!(bt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE);
                 let pipe_compat = gas_pipe_compat || liquid_pipe_compat;
-                let same_type = btu == bid || pipe_compat; // allow pipe↔restrictor
+                let same_type = bt == bid || pipe_compat; // allow pipe↔restrictor
                 // Thin wall merge: allow placing on existing wall tiles for corner upgrades
                 let has_wd_walls = idx < self.wall_data.len() && wd_edges(self.wall_data[idx]) != 0;
                 let thin_wall_merge = is_wall_block(bid)
                     && self.wall_thickness < 4
-                    && (has_wd_walls || (is_wall_block(btu) && bh > 0));
+                    && (has_wd_walls || (is_wall_block(bt) && bh > 0));
 
-                if ((btu == BT_AIR || btu == BT_DIRT) && bh == 0)
-                    || (wire_anywhere && btu != BT_WIRE)
+                if ((bt == BT_AIR || bt == BT_DIRT) && bh == 0)
+                    || (wire_anywhere && bt != BT_WIRE)
                     || (is_line_type && same_type)
                     || thin_wall_merge
                 {
@@ -864,7 +866,6 @@ impl App {
                             }
                             let aidx = (any as u32 * GRID_W + anx as u32) as usize;
                             let abt = block_type_rs(self.grid_data[aidx]);
-                            let abt = abt as u32;
                             let adj_gas_match = bt_is!(bid, BT_PIPE, BT_RESTRICTOR)
                                 && bt_is!(abt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE);
                             let adj_liq_match = bid == BT_LIQUID_PIPE
@@ -879,7 +880,7 @@ impl App {
                     }
 
                     if is_line_type && same_type {
-                        if btu == bid {
+                        if bt == bid {
                             // Same type: just merge new connections into existing mask
                             let existing_h = (block_height_rs(block) as u32) as u8;
                             let merged = existing_h | conn;
@@ -898,7 +899,7 @@ impl App {
                             self.grid_data[idx] =
                                 make_block(block_type_id as u8, height, roof_flag) | roof_h;
                         }
-                    } else if wire_anywhere && btu != BT_AIR && btu != BT_DIRT {
+                    } else if wire_anywhere && bt != BT_AIR && bt != BT_DIRT {
                         self.grid_data[idx] |= 0x80 << 16; // wire overlay flag
                     } else {
                         let roof_flag = block_flags_rs(block) & 2;
@@ -1007,8 +1008,6 @@ impl App {
                             let nidx = (nny as u32 * GRID_W + nnx as u32) as usize;
                             let nb = self.grid_data[nidx];
                             let nbt = block_type_rs(nb);
-                            // Update same-type (or pipe↔restrictor↔bridge) neighbors with connection mask
-                            let nbt = nbt as u32;
                             let recip_match = nbt == bid
                                 || (bt_is!(bid, BT_PIPE, BT_RESTRICTOR)
                                     && bt_is!(nbt, BT_PIPE, BT_RESTRICTOR, BT_PIPE_BRIDGE))
@@ -1089,7 +1088,7 @@ impl App {
     /// Build and open a context menu for the given screen and world position.
     /// Place a block or create a blueprint (if not sandbox mode and block is structural).
     pub(crate) fn place_or_blueprint(&mut self, x: i32, y: i32, block_data: u32) {
-        let bt = (block_data & 0xFF) as u32;
+        let bt = block_data & 0xFF;
         // Non-buildable block types that always place instantly (terrain, vegetation)
         let always_instant = matches!(
             bt,
@@ -1115,7 +1114,7 @@ impl App {
         let bx = wx.floor() as i32;
         let by = wy.floor() as i32;
         let bt = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
-            (self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] & 0xFF) as u32
+            self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] & 0xFF
         } else {
             0
         };
@@ -1186,7 +1185,7 @@ impl App {
                 }
                 let dist =
                     ((p.x - bx as f32 - 0.5).powi(2) + (p.y - by as f32 - 0.5).powi(2)).sqrt();
-                if best_pleb.map_or(true, |(_, bd)| dist < bd) {
+                if best_pleb.is_none_or(|(_, bd)| dist < bd) {
                     best_pleb = Some((i, dist));
                 }
             }
@@ -1255,29 +1254,29 @@ impl App {
         }
 
         // Hand-craft recipes — only when right-clicking ON or near the pleb
-        if let Some(pi) = sel_pleb {
-            if let Some(pleb) = self.plebs.get(pi) {
-                let near_pleb = (wx - pleb.x).abs() < 1.5 && (wy - pleb.y).abs() < 1.5;
-                if near_pleb {
-                    let idle = matches!(pleb.activity, PlebActivity::Idle | PlebActivity::Walking);
-                    let recipe_reg = recipe_defs::RecipeRegistry::cached();
-                    let item_reg = item_defs::ItemRegistry::cached();
-                    for recipe in recipe_reg.for_station("hand") {
-                        let has_mats = idle
-                            && recipe
-                                .inputs
-                                .iter()
-                                .all(|ing| pleb.inventory.count_of(ing.item) >= ing.count as u32);
-                        let ing_text: Vec<String> = recipe
+        if let Some(pi) = sel_pleb
+            && let Some(pleb) = self.plebs.get(pi)
+        {
+            let near_pleb = (wx - pleb.x).abs() < 1.5 && (wy - pleb.y).abs() < 1.5;
+            if near_pleb {
+                let idle = matches!(pleb.activity, PlebActivity::Idle | PlebActivity::Walking);
+                let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                let item_reg = item_defs::ItemRegistry::cached();
+                for recipe in recipe_reg.for_station("hand") {
+                    let has_mats = idle
+                        && recipe
                             .inputs
                             .iter()
-                            .map(|ing| format!("{} {}", ing.count, item_reg.name(ing.item)))
-                            .collect();
-                        let label = format!("Craft {} ({})", recipe.name, ing_text.join(", "));
-                        menu.actions
-                            .push((label, ContextAction::HandCraft(recipe.id), has_mats));
-                        has_actions = true;
-                    }
+                            .all(|ing| pleb.inventory.count_of(ing.item) >= ing.count as u32);
+                    let ing_text: Vec<String> = recipe
+                        .inputs
+                        .iter()
+                        .map(|ing| format!("{} {}", ing.count, item_reg.name(ing.item)))
+                        .collect();
+                    let label = format!("Craft {} ({})", recipe.name, ing_text.join(", "));
+                    menu.actions
+                        .push((label, ContextAction::HandCraft(recipe.id), has_mats));
+                    has_actions = true;
                 }
             }
         }
@@ -1510,9 +1509,7 @@ impl App {
                     let place_height = placement.map(|p| p.place_height).unwrap_or(1);
                     let extra_flags = placement.map(|p| p.extra_flags).unwrap_or(0);
                     let stays_selected = placement.map(|p| p.stays_selected).unwrap_or(false);
-                    let click_mode = placement
-                        .map(|p| p.click.clone())
-                        .unwrap_or(block_defs::ClickMode::Simple);
+                    let click_mode = placement.map_or(block_defs::ClickMode::Simple, |p| p.click);
 
                     // Wall-adjacent placement: auto-detect wall direction
                     if click_mode == block_defs::ClickMode::WallAdjacent {
@@ -1541,8 +1538,7 @@ impl App {
 
                     // Well: must be placed on dug ground with water table
                     if id == BT_WELL {
-                        let bt_here = bt as u32;
-                        if bt_here == BT_DUG_GROUND {
+                        if bt == BT_DUG_GROUND {
                             let (roof_flag, roof_h) = extract_roof_data(block);
                             self.place_or_blueprint(
                                 bx,
@@ -1557,7 +1553,6 @@ impl App {
                         return;
                     }
 
-                    let bt = bt as u32;
                     let can_place = self.can_place_at(bx, by)
                         || (id == BT_PUMP && bt == BT_PIPE)
                         || (id == BT_LIQUID_PUMP && bt == BT_LIQUID_PIPE)
@@ -1786,7 +1781,6 @@ impl App {
                 BuildTool::WoodBox => {
                     self.physics_bodies.push(PhysicsBody::new_wood_box(wx, wy));
                     // Don't deselect — can place multiple
-                    return;
                 }
                 BuildTool::Dig => {
                     // Dig: 20% per click, max depth 5 (= 1 full block).
@@ -1849,7 +1843,6 @@ impl App {
                             self.zones.push(zone);
                         }
                     }
-                    return;
                 }
                 BuildTool::StorageZone => {
                     let bh = block_height_rs(block) as u32;
@@ -1865,11 +1858,9 @@ impl App {
                             self.zones.push(zone);
                         }
                     }
-                    return;
                 }
                 BuildTool::None | BuildTool::Destroy | BuildTool::Roof => {}
             }
-            return;
         }
     }
 
@@ -2028,7 +2019,6 @@ impl App {
                 Some(widx)
             };
             self.block_sel.workbench_world = (bx as f32 + 0.5, by as f32 + 0.5);
-            return;
         }
 
         // Removal is handled by the Destroy tool, not by clicking
@@ -2067,12 +2057,14 @@ pub(crate) fn compute_diagonal_wall_tiles(
     let is_below = rotation < 2;
     let main_var: u8 = if is_backslash {
         if is_below { 1 } else { 3 } // \ variants
+    } else if is_below {
+        0 // / variants
     } else {
-        if is_below { 0 } else { 2 } // / variants
+        2
     };
     let fill_var: u8 = main_var ^ 2; // flip side: 0↔2, 1↔3
 
-    let mut tiles = Vec::new();
+    let mut tiles = Vec::with_capacity((steps as usize + 1) * 2);
     let mut x = x0;
     let mut y = y0;
 

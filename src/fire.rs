@@ -67,7 +67,7 @@ pub fn tick_fire(
     wetness: &[f32],
     fire_intensity: f32,
 ) -> (Vec<(usize, f32)>, Vec<usize>) {
-    let mut temp_overrides = Vec::new();
+    let mut temp_overrides = Vec::with_capacity(burn_progress.len());
     let mut destroyed = Vec::new();
     let grid_size = (GRID_W * GRID_H) as usize;
     let reg = BlockRegistry::cached();
@@ -75,8 +75,7 @@ pub fn tick_fire(
 
     // --- Burn progress + self-heating ---
     let burning_indices: Vec<usize> = burn_progress.keys().copied().collect();
-    for idx in &burning_indices {
-        let idx = *idx;
+    for &idx in &burning_indices {
         if idx >= grid_size {
             continue;
         }
@@ -104,11 +103,7 @@ pub fn tick_fire(
         };
 
         // Advance burn progress
-        let wet = if idx < wetness.len() {
-            wetness[idx]
-        } else {
-            0.0
-        };
+        let wet = wetness.get(idx).copied().unwrap_or(0.0);
         let wet_factor = (1.0 - wet * WET_DAMPING).max(WET_MIN_FACTOR);
         *progress += t / bt_time * wet_factor;
 
@@ -137,7 +132,7 @@ pub fn tick_fire(
     }
 
     // --- Fire spread (every N frames) ---
-    if frame_count % SPREAD_CHECK_INTERVAL == 0 && !burning_indices.is_empty() {
+    if frame_count.is_multiple_of(SPREAD_CHECK_INTERVAL) && !burning_indices.is_empty() {
         let wind_dx = wind_angle.cos();
         let wind_dy = wind_angle.sin();
 
@@ -188,11 +183,7 @@ pub fn tick_fire(
                 let wind_bonus = if wind_dot > 0.0 { 1.0 + wind_dot } else { 1.0 };
 
                 // Wetness resistance
-                let wet = if nidx < wetness.len() {
-                    wetness[nidx]
-                } else {
-                    0.0
-                };
+                let wet = wetness.get(nidx).copied().unwrap_or(0.0);
                 if wet > WET_BLOCK_THRESHOLD {
                     continue;
                 }
