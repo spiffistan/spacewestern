@@ -13,6 +13,8 @@ macro_rules! bt_is {
 }
 
 mod block_defs;
+mod creature_defs;
+mod creatures;
 mod grid;
 pub mod item_defs;
 mod materials;
@@ -201,6 +203,10 @@ struct App {
     selected_pleb: Option<usize>, // index into plebs vec
     placing_pleb: bool,
     next_pleb_id: usize,
+    // Alien fauna
+    creatures: Vec<creatures::Creature>,
+    creature_spawn_timer: f32,
+    next_pack_id: u16,
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
     show_pleb_help: bool,                               // show controls modal
     show_inventory: bool,                               // show pleb inventory window
@@ -343,6 +349,7 @@ struct GfxState {
     terrain_buffer: wgpu::Buffer,
     wall_buffer: wgpu::Buffer, // u16 per tile: wall edges, thickness, material (DN-008)
     door_buffer: wgpu::Buffer, // physical door data for raytrace (binding 25)
+    creature_buffer: wgpu::Buffer, // alien fauna data (binding 26)
     // Power grid
     voltage_buffer: wgpu::Buffer,
     power_pipeline: wgpu::ComputePipeline,
@@ -572,6 +579,9 @@ impl App {
             selected_pleb: Some(0),
             next_pleb_id: 1,
             placing_pleb: false,
+            creatures: Vec::new(),
+            creature_spawn_timer: 0.0,
+            next_pack_id: 0,
             cannon_angles: std::collections::HashMap::new(),
             show_pleb_help: false,
             show_inventory: false,
@@ -1959,6 +1969,23 @@ impl App {
             }
             gfx.queue
                 .write_buffer(&gfx.pleb_buffer, 0, bytemuck::cast_slice(&gpu_plebs));
+        }
+        // Upload creature data to GPU
+        {
+            let mut gpu_creatures = [creatures::GpuCreature::zeroed(); creatures::MAX_CREATURES];
+            for (i, c) in self
+                .creatures
+                .iter()
+                .enumerate()
+                .take(creatures::MAX_CREATURES)
+            {
+                gpu_creatures[i] = c.to_gpu();
+            }
+            gfx.queue.write_buffer(
+                &gfx.creature_buffer,
+                0,
+                bytemuck::cast_slice(&gpu_creatures),
+            );
         }
         // --- egui frame setup (before bp_cam/blueprint computation) ---
         // gfx borrow ends here (re-borrowed later for GPU submission)

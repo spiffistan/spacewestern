@@ -1,6 +1,7 @@
 //! GPU initialization — wgpu setup, pipeline creation, bind groups.
 //! Extracted from main.rs to keep it manageable.
 
+use crate::creatures::{GpuCreature, MAX_CREATURES};
 use crate::grid::{
     adjust_water_table_for_elevation, compute_terrain_ao, generate_elevation, generate_water_table,
     wgsl_block_constants,
@@ -194,6 +195,14 @@ impl App {
         let pleb_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pleb-buffer"),
             size: (MAX_PLEBS * std::mem::size_of::<GpuPleb>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Creature storage buffer (alien fauna, updated each frame)
+        let creature_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("creature-buffer"),
+            size: (MAX_CREATURES * std::mem::size_of::<GpuCreature>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1703,6 +1712,16 @@ impl App {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 26,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -2009,6 +2028,10 @@ impl App {
                     resource: door_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
+                    binding: 26,
+                    resource: creature_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(&fv_dye_a),
                 },
@@ -2117,6 +2140,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 25,
                     resource: door_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 26,
+                    resource: creature_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -2229,6 +2256,10 @@ impl App {
                     resource: door_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
+                    binding: 26,
+                    resource: creature_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(&fv_dye_b),
                 },
@@ -2337,6 +2368,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 25,
                     resource: door_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 26,
+                    resource: creature_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -3084,6 +3119,7 @@ impl App {
             terrain_buffer,
             wall_buffer,
             door_buffer,
+            creature_buffer,
             voltage_buffer,
             pipe_flow_buffer,
             power_pipeline: power_pipeline_val,

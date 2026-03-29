@@ -11,6 +11,8 @@ macro_rules! bt_is {
 pub mod block_defs;
 pub mod build;
 pub mod camera;
+pub mod creature_defs;
+pub mod creatures;
 pub mod fluid;
 pub mod grid;
 pub mod item_defs;

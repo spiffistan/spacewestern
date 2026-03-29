@@ -1722,6 +1722,9 @@ impl App {
             }
         }
 
+        // --- Alien fauna: spawn, tick, sound, cleanup ---
+        self.tick_creatures(dt, &mut events);
+
         // --- Work queue: assign idle friendly plebs to tasks by priority ---
         {
             let mut farm_tasks =
@@ -2992,6 +2995,399 @@ impl App {
         }
 
         dt
+    }
+
+    /// Tick alien fauna: spawning, FSM behavior, sound, cleanup.
+    fn tick_creatures(&mut self, dt: f32, events: &mut Vec<GameEventKind>) {
+        use crate::creature_defs::{CREATURE_DUSKWEAVER, CREATURE_HOLLOWCALL, CreatureRegistry};
+        use crate::creatures::{Creature, CreatureState, MAX_CREATURES};
+
+        let dt_game = dt * self.time_speed;
+        let day_frac = (self.time_of_day / DAY_DURATION).rem_euclid(1.0);
+        let is_night = day_frac > 0.85 || day_frac < 0.15;
+        let approaching_dusk = day_frac > 0.80 && day_frac < 0.85;
+        let approaching_dawn = day_frac > 0.15 && day_frac < 0.20;
+        let reg = CreatureRegistry::cached();
+        let gw = GRID_W as i32;
+        let gh = GRID_H as i32;
+
+        // --- Spawn at dusk ---
+        self.creature_spawn_timer -= dt_game;
+        if self.creature_spawn_timer <= 0.0 {
+            self.creature_spawn_timer = 8.0 + (self.frame_count as f32 * 0.1).sin().abs() * 7.0;
+
+            if (approaching_dusk || is_night) && self.creatures.len() < MAX_CREATURES {
+                // Spawn a duskweaver pack at a random map edge
+                let has_duskweavers = self
+                    .creatures
+                    .iter()
+                    .any(|c| c.species_id == CREATURE_DUSKWEAVER && !c.is_dead);
+                if !has_duskweavers {
+                    let pack_id = self.next_pack_id;
+                    self.next_pack_id = self.next_pack_id.wrapping_add(1);
+                    let def = reg.get(CREATURE_DUSKWEAVER);
+                    let pack_size = def.map_or(4, |d| {
+                        let range = d.pack_max.saturating_sub(d.pack_min) as u32 + 1;
+                        let rng = (self.time_of_day * 1000.0) as u32 % range;
+                        d.pack_min + rng as u8
+                    }) as usize;
+                    // Pick an edge
+                    let edge = (self.next_pack_id % 4) as i32;
+                    let (base_x, base_y) = match edge {
+                        0 => (2.0, (gh / 2) as f32),
+                        1 => ((gw - 3) as f32, (gh / 2) as f32),
+                        2 => ((gw / 2) as f32, 2.0),
+                        _ => ((gw / 2) as f32, (gh - 3) as f32),
+                    };
+                    for i in 0..pack_size.min(MAX_CREATURES - self.creatures.len()) {
+                        let offset = (i as f32) * 0.8;
+                        let cx = base_x + (i as f32 * 1.3).sin() * offset;
+                        let cy = base_y + (i as f32 * 2.1).cos() * offset;
+                        self.creatures
+                            .push(Creature::new(CREATURE_DUSKWEAVER, cx, cy, pack_id));
+                    }
+                }
+
+                // Spawn hollowcalls
+                let has_hollowcall = self
+                    .creatures
+                    .iter()
+                    .any(|c| c.species_id == CREATURE_HOLLOWCALL && !c.is_dead);
+                if !has_hollowcall && self.creatures.len() < MAX_CREATURES {
+                    // Distant position, far from any pleb
+                    let hx = if day_frac > 0.5 {
+                        20.0
+                    } else {
+                        (gw - 20) as f32
+                    };
+                    let hy = if self.next_pack_id % 2 == 0 {
+                        20.0
+                    } else {
+                        (gh - 20) as f32
+                    };
+                    let pack_id = self.next_pack_id;
+                    self.next_pack_id = self.next_pack_id.wrapping_add(1);
+                    self.creatures
+                        .push(Creature::new(CREATURE_HOLLOWCALL, hx, hy, pack_id));
+                }
+            }
+        }
+
+        // --- Dawn: despawn nocturnal creatures ---
+        if approaching_dawn {
+            for c in &mut self.creatures {
+                let def = reg.get(c.species_id);
+                if def.is_some_and(|d| d.nocturnal) && c.state != CreatureState::Despawn {
+                    c.state = CreatureState::Despawn;
+                    c.state_timer = 2.0;
+                }
+            }
+        }
+
+        // --- FSM tick ---
+        let pleb_positions: Vec<(f32, f32, bool)> = self
+            .plebs
+            .iter()
+            .filter(|p| !p.is_dead && !p.is_enemy)
+            .map(|p| (p.x, p.y, p.torch_on || p.headlight_on))
+            .collect();
+
+        for ci in 0..self.creatures.len() {
+            let c = &self.creatures[ci];
+            if c.is_dead {
+                continue;
+            }
+            let def = match reg.get(c.species_id) {
+                Some(d) => d,
+                None => continue,
+            };
+            let speed = def.speed * self.time_speed;
+
+            match c.state.clone() {
+                CreatureState::Idle => {
+                    // Wander + scan for targets
+                    let c = &mut self.creatures[ci];
+                    c.state_timer += dt_game;
+
+                    // Move along path if we have one
+                    if c.path_idx < c.path.len() && speed > 0.0 {
+                        let (tx, ty) = c.path[c.path_idx];
+                        let dx = tx as f32 + 0.5 - c.x;
+                        let dy = ty as f32 + 0.5 - c.y;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist < 0.3 {
+                            c.path_idx += 1;
+                        } else {
+                            let step = speed * dt;
+                            c.x += dx / dist * step;
+                            c.y += dy / dist * step;
+                            c.angle = dy.atan2(dx);
+                        }
+                    } else if c.state_timer > 3.0 && speed > 0.0 {
+                        // Pick a new wander target
+                        c.state_timer = 0.0;
+                        let wx = (c.x as i32 + ((c.x * 13.7).sin() * 8.0) as i32).clamp(2, gw - 3);
+                        let wy = (c.y as i32 + ((c.y * 17.3).cos() * 8.0) as i32).clamp(2, gh - 3);
+                        c.path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            (c.x as i32, c.y as i32),
+                            (wx, wy),
+                        );
+                        c.path_idx = 0;
+                    }
+
+                    // Duskweaver: scan for food or lone colonists
+                    if c.species_id == CREATURE_DUSKWEAVER && c.state_timer > 2.0 {
+                        // Check for ground food within 20 tiles
+                        let mut best_food: Option<(i32, i32, f32)> = None;
+                        for gi in &self.ground_items {
+                            if gi.stack.item_id == ITEM_BERRIES {
+                                let d = (gi.x - c.x).powi(2) + (gi.y - c.y).powi(2);
+                                if d < 400.0 && best_food.map_or(true, |(_, _, bd)| d < bd) {
+                                    best_food = Some((gi.x.floor() as i32, gi.y.floor() as i32, d));
+                                }
+                            }
+                        }
+
+                        // Check light avoidance
+                        let near_light = pleb_positions.iter().any(|&(px, py, has_light)| {
+                            has_light
+                                && (px - c.x).powi(2) + (py - c.y).powi(2)
+                                    < def.flee_light_radius * def.flee_light_radius
+                        });
+
+                        if !near_light {
+                            if let Some((fx, fy, _)) = best_food {
+                                c.state = CreatureState::Stalk(fx as f32 + 0.5, fy as f32 + 0.5);
+                                c.state_timer = 0.0;
+                                c.path = astar_path_terrain_wd(
+                                    &self.grid_data,
+                                    &self.wall_data,
+                                    &self.terrain_data,
+                                    (c.x as i32, c.y as i32),
+                                    (fx, fy),
+                                );
+                                c.path_idx = 0;
+                            }
+                        }
+                    }
+                }
+
+                CreatureState::Stalk(tx, ty) => {
+                    let c = &mut self.creatures[ci];
+                    c.state_timer += dt_game;
+
+                    // Move along path
+                    if c.path_idx < c.path.len() && speed > 0.0 {
+                        let (px, py) = c.path[c.path_idx];
+                        let dx = px as f32 + 0.5 - c.x;
+                        let dy = py as f32 + 0.5 - c.y;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist < 0.3 {
+                            c.path_idx += 1;
+                        } else {
+                            let step = speed * dt;
+                            c.x += dx / dist * step;
+                            c.y += dy / dist * step;
+                            c.angle = dy.atan2(dx);
+                        }
+                    }
+
+                    // Check if near target → steal
+                    let dist_to_target = ((c.x - tx).powi(2) + (c.y - ty).powi(2)).sqrt();
+                    if dist_to_target < 1.5 {
+                        c.state = CreatureState::Steal(tx as i32, ty as i32);
+                        c.state_timer = 0.0;
+                    }
+
+                    // Check flee conditions: light or group of colonists
+                    let near_light = pleb_positions.iter().any(|&(px, py, has_light)| {
+                        has_light
+                            && (px - c.x).powi(2) + (py - c.y).powi(2)
+                                < def.flee_light_radius * def.flee_light_radius
+                    });
+                    let nearby_colonists = pleb_positions
+                        .iter()
+                        .filter(|&&(px, py, _)| (px - c.x).powi(2) + (py - c.y).powi(2) < 64.0)
+                        .count();
+                    if near_light || nearby_colonists >= def.flee_group_size as usize {
+                        // Flee to nearest edge
+                        let edge_x = if c.x < (gw / 2) as f32 {
+                            1.0
+                        } else {
+                            (gw - 2) as f32
+                        };
+                        let edge_y = if c.y < (gh / 2) as f32 {
+                            1.0
+                        } else {
+                            (gh - 2) as f32
+                        };
+                        c.state = CreatureState::Flee(edge_x, edge_y);
+                        c.state_timer = 0.0;
+                        c.path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            (c.x as i32, c.y as i32),
+                            (edge_x as i32, edge_y as i32),
+                        );
+                        c.path_idx = 0;
+                    }
+
+                    // Timeout: if stalking too long, give up
+                    if c.state_timer > 30.0 {
+                        c.state = CreatureState::Idle;
+                        c.state_timer = 0.0;
+                    }
+                }
+
+                CreatureState::Steal(sx, sy) => {
+                    let c = &mut self.creatures[ci];
+                    c.state_timer += dt_game;
+                    if c.state_timer > 2.0 {
+                        // Remove the ground item
+                        if let Some(gi_idx) = self
+                            .ground_items
+                            .iter()
+                            .position(|gi| gi.x.floor() as i32 == sx && gi.y.floor() as i32 == sy)
+                        {
+                            let name = ItemRegistry::cached()
+                                .name(self.ground_items[gi_idx].stack.item_id)
+                                .to_string();
+                            self.ground_items.remove(gi_idx);
+                            events.push(GameEventKind::Generic(
+                                types::EventCategory::Combat,
+                                format!("Duskweaver stole {}!", name),
+                            ));
+                        }
+                        // Flee after stealing
+                        let edge_x = if c.x < (gw / 2) as f32 {
+                            1.0
+                        } else {
+                            (gw - 2) as f32
+                        };
+                        let edge_y = if c.y < (gh / 2) as f32 {
+                            1.0
+                        } else {
+                            (gh - 2) as f32
+                        };
+                        c.state = CreatureState::Flee(edge_x, edge_y);
+                        c.state_timer = 0.0;
+                        c.path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            (c.x as i32, c.y as i32),
+                            (edge_x as i32, edge_y as i32),
+                        );
+                        c.path_idx = 0;
+                    }
+                }
+
+                CreatureState::Attack(pleb_idx) => {
+                    let c = &mut self.creatures[ci];
+                    // Hit-and-run: deal damage once, then flee
+                    if let Some(pleb) = self.plebs.get_mut(pleb_idx) {
+                        if !pleb.is_dead {
+                            pleb.needs.health = (pleb.needs.health - def.damage / 100.0).max(0.0);
+                            events.push(GameEventKind::Generic(
+                                types::EventCategory::Combat,
+                                format!("Duskweaver attacked {}!", pleb.name),
+                            ));
+                        }
+                    }
+                    let edge_x = if c.x < (gw / 2) as f32 {
+                        1.0
+                    } else {
+                        (gw - 2) as f32
+                    };
+                    let edge_y = if c.y < (gh / 2) as f32 {
+                        1.0
+                    } else {
+                        (gh - 2) as f32
+                    };
+                    c.state = CreatureState::Flee(edge_x, edge_y);
+                    c.state_timer = 0.0;
+                    c.path = astar_path_terrain_wd(
+                        &self.grid_data,
+                        &self.wall_data,
+                        &self.terrain_data,
+                        (c.x as i32, c.y as i32),
+                        (edge_x as i32, edge_y as i32),
+                    );
+                    c.path_idx = 0;
+                }
+
+                CreatureState::Flee(fx, fy) => {
+                    let c = &mut self.creatures[ci];
+                    c.state_timer += dt_game;
+
+                    // Move along path
+                    if c.path_idx < c.path.len() && speed > 0.0 {
+                        let (px, py) = c.path[c.path_idx];
+                        let dx = px as f32 + 0.5 - c.x;
+                        let dy = py as f32 + 0.5 - c.y;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist < 0.3 {
+                            c.path_idx += 1;
+                        } else {
+                            let step = speed * 1.5 * dt; // flee faster
+                            c.x += dx / dist * step;
+                            c.y += dy / dist * step;
+                            c.angle = dy.atan2(dx);
+                        }
+                    }
+
+                    // Near edge or path done → idle
+                    let near_edge =
+                        c.x < 3.0 || c.x > (gw - 3) as f32 || c.y < 3.0 || c.y > (gh - 3) as f32;
+                    if near_edge || c.path_idx >= c.path.len() {
+                        c.state = CreatureState::Idle;
+                        c.state_timer = 0.0;
+                    }
+
+                    let _ = (fx, fy); // used for pathfinding target already
+                }
+
+                CreatureState::Despawn => {
+                    let c = &mut self.creatures[ci];
+                    c.state_timer -= dt_game;
+                    if c.state_timer <= 0.0 {
+                        c.is_dead = true; // will be removed in cleanup
+                    }
+                }
+            }
+
+            // --- Sound emission ---
+            let c = &self.creatures[ci];
+            if !c.is_dead && def.sound_amplitude_db > 0.0 {
+                let c = &mut self.creatures[ci];
+                c.sound_timer -= dt_game;
+                if c.sound_timer <= 0.0 {
+                    c.sound_timer = def.sound_interval
+                        + (c.x * 7.3 + c.y * 11.1).sin().abs() * def.sound_interval * 0.3;
+                    let duration = if c.species_id == CREATURE_HOLLOWCALL {
+                        4.0
+                    } else {
+                        0.3
+                    };
+                    self.sound_sources.push(types::SoundSource {
+                        x: c.x,
+                        y: c.y,
+                        amplitude: types::db_to_amplitude(def.sound_amplitude_db),
+                        frequency: def.sound_frequency,
+                        phase: 0.0,
+                        pattern: def.sound_pattern,
+                        duration,
+                    });
+                }
+            }
+        }
+
+        // --- Cleanup: remove dead/despawned creatures ---
+        self.creatures.retain(|c| !c.is_dead);
     }
 }
 

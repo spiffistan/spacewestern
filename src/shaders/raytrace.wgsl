@@ -93,6 +93,15 @@ struct Camera {
 @group(0) @binding(23) var<storage, read> terrain_buf: array<u32>;
 @group(0) @binding(24) var<storage, read> wall_buf: array<u32>; // u16 packed as u32 pairs
 @group(0) @binding(25) var<storage, read> door_buf: array<u32>; // [count, w0, angle, w0, angle, ...]
+
+// Alien fauna
+struct GpuCreature {
+    x: f32, y: f32, angle: f32, health: f32,
+    color_r: f32, color_g: f32, color_b: f32, body_radius: f32,
+};
+const MAX_CREATURES: u32 = 32u;
+@group(0) @binding(26) var<storage, read> creature_buf: array<GpuCreature>;
+
 // Bush sprites packed after tree sprites in the same buffer
 const BUSH_SPRITE_SIZE: u32 = 64u;
 const BUSH_SPRITE_VARIANTS: u32 = 16u;
@@ -4683,6 +4692,40 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                             color = vec3(0.15, 0.12, 0.10); // empty bar background
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // --- Creature rendering (alien fauna) ---
+    for (var ci: u32 = 0u; ci < MAX_CREATURES; ci++) {
+        let cr = creature_buf[ci];
+        if cr.body_radius < 0.01 { continue; } // invisible or empty slot
+        let cdx = world_x - cr.x;
+        let cdy = world_y - cr.y;
+        let cdist = length(vec2(cdx, cdy));
+        if cdist < cr.body_radius {
+            // Body: shaded circle
+            let shade = 1.0 - cdist / cr.body_radius * 0.4;
+            color = vec3(cr.color_r, cr.color_g, cr.color_b) * shade;
+            // Eye dots: two small bright spots toward facing direction
+            let eye_spread = cr.body_radius * 0.4;
+            let eye_fwd = cr.body_radius * 0.3;
+            let eye_r = cr.body_radius * 0.12;
+            let fwd = vec2(cos(cr.angle), sin(cr.angle));
+            let side = vec2(-fwd.y, fwd.x);
+            let eye1 = vec2(cr.x, cr.y) + fwd * eye_fwd + side * eye_spread;
+            let eye2 = vec2(cr.x, cr.y) + fwd * eye_fwd - side * eye_spread;
+            let ed1 = length(vec2(world_x, world_y) - eye1);
+            let ed2 = length(vec2(world_x, world_y) - eye2);
+            if ed1 < eye_r || ed2 < eye_r {
+                color = vec3(0.8, 0.4, 0.1); // orange eyes
+            }
+            // Corpse: red X overlay
+            if cr.health <= 0.0 {
+                let ax = abs(cdx) - abs(cdy);
+                if abs(ax) < cr.body_radius * 0.15 {
+                    color = mix(color, vec3(0.6, 0.1, 0.1), 0.7);
                 }
             }
         }
