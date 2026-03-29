@@ -12,7 +12,6 @@ macro_rules! bt_is {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod audio;
 mod block_defs;
 mod creature_defs;
@@ -187,7 +186,6 @@ struct App {
     dye_h: u32,                   // current dye texture height
     sandbox_mode: bool,           // enables sandbox build category + debug tools
     debug_creatures_always: bool, // spawn creatures regardless of time of day
-    #[cfg(not(target_arch = "wasm32"))]
     audio_output: Option<audio::AudioOutput>,
     sandbox_tool: SandboxTool,            // current sandbox action
     show_pipe_overlay: bool,              // draw gas pipe contents as egui overlay (ventilation)
@@ -290,6 +288,7 @@ struct App {
     entry_side: u8,
     // Campfire subtile offset for preview: (x_off, y_off) in 0-2 range, or None for full tile
     campfire_subtile: Option<(u8, u8)>,
+    menu_hover_id: Option<egui::Id>, // last hovered button ID for sound debounce
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
     voltage_data: Vec<f32>,
     voltage_readback_pending: bool,
@@ -560,8 +559,7 @@ impl App {
             dye_h: FLUID_DYE_H,
             sandbox_mode: false,
             debug_creatures_always: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            audio_output: audio::AudioOutput::new(),
+            audio_output: None, // lazy init on first sound (browser requires user gesture)
             sandbox_tool: SandboxTool::None,
             drag_start: None,
             show_pipe_overlay: false,
@@ -667,6 +665,7 @@ impl App {
             drag_entryway: None,
             entry_side: 0,
             campfire_subtile: None,
+            menu_hover_id: None,
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
             fog_enabled: true,
@@ -1516,8 +1515,10 @@ impl App {
 
         let dt = self.update_simulation();
 
-        // Play audio for fresh sound sources
-        #[cfg(not(target_arch = "wasm32"))]
+        // Play audio for fresh sound sources (lazy init: browser requires user gesture)
+        if self.audio_output.is_none() {
+            self.audio_output = audio::AudioOutput::new();
+        }
         if let Some(ref audio) = self.audio_output {
             if self.sound_enabled {
                 for src in &mut self.sound_sources {

@@ -55,6 +55,11 @@ impl App {
         blueprint_tiles: Vec<((i32, i32), u8)>,
         dt: f32,
     ) {
+        // Reset hover sound debounce if no pointer interaction
+        if ctx.input(|i| i.pointer.hover_pos().is_none()) {
+            self.menu_hover_id = None;
+        }
+
         // Font setup: Inter Medium for thicker UI text
         {
             let mut fonts = egui::FontDefinitions::default();
@@ -146,43 +151,21 @@ impl App {
                     ui.add_space(30.0);
 
                     let btn_size = egui::Vec2::new(200.0, 36.0);
-                    if ui
-                        .add_sized(
-                            btn_size,
-                            egui::Button::new(egui::RichText::new("New Game").size(16.0)),
-                        )
-                        .clicked()
-                    {
-                        self.game_state = GameState::MapGen;
-                    }
-                    ui.add_space(4.0);
-                    if ui
-                        .add_sized(
-                            btn_size,
-                            egui::Button::new(egui::RichText::new("Sample Map").size(14.0)),
-                        )
-                        .clicked()
-                    {
-                        self.regenerate_world_preview();
-                        self.wall_data = vec![0u16; (GRID_W * GRID_H) as usize];
-                        grid::generate_sample_buildings_wd(
-                            &mut self.grid_data,
-                            &mut self.wall_data,
-                        );
-                        // Also pick up any legacy walls from grid
-                        let extracted = extract_wall_data_from_grid(&self.grid_data);
-                        for (wd, &ext) in self.wall_data.iter_mut().zip(extracted.iter()) {
-                            if wd_edges(*wd) == 0 && wd_edges(ext) != 0 {
-                                *wd = ext;
-                            }
+                    let new_game_btn = ui.add_sized(
+                        btn_size,
+                        egui::Button::new(egui::RichText::new("New Game").size(16.0)),
+                    );
+                    if new_game_btn.hovered() && self.menu_hover_id != Some(new_game_btn.id) {
+                        self.menu_hover_id = Some(new_game_btn.id);
+                        if self.audio_output.is_none() {
+                            self.audio_output = audio::AudioOutput::new();
                         }
-                        compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
-                        // Extract physical doors from wall_data
-                        self.doors = grid::extract_doors_from_wall_data(&self.wall_data);
-                        self.grid_dirty = true;
-                        // Spawn sample enemies
-                        self.spawn_sample_enemies();
-                        self.game_state = GameState::Playing;
+                        if let Some(ref audio) = self.audio_output {
+                            audio.play_click();
+                        }
+                    }
+                    if new_game_btn.clicked() {
+                        self.game_state = GameState::MapGen;
                     }
                     ui.add_space(8.0);
                     ui.label(
@@ -192,6 +175,24 @@ impl App {
                     );
                 });
             });
+    }
+
+    /// Play a click sound when a button is first hovered. Returns true if clicked.
+    fn hover_click_button(&mut self, ui: &mut egui::Ui, text: egui::RichText) -> bool {
+        let resp = ui.button(text);
+        let btn_id = resp.id;
+        if resp.hovered() {
+            if self.menu_hover_id != Some(btn_id) {
+                self.menu_hover_id = Some(btn_id);
+                if self.audio_output.is_none() {
+                    self.audio_output = audio::AudioOutput::new();
+                }
+                if let Some(ref audio) = self.audio_output {
+                    audio.play_click();
+                }
+            }
+        }
+        resp.clicked()
     }
 
     fn draw_map_gen_screen(&mut self, ctx: &egui::Context) {
@@ -216,9 +217,9 @@ impl App {
                 ui.horizontal(|ui| {
                     // ═══ LEFT: Sliders ═══
                     ui.vertical(|ui| {
-                        ui.set_max_width(180.0);
-                        ui.label(egui::RichText::new("Terrain").strong().size(12.0));
-                        ui.add_space(2.0);
+                        ui.set_max_width(320.0);
+                        ui.label(egui::RichText::new("Terrain").strong().size(15.0));
+                        ui.add_space(4.0);
 
                         let slider = |ui: &mut egui::Ui,
                                       label: &str,
@@ -226,12 +227,12 @@ impl App {
                                       color: egui::Color32| {
                             ui.horizontal(|ui| {
                                 let (dot_rect, _) = ui.allocate_exact_size(
-                                    egui::Vec2::splat(8.0),
+                                    egui::Vec2::splat(12.0),
                                     egui::Sense::hover(),
                                 );
-                                ui.painter_at(dot_rect).rect_filled(dot_rect, 2.0, color);
-                                ui.label(egui::RichText::new(label).size(9.0).monospace());
-                                ui.spacing_mut().slider_width = 60.0;
+                                ui.painter_at(dot_rect).rect_filled(dot_rect, 3.0, color);
+                                ui.label(egui::RichText::new(label).size(13.0).monospace());
+                                ui.spacing_mut().slider_width = 140.0;
                                 ui.add(egui::Slider::new(val, 0.0..=1.0).show_value(false));
                             });
                         };
@@ -285,18 +286,18 @@ impl App {
                             egui::Color32::from_rgb(77, 89, 56),
                         );
 
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
                         ui.separator();
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Ponds").size(10.0));
-                            ui.spacing_mut().slider_width = 60.0;
+                            ui.label(egui::RichText::new("Ponds").size(13.0));
+                            ui.spacing_mut().slider_width = 140.0;
                             ui.add(
                                 egui::Slider::new(&mut self.terrain_params.pond_density, 0.0..=1.0)
                                     .show_value(false),
                             );
                         });
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Seed").size(10.0));
+                            ui.label(egui::RichText::new("Seed").size(13.0));
                             let mut seed_i = self.terrain_params.seed as i32;
                             if ui
                                 .add(egui::DragValue::new(&mut seed_i).range(0..=9999))
@@ -304,21 +305,22 @@ impl App {
                             {
                                 self.terrain_params.seed = seed_i.max(0) as u32;
                             }
-                            if ui.small_button("Random").clicked() {
+                            if self.hover_click_button(ui, egui::RichText::new("Random").size(13.0))
+                            {
                                 self.terrain_params.seed =
                                     (self.frame_count.wrapping_mul(2654435761)) % 10000;
                                 self.regenerate_world_preview();
                             }
                         });
 
-                        ui.add_space(8.0);
+                        ui.add_space(10.0);
                         ui.label(
                             egui::RichText::new(format!("Map: {}×{}", GRID_W, GRID_H))
-                                .size(9.0)
+                                .size(11.0)
                                 .weak(),
                         );
-                        ui.add_space(4.0);
-                        if ui.button("Preview").clicked() {
+                        ui.add_space(6.0);
+                        if self.hover_click_button(ui, egui::RichText::new("Preview").size(14.0)) {
                             self.regenerate_world_preview();
                         }
                     });
@@ -327,8 +329,8 @@ impl App {
 
                     // ═══ RIGHT: Preview ═══
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("Preview").strong().size(11.0));
-                        let preview_size = 256.0;
+                        ui.label(egui::RichText::new("Preview").strong().size(15.0));
+                        let preview_size = 420.0;
                         let (rect, _) = ui.allocate_exact_size(
                             egui::Vec2::splat(preview_size),
                             egui::Sense::hover(),
@@ -372,19 +374,16 @@ impl App {
                     });
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    if ui
-                        .button(egui::RichText::new("← Back").size(12.0))
-                        .clicked()
-                    {
+                    if self.hover_click_button(ui, egui::RichText::new("← Back").size(14.0)) {
                         self.game_state = GameState::MainMenu;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(egui::RichText::new("Start Game →").size(14.0).strong())
-                            .clicked()
-                        {
+                        if self.hover_click_button(
+                            ui,
+                            egui::RichText::new("Start Game →").size(16.0).strong(),
+                        ) {
                             start_game = true;
                         }
                     });
@@ -1333,8 +1332,10 @@ impl App {
                             self.fog_dirty = true;
                         }
                         ui.separator();
-                        #[cfg(not(target_arch = "wasm32"))]
                         if ui.button("Test Audio Beep").clicked() {
+                            if self.audio_output.is_none() {
+                                self.audio_output = audio::AudioOutput::new();
+                            }
                             if let Some(ref audio) = self.audio_output {
                                 audio.test_beep();
                             } else {
