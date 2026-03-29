@@ -289,6 +289,12 @@ struct App {
     chargen_hair_style: u8,
     chargen_shirt: [f32; 3],
     chargen_pants: [f32; 3],
+    chargen_backstory: Backstory,
+    chargen_body_type: BodyType,
+    chargen_gender: Gender,
+    chargen_age: u8,
+    chargen_trait: Option<PlebTrait>,
+    chargen_preview_angle: f32, // rotating preview angle
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Entryway position for hollow rect drag (shown differently in preview)
@@ -496,6 +502,7 @@ impl App {
                 hover_x: -1.0,
                 hover_y: -1.0,
                 shadow_intensity: 1.0,
+                pleb_scale: 1.75,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -678,6 +685,12 @@ impl App {
             chargen_hair_style: 0,
             chargen_shirt: [0.35, 0.25, 0.20],
             chargen_pants: [0.30, 0.28, 0.22],
+            chargen_backstory: Backstory::Sheriff,
+            chargen_body_type: BodyType::Medium,
+            chargen_gender: Gender::Male,
+            chargen_age: 32,
+            chargen_trait: None,
+            chargen_preview_angle: 0.0,
             diag_preview: Vec::new(),
             drag_entryway: None,
             entry_side: 0,

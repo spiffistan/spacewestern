@@ -63,4 +63,5 @@ pub struct CameraUniform {
     pub hover_x: f32,               // hovered world x (-1 = none)
     pub hover_y: f32,               // hovered world y (-1 = none)
     pub shadow_intensity: f32,      // 0.0 = no shadows, 1.0 = full shadows
+    pub pleb_scale: f32,            // pleb body size multiplier (1.0 = default)
 }

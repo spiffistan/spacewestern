@@ -12,6 +12,209 @@ pub struct GameHint {
     pub highlight_blocks: Vec<u32>,
 }
 
+// --- Character Generation ---
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Backstory {
+    Sheriff,
+    Prospector,
+    RanchHand,
+    Mechanic,
+    FrontierDoc,
+    Outlaw,
+    Preacher,
+    Drifter,
+    Engineer,
+    Scout,
+}
+
+impl Backstory {
+    pub const ALL: &'static [Backstory] = &[
+        Backstory::Sheriff,
+        Backstory::Prospector,
+        Backstory::RanchHand,
+        Backstory::Mechanic,
+        Backstory::FrontierDoc,
+        Backstory::Outlaw,
+        Backstory::Preacher,
+        Backstory::Drifter,
+        Backstory::Engineer,
+        Backstory::Scout,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Backstory::Sheriff => "Sheriff",
+            Backstory::Prospector => "Prospector",
+            Backstory::RanchHand => "Ranch Hand",
+            Backstory::Mechanic => "Mechanic",
+            Backstory::FrontierDoc => "Frontier Doc",
+            Backstory::Outlaw => "Outlaw",
+            Backstory::Preacher => "Preacher",
+            Backstory::Drifter => "Drifter",
+            Backstory::Engineer => "Engineer",
+            Backstory::Scout => "Scout",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Backstory::Sheriff => {
+                "Kept the peace in a small settlement. Steady hand, respected voice. Rallies others in a crisis."
+            }
+            Backstory::Prospector => {
+                "Spent years alone in the hills, chipping at rock. Knows minerals by sight and stone by sound."
+            }
+            Backstory::RanchHand => {
+                "Worked cattle on the open range. Tough, practical, good with animals. Knows how to survive lean seasons."
+            }
+            Backstory::Mechanic => {
+                "Fixed anything with moving parts. Generators, pumps, guns. If it's broken, they'll jury-rig it."
+            }
+            Backstory::FrontierDoc => {
+                "The only doctor for a hundred miles. Stitched wounds, set bones, delivered babies. Irreplaceable."
+            }
+            Backstory::Outlaw => {
+                "Ran with a bad crowd. Quick draw, sharp eyes, flexible morals. Trying to start over — maybe."
+            }
+            Backstory::Preacher => {
+                "Carried faith across the frontier. Words that calm the panicked and steady the broken."
+            }
+            Backstory::Drifter => {
+                "No ties, no past worth mentioning. Arrived with nothing but survival instincts and a knife."
+            }
+            Backstory::Engineer => {
+                "Built bridges, fortifications, water systems. Sees structures where others see terrain."
+            }
+            Backstory::Scout => {
+                "Eyes like a hawk, quiet as a shadow. Maps the unknown and comes back alive."
+            }
+        }
+    }
+
+    pub fn skills(&self) -> [u8; 6] {
+        // [shooting, melee, crafting, farming, medical, construction]
+        match self {
+            Backstory::Sheriff => [7, 5, 2, 1, 2, 3],
+            Backstory::Prospector => [3, 4, 5, 1, 1, 6],
+            Backstory::RanchHand => [4, 4, 3, 6, 2, 4],
+            Backstory::Mechanic => [2, 2, 8, 1, 1, 5],
+            Backstory::FrontierDoc => [1, 1, 3, 2, 9, 2],
+            Backstory::Outlaw => [8, 6, 2, 0, 1, 1],
+            Backstory::Preacher => [1, 1, 2, 3, 4, 2],
+            Backstory::Drifter => [4, 5, 3, 2, 2, 3],
+            Backstory::Engineer => [2, 1, 6, 1, 1, 8],
+            Backstory::Scout => [6, 3, 2, 2, 2, 3],
+        }
+    }
+
+    pub fn skill_names() -> &'static [&'static str; 6] {
+        &[
+            "Shooting",
+            "Melee",
+            "Crafting",
+            "Farming",
+            "Medical",
+            "Construction",
+        ]
+    }
+
+    pub fn ability(&self) -> &'static str {
+        match self {
+            Backstory::Sheriff => "Rally — nearby allies: +30% accuracy for 20s",
+            Backstory::Prospector => "Assay — reveal mineral deposits in 15-tile radius",
+            Backstory::RanchHand => "Roundup — instantly haul all loose items to crates",
+            Backstory::Mechanic => "Jury Rig — instantly repair a broken machine",
+            Backstory::FrontierDoc => "Field Surgery — stabilize a dying colonist at range",
+            Backstory::Outlaw => "Quick Draw — instant shot, guaranteed hit",
+            Backstory::Preacher => "Sermon — all colonists: -20 stress",
+            Backstory::Drifter => "Dirty Fight — next melee: 3× damage + stun",
+            Backstory::Engineer => "Fortify — double a wall section's HP for 60s",
+            Backstory::Scout => "Eagle Eye — reveal fog of war in huge radius for 15s",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BodyType {
+    Thin,
+    Medium,
+    Stocky,
+}
+
+impl BodyType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            BodyType::Thin => "Thin",
+            BodyType::Medium => "Medium",
+            BodyType::Stocky => "Stocky",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Gender {
+    Male,
+    Female,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PlebTrait {
+    Weathered,
+    StarlitMind,
+    SteadyHands,
+    DesertBlood,
+    Salvager,
+    LoneStar,
+    Frontier,
+    StoneEater,
+}
+
+impl PlebTrait {
+    pub const ALL: &'static [PlebTrait] = &[
+        PlebTrait::Weathered,
+        PlebTrait::StarlitMind,
+        PlebTrait::SteadyHands,
+        PlebTrait::DesertBlood,
+        PlebTrait::Salvager,
+        PlebTrait::LoneStar,
+        PlebTrait::Frontier,
+        PlebTrait::StoneEater,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            PlebTrait::Weathered => "Weathered",
+            PlebTrait::StarlitMind => "Starlit Mind",
+            PlebTrait::SteadyHands => "Steady Hands",
+            PlebTrait::DesertBlood => "Desert Blood",
+            PlebTrait::Salvager => "Salvager",
+            PlebTrait::LoneStar => "Lone Star",
+            PlebTrait::Frontier => "Frontier Born",
+            PlebTrait::StoneEater => "Stone Eater",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            PlebTrait::Weathered => "Survived worse than this. +25% health, slower to bleed out.",
+            PlebTrait::StarlitMind => {
+                "Came alive under alien stars. Works better at night, sharper senses in the dark."
+            }
+            PlebTrait::SteadyHands => {
+                "Surgeon's precision, watchmaker's patience. +20% crafting quality."
+            }
+            PlebTrait::DesertBlood => "Born in the dry lands. Needs less water, tolerates heat.",
+            PlebTrait::Salvager => "Sees treasure in wreckage. +30% yield from salvage and mining.",
+            PlebTrait::LoneStar => "Prefers solitude. No mood penalty alone, stressed in crowds.",
+            PlebTrait::Frontier => "Grew up where the map ends. +15% to all outdoor work.",
+            PlebTrait::StoneEater => {
+                "Can stomach anything. No food preferences, immune to food poisoning."
+            }
+        }
+    }
+}
+
 // --- Game State ---
 
 #[derive(Clone, Copy, Debug, PartialEq)]

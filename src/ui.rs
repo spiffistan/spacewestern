@@ -412,6 +412,9 @@ impl App {
                     .rect_filled(screen, 0.0, egui::Color32::from_rgb(10, 12, 18));
             });
 
+        // Rotate preview
+        self.chargen_preview_angle += ctx.input(|i| i.stable_dt) * 0.5;
+
         let mut start_game = false;
 
         egui::Window::new("Create Your Colonist")
@@ -419,12 +422,13 @@ impl App {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.set_min_width(650.0);
+                ui.set_min_width(750.0);
                 ui.horizontal(|ui| {
-                    // === LEFT: Character preview ===
+                    // === LEFT: Preview + lore ===
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("Preview").strong().size(15.0));
-                        let preview_size = 300.0;
+                        ui.set_max_width(300.0);
+
+                        let preview_size = 280.0;
                         let (rect, _) = ui.allocate_exact_size(
                             egui::Vec2::new(preview_size, preview_size),
                             egui::Sense::hover(),
@@ -432,12 +436,16 @@ impl App {
                         let painter = ui.painter_at(rect);
                         painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(25, 28, 20));
 
-                        // Draw procedural pleb preview (matching shader zones)
                         let cx = rect.center().x;
-                        let cy = rect.center().y + 30.0;
-                        let s = preview_size * 0.38; // scale factor
+                        let cy = rect.center().y + 25.0;
+                        let body_scale = match self.chargen_body_type {
+                            BodyType::Thin => 0.32,
+                            BodyType::Medium => 0.38,
+                            BodyType::Stocky => 0.44,
+                        };
+                        let s = preview_size * body_scale;
+                        let dir_x = self.chargen_preview_angle.cos() * 0.03 * s;
 
-                        // Helper: draw a filled rounded rect as ellipse approximation
                         let ell = |p: &egui::Painter,
                                    pos: egui::Pos2,
                                    rx: f32,
@@ -449,8 +457,21 @@ impl App {
                                 col,
                             );
                         };
+                        let to_col = |c: [f32; 3]| {
+                            egui::Color32::from_rgb(
+                                (c[0] * 255.0) as u8,
+                                (c[1] * 255.0) as u8,
+                                (c[2] * 255.0) as u8,
+                            )
+                        };
+                        let to_dark = |c: [f32; 3]| {
+                            egui::Color32::from_rgb(
+                                (c[0] * 140.0) as u8,
+                                (c[1] * 140.0) as u8,
+                                (c[2] * 140.0) as u8,
+                            )
+                        };
 
-                        // Shadow
                         ell(
                             &painter,
                             egui::pos2(cx, cy + s * 0.35),
@@ -458,83 +479,76 @@ impl App {
                             s * 0.12,
                             egui::Color32::from_rgba_unmultiplied(0, 0, 0, 60),
                         );
-
-                        // Feet
-                        let pants_col = egui::Color32::from_rgb(
-                            (self.chargen_pants[0] * 255.0) as u8,
-                            (self.chargen_pants[1] * 255.0) as u8,
-                            (self.chargen_pants[2] * 255.0) as u8,
-                        );
-                        let pants_dark = egui::Color32::from_rgb(
-                            (self.chargen_pants[0] * 140.0) as u8,
-                            (self.chargen_pants[1] * 140.0) as u8,
-                            (self.chargen_pants[2] * 140.0) as u8,
-                        );
                         ell(
                             &painter,
                             egui::pos2(cx, cy + s * 0.28),
                             s * 0.12,
                             s * 0.06,
-                            pants_dark,
+                            to_dark(self.chargen_pants),
                         );
-
-                        // Pants
                         ell(
                             &painter,
                             egui::pos2(cx, cy + s * 0.14),
                             s * 0.22,
                             s * 0.15,
-                            pants_col,
-                        );
-
-                        // Shirt
-                        let shirt_col = egui::Color32::from_rgb(
-                            (self.chargen_shirt[0] * 255.0) as u8,
-                            (self.chargen_shirt[1] * 255.0) as u8,
-                            (self.chargen_shirt[2] * 255.0) as u8,
+                            to_col(self.chargen_pants),
                         );
                         ell(
                             &painter,
-                            egui::pos2(cx, cy - s * 0.08),
+                            egui::pos2(cx + dir_x * 0.3, cy - s * 0.08),
                             s * 0.26,
                             s * 0.20,
-                            shirt_col,
+                            to_col(self.chargen_shirt),
                         );
-
-                        // Head
-                        let skin_col = egui::Color32::from_rgb(
-                            (self.chargen_skin[0] * 255.0) as u8,
-                            (self.chargen_skin[1] * 255.0) as u8,
-                            (self.chargen_skin[2] * 255.0) as u8,
+                        painter.circle_filled(
+                            egui::pos2(cx + dir_x, cy - s * 0.32),
+                            s * 0.16,
+                            to_col(self.chargen_skin),
                         );
-                        painter.circle_filled(egui::pos2(cx, cy - s * 0.32), s * 0.16, skin_col);
-
-                        // Hair
-                        let hair_col = egui::Color32::from_rgb(
-                            (self.chargen_hair[0] * 255.0) as u8,
-                            (self.chargen_hair[1] * 255.0) as u8,
-                            (self.chargen_hair[2] * 255.0) as u8,
-                        );
-                        let hair_r = if self.chargen_hair_style > 1 {
-                            s * 0.14
-                        } else {
-                            s * 0.10
+                        let hair_r = match self.chargen_hair_style {
+                            3 => s * 0.04,
+                            2 => s * 0.14,
+                            1 => s * 0.10,
+                            _ => s * 0.08,
                         };
                         ell(
                             &painter,
-                            egui::pos2(cx, cy - s * 0.42),
+                            egui::pos2(cx + dir_x * 1.5, cy - s * 0.42),
                             hair_r,
                             hair_r * 0.7,
-                            hair_col,
+                            to_col(self.chargen_hair),
                         );
 
-                        // Name below
                         painter.text(
                             egui::pos2(cx, cy + s * 0.50),
                             egui::Align2::CENTER_TOP,
                             &self.chargen_name,
-                            egui::FontId::proportional(14.0),
-                            egui::Color32::from_gray(200),
+                            egui::FontId::proportional(16.0),
+                            egui::Color32::from_gray(220),
+                        );
+                        painter.text(
+                            egui::pos2(cx, cy + s * 0.50 + 20.0),
+                            egui::Align2::CENTER_TOP,
+                            self.chargen_backstory.name(),
+                            egui::FontId::proportional(12.0),
+                            egui::Color32::from_gray(140),
+                        );
+
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(self.chargen_backstory.description())
+                                .size(11.0)
+                                .italics()
+                                .color(egui::Color32::from_gray(160)),
+                        );
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Ability: {}",
+                                self.chargen_backstory.ability()
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(180, 160, 100)),
                         );
                     });
 
@@ -542,43 +556,170 @@ impl App {
 
                     // === RIGHT: Controls ===
                     ui.vertical(|ui| {
-                        ui.set_min_width(320.0);
-                        ui.label(egui::RichText::new("Identity").strong().size(14.0));
-                        ui.add_space(4.0);
+                        ui.set_min_width(400.0);
 
+                        ui.label(egui::RichText::new("Identity").strong().size(14.0));
+                        ui.add_space(2.0);
                         ui.horizontal(|ui| {
                             ui.label("Name:");
-                            ui.text_edit_singleline(&mut self.chargen_name);
+                            ui.add_sized(
+                                [160.0, 20.0],
+                                egui::TextEdit::singleline(&mut self.chargen_name),
+                            );
+                            if ui.small_button("Random").clicked() {
+                                self.chargen_name = random_name(self.frame_count);
+                            }
                         });
-                        if ui.small_button("Random Name").clicked() {
-                            self.chargen_name = random_name(self.frame_count);
-                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Gender:");
+                            if ui
+                                .selectable_label(self.chargen_gender == Gender::Male, "Male")
+                                .clicked()
+                            {
+                                self.chargen_gender = Gender::Male;
+                            }
+                            if ui
+                                .selectable_label(self.chargen_gender == Gender::Female, "Female")
+                                .clicked()
+                            {
+                                self.chargen_gender = Gender::Female;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Age:");
+                            ui.add(egui::Slider::new(&mut self.chargen_age, 18..=65));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Build:");
+                            for bt in &[BodyType::Thin, BodyType::Medium, BodyType::Stocky] {
+                                if ui
+                                    .selectable_label(self.chargen_body_type == *bt, bt.label())
+                                    .clicked()
+                                {
+                                    self.chargen_body_type = *bt;
+                                }
+                            }
+                        });
 
-                        ui.add_space(10.0);
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.label(egui::RichText::new("Backstory").strong().size(14.0));
+                        ui.add_space(2.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(100.0)
+                            .show(ui, |ui| {
+                                for &bs in Backstory::ALL {
+                                    let resp = ui
+                                        .selectable_label(self.chargen_backstory == bs, bs.name());
+                                    if resp.clicked() {
+                                        self.chargen_backstory = bs;
+                                    }
+                                    if resp.hovered() {
+                                        resp.on_hover_text(bs.description());
+                                    }
+                                }
+                            });
+
+                        ui.add_space(6.0);
+                        ui.separator();
                         ui.label(egui::RichText::new("Appearance").strong().size(14.0));
-                        ui.add_space(4.0);
+                        ui.add_space(2.0);
 
-                        // Skin tone
+                        // Skin tone palette
+                        const SKIN_PALETTE: &[[f32; 3]] = &[
+                            [0.96, 0.87, 0.77], // very light
+                            [0.92, 0.78, 0.65], // light
+                            [0.85, 0.68, 0.53], // fair
+                            [0.76, 0.60, 0.46], // medium
+                            [0.65, 0.48, 0.35], // olive
+                            [0.55, 0.38, 0.26], // tan
+                            [0.45, 0.30, 0.20], // brown
+                            [0.36, 0.22, 0.14], // dark
+                            [0.28, 0.16, 0.10], // very dark
+                            [0.20, 0.12, 0.08], // deepest
+                        ];
                         ui.horizontal(|ui| {
                             ui.label("Skin:");
-                            let mut col = self.chargen_skin;
-                            ui.color_edit_button_rgb(&mut col);
-                            self.chargen_skin = col;
+                            let swatch = 16.0;
+                            for &tone in SKIN_PALETTE {
+                                let col = egui::Color32::from_rgb(
+                                    (tone[0] * 255.0) as u8,
+                                    (tone[1] * 255.0) as u8,
+                                    (tone[2] * 255.0) as u8,
+                                );
+                                let selected = (self.chargen_skin[0] - tone[0]).abs() < 0.02
+                                    && (self.chargen_skin[1] - tone[1]).abs() < 0.02;
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    egui::vec2(swatch, swatch),
+                                    egui::Sense::click(),
+                                );
+                                ui.painter().rect_filled(rect, 2.0, col);
+                                if selected {
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        2.0,
+                                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                }
+                                if resp.clicked() {
+                                    self.chargen_skin = tone;
+                                }
+                            }
                         });
 
-                        // Hair color
+                        // Hair color palette
+                        const HAIR_PALETTE: &[[f32; 3]] = &[
+                            [0.95, 0.90, 0.65], // blonde
+                            [0.80, 0.55, 0.25], // strawberry
+                            [0.55, 0.30, 0.12], // auburn
+                            [0.40, 0.22, 0.10], // brown
+                            [0.25, 0.15, 0.08], // dark brown
+                            [0.10, 0.08, 0.06], // black
+                            [0.60, 0.58, 0.55], // gray
+                            [0.85, 0.82, 0.78], // white/silver
+                            [0.65, 0.20, 0.12], // red
+                            [0.45, 0.15, 0.08], // deep red
+                        ];
                         ui.horizontal(|ui| {
                             ui.label("Hair:");
-                            let mut col = self.chargen_hair;
-                            ui.color_edit_button_rgb(&mut col);
-                            self.chargen_hair = col;
+                            let swatch = 16.0;
+                            for &tone in HAIR_PALETTE {
+                                let col = egui::Color32::from_rgb(
+                                    (tone[0] * 255.0) as u8,
+                                    (tone[1] * 255.0) as u8,
+                                    (tone[2] * 255.0) as u8,
+                                );
+                                let selected = (self.chargen_hair[0] - tone[0]).abs() < 0.02
+                                    && (self.chargen_hair[1] - tone[1]).abs() < 0.02;
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    egui::vec2(swatch, swatch),
+                                    egui::Sense::click(),
+                                );
+                                ui.painter().rect_filled(rect, 2.0, col);
+                                if selected {
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        2.0,
+                                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                }
+                                if resp.clicked() {
+                                    self.chargen_hair = tone;
+                                }
+                            }
                         });
-
-                        // Hair style
                         ui.horizontal(|ui| {
-                            ui.label("Style:");
-                            let styles = ["Short", "Medium", "Long", "Bald"];
-                            for (i, name) in styles.iter().enumerate() {
+                            ui.label("Shirt:");
+                            ui.color_edit_button_rgb(&mut self.chargen_shirt);
+                            ui.label("Pants:");
+                            ui.color_edit_button_rgb(&mut self.chargen_pants);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Hair style:");
+                            for (i, name) in ["Short", "Medium", "Long", "Bald"].iter().enumerate()
+                            {
                                 if ui
                                     .selectable_label(self.chargen_hair_style == i as u8, *name)
                                     .clicked()
@@ -588,37 +729,91 @@ impl App {
                             }
                         });
 
-                        // Shirt color
-                        ui.horizontal(|ui| {
-                            ui.label("Shirt:");
-                            let mut col = self.chargen_shirt;
-                            ui.color_edit_button_rgb(&mut col);
-                            self.chargen_shirt = col;
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.label(egui::RichText::new("Trait").strong().size(14.0));
+                        ui.add_space(2.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .selectable_label(self.chargen_trait.is_none(), "None")
+                                .clicked()
+                            {
+                                self.chargen_trait = None;
+                            }
+                            for &t in PlebTrait::ALL {
+                                let resp =
+                                    ui.selectable_label(self.chargen_trait == Some(t), t.name());
+                                if resp.clicked() {
+                                    self.chargen_trait = Some(t);
+                                }
+                                if resp.hovered() {
+                                    resp.on_hover_text(t.description());
+                                }
+                            }
                         });
 
-                        // Pants color
-                        ui.horizontal(|ui| {
-                            ui.label("Pants:");
-                            let mut col = self.chargen_pants;
-                            ui.color_edit_button_rgb(&mut col);
-                            self.chargen_pants = col;
-                        });
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.label(egui::RichText::new("Skills").strong().size(14.0));
+                        ui.add_space(2.0);
+                        let skills = self.chargen_backstory.skills();
+                        let names = Backstory::skill_names();
+                        for (i, &name) in names.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{:12}", name))
+                                        .monospace()
+                                        .size(11.0),
+                                );
+                                let val = skills[i];
+                                let bar_w = 100.0;
+                                let (bar_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(bar_w, 10.0),
+                                    egui::Sense::hover(),
+                                );
+                                let fill_w = bar_w * val as f32 / 10.0;
+                                let bar_col = if val >= 7 {
+                                    egui::Color32::from_rgb(80, 180, 80)
+                                } else if val >= 4 {
+                                    egui::Color32::from_rgb(180, 160, 60)
+                                } else {
+                                    egui::Color32::from_rgb(120, 80, 60)
+                                };
+                                ui.painter().rect_filled(
+                                    bar_rect,
+                                    2.0,
+                                    egui::Color32::from_gray(30),
+                                );
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_size(
+                                        bar_rect.min,
+                                        egui::vec2(fill_w, 10.0),
+                                    ),
+                                    2.0,
+                                    bar_col,
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("{}", val))
+                                        .monospace()
+                                        .size(11.0),
+                                );
+                            });
+                        }
 
                         ui.add_space(8.0);
-                        if ui.small_button("Randomize All").clicked() {
+                        if ui.button("Randomize All").clicked() {
                             let seed = self.frame_count;
                             self.chargen_name = random_name(seed);
                             let h = |s: u32, off: u32| -> f32 {
                                 ((s.wrapping_add(off).wrapping_mul(2654435761)) & 0xFFFF) as f32
                                     / 65535.0
                             };
-                            self.chargen_skin = [
-                                0.45 + h(seed, 1) * 0.45,
-                                0.30 + h(seed, 2) * 0.40,
-                                0.20 + h(seed, 3) * 0.35,
-                            ];
+                            self.chargen_skin =
+                                SKIN_PALETTE[(h(seed, 1) * SKIN_PALETTE.len() as f32) as usize
+                                    % SKIN_PALETTE.len()];
                             self.chargen_hair =
-                                [h(seed, 4) * 0.5, h(seed, 5) * 0.35, h(seed, 6) * 0.25];
+                                HAIR_PALETTE[(h(seed, 4) * HAIR_PALETTE.len() as f32) as usize
+                                    % HAIR_PALETTE.len()];
                             self.chargen_hair_style = (h(seed, 7) * 4.0) as u8;
                             self.chargen_shirt = [
                                 0.15 + h(seed, 8) * 0.6,
@@ -630,6 +825,20 @@ impl App {
                                 0.15 + h(seed, 12) * 0.35,
                                 0.10 + h(seed, 13) * 0.3,
                             ];
+                            self.chargen_backstory = Backstory::ALL
+                                [(h(seed, 14) * 10.0) as usize % Backstory::ALL.len()];
+                            self.chargen_body_type =
+                                [BodyType::Thin, BodyType::Medium, BodyType::Stocky]
+                                    [(h(seed, 15) * 3.0) as usize % 3];
+                            self.chargen_gender = if h(seed, 16) > 0.5 {
+                                Gender::Female
+                            } else {
+                                Gender::Male
+                            };
+                            self.chargen_age = 20 + (h(seed, 17) * 40.0) as u8;
+                            let trait_roll =
+                                (h(seed, 18) * (PlebTrait::ALL.len() + 2) as f32) as usize;
+                            self.chargen_trait = PlebTrait::ALL.get(trait_roll).copied();
                         }
                     });
                 });
@@ -651,7 +860,6 @@ impl App {
             });
 
         if start_game {
-            // Create the pleb with chargen settings
             let pleb = &mut self.plebs[0];
             pleb.name = self.chargen_name.clone();
             pleb.appearance.skin_r = self.chargen_skin[0];
@@ -1452,6 +1660,12 @@ impl App {
                                 .step_by(0.05),
                         );
                         self.render_scale = rs;
+
+                        ui.add(
+                            egui::Slider::new(&mut self.camera.pleb_scale, 0.5..=3.0)
+                                .text("Pleb size")
+                                .step_by(0.1),
+                        );
 
                         ui.separator();
 

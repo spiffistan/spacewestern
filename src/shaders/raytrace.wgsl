@@ -65,6 +65,7 @@ struct Camera {
     hover_x: f32,
     hover_y: f32,
     shadow_intensity: f32,
+    pleb_scale: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -3079,6 +3080,47 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // --- Pleb shadows (analytical ellipse, cast along sun direction) ---
+    var pleb_shadow = 1.0;
+    if camera.sun_intensity > 0.05 {
+        let shd_elev = max(camera.sun_elevation, 0.08);
+        let sun_n = normalize(vec2(camera.sun_dir_x, camera.sun_dir_y));
+        let sun_p = vec2(-sun_n.y, sun_n.x); // perpendicular
+        let shd_stretch = 1.5 / shd_elev; // longer shadow at low sun
+        let ps = 0.55 * camera.pleb_scale; // match body scale
+
+        for (var pi: u32 = 0u; pi < MAX_PLEBS; pi++) {
+            let p = plebs[pi];
+            if p.x < 0.5 && p.y < 0.5 { continue; }
+            if p.health <= 0.0 { continue; }
+
+            // Pleb "trunk" (feet position)
+            let foot_x = p.x;
+            let foot_y = p.y;
+
+            // Pixel offset from pleb feet
+            let dx = world_x - foot_x;
+            let dy = world_y - foot_y;
+
+            // Decompose into shadow axis (along sun dir) and perpendicular
+            let along = dx * sun_n.x + dy * sun_n.y;
+            let across = dx * sun_p.x + dy * sun_p.y;
+
+            // Shadow extends away from sun (along < 0 = toward sun = no shadow)
+            let shadow_len = shd_stretch * ps * 0.7;
+            if along < -ps * 0.1 || along > shadow_len { continue; }
+            if abs(across) > ps * 0.28 { continue; }
+
+            // Shadow shape: tapers with distance from body
+            let t = along / shadow_len; // 0 at body, 1 at tip
+            let width = ps * 0.26 * (1.0 - t * 0.6); // narrower at tip
+            if abs(across) < width {
+                let alpha = (1.0 - t) * 0.35 * camera.sun_intensity;
+                pleb_shadow = min(pleb_shadow, 1.0 - alpha);
+            }
+        }
+    }
+
     if is_tree_pixel {
         // Tree pixel already colored by multi-tile pre-pass — skip block-type switch
     } else if btype == BT_GLASS {
@@ -4472,7 +4514,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     } else {
         // Normal block: apply shadow + additive point light
-        let lit = color * (ambient + sun_color * light_factor * 0.85 * shadow_tint * tree_shadow);
+        let lit = color * (ambient + sun_color * light_factor * 0.85 * shadow_tint * tree_shadow * pleb_shadow);
         // Point light is additive (not multiplied by base color) so it illuminates
         // even when ambient/sun is very low (e.g. at night)
         let pl_mul = select(camera.light_bleed_mul, camera.indoor_glow_mul, is_indoor);
@@ -4599,49 +4641,43 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Body rendering — 3/4 view (head on top, shirt, pants, shadow)
-        // Scale factor: plebs are ~1.5 tiles tall
-        let S = 1.8; // size multiplier
-        let bx = pdx;
-        let by = pdy + 0.25 * S;
+        // Body rendering — matches chargen preview exactly
+        // s = scale factor (tile units). Proportions identical to UI preview.
+        let s = 0.55 * camera.pleb_scale; // body scale in world tiles
+        let lx = pdx;
+        let ly = -pdy; // flip Y: negative pdy = above pleb = top of body
 
         let dir_x = cos(p.angle);
-        let dir_y = sin(p.angle);
-        let side_factor = abs(dir_x);
-        let body_w = (0.12 + side_factor * 0.02) * S;
-
         let walk_phase = fract((p.x + p.y) * 2.0 + camera.time * 4.0);
-        let bob = sin(walk_phase * 6.28) * 0.012 * S;
-        let by_b = by + bob;
-
-        let head_ox = dir_x * 0.04 * S;
-        let head_oy = dir_y * 0.03 * S - 0.34 * S + bob;
+        let bob = sin(walk_phase * 6.28) * 0.008;
+        let head_dx = dir_x * 0.02 * s;
 
         var drew_pleb = false;
 
-        // Selection: ground ellipse at feet
+        // Selection: bright pulsing ring at feet
         if p.selected > 0.5 {
-            let sel_d = (bx / (0.22 * S)) * (bx / (0.22 * S)) + (pdy / (0.10 * S)) * (pdy / (0.10 * S));
-            if sel_d < 1.0 && sel_d > 0.55 {
-                let pulse = sin(camera.time * 4.0) * 0.2 + 0.6;
-                color = mix(color, vec3(0.3, 0.9, 0.3), pulse);
+            let ring_d = length(vec2(lx / (s * 0.42), ly / (s * 0.18)));
+            let ring_w = 0.08; // ring thickness in normalized space
+            if ring_d > 1.0 - ring_w && ring_d < 1.0 + ring_w {
+                let pulse = sin(camera.time * 4.0) * 0.25 + 0.75;
+                color = mix(color, vec3(0.3, 0.95, 0.3), pulse);
                 drew_pleb = true;
             }
         }
 
         // Shadow
         {
-            let sh_d = (bx / (0.18 * S)) * (bx / (0.18 * S)) + (pdy / (0.07 * S)) * (pdy / (0.07 * S));
-            if sh_d < 1.0 {
-                color = mix(color, vec3(0.0), 0.25 * (1.0 - sh_d));
+            let sd = (lx / (s * 0.35)) * (lx / (s * 0.35)) + (ly / (s * 0.12)) * (ly / (s * 0.12));
+            if sd < 1.0 {
+                color = mix(color, vec3(0.0), 0.22 * (1.0 - sd));
                 drew_pleb = true;
             }
         }
 
-        // Feet
+        // Feet (dark pants)
         {
-            let fy = by_b + 0.17 * S;
-            let fd = (bx / (0.07 * S)) * (bx / (0.07 * S)) + (fy / (0.04 * S)) * (fy / (0.04 * S));
+            let fy = ly - s * 0.07 + bob;
+            let fd = (lx / (s * 0.12)) * (lx / (s * 0.12)) + (fy / (s * 0.06)) * (fy / (s * 0.06));
             if fd < 1.0 {
                 color = vec3(p.pants_r, p.pants_g, p.pants_b) * 0.55;
                 drew_pleb = true;
@@ -4650,64 +4686,61 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // Pants
         {
-            let py_c = by_b + 0.08 * S;
-            let pw = body_w * 0.82;
-            let pd = (bx / pw) * (bx / pw) + (py_c / (0.09 * S)) * (py_c / (0.09 * S));
+            let py = ly - s * 0.21 + bob;
+            let pd = (lx / (s * 0.22)) * (lx / (s * 0.22)) + (py / (s * 0.15)) * (py / (s * 0.15));
             if pd < 1.0 {
-                let shade = 0.82 + 0.18 * (1.0 - pd);
+                let shade = 0.80 + 0.20 * (1.0 - pd);
                 color = vec3(p.pants_r, p.pants_g, p.pants_b) * shade;
                 drew_pleb = true;
             }
         }
 
-        // Shirt (shoulders)
+        // Shirt (widest part — shoulders)
         {
-            let sy_c = by_b - 0.04 * S;
-            let sd = (bx / body_w) * (bx / body_w) + (sy_c / (0.11 * S)) * (sy_c / (0.11 * S));
+            let sx_l = lx - head_dx * 0.3;
+            let sy = ly - s * 0.43 + bob;
+            let sd = (sx_l / (s * 0.26)) * (sx_l / (s * 0.26)) + (sy / (s * 0.20)) * (sy / (s * 0.20));
             if sd < 1.0 {
-                let shade = 0.82 + 0.18 * (1.0 - sd);
+                let shade = 0.80 + 0.20 * (1.0 - sd);
                 color = vec3(p.shirt_r, p.shirt_g, p.shirt_b) * shade;
                 drew_pleb = true;
             }
         }
 
-        // Head
+        // Head (circle, offset by facing)
         {
-            let hx = bx - head_ox;
-            let hy = by_b + head_oy + 0.25 * S;
+            let hx = lx - head_dx;
+            let hy = ly - s * 0.67 + bob;
             let hd = length(vec2(hx, hy));
-            if hd < 0.10 * S {
-                let shade = 0.88 + 0.12 * (1.0 - hd / (0.10 * S));
+            let hr = s * 0.16;
+            if hd < hr {
+                let shade = 0.85 + 0.15 * (1.0 - hd / hr);
                 color = vec3(p.skin_r, p.skin_g, p.skin_b) * shade;
                 drew_pleb = true;
             }
         }
 
-        // Hair
+        // Hair (above head, offset by facing)
         {
-            let hair_ox = dir_x * 0.06 * S;
-            let hair_oy = dir_y * 0.04 * S - 0.40 * S + bob;
-            let hx = bx - hair_ox;
-            let hy = by + hair_oy + 0.25 * S;
-            let hair_r = select(0.06, 0.09, p.hair_style > 1.5) * S;
-            let hd = length(vec2(hx, hy * 1.2));
-            if hd < hair_r {
+            let hx = lx - head_dx * 1.5;
+            let hy = ly - s * 0.77 + bob;
+            let hr = select(select(select(s * 0.04, s * 0.08, p.hair_style > 0.5), s * 0.10, p.hair_style > 1.5), s * 0.14, p.hair_style > 2.5);
+            let hd = length(vec2(hx, hy * 1.4));
+            if hd < hr {
                 color = vec3(p.hair_r, p.hair_g, p.hair_b);
                 drew_pleb = true;
             }
         }
 
-        // Carried item
+        // Carried item (above hair)
         if drew_pleb && p.carrying > 0.5 {
-            let co = dir_x * 0.04 * S;
-            let cy_o = dir_y * 0.03 * S - 0.48 * S + bob;
-            let cx_r = bx - co;
-            let cy_r = by + cy_o + 0.25 * S;
-            let cd = length(vec2(cx_r * 1.3, cy_r));
-            if cd < 0.10 * S {
+            let cx_c = lx - head_dx * 0.5;
+            let cy_c = ly - s * 0.88 + bob;
+            let cd = length(vec2(cx_c * 1.3, cy_c));
+            if cd < s * 0.10 {
                 let rv = fract(sin(world_x * 53.1 + world_y * 97.3) * 43758.5) * 0.04;
                 color = vec3(0.30 + rv, 0.28 + rv, 0.26 + rv);
-                if cd > 0.07 * S { color = vec3(0.16, 0.15, 0.13); }
+                if cd > s * 0.07 { color = vec3(0.16, 0.15, 0.13); }
             }
         }
 
@@ -4715,21 +4748,21 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if drew_pleb && p.health <= 0.0 {
             let gray = dot(color, vec3(0.3, 0.5, 0.2));
             color = mix(vec3(gray * 0.5), vec3(0.25, 0.18, 0.15), 0.3);
-            let xc_x = bx + 0.18 * S;
-            let xc_y = by_b - 0.08 * S;
+            let xc_x = lx + s * 0.2;
+            let xc_y = ly - s * 0.3;
             let x1 = abs(xc_x - xc_y);
             let x2 = abs(xc_x + xc_y);
-            if (x1 < 0.04 * S || x2 < 0.04 * S) && abs(xc_x) < 0.12 * S && abs(xc_y) < 0.12 * S {
+            if (x1 < s * 0.05 || x2 < s * 0.05) && abs(xc_x) < s * 0.15 && abs(xc_y) < s * 0.15 {
                 color = vec3(0.85, 0.15, 0.10);
             }
         }
 
-        // Health bar
+        // Health bar (below feet)
         if p.health > 0.0 && p.health < 0.95 {
-            let bar_cx = world_x - p.x;
-            let bar_cy = world_y - p.y + 0.12 * S;
-            if abs(bar_cy) < 0.025 * S && abs(bar_cx) < 0.18 * S {
-                let bar_t = (bar_cx + 0.18 * S) / (0.36 * S);
+            let bar_cx = lx;
+            let bar_cy = ly + s * 0.12;
+            if abs(bar_cy) < 0.025 && abs(bar_cx) < s * 0.25 {
+                let bar_t = (bar_cx + s * 0.25) / (s * 0.50);
                 if bar_t < p.health {
                     var bar_col = vec3(0.2, 0.8, 0.2);
                     if p.health < 0.5 { bar_col = mix(vec3(0.9, 0.2, 0.1), vec3(0.9, 0.8, 0.1), p.health * 2.0); }
