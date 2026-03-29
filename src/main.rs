@@ -186,6 +186,7 @@ struct App {
     dye_h: u32,                   // current dye texture height
     sandbox_mode: bool,           // enables sandbox build category + debug tools
     debug_creatures_always: bool, // spawn creatures regardless of time of day
+    debug_bullet_slowmo: bool,    // slow bullets 50× and show kinematic labels
     audio_output: Option<audio::AudioOutput>,
     sandbox_tool: SandboxTool,            // current sandbox action
     show_pipe_overlay: bool,              // draw gas pipe contents as egui overlay (ventilation)
@@ -210,12 +211,13 @@ struct App {
     creatures: Vec<creatures::Creature>,
     creature_spawn_timer: f32,
     next_pack_id: u16,
+    blood_stains: Vec<(f32, f32, f32)>, // (x, y, fade_timer) — blood drops on ground
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
-    show_pleb_help: bool,                               // show controls modal
-    show_inventory: bool,                               // show pleb inventory window
-    inv_selected_slot: Option<usize>,                   // selected inventory slot for swap/drop
-    show_schedule: bool,                                // show shift schedule window
-    show_priorities: bool,                              // show work priorities window
+    show_pleb_help: bool,               // show controls modal
+    show_inventory: bool,               // show pleb inventory window
+    inv_selected_slot: Option<usize>,   // selected inventory slot for swap/drop
+    show_schedule: bool,                // show shift schedule window
+    show_priorities: bool,              // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
     doors: Vec<Door>,     // physical hinged doors
     doors_dirty: bool,    // door angles changed, re-upload door_buffer
@@ -559,6 +561,7 @@ impl App {
             dye_h: FLUID_DYE_H,
             sandbox_mode: false,
             debug_creatures_always: false,
+            debug_bullet_slowmo: false,
             audio_output: None, // lazy init on first sound (browser requires user gesture)
             sandbox_tool: SandboxTool::None,
             drag_start: None,
@@ -594,6 +597,7 @@ impl App {
             creatures: Vec::new(),
             creature_spawn_timer: 0.0,
             next_pack_id: 0,
+            blood_stains: Vec::new(),
             cannon_angles: std::collections::HashMap::new(),
             show_pleb_help: false,
             show_inventory: false,

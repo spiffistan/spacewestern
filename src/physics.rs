@@ -179,7 +179,7 @@ fn build_projectile_defs() -> Vec<ProjectileDef> {
             size: 0.02,
             render_height: 0.05,
             max_speed: 120.0,
-            traversal: TraversalMode::Hitscan,
+            traversal: TraversalMode::Ballistic,
             impact: ImpactEffect {
                 sound_db: 0.0,
                 sound_duration: 0.0,
@@ -253,12 +253,20 @@ pub struct Impact {
     pub projectile_id: ProjectileId,
 }
 
-/// Result of a bullet hitting a pleb.
+/// What kind of entity was hit by a bullet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HitTarget {
+    Pleb(usize),
+    Creature(usize),
+}
+
+/// Result of a bullet hitting an entity.
 #[derive(Debug)]
 pub struct BulletHit {
-    pub pleb_idx: usize,
+    pub target: HitTarget,
     pub x: f32,
     pub y: f32,
+    pub kinetic_energy: f32,
 }
 
 impl PhysicsBody {
@@ -619,6 +627,7 @@ pub fn tick_bodies(
     wind_y: f32,
     pleb: Option<(f32, f32, f32, f32, f32)>, // (pleb_x, pleb_y, pleb_vx, pleb_vy, pleb_angle)
     all_plebs: &[(f32, f32, usize)],         // (x, y, pleb_index) for bullet collision
+    all_creatures: &[(f32, f32, usize, f32)], // (x, y, creature_index, radius) for bullet collision
     selected_pleb: Option<usize>,
     ricochets_enabled: bool,
     sound_sources: &[(f32, f32, f32)], // (x, y, amplitude) for sound→body force
@@ -626,6 +635,7 @@ pub fn tick_bodies(
     let mut impacts = Vec::new();
     let mut explosions = Vec::new();
     let wind_threshold = 5.0; // minimum wind speed to push a box
+    let gravity = 25.0; // tiles/sec² downward
 
     for body in bodies.iter_mut() {
         // Save position before physics update for accurate collision line segments
@@ -633,42 +643,6 @@ pub fn tick_bodies(
         body.prev_y = body.y;
 
         let def = projectile_def(body.kind);
-
-        // --- Hitscan fast path: DDA ray march through grid (no skipped cells) ---
-        if def.traversal == TraversalMode::Hitscan {
-            let x0 = body.x;
-            let y0 = body.y;
-            let x1 = body.x + body.vx * dt;
-            let y1 = body.y + body.vy * dt;
-
-            if let Some(hit) = dda_bullet_trace(grid, wall_data, x0, y0, x1, y1) {
-                if ricochets_enabled && def.impact.ricochet {
-                    let keep = 1.0 - def.impact.ricochet_loss;
-                    body.x = hit.x;
-                    body.y = hit.y;
-                    if hit.hit_x_face {
-                        body.vx = -body.vx * keep;
-                        body.vy *= keep;
-                        body.x += if body.vx > 0.0 { 0.05 } else { -0.05 };
-                    } else {
-                        body.vy = -body.vy * keep;
-                        body.vx *= keep;
-                        body.y += if body.vy > 0.0 { 0.05 } else { -0.05 };
-                    }
-                    if body.vx.abs() + body.vy.abs() < def.remove_speed_threshold {
-                        body.vx = 0.0;
-                        body.vy = 0.0;
-                    }
-                } else {
-                    body.vx = 0.0;
-                    body.vy = 0.0;
-                }
-            } else {
-                body.x = x1;
-                body.y = y1;
-            }
-            continue;
-        }
 
         // --- Wind force ---
         // Use global wind as approximation (actual fluid velocity sampling would need GPU readback)
@@ -785,20 +759,25 @@ pub fn tick_bodies(
         }
 
         // --- Gravity (Z axis) ---
-        let gravity = 25.0; // tiles/sec² downward
         body.vz -= gravity * dt;
         body.z += body.vz * dt;
 
         // --- Bounce when hitting ground ---
         if body.z <= 0.0 {
             body.z = 0.0;
-            if body.vz < -1.0 {
+            if body.bounce < 0.01 {
+                // No bounce (bullets): stop completely on ground impact
+                body.vx = 0.0;
+                body.vy = 0.0;
+                body.vz = 0.0;
+                body.has_landed = true;
+            } else if body.vz < -1.0 {
                 body.vz = -body.vz * body.bounce;
                 body.vx *= 0.8;
                 body.vy *= 0.8;
-                // Impact adds tumble spin from horizontal velocity
                 body.spin_x += body.vy * 0.3;
                 body.spin_y -= body.vx * 0.3;
+                body.has_landed = true;
             } else {
                 body.vz = 0.0;
             }
@@ -831,17 +810,55 @@ pub fn tick_bodies(
             let mut hit_wall_x = false;
             let mut hit_wall_y = false;
 
-            if body_can_move(grid, nx, body.y, body.size) {
-                body.x = nx;
+            // Fast bodies (>20 tiles/sec): use DDA for accurate wall detection
+            let move_dist = ((nx - body.x) * (nx - body.x) + (ny - body.y) * (ny - body.y)).sqrt();
+            if move_dist > 0.5 {
+                // DDA trace: catches thin walls and prevents tunneling
+                if let Some(hit) = dda_bullet_trace(grid, wall_data, body.x, body.y, nx, ny) {
+                    if ricochets_enabled && def.impact.ricochet {
+                        let keep = 1.0 - def.impact.ricochet_loss;
+                        body.x = hit.x;
+                        body.y = hit.y;
+                        if hit.hit_x_face {
+                            body.vx = -body.vx * keep;
+                            body.vy *= keep;
+                            body.x += if body.vx > 0.0 { 0.05 } else { -0.05 };
+                            hit_wall_x = true;
+                        } else {
+                            body.vy = -body.vy * keep;
+                            body.vx *= keep;
+                            body.y += if body.vy > 0.0 { 0.05 } else { -0.05 };
+                            hit_wall_y = true;
+                        }
+                        if body.vx.abs() + body.vy.abs() < def.remove_speed_threshold {
+                            body.vx = 0.0;
+                            body.vy = 0.0;
+                        }
+                    } else {
+                        body.x = hit.x;
+                        body.y = hit.y;
+                        hit_wall_x = true; // for impact detection below
+                        body.vx *= -body.bounce;
+                        body.vy *= -body.bounce;
+                    }
+                } else {
+                    body.x = nx;
+                    body.y = ny;
+                }
             } else {
-                hit_wall_x = true;
-                body.vx *= -body.bounce;
-            }
-            if body_can_move(grid, body.x, ny, body.size) {
-                body.y = ny;
-            } else {
-                hit_wall_y = true;
-                body.vy *= -body.bounce;
+                // Slow bodies: simple single-tile collision
+                if body_can_move(grid, nx, body.y, body.size) {
+                    body.x = nx;
+                } else {
+                    hit_wall_x = true;
+                    body.vx *= -body.bounce;
+                }
+                if body_can_move(grid, body.x, ny, body.size) {
+                    body.y = ny;
+                } else {
+                    hit_wall_y = true;
+                    body.vy *= -body.bounce;
+                }
             }
 
             // Projectile impact on wall hit (block destruction check)
@@ -943,15 +960,18 @@ pub fn tick_bodies(
         }
     }
 
-    // --- Bullet-pleb collision (before retain removes stopped bullets) ---
-    let mut bullet_hits = Vec::with_capacity(all_plebs.len());
-    let hit_radius = 0.45f32;
+    // --- Bullet-entity collision (plebs + creatures) ---
+    let mut bullet_hits = Vec::with_capacity(all_plebs.len() + all_creatures.len());
+    let pleb_hit_radius = 0.45f32;
     let mut bullets_hit = std::collections::HashSet::new();
     for (bi, body) in bodies.iter().enumerate() {
+        if bullets_hit.contains(&bi) {
+            continue;
+        }
         let def = projectile_def(body.kind);
         if def.hit_damage <= 0.0 {
             continue;
-        } // only projectiles with direct-hit damage
+        }
         let bx0 = body.prev_x;
         let by0 = body.prev_y;
         let bx1 = body.x;
@@ -959,6 +979,10 @@ pub fn tick_bodies(
         let seg_dx = bx1 - bx0;
         let seg_dy = by1 - by0;
         let seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+        let speed_sq = body.vx * body.vx + body.vy * body.vy;
+        let ke = 0.5 * body.mass * speed_sq;
+
+        // Check plebs
         for &(px, py, pi) in all_plebs {
             if Some(pi) == selected_pleb {
                 continue;
@@ -972,18 +996,45 @@ pub fn tick_bodies(
             let cx = bx0 + t * seg_dx;
             let cy = by0 + t * seg_dy;
             let dist = ((cx - px) * (cx - px) + (cy - py) * (cy - py)).sqrt();
-            if dist < hit_radius {
+            if dist < pleb_hit_radius {
                 bullet_hits.push(BulletHit {
-                    pleb_idx: pi,
+                    target: HitTarget::Pleb(pi),
                     x: cx,
                     y: cy,
+                    kinetic_energy: ke,
+                });
+                bullets_hit.insert(bi);
+                break;
+            }
+        }
+        if bullets_hit.contains(&bi) {
+            continue;
+        }
+
+        // Check creatures
+        for &(cx_pos, cy_pos, ci, c_radius) in all_creatures {
+            let t = if seg_len_sq > 0.0001 {
+                ((cx_pos - bx0) * seg_dx + (cy_pos - by0) * seg_dy) / seg_len_sq
+            } else {
+                0.0
+            }
+            .clamp(0.0, 1.0);
+            let cx = bx0 + t * seg_dx;
+            let cy = by0 + t * seg_dy;
+            let dist = ((cx - cx_pos) * (cx - cx_pos) + (cy - cy_pos) * (cy - cy_pos)).sqrt();
+            if dist < c_radius.max(0.2) {
+                bullet_hits.push(BulletHit {
+                    target: HitTarget::Creature(ci),
+                    x: cx,
+                    y: cy,
+                    kinetic_energy: ke,
                 });
                 bullets_hit.insert(bi);
                 break;
             }
         }
     }
-    // Remove bullets that hit plebs
+    // Remove bullets that hit entities
     if !bullets_hit.is_empty() {
         let mut idx = 0;
         bodies.retain(|_| {

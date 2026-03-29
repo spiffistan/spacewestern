@@ -27,6 +27,9 @@ pub struct Creature {
     pub sound_timer: f32,
     pub pack_id: u16,
     pub is_dead: bool,
+    pub bleeding: f32,         // 0.0 = not bleeding, 1.0 = bleeding profusely
+    pub blood_drop_timer: f32, // countdown to next blood drop on ground
+    pub corpse_timer: f32,     // seconds remaining as visible corpse
 }
 
 impl Creature {
@@ -48,6 +51,9 @@ impl Creature {
             sound_timer: sound_interval,
             pack_id,
             is_dead: false,
+            bleeding: 0.0,
+            blood_drop_timer: 0.0,
+            corpse_timer: 0.0,
         }
     }
 

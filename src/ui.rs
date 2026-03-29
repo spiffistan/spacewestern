@@ -1307,6 +1307,12 @@ impl App {
                                 self.creatures.clear();
                             }
                         }
+                        if ui
+                            .selectable_label(self.debug_bullet_slowmo, "Bullet Slow-Mo")
+                            .clicked()
+                        {
+                            self.debug_bullet_slowmo = !self.debug_bullet_slowmo;
+                        }
                         ui.separator();
                         if ui
                             .selectable_label(self.fog_enabled, "Fog of War")
@@ -5433,6 +5439,26 @@ impl App {
             }
         }
 
+        // Render blood stains
+        if !self.blood_stains.is_empty() {
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let blood_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::new("blood_stains"),
+            ));
+            for &(bx, by, timer) in &self.blood_stains {
+                let sx = ((bx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((by - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                let alpha = (timer / 3.0).clamp(0.0, 1.0); // fade over last 3 seconds
+                let r = cam_zoom / self.render_scale / bp_ppp * 0.08; // small drops
+                blood_painter.circle_filled(
+                    egui::pos2(sx, sy),
+                    r.max(1.5),
+                    egui::Color32::from_rgba_unmultiplied(120, 10, 10, (alpha * 180.0) as u8),
+                );
+            }
+        }
+
         // Render ground items (harvest drops)
         if !self.ground_items.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
@@ -6136,6 +6162,37 @@ impl App {
                             ],
                             egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 240, 150)),
                         );
+
+                        // Debug: kinematic label
+                        if self.debug_bullet_slowmo {
+                            let ke = 0.5 * body.mass * speed * speed;
+                            let angle_deg = body.vy.atan2(body.vx).to_degrees();
+                            let label = format!(
+                                "v={:.1} m={:.3}\nKE={:.1} z={:.2}\nθ={:.0}° vz={:.1}",
+                                speed, body.mass, ke, body.z, angle_deg, body.vz
+                            );
+                            let label_pos = egui::pos2(gx + 6.0, gy - z_offset - 6.0);
+                            // Background
+                            let galley = painter.layout_no_wrap(
+                                label.clone(),
+                                egui::FontId::monospace(9.0),
+                                egui::Color32::from_rgb(255, 255, 200),
+                            );
+                            let text_rect =
+                                egui::Align2::LEFT_BOTTOM.anchor_size(label_pos, galley.size());
+                            painter.rect_filled(
+                                text_rect.expand(2.0),
+                                2.0,
+                                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200),
+                            );
+                            painter.text(
+                                label_pos,
+                                egui::Align2::LEFT_BOTTOM,
+                                &label,
+                                egui::FontId::monospace(9.0),
+                                egui::Color32::from_rgb(255, 255, 200),
+                            );
+                        }
                     }
                     physics::BodyType::Grenade => {
                         let shadow_scale = (1.0 - body.z * 0.15).max(0.2);

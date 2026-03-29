@@ -1429,35 +1429,113 @@ impl App {
                 .iter()
                 .map(|s| (s.x, s.y, s.amplitude))
                 .collect();
+            // Collect creature positions for bullet collision
+            let creature_positions: Vec<(f32, f32, usize, f32)> = self
+                .creatures
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| !c.is_dead)
+                .map(|(i, c)| {
+                    let radius = crate::creature_defs::CreatureRegistry::cached()
+                        .get(c.species_id)
+                        .map(|d| d.body_radius)
+                        .unwrap_or(0.2);
+                    (c.x, c.y, i, radius)
+                })
+                .collect();
+            let physics_dt = if self.debug_bullet_slowmo {
+                dt * 0.02
+            } else {
+                dt
+            };
             let (impacts, bullet_hits, explosion_events) = tick_bodies(
                 &mut self.physics_bodies,
-                dt,
+                physics_dt,
                 &self.grid_data,
                 &self.wall_data,
                 self.fluid_params.wind_x,
                 self.fluid_params.wind_y,
                 pleb_data,
                 &pleb_positions,
+                &creature_positions,
                 self.selected_pleb,
                 self.enable_ricochets,
                 &sound_data,
             );
 
-            // Apply bullet hits to plebs (data-driven damage)
+            // Apply bullet hits to entities
             for hit in &bullet_hits {
-                if let Some(pleb) = self.plebs.get_mut(hit.pleb_idx) {
-                    // Look up damage from the projectile that hit (scan bodies for the source)
-                    // For now use a fixed lookup since bullets are the only hitscan type
-                    let dmg = projectile_def(PROJ_BULLET).hit_damage;
-                    events.push(GameEventKind::PlebHit {
-                        pleb: pleb.name.clone(),
-                        hp_pct: (pleb.needs.health - dmg).max(0.0) * 100.0,
-                    });
-                    pleb.needs.health -= dmg;
-                    self.fluid_params.splat_x = hit.x;
-                    self.fluid_params.splat_y = hit.y;
-                    self.fluid_params.splat_radius = 0.3;
-                    self.fluid_params.splat_active = 1.0;
+                match hit.target {
+                    physics::HitTarget::Pleb(pi) => {
+                        if let Some(pleb) = self.plebs.get_mut(pi) {
+                            let dmg = projectile_def(PROJ_BULLET).hit_damage;
+                            events.push(GameEventKind::PlebHit {
+                                pleb: pleb.name.clone(),
+                                hp_pct: (pleb.needs.health - dmg).max(0.0) * 100.0,
+                            });
+                            pleb.needs.health -= dmg;
+                            self.fluid_params.splat_x = hit.x;
+                            self.fluid_params.splat_y = hit.y;
+                            self.fluid_params.splat_radius = 0.3;
+                            self.fluid_params.splat_active = 1.0;
+                        }
+                    }
+                    physics::HitTarget::Creature(ci) => {
+                        if let Some(creature) = self.creatures.get_mut(ci) {
+                            let dmg = projectile_def(PROJ_BULLET).hit_damage;
+                            let species_name = creature_defs::CreatureRegistry::cached()
+                                .name(creature.species_id)
+                                .to_string();
+
+                            // Apply damage
+                            creature.health -= dmg * 100.0; // scale: bullet damage 0.2 × 100 = 20 HP
+
+                            // Determine hit description based on hit position relative to creature
+                            let body_part = "body"; // simplified for now
+
+                            // Bleeding: set a bleed timer
+                            creature.bleeding = (creature.bleeding + 0.3).min(1.0);
+
+                            // Shooter name
+                            let shooter = self
+                                .selected_pleb
+                                .and_then(|i| self.plebs.get(i))
+                                .map(|p| p.name.as_str())
+                                .unwrap_or("Someone");
+
+                            if creature.health <= 0.0 {
+                                creature.is_dead = true;
+                                events.push(GameEventKind::Generic(
+                                    types::EventCategory::Combat,
+                                    format!(
+                                        "{} hit {} in the {}. {} is dead!",
+                                        shooter, species_name, body_part, species_name
+                                    ),
+                                ));
+                            } else {
+                                let bleed_desc = if creature.bleeding > 0.7 {
+                                    "bleeding profusely"
+                                } else if creature.bleeding > 0.3 {
+                                    "bleeding"
+                                } else {
+                                    "scratched"
+                                };
+                                events.push(GameEventKind::Generic(
+                                    types::EventCategory::Combat,
+                                    format!(
+                                        "{} hit {} in the {}. {} is {}.",
+                                        shooter, species_name, body_part, species_name, bleed_desc
+                                    ),
+                                ));
+                            }
+
+                            // Blood splat in fluid sim
+                            self.fluid_params.splat_x = hit.x;
+                            self.fluid_params.splat_y = hit.y;
+                            self.fluid_params.splat_radius = 0.2;
+                            self.fluid_params.splat_active = 1.0;
+                        }
+                    }
                 }
             }
 
@@ -3402,8 +3480,44 @@ impl App {
             }
         }
 
-        // --- Cleanup: remove dead/despawned creatures ---
-        self.creatures.retain(|c| !c.is_dead);
+        // --- Bleeding: blood loss + blood drops on ground ---
+        for c in &mut self.creatures {
+            if c.is_dead || c.bleeding <= 0.0 {
+                continue;
+            }
+            // Blood loss reduces health over time
+            let blood_loss = c.bleeding * 2.0 * dt_game; // bleeding 1.0 = 2 HP/sec
+            c.health -= blood_loss;
+            if c.health <= 0.0 {
+                c.is_dead = true;
+                c.corpse_timer = 10.0;
+            }
+
+            // Bleeding slowly clots (unless wound is severe)
+            c.bleeding = (c.bleeding - 0.02 * dt_game).max(0.0);
+
+            // Drop blood marks on the ground
+            c.blood_drop_timer -= dt_game;
+            if c.blood_drop_timer <= 0.0 {
+                c.blood_drop_timer = 0.5 / c.bleeding.max(0.1); // faster drips = more bleeding
+                self.blood_stains.push((c.x, c.y, 3.0)); // (x, y, fade_timer)
+            }
+        }
+
+        // --- Fade blood stains ---
+        for stain in &mut self.blood_stains {
+            stain.2 -= dt_game; // countdown fade timer
+        }
+        self.blood_stains.retain(|s| s.2 > 0.0);
+
+        // --- Corpse timer + cleanup ---
+        for c in &mut self.creatures {
+            if c.is_dead && c.corpse_timer > 0.0 {
+                c.corpse_timer -= dt_game;
+            }
+        }
+        self.creatures
+            .retain(|c| !c.is_dead || c.corpse_timer > 0.0);
     }
 }
 
