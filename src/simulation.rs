@@ -1412,6 +1412,105 @@ impl App {
 
         // (Auto-close replaced by physical door tick above — doors swing shut via damping/latch)
 
+        // --- Drafted combat: auto-target enemies, aim, fire ---
+        // Fire actions are deferred to avoid borrowing self.plebs while mutating a pleb.
+        let fire_actions: Vec<(f32, f32, f32, f32, String)>;
+        {
+            let aim_speed = 1.5; // seconds to full aim (0→1)
+            let max_range = 12.0; // tiles
+
+            // Collect enemy positions
+            let enemies: Vec<(usize, f32, f32)> = self
+                .plebs
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.is_enemy && !p.is_dead)
+                .map(|(i, p)| (i, p.x, p.y))
+                .collect();
+
+            let mut pending_fires: Vec<(f32, f32, f32, f32, String)> = Vec::new();
+
+            // For each drafted friendly pleb, acquire and aim at nearest enemy
+            for pi in 0..self.plebs.len() {
+                if self.plebs[pi].is_enemy || self.plebs[pi].is_dead || !self.plebs[pi].drafted {
+                    continue;
+                }
+
+                // Find nearest enemy in range
+                let px = self.plebs[pi].x;
+                let py = self.plebs[pi].y;
+                let mut best: Option<(usize, f32, f32, f32)> = None;
+                for &(ei, ex, ey) in &enemies {
+                    let d = ((px - ex).powi(2) + (py - ey).powi(2)).sqrt();
+                    if d < max_range && best.map_or(true, |(_, bd, _, _)| d < bd) {
+                        best = Some((ei, d, ex, ey));
+                    }
+                }
+
+                if let Some((target_idx, _, tx, ty)) = best {
+                    // Face the target
+                    let dx = tx - self.plebs[pi].x;
+                    let dy = ty - self.plebs[pi].y;
+                    self.plebs[pi].angle = dy.atan2(dx);
+
+                    // Aiming
+                    if self.plebs[pi].aim_target == Some(target_idx) {
+                        self.plebs[pi].aim_progress =
+                            (self.plebs[pi].aim_progress + dt / aim_speed).min(1.0);
+                    } else {
+                        self.plebs[pi].aim_target = Some(target_idx);
+                        self.plebs[pi].aim_progress = 0.0;
+                    }
+
+                    // Fire when fully aimed
+                    if self.plebs[pi].aim_progress >= 1.0 {
+                        let fx = self.plebs[pi].x;
+                        let fy = self.plebs[pi].y;
+                        let name = self.plebs[pi].name.clone();
+                        pending_fires.push((fx, fy, dx, dy, name));
+                        self.plebs[pi].aim_progress = 0.0; // reset for next shot
+                    }
+                } else {
+                    self.plebs[pi].aim_target = None;
+                    self.plebs[pi].aim_progress = 0.0;
+                }
+            }
+            fire_actions = pending_fires;
+        }
+        // Apply deferred fire actions (with accuracy spread)
+        for (fx, fy, dx, dy, name) in fire_actions {
+            // Accuracy: base spread reduced by shooting skill
+            // Spread in radians: 0.15 (poor) to 0.02 (excellent)
+            // TODO: use pleb's actual shooting skill once backstory is stored on Pleb
+            let base_spread = 0.10; // radians (~5.7°) — moderate accuracy
+            let rng_seed = (fx * 137.3 + fy * 311.7 + self.time_of_day * 1000.0) as u32;
+            let rng_val = (rng_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+            let spread_angle = (rng_val - 0.5) * 2.0 * base_spread;
+            let cos_s = spread_angle.cos();
+            let sin_s = spread_angle.sin();
+            let sdx = dx * cos_s - dy * sin_s;
+            let sdy = dx * sin_s + dy * cos_s;
+
+            self.physics_bodies
+                .push(PhysicsBody::new_bullet(fx, fy, sdx, sdy));
+            if self.sound_enabled {
+                self.sound_sources.push(SoundSource {
+                    x: fx,
+                    y: fy,
+                    amplitude: types::db_to_amplitude(100.0),
+                    frequency: 0.0,
+                    phase: 0.0,
+                    pattern: 0,
+                    duration: 0.05,
+                    fresh: true,
+                });
+            }
+            events.push(GameEventKind::Generic(
+                types::EventCategory::Combat,
+                format!("{} fires at enemy!", name),
+            ));
+        }
+
         // --- Physics tick ---
         {
             let sel_pleb = self.selected_pleb.and_then(|i| self.plebs.get(i));
@@ -1853,7 +1952,7 @@ impl App {
                 .collect();
 
             for pleb in self.plebs.iter_mut() {
-                if pleb.is_enemy || pleb.is_dead {
+                if pleb.is_enemy || pleb.is_dead || pleb.drafted {
                     continue;
                 }
                 if pleb.activity != PlebActivity::Idle {
@@ -2559,7 +2658,7 @@ impl App {
                     let needs_sticks = bp.is_campfire();
                     let mut best: Option<(usize, f32)> = None;
                     for (i, pleb) in self.plebs.iter().enumerate() {
-                        if pleb.is_enemy || pleb.work_target.is_some() {
+                        if pleb.is_enemy || pleb.drafted || pleb.work_target.is_some() {
                             continue;
                         }
                         if !matches!(pleb.activity, PlebActivity::Idle) {
@@ -2671,10 +2770,14 @@ impl App {
                                 }
                                 best_crate
                             };
-                            // Find nearest idle pleb
+                            // Find nearest idle (undrafted) pleb
                             let mut best_pleb: Option<(usize, f32)> = None;
                             for (i, pleb) in self.plebs.iter().enumerate() {
-                                if pleb.is_enemy || pleb.is_dead || pleb.work_target.is_some() {
+                                if pleb.is_enemy
+                                    || pleb.is_dead
+                                    || pleb.drafted
+                                    || pleb.work_target.is_some()
+                                {
                                     continue;
                                 }
                                 if !matches!(pleb.activity, PlebActivity::Idle) {
@@ -2881,10 +2984,13 @@ impl App {
                     let Some((sx, sy, _)) = nearest_slot else {
                         break;
                     };
-                    // Find nearest idle pleb not already doing something
+                    // Find nearest idle undrafted pleb
                     let mut best_pleb: Option<(usize, f32)> = None;
                     for (pi, pleb) in self.plebs.iter().enumerate() {
-                        if pleb.is_enemy || pleb.work_target.is_some() || pleb.haul_target.is_some()
+                        if pleb.is_enemy
+                            || pleb.drafted
+                            || pleb.work_target.is_some()
+                            || pleb.haul_target.is_some()
                         {
                             continue;
                         }
@@ -3844,8 +3950,8 @@ fn tick_pleb_activity(
                 PlebActivity::Crisis(Box::new(PlebActivity::Walking), "Overheating!"),
             );
         }
-    } else if !pleb.activity.is_crisis() {
-        // Non-crisis auto-behaviors
+    } else if !pleb.activity.is_crisis() && !pleb.drafted {
+        // Non-crisis auto-behaviors (only when undrafted)
         if pleb.activity == PlebActivity::Idle || pleb.activity == PlebActivity::Walking {
             if pleb.needs.hunger < 0.25 && pleb.inventory.count_of(ITEM_BERRIES) > 0 {
                 pleb.activity = PlebActivity::Eating;

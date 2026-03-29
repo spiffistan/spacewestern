@@ -1847,6 +1847,20 @@ impl App {
                     if self.placing_pleb {
                         ui.label(egui::RichText::new("Click to place").weak().size(10.0));
                     }
+                    ui.separator();
+                    if ui.button("Place Redskull Enemy").clicked() {
+                        self.placing_enemy = true;
+                        self.placing_pleb = false;
+                        self.build_tool = BuildTool::None;
+                        ui.close();
+                    }
+                    if self.placing_enemy {
+                        ui.label(
+                            egui::RichText::new("Click to place enemy")
+                                .weak()
+                                .size(10.0),
+                        );
+                    }
                 });
             });
             // Right-aligned FPS/version info (painted over the menu bar)
@@ -3228,6 +3242,40 @@ impl App {
                         });
                     });
                 });
+
+            // Draft button below colonist bar (when a pleb is selected)
+            if let Some(sel_idx) = self.selected_pleb {
+                if let Some(pleb) = self.plebs.get(sel_idx) {
+                    if !pleb.is_enemy {
+                        let is_drafted = pleb.drafted;
+                        egui::Area::new(egui::Id::new("draft_button"))
+                            .anchor(egui::Align2::CENTER_TOP, [0.0, 72.0])
+                            .interactable(true)
+                            .show(ctx, |ui| {
+                                let (icon, label, col) = if is_drafted {
+                                    ("\u{2694}", "Drafted", egui::Color32::from_rgb(220, 90, 60))
+                                } else {
+                                    ("\u{1f6e1}", "Draft", egui::Color32::from_rgb(120, 120, 120))
+                                };
+                                let btn_text = egui::RichText::new(format!("{} {}", icon, label))
+                                    .size(13.0)
+                                    .color(col);
+                                let btn = ui
+                                    .add_sized(egui::vec2(80.0, 26.0), egui::Button::new(btn_text));
+                                if btn.clicked() {
+                                    if let Some(p) = self.plebs.get_mut(sel_idx) {
+                                        p.drafted = !p.drafted;
+                                        if !p.drafted {
+                                            p.work_target = None;
+                                            p.haul_target = None;
+                                            p.harvest_target = None;
+                                        }
+                                    }
+                                }
+                            });
+                    }
+                }
+            }
         }
 
         // Schedule window (all plebs)
@@ -7080,19 +7128,26 @@ impl App {
                         continue;
                     }
 
-                    // Name label (always visible)
-                    let name_color = if pleb.is_enemy {
+                    // Name label (always visible) — red when drafted
+                    let name_color = if pleb.drafted {
+                        egui::Color32::from_rgb(255, 120, 80)
+                    } else if pleb.is_enemy {
                         egui::Color32::from_rgb(255, 50, 50)
                     } else if pleb.activity.is_crisis() {
                         egui::Color32::from_rgb(255, 80, 80)
                     } else {
                         egui::Color32::from_rgb(220, 220, 220)
                     };
+                    let display_name = if pleb.drafted {
+                        format!("[D] {}", pleb.name)
+                    } else {
+                        pleb.name.clone()
+                    };
                     Self::shadow_text(
                         &label_painter,
                         pos,
                         egui::Align2::CENTER_TOP,
-                        &pleb.name,
+                        &display_name,
                         egui::FontId::proportional(11.0),
                         name_color,
                     );

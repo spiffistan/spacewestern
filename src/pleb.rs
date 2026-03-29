@@ -202,7 +202,7 @@ pub struct GpuPleb {
     pub hair_r: f32,
     pub hair_g: f32,
     pub hair_b: f32,
-    pub _pad2: f32,
+    pub aim_progress: f32, // 0.0 = not aiming, 0.01-0.99 = aiming, 1.0 = firing
     pub shirt_r: f32,
     pub shirt_g: f32,
     pub shirt_b: f32,
@@ -238,6 +238,9 @@ pub struct Pleb {
     pub knockback_vx: f32, // explosion knockback velocity (decays over time)
     pub knockback_vy: f32,
     pub is_dead: bool,                   // corpse: stays in world but doesn't act
+    pub drafted: bool,                   // true = player controls only, no autonomous behavior
+    pub aim_target: Option<usize>,       // index of enemy pleb being targeted
+    pub aim_progress: f32,               // 0.0 = just started aiming, 1.0 = ready to fire
     pub work_priorities: [u8; 4],        // [haul, farm, build, craft] — 0=off, 1-3=priority
     pub command_queue: Vec<PlebCommand>, // shift-click queued commands
 }
@@ -327,6 +330,9 @@ impl Pleb {
             knockback_vx: 0.0,
             knockback_vy: 0.0,
             is_dead: false,
+            drafted: false,
+            aim_target: None,
+            aim_progress: 0.0,
             work_priorities: crate::zones::default_work_priorities(),
             command_queue: Vec::new(),
         }
@@ -354,7 +360,7 @@ impl Pleb {
             hair_r: a.hair_r,
             hair_g: a.hair_g,
             hair_b: a.hair_b,
-            _pad2: 0.0,
+            aim_progress: self.aim_progress,
             shirt_r: a.shirt_r,
             shirt_g: a.shirt_g,
             shirt_b: a.shirt_b,

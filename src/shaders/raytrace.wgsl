@@ -333,7 +333,7 @@ struct GpuPleb {
     x: f32, y: f32, angle: f32, selected: f32,
     torch: f32, headlight: f32, carrying: f32, health: f32,
     skin_r: f32, skin_g: f32, skin_b: f32, hair_style: f32,
-    hair_r: f32, hair_g: f32, hair_b: f32, _pad2: f32,
+    hair_r: f32, hair_g: f32, hair_b: f32, aim_progress: f32,
     shirt_r: f32, shirt_g: f32, shirt_b: f32, _pad3: f32,
     pants_r: f32, pants_g: f32, pants_b: f32, _pad4: f32,
 };
@@ -1274,13 +1274,15 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
                         return 0.0;
                     }
                 }
-                // Also check both intermediate corner tiles
+                // Check intermediate corner tiles only for perpendicular wall pairs
+                // (two walls meeting at a right angle to seal a corner)
                 let mid1_wd = read_wall_data(u32(prev_by) * u32(camera.grid_w) + u32(sbx));
-                if (mid1_wd & 0xFu) != 0u && !(wd_has_door(mid1_wd) && wd_door_open(mid1_wd)) {
-                    return 0.0;
-                }
                 let mid2_wd = read_wall_data(u32(sby) * u32(camera.grid_w) + u32(prev_bx));
-                if (mid2_wd & 0xFu) != 0u && !(wd_has_door(mid2_wd) && wd_door_open(mid2_wd)) {
+                // Only block if BOTH intermediate tiles have wall edges (sealed corner)
+                if (mid1_wd & 0xFu) != 0u && (mid2_wd & 0xFu) != 0u
+                    && !(wd_has_door(mid1_wd) && wd_door_open(mid1_wd))
+                    && !(wd_has_door(mid2_wd) && wd_door_open(mid2_wd))
+                {
                     return 0.0;
                 }
             }
@@ -3089,10 +3091,17 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let shd_stretch = 1.5 / shd_elev; // longer shadow at low sun
         let ps = 0.55 * camera.pleb_scale; // match body scale
 
+        let max_shadow_dist = shd_stretch * ps + 2.0; // max possible shadow reach
+
         for (var pi: u32 = 0u; pi < MAX_PLEBS; pi++) {
             let p = plebs[pi];
             if p.x < 0.5 && p.y < 0.5 { continue; }
             if p.health <= 0.0 { continue; }
+
+            // Early distance cull: skip plebs too far from this pixel
+            let qdx = world_x - p.x;
+            let qdy = world_y - p.y;
+            if qdx * qdx + qdy * qdy > max_shadow_dist * max_shadow_dist { continue; }
 
             // Pleb "trunk" (feet position)
             let foot_x = p.x;
@@ -3132,12 +3141,19 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Fireplace: animated emissive rendering
         color = render_fireplace(world_x, world_y, fx, fy, camera.time);
     } else if btype == BT_CAMPFIRE {
-        // Small campfire: 2x2 subtile fire with subtile offset from flags
-        let sub_x = f32((bflags >> 3u) & 3u) * 0.25; // 0, 0.25, or 0.5
+        // Small campfire: only render the 2x2 subtile fire area, preserve wall/ground elsewhere
+        let sub_x = f32((bflags >> 3u) & 3u) * 0.25;
         let sub_y = f32((bflags >> 5u) & 3u) * 0.25;
-        let cf_cx = sub_x + 0.25; // center of 2x2 subtile area
+        let cf_cx = sub_x + 0.25;
         let cf_cy = sub_y + 0.25;
-        color = render_campfire(world_x, world_y, fx - cf_cx + 0.5, fy - cf_cy + 0.5, camera.time);
+        let cf_fx = fx - cf_cx + 0.5;
+        let cf_fy = fy - cf_cy + 0.5;
+        // Only overwrite if pixel is within the fire pit area
+        let cf_dist = length(vec2(cf_fx - 0.5, cf_fy - 0.5));
+        if cf_dist < 0.26 {
+            color = render_campfire(world_x, world_y, cf_fx, cf_fy, camera.time);
+        }
+        // else: keep existing color (wall, ground, etc.)
     } else if btype == BT_CEILING_LIGHT {
         // Electric light: ceiling fixture rendering
         color = render_electric_light(world_x, world_y, fx, fy, camera.time);
@@ -4612,6 +4628,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let p = plebs[pi];
         if p.x < 0.5 && p.y < 0.5 { continue; } // empty slot
 
+        // Early distance cull: skip plebs beyond light/body range (~12 tiles)
+        let qdx = world_x - p.x;
+        let qdy = world_y - p.y;
+        if qdx * qdx + qdy * qdy > 144.0 { continue; }
+
         let pdx = world_x - p.x;
         let pdy = world_y - p.y;
         let pdist = length(vec2(pdx, pdy));
@@ -4619,9 +4640,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Skip pleb lights on elevated block tops (not walls — walls should receive light)
         let is_elevated = effective_height > 0u && !is_wall_face && !is_wd_wall;
 
+        // Per-pixel jitter for soft light edges (noise-based, varies by pixel + pleb)
+        let jitter_seed = world_x * 127.1 + world_y * 311.7 + f32(pi) * 53.3 + camera.time * 7.1;
+        let jx = (fract(sin(jitter_seed) * 43758.5) - 0.5) * 0.12;
+        let jy = (fract(sin(jitter_seed * 1.37 + 2.1) * 27183.6) - 0.5) * 0.12;
+
         // Torch: warm point light with wall occlusion
         if p.torch > 0.5 && pdist < 6.0 && !is_elevated {
-            let vis = trace_glow_visibility(world_x, world_y, p.x, p.y, 1.0);
+            let vis = trace_glow_visibility(world_x + jx, world_y + jy, p.x, p.y, 1.0);
             if vis > 0.01 {
                 let torch_atten = 1.0 / (1.0 + pdist * 0.4 + pdist * pdist * 0.08);
                 let flicker = sin(camera.time * 8.3 + f32(pi) * 2.0) * 0.15 + sin(camera.time * 13.1) * 0.1 + 0.85;
@@ -4631,7 +4657,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // Headlight: directional cone with wall occlusion
         if p.headlight > 0.5 && pdist > 0.5 && pdist < 10.0 && !is_elevated {
-            let vis = trace_glow_visibility(world_x, world_y, p.x, p.y, 1.5);
+            let vis = trace_glow_visibility(world_x + jx, world_y + jy, p.x, p.y, 1.5);
             if vis > 0.01 {
                 let to_pixel = normalize(vec2(pdx, pdy));
                 let light_dir = vec2(cos(p.angle), sin(p.angle));
@@ -4643,25 +4669,96 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // Body rendering — matches chargen preview exactly
         // s = scale factor (tile units). Proportions identical to UI preview.
-        let s = 0.55 * camera.pleb_scale; // body scale in world tiles
-        let lx = pdx;
-        let ly = -pdy; // flip Y: negative pdy = above pleb = top of body
+        let s = 0.55 * camera.pleb_scale;
+        var lx = pdx;
+        var ly = -pdy; // flip Y
 
+        let is_corpse = p.health <= 0.0;
         let dir_x = cos(p.angle);
         let walk_phase = fract((p.x + p.y) * 2.0 + camera.time * 4.0);
-        let bob = sin(walk_phase * 6.28) * 0.008;
-        let head_dx = dir_x * 0.02 * s;
+        let bob = select(sin(walk_phase * 6.28) * 0.008, 0.0, is_corpse);
+        let head_dx = select(dir_x * 0.02 * s, 0.0, is_corpse);
+
+        // Corpse: rotate body to lay flat in facing direction
+        if is_corpse {
+            let ca = cos(p.angle);
+            let sa = sin(p.angle);
+            lx = pdx * ca + pdy * sa;
+            ly = (-pdx * sa + pdy * ca) * 1.3; // slight squash: body seen from above when lying
+        }
 
         var drew_pleb = false;
 
-        // Selection: bright pulsing ring at feet
+        // Selection: bright pulsing ring at feet (green=normal, red=drafted)
         if p.selected > 0.5 {
             let ring_d = length(vec2(lx / (s * 0.42), ly / (s * 0.18)));
-            let ring_w = 0.08; // ring thickness in normalized space
+            let ring_w = 0.08;
             if ring_d > 1.0 - ring_w && ring_d < 1.0 + ring_w {
                 let pulse = sin(camera.time * 4.0) * 0.25 + 0.75;
+                // hair_style padding _pad2 is repurposed: >100 = drafted
+                // (we'll encode this in the carrying field or a spare)
                 color = mix(color, vec3(0.3, 0.95, 0.3), pulse);
                 drew_pleb = true;
+            }
+        }
+
+        // Direction chevron on ground (always visible, not just selected)
+        {
+            // Vector from pleb feet to pixel, in world space
+            let dx = pdx;
+            let dy = pdy;
+            let fwd = vec2(cos(p.angle), sin(p.angle));
+            let side = vec2(-fwd.y, fwd.x);
+
+            // Project pixel onto forward/side axes
+            let along = dx * fwd.x + dy * fwd.y;
+            let across = dx * side.x + dy * side.y;
+
+            // Chevron sits in front of the pleb at distance ~0.5*s from feet
+            let chev_dist = s * 0.50;
+            let chev_len = s * 0.15;
+            let chev_w = s * 0.12;
+            let t = along - chev_dist; // distance from chevron center along forward axis
+
+            if t > -chev_len && t < chev_len && abs(across) < chev_w {
+                // V shape: two angled lines meeting at the front
+                let arm = chev_w * (1.0 - (t + chev_len) / (chev_len * 2.0));
+                let thickness = s * 0.025;
+                if abs(abs(across) - arm) < thickness {
+                    let alpha = select(0.5, 0.8, p.selected > 0.5);
+                    color = mix(color, vec3(0.85, 0.85, 0.80), alpha);
+                    drew_pleb = true;
+                }
+            }
+        }
+
+        // Aiming cone (narrows from wide to narrow as aim_progress increases)
+        if p.aim_progress > 0.01 {
+            let fwd = vec2(cos(p.angle), sin(p.angle));
+            let side_a = vec2(-fwd.y, fwd.x);
+            let a_dx = pdx;
+            let a_dy = pdy;
+            let along = a_dx * fwd.x + a_dy * fwd.y;
+            let across = a_dx * side_a.x + a_dy * side_a.y;
+
+            // Cone: extends forward from pleb, narrowing with progress
+            let cone_len = 4.0;  // tiles long
+            let half_angle_start = 0.4; // radians (~23°) at progress=0
+            let half_angle_end = 0.03;  // radians (~1.7°) at progress=1
+            let half_angle = mix(half_angle_start, half_angle_end, p.aim_progress);
+
+            if along > 0.3 && along < cone_len {
+                let max_width = along * tan(half_angle);
+                if abs(across) < max_width {
+                    // Thin edge lines of the cone
+                    let edge_dist = abs(abs(across) - max_width);
+                    if edge_dist < 0.04 {
+                        let fade = 1.0 - along / cone_len;
+                        let col = mix(vec3(1.0, 0.4, 0.2), vec3(1.0, 0.2, 0.1), p.aim_progress);
+                        color = mix(color, col, fade * 0.6);
+                        drew_pleb = true;
+                    }
+                }
             }
         }
 
@@ -4744,6 +4841,25 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
+        // Black outline: check if pixel is just outside any body zone
+        if !drew_pleb {
+            let outline_w = 0.025; // outline thickness in tile units
+            // Check expanded versions of main body zones
+            let o_feet = (lx / (s * 0.12 + outline_w)) * (lx / (s * 0.12 + outline_w))
+                + ((ly - s * 0.07 + bob) / (s * 0.06 + outline_w)) * ((ly - s * 0.07 + bob) / (s * 0.06 + outline_w));
+            let o_pants = (lx / (s * 0.22 + outline_w)) * (lx / (s * 0.22 + outline_w))
+                + ((ly - s * 0.21 + bob) / (s * 0.15 + outline_w)) * ((ly - s * 0.21 + bob) / (s * 0.15 + outline_w));
+            let o_shirt = ((lx - head_dx * 0.3) / (s * 0.26 + outline_w)) * ((lx - head_dx * 0.3) / (s * 0.26 + outline_w))
+                + ((ly - s * 0.43 + bob) / (s * 0.20 + outline_w)) * ((ly - s * 0.43 + bob) / (s * 0.20 + outline_w));
+            let hx_o = lx - head_dx;
+            let hy_o = ly - s * 0.67 + bob;
+            let o_head = length(vec2(hx_o, hy_o)) / (s * 0.16 + outline_w);
+            if o_feet < 1.0 || o_pants < 1.0 || o_shirt < 1.0 || o_head < 1.0 {
+                color = vec3(0.02, 0.02, 0.02);
+                drew_pleb = true;
+            }
+        }
+
         // Corpse
         if drew_pleb && p.health <= 0.0 {
             let gray = dot(color, vec3(0.3, 0.5, 0.2));
@@ -4778,9 +4894,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- Creature rendering (alien fauna) ---
     for (var ci: u32 = 0u; ci < MAX_CREATURES; ci++) {
         let cr = creature_buf[ci];
-        if cr.body_radius < 0.01 { continue; } // invisible or empty slot
+        if cr.body_radius < 0.01 { continue; }
+        // Early distance cull
         let cdx = world_x - cr.x;
         let cdy = world_y - cr.y;
+        if cdx * cdx + cdy * cdy > 4.0 { continue; } // >2 tiles away
         let cdist = length(vec2(cdx, cdy));
         if cdist < cr.body_radius {
             // Body: shaded circle

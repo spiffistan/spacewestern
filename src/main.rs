@@ -206,6 +206,7 @@ struct App {
     plebs: Vec<Pleb>,
     selected_pleb: Option<usize>, // index into plebs vec
     placing_pleb: bool,
+    placing_enemy: bool,
     next_pleb_id: usize,
     // Alien fauna
     creatures: Vec<creatures::Creature>,
@@ -608,6 +609,7 @@ impl App {
             selected_pleb: Some(0),
             next_pleb_id: 1,
             placing_pleb: false,
+            placing_enemy: false,
             creatures: Vec::new(),
             creature_spawn_timer: 0.0,
             next_pack_id: 0,

@@ -206,6 +206,27 @@ impl App {
             return;
         }
 
+        // Placing enemy mode
+        if self.placing_enemy {
+            if is_walkable_pos(&self.grid_data, wx, wy) && self.plebs.len() < MAX_PLEBS {
+                let id = self.next_pleb_id;
+                self.next_pleb_id += 1;
+                let name = format!("Redskull #{}", id);
+                let mut p = Pleb::new(id, name, wx, wy, id as u32 * 3571 + 99);
+                p.is_enemy = true;
+                // Redskull appearance: red tones
+                p.appearance.shirt_r = 0.55;
+                p.appearance.shirt_g = 0.12;
+                p.appearance.shirt_b = 0.10;
+                p.appearance.pants_r = 0.25;
+                p.appearance.pants_g = 0.18;
+                p.appearance.pants_b = 0.15;
+                self.plebs.push(p);
+                self.placing_enemy = false;
+            }
+            return;
+        }
+
         // Click on rock (no build tool): open context menu
         if bt == BT_ROCK && self.build_tool == BuildTool::None {
             self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);
@@ -456,6 +477,20 @@ impl App {
                     } else if self.selected_pleb.is_none() && self.wall_thickness > 1 {
                         // R: decrease wall thickness
                         self.wall_thickness -= 1;
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyD) => {
+                    // D: toggle draft/rally mode for selected pleb
+                    if let Some(idx) = self.selected_pleb {
+                        if let Some(pleb) = self.plebs.get_mut(idx) {
+                            pleb.drafted = !pleb.drafted;
+                            if !pleb.drafted {
+                                // Returning to autonomous: clear manual targets
+                                pleb.work_target = None;
+                                pleb.haul_target = None;
+                                pleb.harvest_target = None;
+                            }
+                        }
                     }
                 }
                 PhysicalKey::Code(KeyCode::Space) => {
