@@ -28,6 +28,8 @@ Numbered technical documents for specific architectural decisions. Format: `DN-N
 | `DN-008-three-layer-world-model.md` | Proposed | Three-layer architecture: wall edges, blocks, surface items |
 | `DN-009-pleb-sprites.md` | Proposed | Layered sprite compositing for colonist rendering |
 | `DN-010-discovery-layer.md` | Proposed | Hidden map features: creature dens, minerals, artifacts, metal detector |
+| `DN-011-combat-rework.md` | Proposed | Kinematic bullets, spatial hash collision, creature hits, drag/wind |
+| `DN-012-wound-system.md` | Proposed | Anatomical hit locations, bleeding, infection, treatment, permanent effects |
 
 ## Ideas (`ideas/`)
 
