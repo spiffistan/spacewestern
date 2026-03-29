@@ -18,6 +18,7 @@ pub struct GameHint {
 pub enum GameState {
     MainMenu,
     MapGen,
+    CharGen,
     Playing,
 }
 

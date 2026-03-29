@@ -4599,99 +4599,144 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Body rendering — matches portrait (shirt body, skin head, hair)
-        if pdist < 0.45 {
-            // Selection ring (pulsing green)
-            if p.selected > 0.5 {
-                let ring_inner = 0.38;
-                let ring_outer = 0.44;
-                if pdist > ring_inner && pdist < ring_outer {
-                    let pulse = sin(camera.time * 4.0) * 0.3 + 0.7;
-                    color = mix(color, vec3(0.3, 0.9, 0.3), pulse);
-                }
-            }
+        // Body rendering — 3/4 view (head on top, shirt, pants, shadow)
+        // Scale factor: plebs are ~1.5 tiles tall
+        let S = 1.8; // size multiplier
+        let bx = pdx;
+        let by = pdy + 0.25 * S;
 
-            // Pants (lower body) — outer ring
-            if pdist < 0.35 && pdist > 0.20 {
-                let shade = 1.0 - (pdist - 0.20) / 0.15 * 0.3;
+        let dir_x = cos(p.angle);
+        let dir_y = sin(p.angle);
+        let side_factor = abs(dir_x);
+        let body_w = (0.12 + side_factor * 0.02) * S;
+
+        let walk_phase = fract((p.x + p.y) * 2.0 + camera.time * 4.0);
+        let bob = sin(walk_phase * 6.28) * 0.012 * S;
+        let by_b = by + bob;
+
+        let head_ox = dir_x * 0.04 * S;
+        let head_oy = dir_y * 0.03 * S - 0.34 * S + bob;
+
+        var drew_pleb = false;
+
+        // Selection: ground ellipse at feet
+        if p.selected > 0.5 {
+            let sel_d = (bx / (0.22 * S)) * (bx / (0.22 * S)) + (pdy / (0.10 * S)) * (pdy / (0.10 * S));
+            if sel_d < 1.0 && sel_d > 0.55 {
+                let pulse = sin(camera.time * 4.0) * 0.2 + 0.6;
+                color = mix(color, vec3(0.3, 0.9, 0.3), pulse);
+                drew_pleb = true;
+            }
+        }
+
+        // Shadow
+        {
+            let sh_d = (bx / (0.18 * S)) * (bx / (0.18 * S)) + (pdy / (0.07 * S)) * (pdy / (0.07 * S));
+            if sh_d < 1.0 {
+                color = mix(color, vec3(0.0), 0.25 * (1.0 - sh_d));
+                drew_pleb = true;
+            }
+        }
+
+        // Feet
+        {
+            let fy = by_b + 0.17 * S;
+            let fd = (bx / (0.07 * S)) * (bx / (0.07 * S)) + (fy / (0.04 * S)) * (fy / (0.04 * S));
+            if fd < 1.0 {
+                color = vec3(p.pants_r, p.pants_g, p.pants_b) * 0.55;
+                drew_pleb = true;
+            }
+        }
+
+        // Pants
+        {
+            let py_c = by_b + 0.08 * S;
+            let pw = body_w * 0.82;
+            let pd = (bx / pw) * (bx / pw) + (py_c / (0.09 * S)) * (py_c / (0.09 * S));
+            if pd < 1.0 {
+                let shade = 0.82 + 0.18 * (1.0 - pd);
                 color = vec3(p.pants_r, p.pants_g, p.pants_b) * shade;
+                drew_pleb = true;
             }
+        }
 
-            // Shirt (upper body) — middle area
-            if pdist < 0.28 {
-                let shade = 1.0 - pdist / 0.28 * 0.2;
+        // Shirt (shoulders)
+        {
+            let sy_c = by_b - 0.04 * S;
+            let sd = (bx / body_w) * (bx / body_w) + (sy_c / (0.11 * S)) * (sy_c / (0.11 * S));
+            if sd < 1.0 {
+                let shade = 0.82 + 0.18 * (1.0 - sd);
                 color = vec3(p.shirt_r, p.shirt_g, p.shirt_b) * shade;
+                drew_pleb = true;
             }
+        }
 
-            // Head (skin) — offset slightly north (toward facing direction)
-            let head_offset = vec2(cos(p.angle) * 0.08, sin(p.angle) * 0.08);
-            let head_dist = length(vec2(pdx - head_offset.x, pdy - head_offset.y));
-            if head_dist < 0.14 {
-                let head_shade = 1.0 - head_dist / 0.14 * 0.15;
-                color = vec3(p.skin_r, p.skin_g, p.skin_b) * head_shade;
+        // Head
+        {
+            let hx = bx - head_ox;
+            let hy = by_b + head_oy + 0.25 * S;
+            let hd = length(vec2(hx, hy));
+            if hd < 0.10 * S {
+                let shade = 0.88 + 0.12 * (1.0 - hd / (0.10 * S));
+                color = vec3(p.skin_r, p.skin_g, p.skin_b) * shade;
+                drew_pleb = true;
             }
+        }
 
-            // Hair (on top of head, offset further in facing direction)
-            let hair_offset = vec2(cos(p.angle) * 0.14, sin(p.angle) * 0.14);
-            let hair_dist = length(vec2(pdx - hair_offset.x, pdy - hair_offset.y));
-            let hair_r = select(0.08, 0.12, p.hair_style > 1.5); // longer hair = bigger
-            if hair_dist < hair_r {
+        // Hair
+        {
+            let hair_ox = dir_x * 0.06 * S;
+            let hair_oy = dir_y * 0.04 * S - 0.40 * S + bob;
+            let hx = bx - hair_ox;
+            let hy = by + hair_oy + 0.25 * S;
+            let hair_r = select(0.06, 0.09, p.hair_style > 1.5) * S;
+            let hd = length(vec2(hx, hy * 1.2));
+            if hd < hair_r {
                 color = vec3(p.hair_r, p.hair_g, p.hair_b);
+                drew_pleb = true;
             }
+        }
 
-            // Carried rock: small dark stone sprite offset above head
-            if p.carrying > 0.5 {
-                let carry_ox = cos(p.angle) * 0.05;
-                let carry_oy = sin(p.angle) * 0.05 - 0.18; // offset above head
-                let carry_dx = pdx - carry_ox;
-                let carry_dy = pdy - carry_oy;
-                let carry_dist = length(vec2(carry_dx * 1.3, carry_dy));
-                if carry_dist < 0.10 {
-                    let rv = fract(sin(world_x * 53.1 + world_y * 97.3) * 43758.5) * 0.04;
-                    color = vec3(0.30 + rv, 0.28 + rv, 0.26 + rv);
-                    if carry_dist > 0.07 {
-                        color = vec3(0.16, 0.15, 0.13); // outline
-                    }
-                }
+        // Carried item
+        if drew_pleb && p.carrying > 0.5 {
+            let co = dir_x * 0.04 * S;
+            let cy_o = dir_y * 0.03 * S - 0.48 * S + bob;
+            let cx_r = bx - co;
+            let cy_r = by + cy_o + 0.25 * S;
+            let cd = length(vec2(cx_r * 1.3, cy_r));
+            if cd < 0.10 * S {
+                let rv = fract(sin(world_x * 53.1 + world_y * 97.3) * 43758.5) * 0.04;
+                color = vec3(0.30 + rv, 0.28 + rv, 0.26 + rv);
+                if cd > 0.07 * S { color = vec3(0.16, 0.15, 0.13); }
             }
+        }
 
-            // Corpse: desaturate and add red X
-            if p.health <= 0.0 {
-                let gray = dot(color, vec3(0.3, 0.5, 0.2));
-                color = mix(vec3(gray * 0.5), vec3(0.25, 0.18, 0.15), 0.3);
-                // Red X in the corner (northeast quadrant of the pleb)
-                let xc_x = pdx + 0.22;
-                let xc_y = pdy + 0.22;
-                let x_arm1 = abs(xc_x - xc_y);  // diagonal /
-                let x_arm2 = abs(xc_x + xc_y);  // diagonal \.
-                if (x_arm1 < 0.04 || x_arm2 < 0.04) && abs(xc_x) < 0.12 && abs(xc_y) < 0.12 {
-                    color = vec3(0.85, 0.15, 0.10);
-                }
-            } else {
-                // Direction indicator: small bright dot at front edge (living only)
-                let front_x = p.x + cos(p.angle) * 0.30;
-                let front_y = p.y + sin(p.angle) * 0.30;
-                let front_dist = length(vec2(world_x - front_x, world_y - front_y));
-                if front_dist < 0.05 {
-                    color = vec3(0.95, 0.95, 1.0);
-                }
+        // Corpse
+        if drew_pleb && p.health <= 0.0 {
+            let gray = dot(color, vec3(0.3, 0.5, 0.2));
+            color = mix(vec3(gray * 0.5), vec3(0.25, 0.18, 0.15), 0.3);
+            let xc_x = bx + 0.18 * S;
+            let xc_y = by_b - 0.08 * S;
+            let x1 = abs(xc_x - xc_y);
+            let x2 = abs(xc_x + xc_y);
+            if (x1 < 0.04 * S || x2 < 0.04 * S) && abs(xc_x) < 0.12 * S && abs(xc_y) < 0.12 * S {
+                color = vec3(0.85, 0.15, 0.10);
+            }
+        }
 
-                // Health bar (only when damaged, below pleb)
-                if p.health < 0.95 {
-                    let bar_cx = world_x - p.x;
-                    let bar_cy = world_y - p.y - 0.38; // below pleb
-                    if abs(bar_cy) < 0.03 && abs(bar_cx) < 0.18 {
-                        let bar_t = (bar_cx + 0.18) / 0.36; // 0..1 across bar
-                        if bar_t < p.health {
-                            // Green→yellow→red based on health
-                            var bar_col = vec3(0.2, 0.8, 0.2);
-                            if p.health < 0.5 { bar_col = mix(vec3(0.9, 0.2, 0.1), vec3(0.9, 0.8, 0.1), p.health * 2.0); }
-                            else { bar_col = mix(vec3(0.9, 0.8, 0.1), vec3(0.2, 0.8, 0.2), (p.health - 0.5) * 2.0); }
-                            color = bar_col;
-                        } else {
-                            color = vec3(0.15, 0.12, 0.10); // empty bar background
-                        }
-                    }
+        // Health bar
+        if p.health > 0.0 && p.health < 0.95 {
+            let bar_cx = world_x - p.x;
+            let bar_cy = world_y - p.y + 0.12 * S;
+            if abs(bar_cy) < 0.025 * S && abs(bar_cx) < 0.18 * S {
+                let bar_t = (bar_cx + 0.18 * S) / (0.36 * S);
+                if bar_t < p.health {
+                    var bar_col = vec3(0.2, 0.8, 0.2);
+                    if p.health < 0.5 { bar_col = mix(vec3(0.9, 0.2, 0.1), vec3(0.9, 0.8, 0.1), p.health * 2.0); }
+                    else { bar_col = mix(vec3(0.9, 0.8, 0.1), vec3(0.2, 0.8, 0.2), (p.health - 0.5) * 2.0); }
+                    color = bar_col;
+                } else {
+                    color = vec3(0.15, 0.12, 0.10);
                 }
             }
         }

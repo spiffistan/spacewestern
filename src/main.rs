@@ -282,6 +282,13 @@ struct App {
     terrain_dirty: bool,   // true when terrain_data needs re-upload to GPU
     terrain_params: grid::TerrainParams,
     game_state: GameState,
+    // Character generation
+    chargen_name: String,
+    chargen_skin: [f32; 3],
+    chargen_hair: [f32; 3],
+    chargen_hair_style: u8,
+    chargen_shirt: [f32; 3],
+    chargen_pants: [f32; 3],
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Entryway position for hollow rect drag (shown differently in preview)
@@ -665,6 +672,12 @@ impl App {
             terrain_dirty: false,
             terrain_params: grid::TerrainParams::default(),
             game_state: GameState::MainMenu,
+            chargen_name: "Jeff".to_string(),
+            chargen_skin: [0.76, 0.60, 0.46],
+            chargen_hair: [0.25, 0.15, 0.08],
+            chargen_hair_style: 0,
+            chargen_shirt: [0.35, 0.25, 0.20],
+            chargen_pants: [0.30, 0.28, 0.22],
             diag_preview: Vec::new(),
             drag_entryway: None,
             entry_side: 0,
