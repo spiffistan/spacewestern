@@ -576,7 +576,8 @@ impl Blueprint {
             BT_KILN => (8.0, 0, 10, 0, 0, 0),
             // --- Utilities ---
             BT_WELL => (8.0, 3, 0, 0, 2, 1), // rope to lower bucket
-            BT_FIREPLACE => (1.0, 0, 0, 0, 0, 0), // campfire: 3 sticks (consumed on build)
+            BT_FIREPLACE => (1.0, 0, 0, 0, 0, 0), // fireplace: 3 sticks (consumed on build)
+            BT_CAMPFIRE => (0.5, 0, 0, 0, 0, 0), // small campfire: 3 sticks (consumed on build)
             BT_CANNON => (5.0, 0, 0, 0, 6, 0),
             BT_COMPOST => (1.0, 1, 0, 0, 0, 0),
             // --- Lighting ---
@@ -665,7 +666,8 @@ impl Blueprint {
     }
 
     pub fn is_campfire(&self) -> bool {
-        (self.block_data & 0xFF) as u32 == BT_FIREPLACE && self.wall_edges == 0
+        let bt = (self.block_data & 0xFF) as u32;
+        (bt == BT_FIREPLACE || bt == BT_CAMPFIRE) && self.wall_edges == 0
     }
 
     pub fn is_wall(&self) -> bool {

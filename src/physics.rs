@@ -559,6 +559,7 @@ fn dda_bullet_trace(
             bt,
             BT_TREE,
             BT_FIREPLACE,
+            BT_CAMPFIRE,
             BT_CEILING_LIGHT,
             BT_FLOOR_LAMP,
             BT_BERRY_BUSH,

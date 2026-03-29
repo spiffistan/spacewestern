@@ -178,24 +178,25 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
     if bx >= 0 && by >= 0 && bx < i32(params.sim_w) && by < i32(params.sim_h) {
         let block = grid[u32(by) * u32(params.sim_w) + u32(bx)];
         let bt = block & 0xFFu;
-        if bt == BT_FIREPLACE {
+        if bt == BT_FIREPLACE || bt == BT_CAMPFIRE {
             // Fire block: O2-dependent combustion with adjustable intensity
             // Intensity stored in height byte (0-10 → 0.0-1.0)
             let fire_intensity = f32((block >> 8u) & 0xFFu) / 10.0;
             let fire_o2 = result.g;
-            let fire_strength = clamp(fire_o2 * 3.0 - 0.5, 0.0, 1.0) * fire_intensity;
+            let power = select(1.0, 0.5, bt == BT_CAMPFIRE); // campfire: half power
+            let fire_strength = clamp(fire_o2 * 3.0 - 0.5, 0.0, 1.0) * fire_intensity * power;
             let wx = f32(bx) + 0.5;
             let wy = f32(by) + 0.5;
             let phase = fire_hash(vec2(wx, wy)) * 6.28;
             let flicker = sin(params.time * 8.3 + phase) * 0.3 + 0.7;
-            // Smoke production (reduced for gentle campfire)
+            // Smoke production
             result.r += params.smoke_rate * flicker * fire_strength * 0.08;
             // O2 consumption
             result.g -= 0.010 * fire_strength;
             // CO2 production
             result.b += 0.008 * fire_strength;
-            // Temperature: gentle warmth, not a furnace. 40-80°C at the source tile.
-            let fire_temp = 40.0 + fire_intensity * 40.0;
+            // Temperature: gentle warmth, not a furnace
+            let fire_temp = 40.0 + fire_intensity * 40.0 * power;
             result.a = mix(result.a, fire_temp, fire_strength * 0.15 * flicker);
         }
     }

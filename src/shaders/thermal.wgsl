@@ -48,7 +48,7 @@ fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 61u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 62u)]; }
 
 // --- Thin wall edge helpers ---
 fn has_wall_on_edge_t(height: u32, flags: u32, edge: u32) -> bool {
@@ -168,13 +168,15 @@ fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
             if fx < 0 || fy < 0 || fx >= i32(gw) || fy >= i32(gh) { continue; }
             let fidx = u32(fy) * gw + u32(fx);
             let fb = grid[fidx];
-            if block_type(fb) == 6u { // BT_FIREPLACE
+            let fbt = block_type(fb);
+            if fbt == BT_FIREPLACE || fbt == BT_CAMPFIRE {
                 let fire_level = f32((fb >> 8u) & 0xFFu) / 10.0;
                 let fire_str = max(fire_level, 0.3);
+                let power = select(1.0, 0.5, fbt == BT_CAMPFIRE); // campfire: half power
                 let dist_sq = f32(fdx * fdx + fdy * fdy);
                 if dist_sq < 0.5 { continue; } // skip self
                 // Inverse-square radiant intensity
-                let radiance = fire_str * 8.0 / (1.0 + dist_sq * 0.5);
+                let radiance = fire_str * power * 8.0 / (1.0 + dist_sq * 0.5);
                 // Target always above ambient
                 let radiant_target = 30.0;
                 let deficit = max(radiant_target - block_temp, 0.0);

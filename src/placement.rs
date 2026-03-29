@@ -227,7 +227,7 @@ impl App {
         let idx = (by as u32 * GRID_W + bx as u32) as usize;
         let block = self.grid_data[idx];
         let bt = block_type_rs(block);
-        if bt == BT_FIREPLACE || bt == BT_CEILING_LIGHT {
+        if bt == BT_FIREPLACE || bt == BT_CAMPFIRE || bt == BT_CEILING_LIGHT {
             self.dragging_light = Some((bx as u32, by as u32));
             log::info!("Picked up light at ({}, {})", bx, by);
             return true;
@@ -415,7 +415,8 @@ impl App {
     }
 
     /// Compute tiles for a hollow rectangle with an optional entryway.
-    /// If `pleb_pos` is given, the entryway is placed on the side closest to the pleb.
+    /// `entry_side`: 0=auto (use pleb_pos or default south), 1=N, 2=E, 3=S, 4=W.
+    /// If `pleb_pos` is given and entry_side is 0, the entryway is placed on the side closest to the pleb.
     /// Returns (tiles, entryway_position).
     pub(crate) fn hollow_rect_tiles_with_entry(
         x0: i32,
@@ -423,6 +424,19 @@ impl App {
         x1: i32,
         y1: i32,
         pleb_pos: Option<(f32, f32)>,
+    ) -> (Vec<(i32, i32)>, Option<(i32, i32)>) {
+        Self::hollow_rect_tiles_with_entry_side(x0, y0, x1, y1, pleb_pos, 0)
+    }
+
+    /// Compute tiles for a hollow rectangle with an explicit entry side.
+    /// `entry_side`: 0=auto (use pleb_pos or default south), 1=N, 2=E, 3=S, 4=W.
+    pub(crate) fn hollow_rect_tiles_with_entry_side(
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+        pleb_pos: Option<(f32, f32)>,
+        entry_side: u8,
     ) -> (Vec<(i32, i32)>, Option<(i32, i32)>) {
         let min_x = x0.min(x1);
         let max_x = x0.max(x1);
@@ -433,31 +447,35 @@ impl App {
         let w = max_x - min_x;
         let h = max_y - min_y;
         let entry = if w >= 2 && h >= 2 {
-            if let Some((px, py)) = pleb_pos {
-                // Find which side the pleb is closest to
-                let cx = (min_x + max_x) as f32 / 2.0;
-                let cy = (min_y + max_y) as f32 / 2.0;
-                let mid_x = (min_x + max_x) / 2;
-                let mid_y = (min_y + max_y) / 2;
+            let mid_x = (min_x + max_x) / 2;
+            let mid_y = (min_y + max_y) / 2;
+            match entry_side {
+                1 => Some((mid_x, min_y)), // North
+                2 => Some((max_x, mid_y)), // East
+                3 => Some((mid_x, max_y)), // South
+                4 => Some((min_x, mid_y)), // West
+                _ => {
+                    // Auto: use pleb position or default south
+                    if let Some((px, py)) = pleb_pos {
+                        let d_north = (py - min_y as f32).abs();
+                        let d_south = (py - max_y as f32).abs();
+                        let d_west = (px - min_x as f32).abs();
+                        let d_east = (px - max_x as f32).abs();
+                        let min_d = d_north.min(d_south).min(d_west).min(d_east);
 
-                let d_north = (py - min_y as f32).abs();
-                let d_south = (py - max_y as f32).abs();
-                let d_west = (px - min_x as f32).abs();
-                let d_east = (px - max_x as f32).abs();
-                let min_d = d_north.min(d_south).min(d_west).min(d_east);
-
-                if min_d == d_north {
-                    Some((mid_x, min_y))
-                } else if min_d == d_south {
-                    Some((mid_x, max_y))
-                } else if min_d == d_west {
-                    Some((min_x, mid_y))
-                } else {
-                    Some((max_x, mid_y))
+                        if min_d == d_north {
+                            Some((mid_x, min_y))
+                        } else if min_d == d_south {
+                            Some((mid_x, max_y))
+                        } else if min_d == d_west {
+                            Some((min_x, mid_y))
+                        } else {
+                            Some((max_x, mid_y))
+                        }
+                    } else {
+                        Some((mid_x, max_y)) // default: south
+                    }
                 }
-            } else {
-                // Default: south side center
-                Some(((min_x + max_x) / 2, max_y))
             }
         } else {
             None // too small for entryway
@@ -540,7 +558,7 @@ impl App {
     }
 
     /// Check if a tile can support a roof (wall within 6 Manhattan distance).
-    pub(crate) fn can_support_roof(grid: &[u32], x: i32, y: i32) -> bool {
+    pub(crate) fn can_support_roof_wd(grid: &[u32], wall_data: &[u16], x: i32, y: i32) -> bool {
         let max_dist = 6i32;
         for dy in -max_dist..=max_dist {
             for dx in -max_dist..=max_dist {
@@ -552,7 +570,17 @@ impl App {
                 if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
                     continue;
                 }
-                let b = grid[(ny as u32 * GRID_W + nx as u32) as usize];
+                let idx = (ny as u32 * GRID_W + nx as u32) as usize;
+                // Check wall_data layer (thin walls)
+                if idx < wall_data.len() {
+                    let wd = wall_data[idx];
+                    let edges = wd & 0xF;
+                    if edges != 0 {
+                        return true;
+                    }
+                }
+                // Check block grid walls
+                let b = grid[idx];
                 let bt = b & 0xFF;
                 let bh = (b >> 8) & 0xFF;
                 if bh > 0
@@ -566,7 +594,8 @@ impl App {
                         BT_STEEL_WALL,
                         BT_SANDSTONE,
                         BT_GRANITE,
-                        BT_LIMESTONE
+                        BT_LIMESTONE,
+                        BT_MUD_WALL
                     )
                 {
                     return true;
@@ -631,7 +660,7 @@ impl App {
                 if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
                     continue;
                 }
-                if Self::can_support_roof(&self.grid_data, tx, ty) {
+                if Self::can_support_roof_wd(&self.grid_data, &self.wall_data, tx, ty) {
                     let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                     let block = self.grid_data[idx];
                     let bh = block_height_rs(block) as u32;
@@ -732,7 +761,15 @@ impl App {
                         let pleb_pos = self
                             .selected_pleb
                             .and_then(|pi| self.plebs.get(pi).map(|p| (p.x, p.y)));
-                        Self::hollow_rect_tiles_with_entry(sx, sy, ex, ey, pleb_pos).0
+                        Self::hollow_rect_tiles_with_entry_side(
+                            sx,
+                            sy,
+                            ex,
+                            ey,
+                            pleb_pos,
+                            self.entry_side,
+                        )
+                        .0
                     }
                     _ => return,
                 };
@@ -1548,9 +1585,32 @@ impl App {
                             if id == BT_DIMMER {
                                 final_height = 10;
                             }
-                            // Fireplace starts at 50% intensity (height = 5)
+                            // Fire blocks: default intensity
                             if id == BT_FIREPLACE {
                                 final_height = 5;
+                            } else if id == BT_CAMPFIRE {
+                                final_height = 3;
+                                // Subtile placement: encode offset in flags bits 3-6
+                                // x_off in bits 3-4 (0-2), y_off in bits 5-6 (0-2)
+                                let shift_held = self
+                                    .pressed_keys
+                                    .contains(&winit::keyboard::KeyCode::ShiftLeft)
+                                    || self
+                                        .pressed_keys
+                                        .contains(&winit::keyboard::KeyCode::ShiftRight);
+                                let (sub_x, sub_y) = if shift_held {
+                                    // Map fractional position to subtile: 0..1 → 0..4 subtiles,
+                                    // then clamp offset for 2x2 block (max offset = 2)
+                                    let fx = (wx.fract() + 1.0).fract(); // ensure positive
+                                    let fy = (wy.fract() + 1.0).fract();
+                                    let sx = ((fx * 4.0).floor() as u8).min(2);
+                                    let sy = ((fy * 4.0).floor() as u8).min(2);
+                                    (sx, sy)
+                                } else {
+                                    (1, 1) // default: centered
+                                };
+                                combined_flags |= (sub_x & 3) << 3;
+                                combined_flags |= (sub_y & 3) << 5;
                             }
                             // Circuit breaker starts ON (flag bit 2), threshold in height = 15V
                             if id == BT_BREAKER {
@@ -1907,7 +1967,7 @@ impl App {
         }
 
         // Click dimmer, restrictor, or fireplace: show slider popup (shared UI)
-        if (bt == BT_DIMMER || bt == BT_RESTRICTOR || bt == BT_FIREPLACE)
+        if (bt == BT_DIMMER || bt == BT_RESTRICTOR || bt == BT_FIREPLACE || bt == BT_CAMPFIRE)
             && self.build_tool != BuildTool::Destroy
         {
             let didx = by as u32 * GRID_W + bx as u32;

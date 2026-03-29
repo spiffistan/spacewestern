@@ -441,7 +441,7 @@ impl App {
         }
 
         // --- Update all plebs ---
-        let move_speed = 5.0f32;
+        let move_speed = 20.0f32;
         let sel = self.selected_pleb;
 
         for (i, pleb) in self.plebs.iter_mut().enumerate() {
@@ -507,7 +507,7 @@ impl App {
                     let ndx = ddx / dist;
                     let ndy = ddy / dist;
                     pleb.angle = ndy.atan2(ndx);
-                    let effective_speed = move_speed * speed_mul;
+                    let effective_speed = move_speed * speed_mul * self.time_speed;
                     let step_x = ndx * effective_speed * dt;
                     let step_y = ndy * effective_speed * dt;
                     let nx = pleb.x + step_x;
@@ -703,10 +703,35 @@ impl App {
                                     count: rock_yield,
                                     item: "rock".into(),
                                 });
-                            } else if let Some(wi) = self.ground_items.iter().position(|item| {
-                                item.x.floor() as i32 == rx && item.y.floor() as i32 == ry
-                            }) {
-                                // Pick up any ground item
+                            } else if let Some(wi) = {
+                                // Prefer the specific item type the blueprint needs
+                                let prefer_id: Option<u16> =
+                                    pleb.haul_target.and_then(|(cx, cy)| {
+                                        self.blueprints.get(&(cx, cy)).and_then(|bp| {
+                                            if bp.is_roof() {
+                                                Some(ITEM_FIBER)
+                                            } else if bp.is_campfire() {
+                                                Some(ITEM_SCRAP_WOOD)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                    });
+                                // Try preferred item first, fall back to any item
+                                let preferred = prefer_id.and_then(|pid| {
+                                    self.ground_items.iter().position(|item| {
+                                        item.stack.item_id == pid
+                                            && item.x.floor() as i32 == rx
+                                            && item.y.floor() as i32 == ry
+                                    })
+                                });
+                                preferred.or_else(|| {
+                                    self.ground_items.iter().position(|item| {
+                                        item.x.floor() as i32 == rx && item.y.floor() as i32 == ry
+                                    })
+                                })
+                            } {
+                                // Pick up ground item
                                 let item_id = self.ground_items[wi].stack.item_id;
                                 let count = self.ground_items[wi].stack.count;
                                 let max_take = if item_id == ITEM_WOOD { 5u16 } else { 10 };
@@ -717,10 +742,29 @@ impl App {
                                     self.ground_items[wi].stack.count -= take;
                                 }
                                 pleb.inventory.add(item_id, take);
+                                // Batch pickup: also grab nearby matching items within 2 tiles
+                                let mut extra = 0u16;
+                                let mut gi2 = 0;
+                                while gi2 < self.ground_items.len() {
+                                    let gi = &self.ground_items[gi2];
+                                    if gi.stack.item_id == item_id {
+                                        let d = (gi.x - pleb.x).powi(2) + (gi.y - pleb.y).powi(2);
+                                        if d < 4.0 {
+                                            // within 2 tiles
+                                            let t = gi.stack.count;
+                                            extra += t;
+                                            pleb.inventory.add(item_id, t);
+                                            self.ground_items.remove(gi2);
+                                            continue;
+                                        }
+                                    }
+                                    gi2 += 1;
+                                }
+                                let total = take + extra;
                                 let name = ItemRegistry::cached().name(item_id);
                                 events.push(GameEventKind::PickedUp {
                                     pleb: pleb.name.clone(),
-                                    count: take,
+                                    count: total,
                                     item: name.to_string(),
                                 });
                                 pleb.harvest_target = None;
@@ -757,8 +801,11 @@ impl App {
                             pleb.activity = PlebActivity::Idle;
                         }
                     }
-                    // Phase 2: carrying item, at delivery location → deliver
-                    else if at_delivery && pleb.inventory.is_carrying() {
+                    // Phase 2: carrying item, at delivery location, path done → deliver
+                    else if at_delivery
+                        && pleb.inventory.is_carrying()
+                        && pleb.path_idx >= pleb.path.len()
+                    {
                         if let Some((cx, cy)) = pleb.haul_target {
                             let is_blueprint = self.blueprints.contains_key(&(cx, cy));
                             let bp_is_roof = self
@@ -2218,8 +2265,9 @@ impl App {
                             let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
                             if tidx < self.grid_data.len() {
                                 if bp.is_roof() {
-                                    // Roof blueprint: mark as paid
+                                    // Roof blueprint: mark as paid + flash
                                     self.roof_paid[tidx] = true;
+                                    self.roof_flash[tidx] = 3.0; // show roof for 3 seconds
                                     self.grid_dirty = true;
                                     events.push(GameEventKind::Built {
                                         pleb: pleb.name.clone(),
@@ -2247,9 +2295,12 @@ impl App {
                                     });
                                 } else {
                                     let mut placed = bp.block_data;
-                                    // Campfire: default intensity 5 (height byte)
-                                    if (placed & 0xFF) as u32 == BT_FIREPLACE {
+                                    // Fire blocks: default intensity (height byte)
+                                    let placed_bt = (placed & 0xFF) as u32;
+                                    if placed_bt == BT_FIREPLACE {
                                         placed = (placed & 0xFFFF00FF) | (5 << 8);
+                                    } else if placed_bt == BT_CAMPFIRE {
+                                        placed = (placed & 0xFFFF00FF) | (3 << 8);
                                     }
                                     self.grid_data[tidx] = placed;
                                     self.grid_dirty = true;
@@ -2619,6 +2670,9 @@ impl App {
                                         pleb.activity = PlebActivity::Walking;
                                         pleb.work_target = Some((tree_x, tree_y));
                                         pleb.harvest_target = Some((tree_x, tree_y));
+                                        // Store blueprint as haul_target so pleb remembers
+                                        // where to deliver after harvesting
+                                        pleb.haul_target = Some((bx, by));
                                         self.active_work.insert((bx, by));
                                         break;
                                     }
@@ -2665,6 +2719,16 @@ impl App {
                 }
             }
         }
+
+        // Clean up stale active_work entries: remove any blueprint position
+        // that no pleb references as work_target or haul_target
+        self.active_work.retain(|pos| {
+            self.plebs.iter().any(|p| {
+                !p.is_enemy
+                    && !p.is_dead
+                    && (p.work_target == Some(*pos) || p.haul_target == Some(*pos))
+            })
+        });
 
         // Handle plebs arriving at ground item to eat:
         // Check proximity every frame (not just path_done) — pleb may walk close enough mid-path
@@ -2965,7 +3029,13 @@ fn tick_pleb_activity(
             }
         }
         PlebActivity::Harvesting(progress) => {
-            let new_progress = progress + dt * time_speed * 0.5;
+            // Speed scales inversely with yield for tree gathering (more fiber = more time)
+            let is_tree = pleb.harvest_target.map_or(false, |(hx, hy)| {
+                let hidx = (hy as u32 * GRID_W + hx as u32) as usize;
+                hidx < grid.len() && (grid[hidx] & 0xFF) as u32 == BT_TREE
+            });
+            let harvest_speed = if is_tree { 1.5 } else { 5.0 }; // trees: slower (bigger yield)
+            let new_progress = progress + dt * time_speed * harvest_speed;
             if new_progress >= 1.0 {
                 // Check what we're harvesting: tree → sticks, bush → berries
                 let is_tree_target = pleb.harvest_target.map_or(false, |(hx, hy)| {
@@ -2973,29 +3043,80 @@ fn tick_pleb_activity(
                     hidx < grid.len() && (grid[hidx] & 0xFF) as u32 == BT_TREE
                 });
                 if is_tree_target {
-                    // Gather branches — drop individual sticks, tree stays
-                    for i in 0..2u32 {
-                        let angle = i as f32 * 2.5 + 0.7;
-                        ground_items.push(resources::GroundItem::new(
-                            pleb.x + angle.cos() * 0.3,
-                            pleb.y + angle.sin() * 0.3,
-                            ITEM_SCRAP_WOOD,
-                            1,
-                        ));
-                    }
-                    log::info!("{} gathered 2 sticks from tree", pleb.name);
+                    // Gather branches — bulk harvest: 5-10 sticks + 5-10 fiber
+                    // Enough for a small roof in one trip
+                    let rng = ((pleb.x * 137.3 + pleb.y * 311.7) as u32).wrapping_mul(2654435761);
+                    let stick_count = 5 + (rng % 6) as u16; // 5-10
+                    let fiber_count = 5 + ((rng >> 8) % 6) as u16; // 5-10
+                    ground_items.push(resources::GroundItem::new(
+                        pleb.x + 0.2,
+                        pleb.y + 0.1,
+                        ITEM_SCRAP_WOOD,
+                        stick_count,
+                    ));
+                    ground_items.push(resources::GroundItem::new(
+                        pleb.x - 0.2,
+                        pleb.y + 0.2,
+                        ITEM_FIBER,
+                        fiber_count,
+                    ));
+                    log::info!(
+                        "{} gathered {} sticks + {} fiber from tree",
+                        pleb.name,
+                        stick_count,
+                        fiber_count
+                    );
                 } else {
                     // Berry bush harvest
                     ground_items.push(resources::GroundItem::new(pleb.x, pleb.y, ITEM_BERRIES, 3));
                     log::info!("{} harvested 3 berries", pleb.name);
                 }
                 pleb.harvest_target = None;
-                log::info!("{} harvested 3 berries (dropped on ground)", pleb.name);
                 if was_crisis {
                     pleb.activity = PlebActivity::Crisis(
                         Box::new(PlebActivity::Eating),
                         crisis_reason.unwrap_or("Starving"),
                     );
+                } else if pleb.haul_target.is_some() && is_tree_target {
+                    // Was gathering for a blueprint — auto-pickup dropped fiber
+                    // and continue hauling to the blueprint
+                    let mut picked_up = 0u16;
+                    let mut gi_idx = 0;
+                    while gi_idx < ground_items.len() {
+                        let gi = &ground_items[gi_idx];
+                        if gi.stack.item_id == ITEM_FIBER {
+                            let d = (gi.x - pleb.x).powi(2) + (gi.y - pleb.y).powi(2);
+                            if d < 4.0 {
+                                let count = ground_items[gi_idx].stack.count;
+                                pleb.inventory.add(ITEM_FIBER, count);
+                                picked_up += count;
+                                ground_items.remove(gi_idx);
+                                continue;
+                            }
+                        }
+                        gi_idx += 1;
+                    }
+                    if picked_up > 0 {
+                        if let Some((cx, cy)) = pleb.haul_target {
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let adj = adjacent_walkable(grid, cx, cy).unwrap_or((cx, cy));
+                            let path = astar_path_terrain_wd(grid, wall_data, terrain, start, adj);
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Hauling;
+                                pleb.harvest_target = None;
+                            } else {
+                                pleb.activity = PlebActivity::Idle;
+                                pleb.haul_target = None;
+                            }
+                        } else {
+                            pleb.activity = PlebActivity::Idle;
+                        }
+                    } else {
+                        pleb.activity = PlebActivity::Idle;
+                        pleb.haul_target = None;
+                    }
                 } else {
                     pleb.activity = PlebActivity::Idle;
                 }
@@ -3254,7 +3375,10 @@ fn tick_pleb_activity(
                 // Sleep when: shift says it's bedtime (unless override), OR very tired
                 let is_bedtime = pleb.schedule.is_sleep_time(time_of_day, DAY_DURATION);
                 let very_tired = pleb.needs.rest < 0.2;
-                let should_sleep = is_bedtime || very_tired;
+                // Only auto-sleep if there's a bed available (early game: work through the night)
+                let has_bed = env.near_bed || env.nearest_bed.is_some();
+                let has_work = pleb.work_target.is_some() || pleb.haul_target.is_some();
+                let should_sleep = (is_bedtime || very_tired) && has_bed && !has_work;
                 if should_sleep {
                     if env.near_bed {
                         pleb.activity = PlebActivity::Sleeping;

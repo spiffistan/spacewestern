@@ -204,7 +204,7 @@ pub fn sample_environment(grid: &[u32], px: f32, py: f32, day_frac: f32) -> EnvS
             let bt = block_type_rs(b);
             let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
 
-            if bt == BT_FIREPLACE {
+            if bt == BT_FIREPLACE || bt == BT_CAMPFIRE {
                 if dist < NEAR_FIRE_RADIUS {
                     near_fire = true;
                 }
@@ -358,7 +358,7 @@ const HEAT_DAMAGE: f32 = 0.05; // ~20s to die from extreme heat (was 0.015)
 /// Temperature above which colonists take heat damage
 const HEAT_DANGER_TEMP: f32 = 45.0; // lowered from 50
 /// Temperature above which colonists flee (crisis)
-pub const HEAT_CRISIS_TEMP: f32 = 40.0; // lowered from 45 — flee earlier
+pub const HEAT_CRISIS_TEMP: f32 = 60.0; // 60°C — genuinely dangerous (near fire / sealed hot room)
 
 /// Determine whether air is breathable at the pleb's position.
 fn air_breathable(o2: f32, co2: f32) -> bool {
@@ -804,8 +804,8 @@ pub fn find_cool_tile(grid: &[u32], bx: i32, by: i32, max_radius: i32) -> Option
                 {
                     // Also check no fire nearby
                     let bt = block_type_rs(b);
-                    if bt != BT_FIREPLACE {
-                        // not a fireplace
+                    if bt != BT_FIREPLACE && bt != BT_CAMPFIRE {
+                        // not a fire
                         return Some((sx, sy));
                     }
                 }

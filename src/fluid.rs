@@ -71,6 +71,7 @@ pub fn build_obstacle_field(grid: &[u32], wall_data: &[u16]) -> Vec<u8> {
                 bt,
                 BT_TREE,
                 BT_FIREPLACE,
+                BT_CAMPFIRE,
                 BT_CEILING_LIGHT,
                 BT_FLOOR_LAMP,
                 BT_TABLE_LAMP,

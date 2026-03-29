@@ -497,37 +497,69 @@ impl App {
                 }
                 PhysicalKey::Code(KeyCode::KeyQ) => {
                     if self.selected_pleb.is_none() {
-                        let four_way = matches!(
-                            self.build_tool,
-                            BuildTool::Place(12)
-                                | BuildTool::Place(16)
-                                | BuildTool::Place(20)
-                                | BuildTool::Place(19)
-                                | BuildTool::Place(44)
-                        ) || (self.wall_thickness < 4
-                            && matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id)));
-                        if four_way {
-                            self.build_rotation = (self.build_rotation + 3) % 4;
+                        // During HollowRect drag: rotate entry side
+                        let is_hollow_drag = self.drag_start.is_some()
+                            && matches!(self.build_tool, BuildTool::Place(id) if {
+                                let reg = block_defs::BlockRegistry::cached();
+                                reg.get(id)
+                                    .and_then(|d| d.placement.as_ref())
+                                    .and_then(|p| p.drag.as_ref())
+                                    == Some(&block_defs::DragShape::HollowRect)
+                            });
+                        if is_hollow_drag {
+                            // Cycle: 0(auto) → 4(W) → 3(S) → 2(E) → 1(N) → 0
+                            self.entry_side = if self.entry_side == 0 {
+                                4
+                            } else {
+                                self.entry_side - 1
+                            };
                         } else {
-                            self.build_rotation = (self.build_rotation + 1) % 2;
+                            let four_way = matches!(
+                                self.build_tool,
+                                BuildTool::Place(12)
+                                    | BuildTool::Place(16)
+                                    | BuildTool::Place(20)
+                                    | BuildTool::Place(19)
+                                    | BuildTool::Place(44)
+                            ) || (self.wall_thickness < 4
+                                && matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id)));
+                            if four_way {
+                                self.build_rotation = (self.build_rotation + 3) % 4;
+                            } else {
+                                self.build_rotation = (self.build_rotation + 1) % 2;
+                            }
                         }
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyE) => {
                     if self.selected_pleb.is_none() {
-                        let four_way = matches!(
-                            self.build_tool,
-                            BuildTool::Place(12)
-                                | BuildTool::Place(16)
-                                | BuildTool::Place(20)
-                                | BuildTool::Place(19)
-                                | BuildTool::Place(44)
-                        ) || (self.wall_thickness < 4
-                            && matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id)));
-                        if four_way {
-                            self.build_rotation = (self.build_rotation + 1) % 4;
+                        // During HollowRect drag: rotate entry side
+                        let is_hollow_drag = self.drag_start.is_some()
+                            && matches!(self.build_tool, BuildTool::Place(id) if {
+                                let reg = block_defs::BlockRegistry::cached();
+                                reg.get(id)
+                                    .and_then(|d| d.placement.as_ref())
+                                    .and_then(|p| p.drag.as_ref())
+                                    == Some(&block_defs::DragShape::HollowRect)
+                            });
+                        if is_hollow_drag {
+                            // Cycle: 0(auto) → 1(N) → 2(E) → 3(S) → 4(W) → 0
+                            self.entry_side = (self.entry_side + 1) % 5;
                         } else {
-                            self.build_rotation = (self.build_rotation + 1) % 2;
+                            let four_way = matches!(
+                                self.build_tool,
+                                BuildTool::Place(12)
+                                    | BuildTool::Place(16)
+                                    | BuildTool::Place(20)
+                                    | BuildTool::Place(19)
+                                    | BuildTool::Place(44)
+                            ) || (self.wall_thickness < 4
+                                && matches!(self.build_tool, BuildTool::Place(id) if is_wall_block(id)));
+                            if four_way {
+                                self.build_rotation = (self.build_rotation + 1) % 4;
+                            } else {
+                                self.build_rotation = (self.build_rotation + 1) % 2;
+                            }
                         }
                     }
                 }

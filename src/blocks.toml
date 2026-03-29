@@ -1003,3 +1003,21 @@ icon = "🪚"
 label = "Saw Horse"
 click = "simple"
 place_height = 1
+
+[[block]]
+id = 62
+name = "Campfire"
+color = [0.30, 0.25, 0.22]
+render_style = 62.0
+is_emissive = true
+walkable = true
+is_removable = true
+adjustable = true
+light = { intensity = 0.45, color = [1.0, 0.55, 0.15], radius = 4.0, height = 0.5 }
+thermal = { heat_capacity = 2.0, conductivity = 0.01, solar_absorption = 0.7 }
+[block.placement]
+category = "Build"
+icon = "🪵"
+label = "Campfire"
+click = "simple"
+place_height = 1

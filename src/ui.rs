@@ -1787,7 +1787,7 @@ impl App {
                                 "Walls" => 2,
                                 "Floor" => 4,
                                 "Roof" => 2,
-                                "Build" => 8,
+                                "Build" => 9,
                                 "Craft" => 2,
                                 "Light" => 6,
                                 "Power" => 10,
@@ -1894,6 +1894,12 @@ impl App {
                                             );
                                         }
                                         "Build" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(62),
+                                                "\u{1fab5}",
+                                                "Campfire",
+                                            );
                                             icon_btn(
                                                 ui,
                                                 BuildTool::Place(6),
@@ -3803,7 +3809,8 @@ impl App {
                             }
                         } else if is_roof {
                             // Roof preview: blue=valid support, red=no support
-                            if Self::can_support_roof(&self.grid_data, *tx, *ty) {
+                            if Self::can_support_roof_wd(&self.grid_data, &self.wall_data, *tx, *ty)
+                            {
                                 egui::Color32::from_rgba_unmultiplied(100, 160, 255, 100)
                             } else {
                                 egui::Color32::from_rgba_unmultiplied(255, 60, 60, 80)
@@ -4276,6 +4283,21 @@ impl App {
                             bp_painter.rect_filled(edge_rect, 0.0, tint);
                         }
                     }
+                } else if (bp.block_data & 0xFF) as u32 == BT_CAMPFIRE {
+                    // Campfire blueprint: draw only the 2x2 subtile area
+                    let bp_flags = ((bp.block_data >> 16) & 0xFF) as u8;
+                    let sub_x = (bp_flags >> 3) & 3;
+                    let sub_y = (bp_flags >> 5) & 3;
+                    let tw = sx1 - sx0;
+                    let th = sy1 - sy0;
+                    let sub_rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            sx0 + sub_x as f32 * tw * 0.25,
+                            sy0 + sub_y as f32 * th * 0.25,
+                        ),
+                        egui::vec2(tw * 0.5, th * 0.5),
+                    );
+                    bp_painter.rect_filled(sub_rect, 0.0, tint);
                 } else {
                     // Full-thickness wall or non-wall block
                     bp_painter.rect_filled(rect, 0.0, tint);
@@ -4403,6 +4425,22 @@ impl App {
                         _ => vec![tl, tr, br], // \ solid above-right
                     };
                     painter.add(egui::Shape::convex_polygon(tri, color, egui::Stroke::NONE));
+                } else if let Some((sub_x, sub_y)) = self.campfire_subtile {
+                    // Campfire: only highlight the 2x2 subtile area
+                    let tile_w = sx1 - sx0;
+                    let tile_h = sy1 - sy0;
+                    let sub_sx = sx0 + (sub_x as f32) * tile_w * 0.25;
+                    let sub_sy = sy0 + (sub_y as f32) * tile_h * 0.25;
+                    let sub_ex = sub_sx + tile_w * 0.5;
+                    let sub_ey = sub_sy + tile_h * 0.5;
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(sub_sx, sub_sy),
+                            egui::pos2(sub_ex, sub_ey),
+                        ),
+                        0.0,
+                        color,
+                    );
                 } else {
                     painter.rect_filled(
                         egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1)),
@@ -5255,6 +5293,50 @@ impl App {
         {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
             let tile_px = cam_zoom / self.render_scale / bp_ppp;
+            // Roof completion flash: briefly show a tint over newly-built roof tiles
+            {
+                let flash_painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Background,
+                    egui::Id::new("roof_flash"),
+                ));
+                let screen_rect = ctx.content_rect();
+                for y in 0..GRID_H {
+                    for x in 0..GRID_W {
+                        let idx = (y * GRID_W + x) as usize;
+                        if idx >= self.roof_flash.len() || self.roof_flash[idx] <= 0.0 {
+                            continue;
+                        }
+                        let alpha = (self.roof_flash[idx] / 3.0 * 120.0).min(120.0) as u8;
+                        let sx0 = ((x as f32 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                            / self.render_scale
+                            / bp_ppp;
+                        let sy0 = ((y as f32 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                            / self.render_scale
+                            / bp_ppp;
+                        let sx1 = ((x as f32 + 1.0 - cam_cx) * cam_zoom + cam_sw * 0.5)
+                            / self.render_scale
+                            / bp_ppp;
+                        let sy1 = ((y as f32 + 1.0 - cam_cy) * cam_zoom + cam_sh * 0.5)
+                            / self.render_scale
+                            / bp_ppp;
+                        if sx1 < screen_rect.min.x
+                            || sx0 > screen_rect.max.x
+                            || sy1 < screen_rect.min.y
+                            || sy0 > screen_rect.max.y
+                        {
+                            continue;
+                        }
+                        let rect =
+                            egui::Rect::from_min_max(egui::pos2(sx0, sy0), egui::pos2(sx1, sy1));
+                        flash_painter.rect_filled(
+                            rect,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(180, 160, 100, alpha),
+                        );
+                    }
+                }
+            }
+
             if tile_px > 3.0 {
                 let hole_painter = ctx.layer_painter(egui::LayerId::new(
                     egui::Order::Background,

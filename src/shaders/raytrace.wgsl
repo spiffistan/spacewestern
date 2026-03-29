@@ -355,7 +355,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 61u)];
+    return materials[min(bt, 62u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -1252,6 +1252,28 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
                     return 0.0;
                 }
             }
+            // Diagonal: check destination tile for wall edges facing back toward source
+            if sdx != 0 && sdy != 0 {
+                let dest_wd = read_wall_data(u32(sby) * u32(camera.grid_w) + u32(sbx));
+                if dest_wd != 0u && !(wd_has_door(dest_wd) && wd_door_open(dest_wd)) {
+                    // face_x: entering from East(1) if moving left, West(3) if moving right
+                    let face_x = select(1u, 3u, sdx > 0);
+                    // face_y: entering from South(2) if moving up, North(0) if moving down
+                    let face_y = select(2u, 0u, sdy > 0);
+                    if ((dest_wd & (1u << face_x)) != 0u) || ((dest_wd & (1u << face_y)) != 0u) {
+                        return 0.0;
+                    }
+                }
+                // Also check both intermediate corner tiles
+                let mid1_wd = read_wall_data(u32(prev_by) * u32(camera.grid_w) + u32(sbx));
+                if (mid1_wd & 0xFu) != 0u && !(wd_has_door(mid1_wd) && wd_door_open(mid1_wd)) {
+                    return 0.0;
+                }
+                let mid2_wd = read_wall_data(u32(sby) * u32(camera.grid_w) + u32(prev_bx));
+                if (mid2_wd & 0xFu) != 0u && !(wd_has_door(mid2_wd) && wd_door_open(mid2_wd)) {
+                    return 0.0;
+                }
+            }
         }
         prev_bx = sbx;
         prev_by = sby;
@@ -1387,8 +1409,8 @@ fn compute_proximity_glow(wx: f32, wy: f32, time: f32) -> vec3<f32> {
                 }
             }
 
-            // Fireplace: apply flicker animation
-            if bt == BT_FIREPLACE {
+            // Fire blocks: apply flicker animation
+            if bt == BT_FIREPLACE || bt == BT_CAMPFIRE {
                 let phase = fire_hash(vec2<f32>(lcx, lcy)) * 6.28;
                 let flicker = fire_flicker(time + phase);
                 intensity *= (0.7 + 0.3 * flicker);
@@ -1586,6 +1608,56 @@ fn render_fireplace(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> 
         // Bright hot core at very center
         let core_t = max(0.0, 1.0 - dist_center / (rim_inner * 0.4));
         color = mix(color, FIRE_COLOR_HOT * (0.8 + 0.2 * flicker), core_t * core_t);
+    }
+
+    return color;
+}
+
+// Small campfire: 2x2 subtiles centered, half the power of a full fireplace
+fn render_campfire(wx: f32, wy: f32, fx: f32, fy: f32, time: f32) -> vec3<f32> {
+    // Ground color (dirt/stone base)
+    let ground = vec3<f32>(0.28, 0.24, 0.20);
+    let stone_var = fire_hash(vec2<f32>(floor(fx * 4.0), floor(fy * 4.0))) * 0.04;
+    var color = ground + vec3<f32>(stone_var);
+
+    // Small fire pit centered in tile, 2x2 subtiles = 0.5 tile width
+    let cx = fx - 0.5;
+    let cy = fy - 0.5;
+    let dist_center = sqrt(cx * cx + cy * cy);
+
+    // Small stone ring
+    let rim_outer = 0.24;
+    let rim_inner = 0.18;
+    if dist_center < rim_outer && dist_center > rim_inner {
+        let rim_t = (dist_center - rim_inner) / (rim_outer - rim_inner);
+        color = mix(vec3<f32>(0.35, 0.31, 0.27), vec3<f32>(0.25, 0.22, 0.20), rim_t);
+    }
+
+    // Fire inside
+    if dist_center < rim_inner {
+        let ember_base = vec3<f32>(0.22, 0.05, 0.02);
+        let ember_t = time * 1.5;
+        let e1 = sin(wx * 17.0 + ember_t * 2.3) * sin(wy * 19.0 + ember_t * 1.7);
+        let e2 = sin(wx * 31.0 - ember_t * 3.1) * sin(wy * 23.0 + ember_t * 2.9);
+        let ember_glow = clamp(e1 * 0.5 + e2 * 0.3 + 0.3, 0.0, 1.0);
+        let ember_color = mix(ember_base, vec3<f32>(0.85, 0.28, 0.05), ember_glow);
+
+        let flame_t = time * 3.0;
+        let angle = atan2(cy, cx);
+        let flame1 = sin(angle * 3.0 + flame_t * 4.7) * 0.5 + 0.5;
+        let flame2 = sin(angle * 5.0 - flame_t * 6.3 + 1.5) * 0.5 + 0.5;
+        let flame_intensity = flame1 * flame2;
+        let flame_radial = 1.0 - dist_center / rim_inner;
+        let flame = flame_intensity * flame_radial * flame_radial;
+
+        let flame_color = mix(FIRE_COLOR, FIRE_COLOR_HOT, flame);
+        color = mix(ember_color, flame_color, clamp(flame * 1.5, 0.0, 1.0));
+
+        let flicker = fire_flicker(time);
+        color *= (0.7 + 0.3 * flicker);
+
+        let core_t = max(0.0, 1.0 - dist_center / (rim_inner * 0.4));
+        color = mix(color, FIRE_COLOR_HOT * (0.7 + 0.2 * flicker), core_t * core_t);
     }
 
     return color;
@@ -3008,6 +3080,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if btype == BT_FIREPLACE {
         // Fireplace: animated emissive rendering
         color = render_fireplace(world_x, world_y, fx, fy, camera.time);
+    } else if btype == BT_CAMPFIRE {
+        // Small campfire: 2x2 subtile fire with subtile offset from flags
+        let sub_x = f32((bflags >> 3u) & 3u) * 0.25; // 0, 0.25, or 0.5
+        let sub_y = f32((bflags >> 5u) & 3u) * 0.25;
+        let cf_cx = sub_x + 0.25; // center of 2x2 subtile area
+        let cf_cy = sub_y + 0.25;
+        color = render_campfire(world_x, world_y, fx - cf_cx + 0.5, fy - cf_cy + 0.5, camera.time);
     } else if btype == BT_CEILING_LIGHT {
         // Electric light: ceiling fixture rendering
         color = render_electric_light(world_x, world_y, fx, fy, camera.time);
@@ -4110,7 +4189,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else if btype == BT_RESTRICTOR {
             adj_level = f32(bheight & 0xFu); adj_max = 10.0;
             adj_color = vec3(0.3, 0.7, 1.0); // flow blue
-        } else if btype == BT_FIREPLACE {
+        } else if btype == BT_FIREPLACE || btype == BT_CAMPFIRE {
             adj_level = f32(bheight); adj_max = 10.0;
             adj_color = vec3(1.0, 0.5, 0.15); // fire orange
         } else if btype == BT_FAN {
@@ -4207,7 +4286,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_rock = btype == BT_ROCK;
     let is_crate = btype == BT_CRATE; // crate height = item count, not visual height
     let is_wire = btype == BT_WIRE || btype == BT_WIRE_BRIDGE; // wire height = connection mask, not visual
-    let is_dimmer = btype == BT_DIMMER || btype == BT_FIREPLACE; // height = level/intensity, not visual
+    let is_dimmer = btype == BT_DIMMER || btype == BT_FIREPLACE || btype == BT_CAMPFIRE; // height = level/intensity, not visual
     let is_breaker = btype == BT_BREAKER; // breaker height = threshold, not visual
     let is_plant = btype == BT_CROP; // crop height = growth stage, not visual (berry bush handled by is_tree_ground)
     let is_diag_open = btype == BT_DIAGONAL && !diag_is_wall(fx, fy, (bflags >> 3u) & 3u);
@@ -5230,7 +5309,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 hover_tint = vec3(0.3, 0.7, 1.0); is_hover = true;
             }
             // Slider blocks: dimmers, restrictors, fireplaces
-            if btype == BT_DIMMER || btype == BT_RESTRICTOR || btype == BT_FIREPLACE {
+            if btype == BT_DIMMER || btype == BT_RESTRICTOR || btype == BT_FIREPLACE || btype == BT_CAMPFIRE {
                 hover_tint = vec3(1.0, 0.6, 0.3); is_hover = true;
             }
             // Fan, pump: mechanical blue

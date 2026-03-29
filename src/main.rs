@@ -211,6 +211,7 @@ struct App {
     doors: Vec<Door>,     // physical hinged doors
     doors_dirty: bool,    // door angles changed, re-upload door_buffer
     roof_paid: Vec<bool>, // per-tile: has fiber been delivered for this roof tile?
+    roof_flash: Vec<f32>, // per-tile: seconds remaining to show roof after completion
     physics_bodies: Vec<PhysicsBody>,
     ground_items: Vec<resources::GroundItem>,
     blueprints: std::collections::HashMap<(i32, i32), Blueprint>,
@@ -274,6 +275,10 @@ struct App {
     diag_preview: Vec<(i32, i32, u8)>,
     // Entryway position for hollow rect drag (shown differently in preview)
     drag_entryway: Option<(i32, i32)>,
+    // Entry side override for hollow rect: 0=auto, 1=N, 2=E, 3=S, 4=W
+    entry_side: u8,
+    // Campfire subtile offset for preview: (x_off, y_off) in 0-2 range, or None for full tile
+    campfire_subtile: Option<(u8, u8)>,
     // Per-tile voltage snapshot for labels (read back from GPU when power overlay active)
     voltage_data: Vec<f32>,
     voltage_readback_pending: bool,
@@ -477,7 +482,7 @@ impl App {
             start_time: Instant::now(),
             time_of_day: DAY_DURATION * (CAMERA_START_HOUR / 24.0),
             time_paused: false,
-            time_speed: 0.125,
+            time_speed: 0.25,
             last_frame_time: Instant::now(),
             last_click_frame: 0,
             last_click_pos: (-1, -1),
@@ -577,6 +582,7 @@ impl App {
             doors: Vec::new(),
             doors_dirty: false,
             roof_paid: vec![false; (GRID_W * GRID_H) as usize],
+            roof_flash: vec![0.0; (GRID_W * GRID_H) as usize],
             physics_bodies: Vec::new(),
             ground_items: {
                 // Scatter starting resources near spawn for first tools
@@ -635,6 +641,8 @@ impl App {
             game_state: GameState::MainMenu,
             diag_preview: Vec::new(),
             drag_entryway: None,
+            entry_side: 0,
+            campfire_subtile: None,
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
             fog_enabled: false,
@@ -1573,24 +1581,72 @@ impl App {
             );
         }
 
+        // Tick roof flash timers (runs every frame, not just grid_dirty)
+        for f in self.roof_flash.iter_mut() {
+            if *f > 0.0 {
+                *f -= dt;
+            }
+        }
+
         // Re-upload grid if dirty (door toggled etc.)
         if self.grid_dirty {
+            // Recompute roof heights (walls may have changed)
+            compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
             // Roof fiber cost: suppress roof_h on unpaid tiles, create blueprints
+            // Only create roof blueprints once ALL wall blueprints for that room are built.
             if !self.sandbox_mode {
                 let grid_size = (GRID_W * GRID_H) as usize;
+                let w = GRID_W as i32;
+                let h = GRID_H as i32;
+                let max_search = 20i32;
                 for idx in 0..grid_size.min(self.grid_data.len()) {
                     let roof_h = (self.grid_data[idx] >> 24) & 0xFF;
                     if roof_h > 0 {
                         if self.roof_paid[idx] {
-                            // Already paid, keep roof
+                            // Already paid, keep roof_h (shader handles visibility)
                         } else if !self.blueprints.contains_key(&(
                             (idx % GRID_W as usize) as i32,
                             (idx / GRID_W as usize) as i32,
                         )) {
-                            // New roof tile — create blueprint requiring fiber
+                            // Check if all enclosing walls are built (no wall blueprints remain)
                             let bx = (idx % GRID_W as usize) as i32;
                             let by = (idx / GRID_W as usize) as i32;
-                            self.blueprints.insert((bx, by), Blueprint::new_roof());
+                            let mut walls_complete = true;
+                            let dirs: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+                            'dir_loop: for &(ddx, ddy) in &dirs {
+                                for dist in 1..=max_search {
+                                    let nx = bx + ddx * dist;
+                                    let ny = by + ddy * dist;
+                                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                                        break;
+                                    }
+                                    // Check if this tile has a wall blueprint (not yet built)
+                                    if self
+                                        .blueprints
+                                        .get(&(nx, ny))
+                                        .map_or(false, |bp| bp.is_wall())
+                                    {
+                                        walls_complete = false;
+                                        break 'dir_loop;
+                                    }
+                                    let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
+                                    // Stop at actual walls (block or wall_data)
+                                    let has_wd = nidx < self.wall_data.len()
+                                        && wd_edges(self.wall_data[nidx]) != 0;
+                                    let nb = self.grid_data[nidx];
+                                    let nbh = ((nb >> 8) & 0xFF) as u8;
+                                    let nb_flags = ((nb >> 16) & 0xFF) as u8;
+                                    if has_wd && (nb_flags & 2) == 0 {
+                                        break; // found built wall in this direction
+                                    }
+                                    if nbh > 0 && (nb_flags & 2) == 0 {
+                                        break; // found built block wall
+                                    }
+                                }
+                            }
+                            if walls_complete {
+                                self.blueprints.insert((bx, by), Blueprint::new_roof());
+                            }
                             // Clear roof_h so shader sees no roof yet
                             self.grid_data[idx] &= 0x00FFFFFF;
                         } else {
@@ -1940,6 +1996,25 @@ impl App {
             let (hwx, hwy) = self.hover_world;
             let hbx = hwx.floor() as i32;
             let hby = hwy.floor() as i32;
+
+            // Campfire subtile preview
+            self.campfire_subtile = if matches!(self.build_tool, BuildTool::Place(id) if id == BT_CAMPFIRE)
+            {
+                let shift_held = self.pressed_keys.contains(&KeyCode::ShiftLeft)
+                    || self.pressed_keys.contains(&KeyCode::ShiftRight);
+                if shift_held {
+                    let fx = (hwx.fract() + 1.0).fract();
+                    let fy = (hwy.fract() + 1.0).fract();
+                    Some((
+                        ((fx * 4.0).floor() as u8).min(2),
+                        ((fy * 4.0).floor() as u8).min(2),
+                    ))
+                } else {
+                    Some((1, 1)) // centered
+                }
+            } else {
+                None
+            };
             // Diagonal wall drag: compute per-tile variants for triangle preview
             let diag_drag_tiles: Vec<(i32, i32, u8)> =
                 if self.drag_start.is_some() && self.build_tool == BuildTool::Place(44) {
@@ -1970,8 +2045,14 @@ impl App {
                                 let pleb_pos = self
                                     .selected_pleb
                                     .and_then(|pi| self.plebs.get(pi).map(|p| (p.x, p.y)));
-                                let (wall_tiles, entry) =
-                                    Self::hollow_rect_tiles_with_entry(sx, sy, hbx, hby, pleb_pos);
+                                let (wall_tiles, entry) = Self::hollow_rect_tiles_with_entry_side(
+                                    sx,
+                                    sy,
+                                    hbx,
+                                    hby,
+                                    pleb_pos,
+                                    self.entry_side,
+                                );
                                 // Store entryway for preview rendering
                                 self.drag_entryway = entry;
                                 wall_tiles
@@ -3390,6 +3471,7 @@ impl ApplicationHandler for App {
                         self.mouse_dragged = false;
                         self.drag_start = None;
                         self.drag_entryway = None;
+                        self.entry_side = 0;
                         self.select_drag_start = None;
                     }
                 }

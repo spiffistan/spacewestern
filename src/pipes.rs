@@ -544,7 +544,8 @@ impl PipeNetwork {
                 if sx < 0 || sy < 0 || sx >= GRID_W as i32 || sy >= GRID_H as i32 {
                     continue;
                 }
-                if block_type_rs(grid[(sy as u32 * GRID_W + sx as u32) as usize]) == BT_FIREPLACE {
+                let pbt = block_type_rs(grid[(sy as u32 * GRID_W + sx as u32) as usize]);
+                if pbt == BT_FIREPLACE || pbt == BT_CAMPFIRE {
                     return true;
                 }
             }

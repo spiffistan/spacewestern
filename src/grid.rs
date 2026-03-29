@@ -66,6 +66,7 @@ pub const BT_KILN: u32 = 58;
 pub const BT_WELL: u32 = 59;
 pub const BT_ROUGH_FLOOR: u32 = 60;
 pub const BT_SAW_HORSE: u32 = 61;
+pub const BT_CAMPFIRE: u32 = 62;
 
 /// Generate WGSL `const BT_*: u32 = N;` lines for all block type constants.
 /// Prepend this to shader source so WGSL can use the same names as Rust.
@@ -134,6 +135,7 @@ pub fn wgsl_block_constants() -> String {
         ("BT_WELL", BT_WELL),
         ("BT_ROUGH_FLOOR", BT_ROUGH_FLOOR),
         ("BT_SAW_HORSE", BT_SAW_HORSE),
+        ("BT_CAMPFIRE", BT_CAMPFIRE),
     ];
     for &(name, val) in consts {
         s.push_str(&format!("const {}: u32 = {}u;\n", name, val));
@@ -751,6 +753,8 @@ pub fn compute_roof_heights_wd(grid: &mut Vec<u32>, wall_data: &[u16]) {
     let w = GRID_W as i32;
     let h = GRID_H as i32;
 
+    let max_search = 20i32;
+
     // Pass 1: identify which tiles are part of a roofed building
     let mut is_building = vec![false; grid.len()];
     for y in 0..h {
@@ -782,10 +786,118 @@ pub fn compute_roof_heights_wd(grid: &mut Vec<u32>, wall_data: &[u16]) {
         }
     }
 
+    // Pass 1.5: detect thin-wall room interiors that have no roof flag.
+    // A tile is interior if wall_data edges block passage in >= 3 cardinal directions.
+    if !wall_data.is_empty() {
+        // Edge direction when searching: N(0)=check N edge leaving, E(1), S(2), W(3)
+        let dir_for_search: [(i32, i32, u8, u8); 4] = [
+            (1, 0, 1, 3),  // search East: source E edge or dest W edge
+            (-1, 0, 3, 1), // search West: source W edge or dest E edge
+            (0, 1, 2, 0),  // search South: source S edge or dest N edge
+            (0, -1, 0, 2), // search North: source N edge or dest S edge
+        ];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) as usize;
+                if is_building[idx] {
+                    continue;
+                }
+                // Skip tiles that already have wall_data (they're wall tiles, not interior)
+                if idx < wall_data.len() && wd_edges(wall_data[idx]) != 0 {
+                    continue;
+                }
+                let mut walls_found = 0u8;
+                for &(ddx, ddy, src_edge, dst_edge) in &dir_for_search {
+                    for dist in 0..max_search {
+                        let cx = x + ddx * dist;
+                        let cy = y + ddy * dist;
+                        let nx = cx + ddx;
+                        let ny = cy + ddy;
+                        if cx < 0 || cy < 0 || cx >= w || cy >= h {
+                            break;
+                        }
+                        if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                            break;
+                        }
+                        let cidx = (cy * w + cx) as usize;
+                        let nidx = (ny * w + nx) as usize;
+                        // Check if crossing from (cx,cy) to (nx,ny) is blocked by wall_data edges
+                        let src_blocked =
+                            cidx < wall_data.len() && wd_has_edge(wall_data[cidx], src_edge);
+                        let dst_blocked =
+                            nidx < wall_data.len() && wd_has_edge(wall_data[nidx], dst_edge);
+                        if src_blocked || dst_blocked {
+                            walls_found += 1;
+                            break;
+                        }
+                        // Also check block walls
+                        let nb = grid[nidx];
+                        let nbh = ((nb >> 8) & 0xFF) as u8;
+                        let nb_flags = ((nb >> 16) & 0xFF) as u8;
+                        if nbh > 0 && (nb_flags & 2) == 0 {
+                            let nbt = (nb & 0xFF) as u8;
+                            let skip = bt_is!(
+                                nbt as u32,
+                                BT_TREE,
+                                BT_FIREPLACE,
+                                BT_CAMPFIRE,
+                                BT_CEILING_LIGHT,
+                                BT_CRATE,
+                                BT_WIRE,
+                                BT_DIMMER,
+                                BT_RESTRICTOR,
+                                BT_LIQUID_PIPE,
+                                BT_PIPE_BRIDGE,
+                                BT_WIRE_BRIDGE,
+                                BT_LIQUID_INTAKE,
+                                BT_LIQUID_PUMP,
+                                BT_LIQUID_OUTPUT
+                            );
+                            if !skip {
+                                walls_found += 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if walls_found >= 3 {
+                    is_building[idx] = true;
+                }
+            }
+        }
+        // Also mark wall_data tiles adjacent to detected interiors
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) as usize;
+                if is_building[idx] {
+                    continue;
+                }
+                if idx >= wall_data.len() || wd_edges(wall_data[idx]) == 0 {
+                    continue;
+                }
+                // Wall tile: mark if adjacent to an interior tile
+                for dy2 in -1i32..=1 {
+                    for dx2 in -1i32..=1 {
+                        let nx = x + dx2;
+                        let ny = y + dy2;
+                        if nx >= 0 && ny >= 0 && nx < w && ny < h {
+                            if is_building[(ny * w + nx) as usize] {
+                                is_building[idx] = true;
+                                break;
+                            }
+                        }
+                    }
+                    if is_building[idx] {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Pass 2: for each building tile, find the nearest enclosing wall in each
     // cardinal direction. This naturally finds the walls of THIS building without
     // bleeding into nearby buildings (which the old radius search did).
-    let max_search = 20i32;
     for y in 0..h {
         for x in 0..w {
             let idx = (y * w + x) as usize;
@@ -815,6 +927,7 @@ pub fn compute_roof_heights_wd(grid: &mut Vec<u32>, wall_data: &[u16]) {
                         nbt as u32,
                         BT_TREE,
                         BT_FIREPLACE,
+                        BT_CAMPFIRE,
                         BT_CEILING_LIGHT,
                         BT_CRATE,
                         BT_WIRE,
