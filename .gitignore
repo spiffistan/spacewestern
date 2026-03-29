@@ -6,9 +6,8 @@ DISPATCH_*.md
 # Blender backups
 *.blend1
 
-# Sprite build artifacts (regenerate with render scripts)
+# Sprite intermediate files (regenerate with render scripts)
 assets/sprites/raw/
-assets/sprites/*.bin
 
 # macOS
 .DS_Store

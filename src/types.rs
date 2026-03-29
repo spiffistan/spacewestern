@@ -480,6 +480,7 @@ pub struct SoundSource {
     pub phase: f32,     // accumulated phase
     pub pattern: u32,   // 0=impulse, 1=sine, 2=noise
     pub duration: f32,  // remaining seconds
+    pub fresh: bool,    // true until audio system has played it
 }
 
 /// Convert game decibels to wave equation amplitude.

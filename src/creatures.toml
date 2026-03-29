@@ -12,10 +12,10 @@ flee_group_size = 2
 body_radius = 0.2
 color = [0.25, 0.22, 0.30]
 eye_color = [0.8, 0.4, 0.1]
-sound_amplitude_db = 55.0
+sound_amplitude_db = 85.0
 sound_frequency = 800.0
 sound_pattern = 2
-sound_interval = 2.0
+sound_interval = 3.0
 
 [[creature]]
 id = 1

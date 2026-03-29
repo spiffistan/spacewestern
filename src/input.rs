@@ -131,6 +131,7 @@ impl App {
                     phase: 0.0,
                     pattern,
                     duration,
+                    fresh: true,
                 });
             }
             return;

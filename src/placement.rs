@@ -1200,32 +1200,6 @@ impl App {
             }
         }
 
-        // Dig earth (adds a hole, up to 7 per tile, no block change)
-        let can_dig = bt == BT_DIRT && {
-            let tidx = (by as u32 * GRID_W + bx as u32) as usize;
-            tidx < self.terrain_data.len() && terrain_dig_holes(self.terrain_data[tidx]) < 7
-        };
-        if sel_pleb.is_some() && can_dig {
-            let tidx = (by as u32 * GRID_W + bx as u32) as usize;
-            let is_clay_terrain = tidx < self.terrain_data.len()
-                && terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY;
-            let has_shovel = sel_pleb
-                .and_then(|pi| self.plebs.get(pi))
-                .map(|p| p.inventory.count_of(item_defs::ITEM_WOODEN_SHOVEL) > 0)
-                .unwrap_or(false);
-            if is_clay_terrain {
-                menu.title = "Clay Deposit".into();
-            }
-            let label = if has_shovel {
-                format!("Dig earth + shovel ({})", pleb_name)
-            } else {
-                format!("Dig earth ({})", pleb_name)
-            };
-            menu.actions
-                .push((label, ContextAction::DigClay(bx, by), true));
-            has_actions = true;
-        }
-
         // Ground items at this position: eat + haul actions
         if sel_pleb.is_some() {
             for (i, item) in self.ground_items.iter().enumerate() {
@@ -1292,6 +1266,33 @@ impl App {
         }
 
         if has_actions {
+            // If the only action is "Move here", execute it directly
+            if menu.actions.len() == 1 {
+                if let Some((_, ContextAction::MoveTo(mx, my), true)) = menu.actions.first() {
+                    if let Some(sel_idx) = sel_pleb {
+                        let (mx, my) = (*mx, *my);
+                        let pleb = &mut self.plebs[sel_idx];
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let goal = (mx.floor() as i32, my.floor() as i32);
+                        let path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            start,
+                            goal,
+                        );
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 1;
+                            pleb.activity = PlebActivity::Walking;
+                            pleb.work_target = None;
+                            pleb.haul_target = None;
+                            pleb.harvest_target = None;
+                        }
+                    }
+                    return;
+                }
+            }
             self.context_menu = Some(menu);
         }
     }

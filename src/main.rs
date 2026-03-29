@@ -12,6 +12,8 @@ macro_rules! bt_is {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod audio;
 mod block_defs;
 mod creature_defs;
 mod creatures;
@@ -107,7 +109,7 @@ const LIGHTNING_SURGE_VOLTAGE: f32 = 200.0;
 const LIGHTNING_BREAKER_RADIUS: i32 = 20;
 const WATER_INJECT_RADIUS: i32 = 3;
 const LIGHTMAP_MARGIN: f32 = 14.0; // tiles of margin >= max light radius
-const MAX_SOUND_SOURCES: usize = 16;
+const MAX_SOUND_SOURCES: usize = 32;
 const SOUND_SOURCE_STRIDE: usize = 8; // f32s per source in GPU buffer
 const READBACK_ALIGNMENT: u64 = 256; // wgpu COPY_BYTES_PER_ROW_ALIGNMENT
 const DRAG_THRESHOLD: f64 = 3.0; // pixels before drag is detected
@@ -176,14 +178,17 @@ struct App {
     sound_enabled: bool,
     sound_phase: usize, // 0 or 1 ping-pong
     sound_sources: Vec<SoundSource>,
-    sound_speed: f32,                     // wave propagation speed (c)
-    sound_damping: f32,                   // damping factor per step
-    sound_coupling: f32,                  // sound→gas velocity coupling strength
-    sound_iters_per_frame: u32,           // iterations per frame (controls propagation speed)
-    camera_pan_speed: f32,                // WASD pan speed (tiles/sec at zoom=1)
-    dye_w: u32,                           // current dye texture width (tracks render resolution)
-    dye_h: u32,                           // current dye texture height
-    sandbox_mode: bool,                   // enables sandbox build category + debug tools
+    sound_speed: f32,             // wave propagation speed (c)
+    sound_damping: f32,           // damping factor per step
+    sound_coupling: f32,          // sound→gas velocity coupling strength
+    sound_iters_per_frame: u32,   // iterations per frame (controls propagation speed)
+    camera_pan_speed: f32,        // WASD pan speed (tiles/sec at zoom=1)
+    dye_w: u32,                   // current dye texture width (tracks render resolution)
+    dye_h: u32,                   // current dye texture height
+    sandbox_mode: bool,           // enables sandbox build category + debug tools
+    debug_creatures_always: bool, // spawn creatures regardless of time of day
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_output: Option<audio::AudioOutput>,
     sandbox_tool: SandboxTool,            // current sandbox action
     show_pipe_overlay: bool,              // draw gas pipe contents as egui overlay (ventilation)
     show_grid: bool,                      // tile grid lines overlay
@@ -548,6 +553,9 @@ impl App {
             dye_w: FLUID_DYE_W,
             dye_h: FLUID_DYE_H,
             sandbox_mode: false,
+            debug_creatures_always: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_output: audio::AudioOutput::new(),
             sandbox_tool: SandboxTool::None,
             drag_start: None,
             show_pipe_overlay: false,
@@ -1501,6 +1509,28 @@ impl App {
         }
 
         let dt = self.update_simulation();
+
+        // Play audio for fresh sound sources
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref audio) = self.audio_output {
+            if self.sound_enabled {
+                for src in &mut self.sound_sources {
+                    if src.fresh {
+                        audio.play(
+                            src.x,
+                            src.y,
+                            src.amplitude,
+                            src.frequency,
+                            src.pattern,
+                            src.duration,
+                            self.camera.center_x,
+                            self.camera.center_y,
+                        );
+                        src.fresh = false;
+                    }
+                }
+            }
+        }
 
         // Generate hints every 30 frames
         if self.frame_count.is_multiple_of(30) {

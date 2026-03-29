@@ -27,6 +27,7 @@ Numbered technical documents for specific architectural decisions. Format: `DN-N
 | `DN-007-building-patterns.md` | Analysis | Allowed building patterns with thin walls — corners, T-junctions, double walls |
 | `DN-008-three-layer-world-model.md` | Proposed | Three-layer architecture: wall edges, blocks, surface items |
 | `DN-009-pleb-sprites.md` | Proposed | Layered sprite compositing for colonist rendering |
+| `DN-010-discovery-layer.md` | Proposed | Hidden map features: creature dens, minerals, artifacts, metal detector |
 
 ## Ideas (`ideas/`)
 
@@ -46,6 +47,7 @@ Early-stage design exploration. Not commitments — creative brainstorming for f
 | `PHILOSOPHY.md` | Design philosophy: permanence, silence, loneliness, scarcity as teacher, the colony as character |
 | `COMBAT.md` | Real-time tactical combat: RTwP, breaching, cover, suppression, weapons, enemy AI, wounds |
 | `ALIEN_FAUNA.md` | Nocturnal alien creatures: duskweavers, thermogasts, glintcrawlers, hollowcalls, mistmaws, borers. Sound sourcing, system integration. |
+| `LORE_AND_RESEARCH.md` | Knowledge as physical objects: tacit→written→shared, libraries, lore trading, metal detectors, unreliable narrators, alien translation |
 
 ## Reference (`fluid_mechanics/`)
 

@@ -1286,6 +1286,26 @@ impl App {
                                 self.build_category = None;
                             }
                         }
+                        ui.separator();
+                        if ui
+                            .selectable_label(self.debug_creatures_always, "Creatures (always)")
+                            .clicked()
+                        {
+                            self.debug_creatures_always = !self.debug_creatures_always;
+                            if !self.debug_creatures_always {
+                                // Clear existing creatures when turning off
+                                self.creatures.clear();
+                            }
+                        }
+                        ui.separator();
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if ui.button("Test Audio Beep").clicked() {
+                            if let Some(ref audio) = self.audio_output {
+                                audio.test_beep();
+                            } else {
+                                log::warn!("No audio output available");
+                            }
+                        }
                     });
 
                 ui.separator();

@@ -2896,7 +2896,7 @@ impl App {
         let sound_view_b = sound_tex_b_early.create_view(&wgpu::TextureViewDescriptor::default());
         let sound_source_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sound-sources"),
-            size: (1 + 16 * 8) * 4, // count + up to 16 sources × 8 f32
+            size: (1 + MAX_SOUND_SOURCES * SOUND_SOURCE_STRIDE) as u64 * 4, // count + sources × stride f32s
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });

@@ -8,6 +8,8 @@ macro_rules! bt_is {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod audio;
 pub mod block_defs;
 pub mod build;
 pub mod camera;

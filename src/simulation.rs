@@ -175,6 +175,7 @@ impl App {
                                 phase: 0.0,
                                 pattern: 0,
                                 duration: 0.2,
+                                fresh: true,
                             });
                         }
 
@@ -377,6 +378,7 @@ impl App {
                             phase: 0.0,
                             pattern: 0,
                             duration: 0.05,
+                            fresh: true,
                         });
                     }
                     // Muzzle smoke
@@ -1354,6 +1356,7 @@ impl App {
                             phase: 0.0,
                             pattern: 0,
                             duration: 0.05,
+                            fresh: true,
                         });
                     }
                 }
@@ -1482,6 +1485,7 @@ impl App {
                         phase: 0.0,
                         pattern: 0,
                         duration: def.impact.sound_duration,
+                        fresh: true,
                     });
                 }
 
@@ -1561,6 +1565,7 @@ impl App {
                         phase: 0.0,
                         pattern: 0,
                         duration: expl.def.sound_duration,
+                        fresh: true,
                     });
                 }
 
@@ -3005,8 +3010,9 @@ impl App {
         let dt_game = dt * self.time_speed;
         let day_frac = (self.time_of_day / DAY_DURATION).rem_euclid(1.0);
         let is_night = day_frac > 0.85 || day_frac < 0.15;
-        let approaching_dusk = day_frac > 0.80 && day_frac < 0.85;
-        let approaching_dawn = day_frac > 0.15 && day_frac < 0.20;
+        let force_creatures = self.debug_creatures_always;
+        let approaching_dusk = force_creatures || (day_frac > 0.80 && day_frac < 0.85);
+        let approaching_dawn = !force_creatures && (day_frac > 0.15 && day_frac < 0.20);
         let reg = CreatureRegistry::cached();
         let gw = GRID_W as i32;
         let gh = GRID_H as i32;
@@ -3016,7 +3022,9 @@ impl App {
         if self.creature_spawn_timer <= 0.0 {
             self.creature_spawn_timer = 8.0 + (self.frame_count as f32 * 0.1).sin().abs() * 7.0;
 
-            if (approaching_dusk || is_night) && self.creatures.len() < MAX_CREATURES {
+            if (approaching_dusk || is_night || force_creatures)
+                && self.creatures.len() < MAX_CREATURES
+            {
                 // Spawn a duskweaver pack at a random map edge
                 let has_duskweavers = self
                     .creatures
@@ -3124,10 +3132,17 @@ impl App {
                             c.angle = dy.atan2(dx);
                         }
                     } else if c.state_timer > 3.0 && speed > 0.0 {
-                        // Pick a new wander target
+                        // Pick a new wander target — random point, biased toward map center
                         c.state_timer = 0.0;
-                        let wx = (c.x as i32 + ((c.x * 13.7).sin() * 8.0) as i32).clamp(2, gw - 3);
-                        let wy = (c.y as i32 + ((c.y * 17.3).cos() * 8.0) as i32).clamp(2, gh - 3);
+                        let seed = (c.x * 137.3 + c.y * 311.7 + c.sound_timer * 53.1) as u32;
+                        let hash = seed.wrapping_mul(2654435761);
+                        let rx = (hash % (gw as u32 - 20)) as i32 + 10;
+                        let ry = ((hash >> 16) % (gh as u32 - 20)) as i32 + 10;
+                        // Limit path distance to ~30 tiles to avoid expensive A*
+                        let dx = (rx - c.x as i32).clamp(-30, 30);
+                        let dy = (ry - c.y as i32).clamp(-30, 30);
+                        let wx = (c.x as i32 + dx).clamp(3, gw - 4);
+                        let wy = (c.y as i32 + dy).clamp(3, gh - 4);
                         c.path = astar_path_terrain_wd(
                             &self.grid_data,
                             &self.wall_data,
@@ -3381,6 +3396,7 @@ impl App {
                         phase: 0.0,
                         pattern: def.sound_pattern,
                         duration,
+                        fresh: true,
                     });
                 }
             }
