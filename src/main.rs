@@ -669,7 +669,7 @@ impl App {
             campfire_subtile: None,
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
-            fog_enabled: false,
+            fog_enabled: true,
             fog_visibility: vec![0u8; (GRID_W * GRID_H) as usize],
             fog_explored: vec![0u8; (GRID_W * GRID_H) as usize], // start unexplored (black)
             fog_texture_data: vec![0u8; (GRID_W * GRID_H) as usize],
@@ -2494,311 +2494,210 @@ impl App {
             &screen_descriptor,
         );
 
-        // Lightmap: viewport-culled propagation at 2x resolution
-        self.lightmap_frame += 1;
-        let need_lightmap = self.lightmap_frame >= self.lightmap_interval
-            || self.grid_dirty
-            || self.camera.force_refresh > 0.5;
-        if need_lightmap {
-            self.lightmap_frame = 0;
-            let lm_wg_x = LIGHTMAP_W.div_ceil(WORKGROUP_SIZE);
-            let lm_wg_y = LIGHTMAP_H.div_ceil(WORKGROUP_SIZE);
-
-            // Seed pass: write to both textures (ensures clean state for ping-pong)
-            {
-                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("lightmap-seed-a"),
-                    timestamp_writes: None,
-                });
-                cpass.set_pipeline(&gfx.lightmap_seed_pipeline);
-                cpass.set_bind_group(0, &gfx.lightmap_seed_bind_groups[0], &[]);
-                cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
-            }
-            {
-                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("lightmap-seed-b"),
-                    timestamp_writes: None,
-                });
-                cpass.set_pipeline(&gfx.lightmap_seed_pipeline);
-                cpass.set_bind_group(0, &gfx.lightmap_seed_bind_groups[1], &[]);
-                cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
-            }
-
-            // Propagation passes (viewport-culled in shader)
-            for i in 0..self.lightmap_iterations {
-                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("lightmap-propagate"),
-                    timestamp_writes: None,
-                });
-                cpass.set_pipeline(&gfx.lightmap_prop_pipeline);
-                cpass.set_bind_group(0, &gfx.lightmap_prop_bind_groups[(i as usize) % 2], &[]);
-                cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
-            }
-        }
-
-        // --- Fluid simulation (every frame) ---
-        let fluid_wg = fluid_res.div_ceil(WORKGROUP_SIZE);
+        let is_playing = self.game_state == GameState::Playing;
         let dye_w = self.dye_w;
         let dye_h = self.dye_h;
-        let dye_wg_x = dye_w.div_ceil(WORKGROUP_SIZE);
-        let dye_wg_y = dye_h.div_ceil(WORKGROUP_SIZE);
 
-        // 1. Curl
-        {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("fluid-curl"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.fluid_p_curl);
-            p.set_bind_group(0, &gfx.fluid_bg_curl, &[]);
-            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-        }
-        // 2. Vorticity
-        {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("fluid-vorticity"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.fluid_p_vorticity);
-            p.set_bind_group(0, &gfx.fluid_bg_vorticity, &[]);
-            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-        }
-        // 3. Splat
-        {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("fluid-splat"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.fluid_p_splat);
-            p.set_bind_group(0, &gfx.fluid_bg_splat, &[]);
-            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-        }
-        // 4. Divergence
-        {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("fluid-div"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.fluid_p_divergence);
-            p.set_bind_group(0, &gfx.fluid_bg_divergence, &[]);
-            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-        }
-        // 5. Pressure clear
-        {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("fluid-pres-clear"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.fluid_p_pressure_clear);
-            p.set_bind_group(0, &gfx.fluid_bg_pressure_clear, &[]);
-            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-        }
-        // 6. Pressure Jacobi (16 iterations, ping-pong)
-        for i in 0..self.fluid_pressure_iters {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("fluid-pressure"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.fluid_p_pressure);
-            p.set_bind_group(0, &gfx.fluid_bg_pressure[(i as usize) % 2], &[]);
-            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-        }
-        // 7. Gradient subtract
-        {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("fluid-gradient"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.fluid_p_gradient);
-            p.set_bind_group(0, &gfx.fluid_bg_gradient, &[]);
-            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-        }
-        // 8. Advect velocity
-        {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("fluid-advect-vel"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.fluid_p_advect_vel);
-            p.set_bind_group(0, &gfx.fluid_bg_advect_vel, &[]);
-            p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-        }
-        // 9. Advect dye (512x512)
-        {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("fluid-advect-dye"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.fluid_p_advect_dye);
-            p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]);
-            p.dispatch_workgroups(dye_wg_x, dye_wg_y, 1);
-        }
-        // Flip dye phase for next frame
-        self.fluid_dye_phase = 1 - self.fluid_dye_phase;
+        if is_playing {
+            // Lightmap: viewport-culled propagation at 2x resolution
+            self.lightmap_frame += 1;
+            let need_lightmap = self.lightmap_frame >= self.lightmap_interval
+                || self.grid_dirty
+                || self.camera.force_refresh > 0.5;
+            if need_lightmap {
+                self.lightmap_frame = 0;
+                let lm_wg_x = LIGHTMAP_W.div_ceil(WORKGROUP_SIZE);
+                let lm_wg_y = LIGHTMAP_H.div_ceil(WORKGROUP_SIZE);
 
-        // 10. Thermal exchange (256x256)
-        {
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("thermal"),
-                timestamp_writes: None,
-            });
-            let tw = GRID_W.div_ceil(8);
-            let th = GRID_H.div_ceil(8);
-            p.set_pipeline(&gfx.thermal_pipeline);
-            p.set_bind_group(0, &gfx.thermal_bind_group, &[]);
-            p.dispatch_workgroups(tw, th, 1);
-        }
+                // Seed pass: write to both textures (ensures clean state for ping-pong)
+                {
+                    let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("lightmap-seed-a"),
+                        timestamp_writes: None,
+                    });
+                    cpass.set_pipeline(&gfx.lightmap_seed_pipeline);
+                    cpass.set_bind_group(0, &gfx.lightmap_seed_bind_groups[0], &[]);
+                    cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
+                }
+                {
+                    let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("lightmap-seed-b"),
+                        timestamp_writes: None,
+                    });
+                    cpass.set_pipeline(&gfx.lightmap_seed_pipeline);
+                    cpass.set_bind_group(0, &gfx.lightmap_seed_bind_groups[1], &[]);
+                    cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
+                }
 
-        // 11. Power grid voltage relaxation (256x256)
-        #[cfg(target_arch = "wasm32")]
-        let power_iters = 4;
-        #[cfg(not(target_arch = "wasm32"))]
-        let power_iters = 8;
-        {
-            let tw = GRID_W.div_ceil(8);
-            let th = GRID_H.div_ceil(8);
-            for _ in 0..power_iters {
+                // Propagation passes (viewport-culled in shader)
+                for i in 0..self.lightmap_iterations {
+                    let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("lightmap-propagate"),
+                        timestamp_writes: None,
+                    });
+                    cpass.set_pipeline(&gfx.lightmap_prop_pipeline);
+                    cpass.set_bind_group(0, &gfx.lightmap_prop_bind_groups[(i as usize) % 2], &[]);
+                    cpass.dispatch_workgroups(lm_wg_x, lm_wg_y, 1);
+                }
+            }
+
+            // --- Fluid simulation (every frame) ---
+            let fluid_wg = fluid_res.div_ceil(WORKGROUP_SIZE);
+            let dye_wg_x = self.dye_w.div_ceil(WORKGROUP_SIZE);
+            let dye_wg_y = self.dye_h.div_ceil(WORKGROUP_SIZE);
+
+            // 1. Curl
+            {
                 let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("power"),
+                    label: Some("fluid-curl"),
                     timestamp_writes: None,
                 });
-                p.set_pipeline(&gfx.power_pipeline);
-                p.set_bind_group(0, &gfx.power_bind_group, &[]);
+                p.set_pipeline(&gfx.fluid_p_curl);
+                p.set_bind_group(0, &gfx.fluid_bg_curl, &[]);
+                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+            }
+            // 2. Vorticity
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fluid-vorticity"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.fluid_p_vorticity);
+                p.set_bind_group(0, &gfx.fluid_bg_vorticity, &[]);
+                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+            }
+            // 3. Splat
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fluid-splat"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.fluid_p_splat);
+                p.set_bind_group(0, &gfx.fluid_bg_splat, &[]);
+                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+            }
+            // 4. Divergence
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fluid-div"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.fluid_p_divergence);
+                p.set_bind_group(0, &gfx.fluid_bg_divergence, &[]);
+                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+            }
+            // 5. Pressure clear
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fluid-pres-clear"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.fluid_p_pressure_clear);
+                p.set_bind_group(0, &gfx.fluid_bg_pressure_clear, &[]);
+                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+            }
+            // 6. Pressure Jacobi (16 iterations, ping-pong)
+            for i in 0..self.fluid_pressure_iters {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fluid-pressure"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.fluid_p_pressure);
+                p.set_bind_group(0, &gfx.fluid_bg_pressure[(i as usize) % 2], &[]);
+                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+            }
+            // 7. Gradient subtract
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fluid-gradient"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.fluid_p_gradient);
+                p.set_bind_group(0, &gfx.fluid_bg_gradient, &[]);
+                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+            }
+            // 8. Advect velocity
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fluid-advect-vel"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.fluid_p_advect_vel);
+                p.set_bind_group(0, &gfx.fluid_bg_advect_vel, &[]);
+                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+            }
+            // 9. Advect dye (512x512)
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fluid-advect-dye"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.fluid_p_advect_dye);
+                p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]);
+                p.dispatch_workgroups(dye_wg_x, dye_wg_y, 1);
+            }
+            // Flip dye phase for next frame
+            self.fluid_dye_phase = 1 - self.fluid_dye_phase;
+
+            // 10. Thermal exchange (256x256)
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("thermal"),
+                    timestamp_writes: None,
+                });
+                let tw = GRID_W.div_ceil(8);
+                let th = GRID_H.div_ceil(8);
+                p.set_pipeline(&gfx.thermal_pipeline);
+                p.set_bind_group(0, &gfx.thermal_bind_group, &[]);
                 p.dispatch_workgroups(tw, th, 1);
             }
-        }
 
-        // 12. Ground water simulation (256x256, every 4 frames)
-        self.water_frame += 1;
-        if self.water_frame.is_multiple_of(4) && !self.time_paused {
-            let tw = GRID_W.div_ceil(8);
-            let th = GRID_H.div_ceil(8);
-            let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("water"),
-                timestamp_writes: None,
-            });
-            p.set_pipeline(&gfx.water_pipeline);
-            p.set_bind_group(0, &gfx.water_bind_groups[self.water_phase], &[]);
-            p.dispatch_workgroups(tw, th, 1);
-            drop(p);
-            self.water_phase = 1 - self.water_phase;
-        }
-
-        // Debug: copy one dye texel at cursor position for readback
-        let ctrl_for_debug = self.pressed_keys.contains(&KeyCode::ControlLeft)
-            || self.pressed_keys.contains(&KeyCode::ControlRight);
-        if self.debug.mode || ctrl_for_debug {
-            let (wx, wy) = self.hover_world;
-            let dye_x = ((wx / GRID_W as f32) * dye_w as f32).clamp(0.0, (dye_w - 1) as f32) as u32;
-            let dye_y = ((wy / GRID_H as f32) * dye_h as f32).clamp(0.0, (dye_h - 1) as f32) as u32;
-            // The current readable dye is the one we just wrote to (dye phase was already flipped)
-            let dye_idx = self.fluid_dye_phase; // after flip, this points to the fresh output
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &gfx.fluid_dye[dye_idx],
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: dye_x,
-                        y: dye_y,
-                        z: 0,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &gfx.debug_readback_buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(READBACK_ALIGNMENT as u32),
-                        rows_per_image: Some(1),
-                    },
-                },
-                wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-            );
-            self.debug.fluid_pending = true;
-
-            // Also copy water level at cursor
-            let water_bx = wx.floor().clamp(0.0, (GRID_W - 1) as f32) as u32;
-            let water_by = wy.floor().clamp(0.0, (GRID_H - 1) as f32) as u32;
-            let water_read_idx = self.water_phase; // current readable water texture
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &gfx.water_textures[water_read_idx],
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: water_bx,
-                        y: water_by,
-                        z: 0,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &gfx.water_readback_buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(READBACK_ALIGNMENT as u32),
-                        rows_per_image: Some(1),
-                    },
-                },
-                wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-            );
-            self.debug.water_pending = true;
-
-            // Also copy block temperature at cursor position from block_temp_buffer
-            let btx = wx.floor() as i32;
-            let bty = wy.floor() as i32;
-            if btx >= 0 && bty >= 0 && btx < GRID_W as i32 && bty < GRID_H as i32 {
-                let bt_idx = (bty as u32 * GRID_W + btx as u32) as u64;
-                encoder.copy_buffer_to_buffer(
-                    &gfx.block_temp_buffer,
-                    bt_idx * 4,
-                    &gfx.block_temp_readback_buffer,
-                    0,
-                    4,
-                );
-                encoder.copy_buffer_to_buffer(
-                    &gfx.voltage_buffer,
-                    bt_idx * 4,
-                    &gfx.block_temp_readback_buffer,
-                    4, // second f32
-                    4,
-                );
-                self.debug.block_temp_pending = true;
-                self.debug.voltage_pending = true;
+            // 11. Power grid voltage relaxation (256x256)
+            #[cfg(target_arch = "wasm32")]
+            let power_iters = 4;
+            #[cfg(not(target_arch = "wasm32"))]
+            let power_iters = 8;
+            {
+                let tw = GRID_W.div_ceil(8);
+                let th = GRID_H.div_ceil(8);
+                for _ in 0..power_iters {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("power"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.power_pipeline);
+                    p.set_bind_group(0, &gfx.power_bind_group, &[]);
+                    p.dispatch_workgroups(tw, th, 1);
+                }
             }
-        }
 
-        // Copy full voltage buffer for per-tile labels (power overlay or flow overlay)
-        if matches!(
-            self.fluid_overlay,
-            FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts
-        ) || self.show_flow_overlay
-        {
-            encoder.copy_buffer_to_buffer(
-                &gfx.voltage_buffer,
-                0,
-                &gfx.voltage_readback_buffer,
-                0,
-                (GRID_W * GRID_H * 4) as u64,
-            );
-            self.voltage_readback_pending = true;
-        }
+            // 12. Ground water simulation (256x256, every 4 frames)
+            self.water_frame += 1;
+            if self.water_frame.is_multiple_of(4) && !self.time_paused {
+                let tw = GRID_W.div_ceil(8);
+                let th = GRID_H.div_ceil(8);
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("water"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.water_pipeline);
+                p.set_bind_group(0, &gfx.water_bind_groups[self.water_phase], &[]);
+                p.dispatch_workgroups(tw, th, 1);
+                drop(p);
+                self.water_phase = 1 - self.water_phase;
+            }
 
-        // Copy dye texels at each pleb position for air readback
-        if !self.plebs.is_empty() {
-            let dye_idx = self.fluid_dye_phase;
-            for (i, pleb) in self.plebs.iter().enumerate() {
+            // Debug: copy one dye texel at cursor position for readback
+            let ctrl_for_debug = self.pressed_keys.contains(&KeyCode::ControlLeft)
+                || self.pressed_keys.contains(&KeyCode::ControlRight);
+            if self.debug.mode || ctrl_for_debug {
+                let (wx, wy) = self.hover_world;
                 let dye_x =
-                    ((pleb.x / GRID_W as f32) * dye_w as f32).clamp(0.0, (dye_w - 1) as f32) as u32;
+                    ((wx / GRID_W as f32) * dye_w as f32).clamp(0.0, (dye_w - 1) as f32) as u32;
                 let dye_y =
-                    ((pleb.y / GRID_H as f32) * dye_h as f32).clamp(0.0, (dye_h - 1) as f32) as u32;
+                    ((wy / GRID_H as f32) * dye_h as f32).clamp(0.0, (dye_h - 1) as f32) as u32;
+                // The current readable dye is the one we just wrote to (dye phase was already flipped)
+                let dye_idx = self.fluid_dye_phase; // after flip, this points to the fresh output
                 encoder.copy_texture_to_buffer(
                     wgpu::TexelCopyTextureInfo {
                         texture: &gfx.fluid_dye[dye_idx],
@@ -2811,9 +2710,9 @@ impl App {
                         aspect: wgpu::TextureAspect::All,
                     },
                     wgpu::TexelCopyBufferInfo {
-                        buffer: &gfx.pleb_air_readback_buffer,
+                        buffer: &gfx.debug_readback_buffer,
                         layout: wgpu::TexelCopyBufferLayout {
-                            offset: (i as u64) * READBACK_ALIGNMENT,
+                            offset: 0,
                             bytes_per_row: Some(READBACK_ALIGNMENT as u32),
                             rows_per_image: Some(1),
                         },
@@ -2824,93 +2723,200 @@ impl App {
                         depth_or_array_layers: 1,
                     },
                 );
+                self.debug.fluid_pending = true;
+
+                // Also copy water level at cursor
+                let water_bx = wx.floor().clamp(0.0, (GRID_W - 1) as f32) as u32;
+                let water_by = wy.floor().clamp(0.0, (GRID_H - 1) as f32) as u32;
+                let water_read_idx = self.water_phase; // current readable water texture
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &gfx.water_textures[water_read_idx],
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: water_bx,
+                            y: water_by,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &gfx.water_readback_buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(READBACK_ALIGNMENT as u32),
+                            rows_per_image: Some(1),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                self.debug.water_pending = true;
+
+                // Also copy block temperature at cursor position from block_temp_buffer
+                let btx = wx.floor() as i32;
+                let bty = wy.floor() as i32;
+                if btx >= 0 && bty >= 0 && btx < GRID_W as i32 && bty < GRID_H as i32 {
+                    let bt_idx = (bty as u32 * GRID_W + btx as u32) as u64;
+                    encoder.copy_buffer_to_buffer(
+                        &gfx.block_temp_buffer,
+                        bt_idx * 4,
+                        &gfx.block_temp_readback_buffer,
+                        0,
+                        4,
+                    );
+                    encoder.copy_buffer_to_buffer(
+                        &gfx.voltage_buffer,
+                        bt_idx * 4,
+                        &gfx.block_temp_readback_buffer,
+                        4, // second f32
+                        4,
+                    );
+                    self.debug.block_temp_pending = true;
+                    self.debug.voltage_pending = true;
+                }
             }
-            self.pleb_air_readback_pending = true;
-        }
 
-        // Reset splat
-        self.fluid_params.splat_active = 0.0;
-
-        // Sound wave propagation (multiple iterations per frame)
-        if self.sound_enabled {
-            // Pack sound parameters into camera padding fields
-            self.camera.sound_speed = self.sound_speed;
-            self.camera.sound_damping = self.sound_damping;
-            self.camera.sound_coupling = self.sound_coupling;
-            // Re-upload camera with sound params
-            gfx.queue
-                .write_buffer(&gfx.camera_buffer, 0, bytemuck::bytes_of(&self.camera));
-
-            // Pack active sound sources into buffer
-            let mut source_data = vec![0.0f32; 1 + MAX_SOUND_SOURCES * SOUND_SOURCE_STRIDE];
-            let count = self.sound_sources.len().min(MAX_SOUND_SOURCES);
-            source_data[0] = count as f32;
-            for (i, src) in self
-                .sound_sources
-                .iter()
-                .enumerate()
-                .take(MAX_SOUND_SOURCES)
+            // Copy full voltage buffer for per-tile labels (power overlay or flow overlay)
+            if matches!(
+                self.fluid_overlay,
+                FluidOverlay::Power | FluidOverlay::PowerAmps | FluidOverlay::PowerWatts
+            ) || self.show_flow_overlay
             {
-                let base = 1 + i * SOUND_SOURCE_STRIDE;
-                source_data[base] = src.x;
-                source_data[base + 1] = src.y;
-                source_data[base + 2] = src.amplitude;
-                source_data[base + 3] = src.frequency;
-                source_data[base + 4] = src.phase;
-                source_data[base + 5] = src.pattern as f32;
-                source_data[base + 6] = src.duration;
+                encoder.copy_buffer_to_buffer(
+                    &gfx.voltage_buffer,
+                    0,
+                    &gfx.voltage_readback_buffer,
+                    0,
+                    (GRID_W * GRID_H * 4) as u64,
+                );
+                self.voltage_readback_pending = true;
             }
-            gfx.queue.write_buffer(
-                &gfx.sound_source_buffer,
-                0,
-                bytemuck::cast_slice(&source_data),
-            );
 
-            // Tick sources: advance phase, decrement duration, remove expired
-            let dt_sound = 1.0 / 60.0;
-            for src in &mut self.sound_sources {
-                src.phase += src.frequency * dt_sound * std::f32::consts::TAU;
-                src.duration -= dt_sound;
+            // Copy dye texels at each pleb position for air readback
+            if !self.plebs.is_empty() {
+                let dye_idx = self.fluid_dye_phase;
+                for (i, pleb) in self.plebs.iter().enumerate() {
+                    let dye_x = ((pleb.x / GRID_W as f32) * dye_w as f32)
+                        .clamp(0.0, (dye_w - 1) as f32) as u32;
+                    let dye_y = ((pleb.y / GRID_H as f32) * dye_h as f32)
+                        .clamp(0.0, (dye_h - 1) as f32) as u32;
+                    encoder.copy_texture_to_buffer(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &gfx.fluid_dye[dye_idx],
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: dye_x,
+                                y: dye_y,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: &gfx.pleb_air_readback_buffer,
+                            layout: wgpu::TexelCopyBufferLayout {
+                                offset: (i as u64) * READBACK_ALIGNMENT,
+                                bytes_per_row: Some(READBACK_ALIGNMENT as u32),
+                                rows_per_image: Some(1),
+                            },
+                        },
+                        wgpu::Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                self.pleb_air_readback_pending = true;
             }
-            self.sound_sources.retain(|s| s.duration > 0.0);
 
-            // Dispatch wave equation iterations (ensure even count so result lands in texture A)
-            let iters = (self.sound_iters_per_frame / 2) * 2; // round down to even
-            let iters = iters.max(2);
-            let sw = GRID_W.div_ceil(WORKGROUP_SIZE);
-            let sh = GRID_H.div_ceil(WORKGROUP_SIZE);
-            for _ in 0..iters {
+            // Reset splat
+            self.fluid_params.splat_active = 0.0;
+
+            // Sound wave propagation (multiple iterations per frame)
+            if self.sound_enabled {
+                // Pack sound parameters into camera padding fields
+                self.camera.sound_speed = self.sound_speed;
+                self.camera.sound_damping = self.sound_damping;
+                self.camera.sound_coupling = self.sound_coupling;
+                // Re-upload camera with sound params
+                gfx.queue
+                    .write_buffer(&gfx.camera_buffer, 0, bytemuck::bytes_of(&self.camera));
+
+                // Pack active sound sources into buffer
+                let mut source_data = vec![0.0f32; 1 + MAX_SOUND_SOURCES * SOUND_SOURCE_STRIDE];
+                let count = self.sound_sources.len().min(MAX_SOUND_SOURCES);
+                source_data[0] = count as f32;
+                for (i, src) in self
+                    .sound_sources
+                    .iter()
+                    .enumerate()
+                    .take(MAX_SOUND_SOURCES)
+                {
+                    let base = 1 + i * SOUND_SOURCE_STRIDE;
+                    source_data[base] = src.x;
+                    source_data[base + 1] = src.y;
+                    source_data[base + 2] = src.amplitude;
+                    source_data[base + 3] = src.frequency;
+                    source_data[base + 4] = src.phase;
+                    source_data[base + 5] = src.pattern as f32;
+                    source_data[base + 6] = src.duration;
+                }
+                gfx.queue.write_buffer(
+                    &gfx.sound_source_buffer,
+                    0,
+                    bytemuck::cast_slice(&source_data),
+                );
+
+                // Tick sources: advance phase, decrement duration, remove expired
+                let dt_sound = 1.0 / 60.0;
+                for src in &mut self.sound_sources {
+                    src.phase += src.frequency * dt_sound * std::f32::consts::TAU;
+                    src.duration -= dt_sound;
+                }
+                self.sound_sources.retain(|s| s.duration > 0.0);
+
+                // Dispatch wave equation iterations (ensure even count so result lands in texture A)
+                let iters = (self.sound_iters_per_frame / 2) * 2; // round down to even
+                let iters = iters.max(2);
+                let sw = GRID_W.div_ceil(WORKGROUP_SIZE);
+                let sh = GRID_H.div_ceil(WORKGROUP_SIZE);
+                for _ in 0..iters {
+                    let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("sound-pass"),
+                        timestamp_writes: None,
+                    });
+                    cpass.set_pipeline(&gfx.sound_pipeline);
+                    cpass.set_bind_group(0, &gfx.sound_bind_groups[self.sound_phase], &[]);
+                    cpass.dispatch_workgroups(sw, sh, 1);
+                    drop(cpass);
+                    self.sound_phase = 1 - self.sound_phase;
+                }
+                // After even iterations, result is back in texture A (phase 0)
+            }
+
+            // Compute pass 2: raytrace (per-pixel, render resolution)
+            let rt_w = self.camera.screen_w as u32;
+            let rt_h = self.camera.screen_h as u32;
+            {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("sound-pass"),
+                    label: Some("raytrace-pass"),
                     timestamp_writes: None,
                 });
-                cpass.set_pipeline(&gfx.sound_pipeline);
-                cpass.set_bind_group(0, &gfx.sound_bind_groups[self.sound_phase], &[]);
-                cpass.dispatch_workgroups(sw, sh, 1);
-                drop(cpass);
-                self.sound_phase = 1 - self.sound_phase;
+                cpass.set_pipeline(&gfx.compute_pipeline);
+                cpass.set_bind_group(
+                    0,
+                    &gfx.compute_bind_groups[self.fluid_dye_phase * 2 + self.output_phase],
+                    &[],
+                );
+                let wg_x = rt_w.div_ceil(WORKGROUP_SIZE);
+                let wg_y = rt_h.div_ceil(WORKGROUP_SIZE);
+                cpass.dispatch_workgroups(wg_x, wg_y, 1);
             }
-            // After even iterations, result is back in texture A (phase 0)
-        }
-
-        // Compute pass 2: raytrace (per-pixel, render resolution)
-        let rt_w = self.camera.screen_w as u32;
-        let rt_h = self.camera.screen_h as u32;
-        {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("raytrace-pass"),
-                timestamp_writes: None,
-            });
-            cpass.set_pipeline(&gfx.compute_pipeline);
-            cpass.set_bind_group(
-                0,
-                &gfx.compute_bind_groups[self.fluid_dye_phase * 2 + self.output_phase],
-                &[],
-            );
-            let wg_x = rt_w.div_ceil(WORKGROUP_SIZE);
-            let wg_y = rt_h.div_ceil(WORKGROUP_SIZE);
-            cpass.dispatch_workgroups(wg_x, wg_y, 1);
-        }
+        } // end if is_playing
 
         // Render pass: blit output texture to screen
         {

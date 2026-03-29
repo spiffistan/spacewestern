@@ -139,8 +139,10 @@ impl App {
         });
         queue.write_buffer(&camera_buffer, 0, bytemuck::bytes_of(&self.camera));
 
-        // Grid storage buffer
-        self.grid_data = generate_world(42);
+        // Grid storage buffer (blank until map gen screen generates the world)
+        if self.grid_data.len() != (GRID_W * GRID_H) as usize {
+            self.grid_data = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+        }
         compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
         self.pipe_network.rebuild(&self.grid_data);
         let grid_buffer = device.create_buffer(&wgpu::BufferDescriptor {

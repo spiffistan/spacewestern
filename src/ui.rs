@@ -55,6 +55,39 @@ impl App {
         blueprint_tiles: Vec<((i32, i32), u8)>,
         dt: f32,
     ) {
+        // Font setup: Inter Medium for thicker UI text
+        {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "Inter".to_owned(),
+                egui::FontData::from_static(include_bytes!("../assets/fonts/Inter-Variable.ttf"))
+                    .into(),
+            );
+            // Insert Inter as first priority for proportional family
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, "Inter".to_owned());
+            ctx.set_fonts(fonts);
+        }
+        {
+            let mut style = (*ctx.style()).clone();
+            style.text_styles.insert(
+                egui::TextStyle::Body,
+                egui::FontId::new(13.0, egui::FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                egui::TextStyle::Button,
+                egui::FontId::new(13.0, egui::FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                egui::TextStyle::Small,
+                egui::FontId::new(11.0, egui::FontFamily::Proportional),
+            );
+            ctx.set_style(style);
+        }
+
         match self.game_state {
             GameState::MainMenu => self.draw_main_menu(ctx),
             GameState::MapGen => self.draw_map_gen_screen(ctx),
@@ -96,6 +129,7 @@ impl App {
         egui::Area::new(egui::Id::new("main_menu"))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
+                ui.set_min_width(320.0);
                 ui.vertical_centered(|ui| {
                     ui.add_space(20.0);
                     ui.label(
@@ -879,30 +913,6 @@ impl App {
         }
 
         // Version label below layers menu
-        egui::Area::new(egui::Id::new("version_label"))
-            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
-            .interactable(false)
-            .show(ctx, |ui| {
-                let frame_ms = if self.fps_display > 0.0 {
-                    1000.0 / self.fps_display
-                } else {
-                    0.0
-                };
-                let rw = self.camera.screen_w as u32;
-                let rh = self.camera.screen_h as u32;
-                ui.label(
-                    egui::RichText::new(format!(
-                        "v{} | {:.0} fps ({:.1}ms) | {}x{}",
-                        include_str!("../VERSION").trim(),
-                        self.fps_display,
-                        frame_ms,
-                        rw,
-                        rh
-                    ))
-                    .color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 180))
-                    .size(12.0),
-                );
-            });
     }
 
     fn draw_menu_bar(&mut self, ctx: &egui::Context, _dt: f32) {
@@ -936,8 +946,9 @@ impl App {
                 } else {
                     "Night"
                 };
-                let time_label = format!("{:02}:{:02} {}", hours, minutes, phase);
-                ui.menu_button(time_label, |ui| {
+                // Fixed-width time label: pad phase to 5 chars so menu doesn't shift
+                let time_label = format!("{:02}:{:02} {:5}", hours, minutes, phase);
+                ui.menu_button(egui::RichText::new(time_label).monospace(), |ui| {
                     ui.add(
                         egui::Slider::new(&mut time_val, 0.0..=DAY_DURATION)
                             .text("Time")
@@ -1298,6 +1309,30 @@ impl App {
                             }
                         }
                         ui.separator();
+                        if ui
+                            .selectable_label(self.fog_enabled, "Fog of War")
+                            .clicked()
+                        {
+                            self.fog_enabled = !self.fog_enabled;
+                            self.fog_dirty = true;
+                            if !self.fog_enabled {
+                                self.fog_texture_data.iter_mut().for_each(|v| *v = 255);
+                                self.fog_dirty = true;
+                            }
+                        }
+                        if self.fog_enabled
+                            && ui
+                                .selectable_label(self.fog_start_explored, "Pre-revealed Map")
+                                .clicked()
+                        {
+                            self.fog_start_explored = !self.fog_start_explored;
+                            if self.fog_start_explored {
+                                self.fog_explored.iter_mut().for_each(|v| *v = 255);
+                            }
+                            self.fog_prev_tiles.clear();
+                            self.fog_dirty = true;
+                        }
+                        ui.separator();
                         #[cfg(not(target_arch = "wasm32"))]
                         if ui.button("Test Audio Beep").clicked() {
                             if let Some(ref audio) = self.audio_output {
@@ -1310,31 +1345,6 @@ impl App {
 
                 ui.separator();
                 ui.menu_button("Admin", |ui| {
-                    if ui
-                        .selectable_label(self.fog_enabled, "Fog of War")
-                        .clicked()
-                    {
-                        self.fog_enabled = !self.fog_enabled;
-                        self.fog_dirty = true;
-                        if !self.fog_enabled {
-                            self.fog_texture_data.iter_mut().for_each(|v| *v = 255);
-                            self.fog_dirty = true;
-                        }
-                    }
-                    if self.fog_enabled
-                        && ui
-                            .selectable_label(self.fog_start_explored, "Pre-revealed Map")
-                            .clicked()
-                    {
-                        self.fog_start_explored = !self.fog_start_explored;
-                        if self.fog_start_explored {
-                            self.fog_explored.iter_mut().for_each(|v| *v = 255);
-                        }
-                        // Force recompute
-                        self.fog_prev_tiles.clear();
-                        self.fog_dirty = true;
-                    }
-                    ui.separator();
                     let pleb_label = format!("Add Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
                     if ui.button(pleb_label).clicked() {
                         self.placing_pleb = !self.placing_pleb;
@@ -1348,6 +1358,31 @@ impl App {
                     }
                 });
             });
+            // Right-aligned FPS/version info (painted over the menu bar)
+            let frame_ms = if self.fps_display > 0.0 {
+                1000.0 / self.fps_display
+            } else {
+                0.0
+            };
+            let rw = self.camera.screen_w as u32;
+            let rh = self.camera.screen_h as u32;
+            let fps_text = format!(
+                "v{} | {:.0} fps ({:.1}ms) | {}x{}",
+                include_str!("../VERSION").trim(),
+                self.fps_display,
+                frame_ms,
+                rw,
+                rh
+            );
+            let bar_rect = ui.max_rect();
+            let painter = ui.painter();
+            painter.text(
+                egui::pos2(bar_rect.max.x - 6.0, bar_rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                &fps_text,
+                egui::FontId::monospace(11.0),
+                egui::Color32::from_rgba_premultiplied(160, 160, 160, 180),
+            );
         });
         self.time_of_day = time_val;
         self.time_paused = paused;
@@ -5421,6 +5456,17 @@ impl App {
                 {
                     continue;
                 }
+                // Hide in fog of war
+                if self.fog_enabled {
+                    let fx = item.x.floor() as i32;
+                    let fy = item.y.floor() as i32;
+                    if fx >= 0 && fy >= 0 && fx < GRID_W as i32 && fy < GRID_H as i32 {
+                        let fidx = (fy as u32 * GRID_W + fx as u32) as usize;
+                        if fidx < self.fog_visibility.len() && self.fog_visibility[fidx] < 128 {
+                            continue;
+                        }
+                    }
+                }
                 let r = (tile_px * 0.18).max(3.0);
                 let n = item.stack.count;
                 let iid = item.stack.item_id;
@@ -6429,18 +6475,18 @@ impl App {
         font: egui::FontId,
         color: egui::Color32,
     ) {
-        let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200);
-        painter.text(
-            pos + egui::Vec2::new(1.0, 1.0),
-            anchor,
-            text,
-            font.clone(),
-            shadow,
+        // 30% opacity black background behind text
+        let galley = painter.layout_no_wrap(text.to_string(), font.clone(), color);
+        let text_rect = anchor.anchor_size(pos, galley.size());
+        let pad = egui::Vec2::new(3.0, 1.0);
+        painter.rect_filled(
+            text_rect.expand2(pad),
+            2.0,
+            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 77),
         );
         painter.text(pos, anchor, text, font, color);
     }
 
-    /// Draw a world-space label with shadow. Size is in points (scaled up from old defaults).
     fn world_label(
         painter: &egui::Painter,
         pos: egui::Pos2,
@@ -6449,16 +6495,14 @@ impl App {
         size: f32,
         color: egui::Color32,
     ) {
-        let font = egui::FontId::proportional(size);
-        let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200);
-        painter.text(
-            pos + egui::Vec2::new(1.0, 1.0),
+        Self::shadow_text(
+            painter,
+            pos,
             anchor,
             text,
-            font.clone(),
-            shadow,
+            egui::FontId::proportional(size),
+            color,
         );
-        painter.text(pos, anchor, text, font, color);
     }
 
     fn draw_world_labels(&mut self, ctx: &egui::Context, bp_cam: (f32, f32, f32, f32, f32)) {
@@ -7500,6 +7544,38 @@ impl App {
 
     // --- Minimap: world overview (bottom-left corner, above build bar) ---
     fn draw_minimap(&self, ctx: &egui::Context) {
+        // Temperature label above minimap
+        let ambient_temp = self
+            .selected_pleb
+            .and_then(|i| self.plebs.get(i))
+            .map(|p| p.needs.air_temp)
+            .unwrap_or(15.0);
+        {
+            let temp_text = format!("{:.0}°C", ambient_temp);
+            let color = if ambient_temp < 5.0 {
+                egui::Color32::from_rgb(100, 160, 255)
+            } else if ambient_temp > 40.0 {
+                egui::Color32::from_rgb(255, 100, 60)
+            } else {
+                egui::Color32::from_gray(210)
+            };
+            let font = egui::FontId::proportional(13.0);
+            let screen = ctx.input(|i| i.screen_rect());
+            let pos = egui::pos2(screen.max.x - 10.0, screen.max.y - 320.0);
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("temp_label"),
+            ));
+            Self::shadow_text(
+                &painter,
+                pos,
+                egui::Align2::RIGHT_TOP,
+                &temp_text,
+                font,
+                color,
+            );
+        }
+
         let map_size = 120.0;
         let gw = GRID_W as f32;
         let gh = GRID_H as f32;
