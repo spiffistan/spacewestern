@@ -65,7 +65,7 @@ impl App {
                 required_limits: {
                     let mut limits =
                         wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
-                    limits.max_storage_buffers_per_shader_stage = 12;
+                    limits.max_storage_buffers_per_shader_stage = 13;
                     limits
                 },
                 memory_hints: wgpu::MemoryHints::default(),

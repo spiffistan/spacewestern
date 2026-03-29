@@ -942,6 +942,10 @@ impl App {
                         resource: gfx.door_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
+                        binding: 26,
+                        resource: gfx.creature_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(&fv_dye_a),
                     },
@@ -1053,6 +1057,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 25,
                         resource: gfx.door_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 26,
+                        resource: gfx.creature_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 6,
@@ -1168,6 +1176,10 @@ impl App {
                         resource: gfx.door_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
+                        binding: 26,
+                        resource: gfx.creature_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(&fv_dye_b),
                     },
@@ -1279,6 +1291,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 25,
                         resource: gfx.door_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 26,
+                        resource: gfx.creature_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 6,
