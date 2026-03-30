@@ -30,6 +30,7 @@ Numbered technical documents for specific architectural decisions. Format: `DN-N
 | `DN-010-discovery-layer.md` | Proposed | Hidden map features: creature dens, minerals, artifacts, metal detector |
 | `DN-011-combat-rework.md` | Proposed | Kinematic bullets, spatial hash collision, creature hits, drag/wind |
 | `DN-012-wound-system.md` | Proposed | Anatomical hit locations, bleeding, infection, treatment, permanent effects |
+| `DN-013-tall-grass.md` | Proposed | Vegetation as gameplay: concealment, fire fuel, harvesting, drying, growth, perimeter management |
 
 ## Ideas (`ideas/`)
 
@@ -49,6 +50,10 @@ Early-stage design exploration. Not commitments — creative brainstorming for f
 | `PHILOSOPHY.md` | Design philosophy: permanence, silence, loneliness, scarcity as teacher, the colony as character |
 | `COMBAT.md` | Real-time tactical combat: RTwP, breaching, cover, suppression, weapons, enemy AI, wounds |
 | `ALIEN_FAUNA.md` | Nocturnal alien creatures: duskweavers, thermogasts, glintcrawlers, hollowcalls, mistmaws, borers. Sound sourcing, system integration. |
+| `EMERGENT_PHYSICS.md` | 20+ gameplay ideas exploiting the physics stack: acoustic ecology, pressure traps, echo location, fire whirls, condensation, thermal footprints, pipe organ, erosion, and more. |
+| `WATER_FLOW.md` | GPU pipe-model water: gravity flow, pooling, volume conservation, dams, channels, erosion, weather cycle |
+| `ASIDES.md` | Quick-capture ideas: thumper, drones, sunskirter (creature + ship + phenomenon) |
+| `TALL_GRASS.md` | Tall grass: concealment, fire fuel, fiber source, creature habitat, perimeter management |
 | `LORE_AND_RESEARCH.md` | Knowledge as physical objects: tacit→written→shared, libraries, lore trading, metal detectors, unreliable narrators, alien translation |
 
 ## Reference (`fluid_mechanics/`)
