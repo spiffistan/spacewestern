@@ -676,22 +676,67 @@ fn terrain_detail(
             let along_blade = dot(blade_pos - 0.5, blade_dir);
             let across_blade = abs(dot(blade_pos - 0.5, vec2(-blade_dir.y, blade_dir.x)));
 
-            // Long grass: sparser, taller blades interspersed (using coarser grid)
+            // Grass height categories
+            let is_tall_grass = t_veg > 0.65; // veg 20+/31
             let long_seed = hash2(floor(pos * 3.0));
             let is_long_grass = long_seed > 0.7 && t_veg > 0.4;
-            let blade_width = select(0.08, 0.06, is_long_grass);
-            let blade_min = select(-0.15, -0.2, is_long_grass);
-            let blade_max = select(0.25, 0.4, is_long_grass);
 
-            let on_blade = f32(across_blade < blade_width && along_blade > blade_min && along_blade < blade_max);
-            let blade_t = clamp((along_blade - blade_min) / (blade_max - blade_min), 0.0, 1.0);
-            var blade_col = mix(grass_col * 0.7, grass_col * 1.2, blade_t);
-            // Long grass tips: lighter, sun-bleached
-            if is_long_grass && blade_t > 0.7 {
-                blade_col = mix(blade_col, vec3(0.55, 0.52, 0.30), (blade_t - 0.7) * 3.0);
+            // Tall grass: bigger blades, more sway, denser
+            var b_width = select(0.08, 0.06, is_long_grass);
+            var b_min = select(-0.15, -0.2, is_long_grass);
+            var b_max = select(0.25, 0.4, is_long_grass);
+            if is_tall_grass {
+                b_width = 0.04;  // thin individual strands
+                b_min = -0.25;
+                b_max = 0.48;    // very tall
             }
-            let grass_vis = grass_amount * mix(0.5, on_blade * 0.8 + 0.2, 0.6);
-            color = mix(color, blade_col, clamp(grass_vis, 0.0, 0.85));
+
+            // Wind sway: more pronounced in tall grass
+            let wind_sway = sin(camera.time * 1.2 + wx * 2.5 + wy * 1.8)
+                          * camera.wind_magnitude * select(0.02, 0.08, is_tall_grass);
+            let swayed_along = along_blade + wind_sway;
+
+            let on_blade = f32(across_blade < b_width && swayed_along > b_min && swayed_along < b_max);
+            let blade_t = clamp((swayed_along - b_min) / (b_max - b_min), 0.0, 1.0);
+            var blade_col = mix(grass_col * 0.7, grass_col * 1.2, blade_t);
+
+            // Tall grass tips: sun-bleached golden
+            if (is_long_grass || is_tall_grass) && blade_t > 0.65 {
+                let tip_blend = (blade_t - 0.65) * 2.85;
+                blade_col = mix(blade_col, vec3(0.55, 0.50, 0.28), tip_blend);
+                // Sun catch: blades leaning toward sun are brighter
+                let sun_catch = max(0.0, wind_sway * 5.0 * camera.sun_dir_x + 0.2)
+                              * camera.sun_intensity * 0.3;
+                blade_col += vec3(camera.sun_color_r, camera.sun_color_g, camera.sun_color_b) * sun_catch;
+            }
+
+            // Density: tall grass fills more of the tile
+            let density_boost = select(0.0, 0.25, is_tall_grass);
+            let grass_vis = grass_amount * mix(0.5 + density_boost, on_blade * 0.8 + 0.2 + density_boost, 0.6);
+            color = mix(color, blade_col, clamp(grass_vis, 0.0, 0.90));
+
+            // Tall grass overlay: dense canopy of bright tips over dark understory
+            if is_tall_grass {
+                // Dark understory (light doesn't reach the ground through dense grass)
+                color = mix(color, grass_col * 0.45, grass_amount * 0.3);
+
+                // Bright grass tip layer: high-frequency noise field
+                let tip_n1 = value_noise(pos * 8.0 + vec2(time * 0.3, time * 0.2));
+                let tip_n2 = value_noise(pos * 12.0 + vec2(77.0, 33.0) + vec2(wind_sway * 2.0, 0.0));
+                let tip_bright = smoothstep(0.35, 0.65, tip_n1 * 0.6 + tip_n2 * 0.4);
+
+                // Tips color: bright yellow-green, catching sun
+                let tip_col = mix(
+                    grass_col * 1.15,
+                    vec3(0.55, 0.52, 0.28),
+                    tip_bright * 0.5
+                );
+                let tip_sun = max(0.0, wind_sway * 4.0 * camera.sun_dir_x + 0.15)
+                            * camera.sun_intensity * 0.25;
+
+                color = mix(color, tip_col + vec3(camera.sun_color_r, camera.sun_color_g, camera.sun_color_b) * tip_sun,
+                    grass_amount * tip_bright * 0.55);
+            }
 
             // Wildflowers (only in medium-high vegetation areas)
             if t_veg > 0.4 {
@@ -1809,37 +1854,38 @@ fn render_fire_overlay(wx: f32, wy: f32, fx: f32, fy: f32, time: f32, intensity:
     // Per-tile offset so adjacent fires don't look identical
     let tile_offset = fire_hash(vec2<f32>(floor(wx), floor(wy))) * 100.0;
 
-    // --- Flame shape: noise field scrolling upward ---
-    // UV coordinates in noise space: x follows tile position, y scrolls up with time
-    let noise_scale = 4.0; // how detailed the flame texture is
-    let rise_speed = 3.0 * (0.8 + 0.4 * intensity); // flames rise faster at higher intensity
+    // --- Flame shape: noise field in WORLD space (no tile boundaries) ---
+    let noise_scale = 4.0;
+    let rise_speed = 3.0 * (0.8 + 0.4 * intensity);
     let noise_uv = vec2<f32>(
-        fx * noise_scale + tile_offset,
-        fy * noise_scale - time * rise_speed + tile_offset * 0.7
+        wx * noise_scale,
+        wy * noise_scale + time * rise_speed
     );
 
     // Multi-octave turbulent noise for flame shape
     let flame_noise = fbm_fire(noise_uv, 4);
 
-    // --- Flame mask: defines where flames can appear ---
-    // Flames are tallest at center-bottom, taper toward edges and top
-    // In top-down view: fire is visible everywhere but edges flicker
+    // --- Flame mask: radial from tile center, noise-modulated edge ---
+    // Small fire = small circle. Full fire = fills tile.
     let cx = fx - 0.5;
     let cy = fy - 0.5;
     let dist = sqrt(cx * cx + cy * cy);
 
-    // Edge fade: flames are cut off beyond tile edge
-    let edge_mask = smoothstep(0.5, 0.25, dist);
+    // Fire radius grows with intensity: 0.12 (tiny) → 0.48 (full tile)
+    let base_radius = 0.12 + intensity * 0.36;
 
-    // Shape variation: irregular edges using a second noise layer
+    // Noise wobbles the edge so it's organic, not a perfect circle
     let edge_noise = fbm_fire(vec2<f32>(
         wx * 6.0 + tile_offset * 0.3,
         wy * 6.0 - time * 1.5
     ), 3);
-    let irregular_edge = edge_mask * (0.6 + 0.4 * edge_noise);
+    let noisy_radius = base_radius + (edge_noise - 0.5) * 0.12;
 
-    // Combine noise with mask — threshold controls flame coverage
-    let threshold = 0.65 - intensity * 0.35; // lower threshold = more fire coverage
+    // Smooth falloff from center
+    let irregular_edge = smoothstep(noisy_radius, noisy_radius * 0.4, dist);
+
+    // Combine noise with radial mask
+    let threshold = 0.55 - intensity * 0.3;
     let raw_flame = (flame_noise - threshold) / (1.0 - threshold);
     let flame = clamp(raw_flame * irregular_edge, 0.0, 1.0);
 
@@ -1851,9 +1897,9 @@ fn render_fire_overlay(wx: f32, wy: f32, fx: f32, fy: f32, time: f32, intensity:
     let flicker = fire_flicker(time + tile_offset);
     fire_col *= (0.75 + 0.25 * flicker);
 
-    // --- Ember base: glowing patches beneath the flames ---
+    // --- Ember base: glowing patches beneath the flames, within fire radius ---
     let ember_noise = fbm_fire(vec2<f32>(wx * 3.0 + time * 0.5, wy * 3.0 + time * 0.3), 3);
-    let ember_glow = clamp(ember_noise * 2.0 - 0.6, 0.0, 1.0) * intensity;
+    let ember_glow = clamp(ember_noise * 2.0 - 0.6, 0.0, 1.0) * intensity * irregular_edge;
     let ember_col = mix(vec3<f32>(0.15, 0.02, 0.0), vec3<f32>(0.8, 0.2, 0.02), ember_glow);
 
     // Blend embers under flames
@@ -1872,7 +1918,7 @@ fn render_fire_overlay(wx: f32, wy: f32, fx: f32, fy: f32, time: f32, intensity:
     // --- Charring: darken the block underneath (applied via reduced opacity at edges) ---
     // Blocks should look charred even where flames aren't directly visible
     let char_amount = intensity * 0.3 * (1.0 - flame);
-    final_color = mix(final_color, vec3<f32>(0.05, 0.03, 0.02), char_amount * edge_mask);
+    final_color = mix(final_color, vec3<f32>(0.05, 0.03, 0.02), char_amount * irregular_edge);
 
     return vec4(final_color, clamp(opacity, 0.0, 1.0));
 }
@@ -4280,7 +4326,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Procedural terrain detail (ground-level blocks only) ---
     // Replace this block with sprite sampling when migrating to sprites.
-    let is_scorched_dirt = btype == BT_DIRT && (bflags & 1u) != 0u;
+    let is_scorched_dirt = btype == BT_DIRT && (bflags & 8u) != 0u; // bit 3 = scorched
     let is_transparent_vegetation = (btype == BT_TREE || btype == BT_BERRY_BUSH) && !is_tree_pixel;
     let is_ground_tile = btype == BT_DIRT || btype == BT_AIR || btype == BT_DUG_GROUND
         || btype == BT_ROCK || is_transparent_vegetation;
@@ -5453,8 +5499,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Temporal blend provides sufficient shadow smoothing.
 
     // --- Fire overlay for burning blocks (applied AFTER lighting so flames are emissive) ---
-    // Skip scorched dirt (flags bit 0) — grass already burned away
-    let skip_fire = btype == BT_DIRT && (bflags & 1u) != 0u;
+    // Skip scorched dirt (flags bit 3) — grass already burned away
+    let skip_fire = btype == BT_DIRT && (bflags & 8u) != 0u;
     if mat.is_flammable > 0.5 && !skip_fire {
         let fire_tidx = u32(by) * u32(camera.grid_w) + u32(bx);
         let fire_temp = block_temps[fire_tidx];

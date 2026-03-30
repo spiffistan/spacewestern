@@ -298,6 +298,17 @@ impl App {
                             );
                         });
                         ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Tall Grass").size(13.0));
+                            ui.spacing_mut().slider_width = 140.0;
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut self.terrain_params.grass_density,
+                                    0.0..=1.0,
+                                )
+                                .show_value(false),
+                            );
+                        });
+                        ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Seed").size(13.0));
                             let mut seed_i = self.terrain_params.seed as i32;
                             if ui

@@ -1728,7 +1728,8 @@ pub struct TerrainParams {
     pub gravel: f32,
     pub peat: f32,
     pub marsh: f32,
-    pub pond_density: f32, // 0.0 = no ponds, 1.0 = many ponds
+    pub pond_density: f32,  // 0.0 = no ponds, 1.0 = many ponds
+    pub grass_density: f32, // 0.0 = sparse, 1.0 = dense tall grass everywhere
     pub seed: u32,
 }
 
@@ -1744,6 +1745,7 @@ impl Default for TerrainParams {
             peat: 0.05,   // ~5% — dark organic soil
             marsh: 0.06,  // ~6% — wet lowlands
             pond_density: 0.5,
+            grass_density: 0.6,
             seed: 42,
         }
     }
@@ -1904,7 +1906,18 @@ pub fn generate_terrain_with_params(
                 _ => 0.3,
             };
             let veg_noise = noise(fx * 0.15 + 4000.0, fy * 0.15 + 4000.0);
-            let vegetation = ((veg_base + (veg_noise - 0.5) * 0.3) * 31.0).clamp(0.0, 31.0) as u32;
+            let veg_scaled = veg_base * (0.4 + params.grass_density * 0.6); // grass_density boosts vegetation
+            let mut vegetation =
+                ((veg_scaled + (veg_noise - 0.5) * 0.3) * 31.0).clamp(0.0, 31.0) as u32;
+
+            // Clear spawn area: low vegetation near map center
+            let cx = (w / 2) as f32;
+            let cy = (h / 2) as f32;
+            let spawn_dist = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
+            if spawn_dist < 12.0 {
+                let clear_factor = (1.0 - spawn_dist / 12.0).powi(2);
+                vegetation = (vegetation as f32 * (1.0 - clear_factor * 0.8)).max(2.0) as u32;
+            }
 
             // --- Grain/texture scale ---
             let grain = match terrain_type {

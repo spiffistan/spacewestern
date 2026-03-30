@@ -1642,11 +1642,11 @@ impl App {
                 let by = (idx / GRID_W as usize) as i32;
                 let bt = block_type_rs(self.grid_data[idx]);
                 if bt == BT_DIRT {
-                    // Grass burned away — scorch the dirt (flags bit 0), don't destroy
-                    // Height stays 0 so placement/water/pathfinding still work
+                    // Grass burned away — scorch the dirt (flags bit 3), don't destroy
+                    // Bit 3 chosen to avoid conflict with bit 0 (door flag)
                     let flags = ((self.grid_data[idx] >> 16) & 0xFF) as u8;
                     let roof_h = self.grid_data[idx] & 0xFF000000;
-                    self.grid_data[idx] = make_block(BT_DIRT as u8, 0, flags | 1) | roof_h;
+                    self.grid_data[idx] = make_block(BT_DIRT as u8, 0, flags | 8) | roof_h;
                 } else {
                     let replacement = fire::burn_replacement_pub(bt);
                     let roof_h = self.grid_data[idx] & 0xFF000000;
@@ -2029,6 +2029,7 @@ impl App {
             let changed = fog::update_fog(
                 &self.grid_data,
                 &self.wall_data,
+                &self.terrain_data,
                 &self.plebs,
                 self.camera.sun_intensity,
                 self.fog_vision_radius,
