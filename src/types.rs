@@ -2,6 +2,20 @@
 
 use crate::grid::*;
 
+/// A dust cloud particle — settles near ground, terrain-colored, wind-drifted.
+#[derive(Clone, Debug)]
+pub struct DustCloud {
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,     // current visual radius (grows from 0)
+    pub max_radius: f32, // target radius
+    pub timer: f32,      // seconds remaining
+    pub max_timer: f32,  // initial lifetime (for alpha calc)
+    pub r: f32,          // color RGB (terrain-sampled)
+    pub g: f32,
+    pub b: f32,
+}
+
 /// A contextual game hint shown to the player.
 #[derive(Clone, Debug)]
 pub struct GameHint {
@@ -656,6 +670,8 @@ pub enum ContextAction {
     GatherBranches(i32, i32),
     /// Focus fire on a specific enemy pleb (target pleb index)
     FireAt(usize),
+    /// Throw a grenade at world position
+    ThrowGrenade(f32, f32),
 }
 
 /// A context menu action entry: (label, action, enabled).

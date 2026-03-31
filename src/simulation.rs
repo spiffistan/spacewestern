@@ -446,6 +446,7 @@ impl App {
             FluidOverlay::WaterTable => 13.0,
             FluidOverlay::Sound => 14.0,
             FluidOverlay::Terrain => 15.0,
+            FluidOverlay::Dust => 16.0,
         };
         // Pack velocity arrows flag as +0.25 on the overlay value
         if self.show_velocity_arrows && self.camera.fluid_overlay > 0.5 {
@@ -541,6 +542,52 @@ impl App {
                 continue;
             }
             pleb.wander_timer -= dt * self.time_speed;
+
+            // Wounded retreat: badly hurt enemies flee from combat
+            if pleb.needs.health < 0.35 && pleb.needs.health > 0.0 && !pleb.is_dead {
+                if let Some(&(fx, fy)) = friendly_positions.first() {
+                    // Find nearest friendly for flee direction
+                    let mut nearest_d = f32::MAX;
+                    let mut flee_from = (fx, fy);
+                    for &(ffx, ffy) in &friendly_positions {
+                        let d = ((pleb.x - ffx).powi(2) + (pleb.y - ffy).powi(2)).sqrt();
+                        if d < nearest_d {
+                            nearest_d = d;
+                            flee_from = (ffx, ffy);
+                        }
+                    }
+                    if nearest_d < 25.0 && pleb.path_idx >= pleb.path.len() {
+                        // Flee in opposite direction from nearest friendly
+                        let flee_dx = pleb.x - flee_from.0;
+                        let flee_dy = pleb.y - flee_from.1;
+                        let flee_len = (flee_dx * flee_dx + flee_dy * flee_dy).sqrt().max(0.1);
+                        let flee_x = (pleb.x + flee_dx / flee_len * 15.0)
+                            .clamp(1.0, GRID_W as f32 - 2.0)
+                            as i32;
+                        let flee_y = (pleb.y + flee_dy / flee_len * 15.0)
+                            .clamp(1.0, GRID_H as f32 - 2.0)
+                            as i32;
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            start,
+                            (flee_x, flee_y),
+                        );
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 0;
+                            pleb.aim_target = None;
+                            pleb.aim_progress = 0.0;
+                            pleb.set_bubble(pleb::BubbleKind::Text("Retreating!".into()), 2.0);
+                        }
+                        pleb.wander_timer = 5.0;
+                        continue; // skip normal wander logic
+                    }
+                }
+            }
+
             if pleb.wander_timer <= 0.0 && pleb.path_idx >= pleb.path.len() {
                 // Check for nearby threats
                 let nearest_threat: Option<(f32, f32, f32)> = friendly_positions
@@ -645,6 +692,15 @@ impl App {
             }
         }
 
+        // --- Flocking: compute group movement adjustments ---
+        let flock_enemy_pos: Vec<(f32, f32)> = self
+            .plebs
+            .iter()
+            .filter(|p| p.is_enemy && !p.is_dead)
+            .map(|p| (p.x, p.y))
+            .collect();
+        let flock_adjustments = comms::compute_flocking(&self.plebs, &flock_enemy_pos);
+
         // --- Update all plebs ---
         let move_speed = 20.0f32;
         let sel = self.selected_pleb;
@@ -660,6 +716,9 @@ impl App {
             }
             if pleb.weapon_swap_timer > 0.0 {
                 pleb.weapon_swap_timer = (pleb.weapon_swap_timer - dt * self.time_speed).max(0.0);
+            }
+            if pleb.suppression > 0.0 {
+                pleb.suppression = (pleb.suppression - dt * 0.5).max(0.0);
             }
 
             // Tick down bubble timer
@@ -741,8 +800,13 @@ impl App {
                         * bleed_mul
                         * stagger_mul
                         * self.time_speed;
-                    let step_x = ndx * effective_speed * dt;
-                    let step_y = ndy * effective_speed * dt;
+                    // Apply flocking adjustment (separation/cohesion forces)
+                    let flock = flock_adjustments.iter().find(|a| a.pleb_idx == i);
+                    let flock_speed = flock.map(|a| a.speed_mul).unwrap_or(1.0);
+                    let flock_dx = flock.map(|a| a.dx).unwrap_or(0.0) * dt;
+                    let flock_dy = flock.map(|a| a.dy).unwrap_or(0.0) * dt;
+                    let step_x = ndx * effective_speed * flock_speed * dt + flock_dx;
+                    let step_y = ndy * effective_speed * flock_speed * dt + flock_dy;
                     let nx = pleb.x + step_x;
                     let ny = pleb.y + step_y;
                     // Check walkability AND wall edge crossings
@@ -799,6 +863,14 @@ impl App {
 
         // --- Update pleb needs and auto-behaviors ---
         {
+            // Collect enemy positions for flee detection
+            let enemy_pos_for_flee: Vec<(f32, f32)> = self
+                .plebs
+                .iter()
+                .filter(|p| p.is_enemy && !p.is_dead)
+                .map(|p| (p.x, p.y))
+                .collect();
+
             let day_frac = self.time_of_day / DAY_DURATION;
             for (i, pleb) in self.plebs.iter_mut().enumerate() {
                 let dx = pleb.x - pleb.prev_x;
@@ -816,6 +888,62 @@ impl App {
                     is_sleeping,
                     air,
                 );
+
+                // Undrafted flee: civilians run to safety when enemies are near
+                if !pleb.is_enemy
+                    && !pleb.drafted
+                    && !pleb.is_dead
+                    && !pleb.activity.is_crisis()
+                    && matches!(pleb.activity, PlebActivity::Idle | PlebActivity::Walking)
+                {
+                    let nearest_enemy_dist = enemy_pos_for_flee
+                        .iter()
+                        .map(|&(ex, ey)| ((pleb.x - ex).powi(2) + (pleb.y - ey).powi(2)).sqrt())
+                        .fold(f32::MAX, f32::min);
+
+                    if nearest_enemy_dist < 15.0 {
+                        // Find nearest roofed (indoor) tile within 20 tiles
+                        let bx = pleb.x.floor() as i32;
+                        let by = pleb.y.floor() as i32;
+                        let mut best_indoor: Option<(i32, i32, f32)> = None;
+                        for dy in -20..=20i32 {
+                            for ddx in -20..=20i32 {
+                                let cx = bx + ddx;
+                                let cy = by + dy;
+                                if cx < 0 || cy < 0 || cx >= GRID_W as i32 || cy >= GRID_H as i32 {
+                                    continue;
+                                }
+                                let idx = (cy as u32 * GRID_W + cx as u32) as usize;
+                                if roof_height_rs(self.grid_data[idx]) > 0 {
+                                    let d = (ddx * ddx + dy * dy) as f32;
+                                    if best_indoor.is_none_or(|(_, _, bd)| d < bd) {
+                                        best_indoor = Some((cx, cy, d));
+                                    }
+                                }
+                            }
+                        }
+                        if let Some((ix, iy, _)) = best_indoor {
+                            let start = (bx, by);
+                            let path = astar_path_terrain_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                start,
+                                (ix, iy),
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Crisis(
+                                    Box::new(PlebActivity::Walking),
+                                    "taking_cover",
+                                );
+                                pleb.clear_targets();
+                                pleb.set_bubble(pleb::BubbleKind::Icon('!', [200, 40, 40]), 2.0);
+                            }
+                        }
+                    }
+                }
 
                 let was_crisis = pleb.activity.is_crisis();
                 tick_pleb_activity(
@@ -1643,6 +1771,27 @@ impl App {
 
         // (Auto-close replaced by physical door tick above — doors swing shut via damping/latch)
 
+        // --- Pleb communication: shouts + flocking ---
+        {
+            let shouts = comms::collect_shouts(&mut self.plebs, dt);
+            // Emit sound sources for shouts
+            for shout in &shouts {
+                if self.sound_enabled {
+                    self.sound_sources.push(SoundSource {
+                        x: shout.x,
+                        y: shout.y,
+                        amplitude: types::db_to_amplitude(shout.kind.sound_db()),
+                        frequency: shout.kind.sound_freq() * if shout.is_enemy { 1.7 } else { 1.0 }, // enemies higher pitch
+                        phase: 0.0,
+                        pattern: 1, // sine
+                        duration: 0.15,
+                        fresh: true,
+                    });
+                }
+            }
+            comms::process_shouts(&mut self.plebs, &shouts, &self.grid_data, &self.wall_data);
+        }
+
         // --- Combat: drafted friendlies + all enemies auto-target and fight ---
         // Melee strike actions deferred to avoid borrow issues: (attacker_idx, target_idx)
         struct MeleeStrike {
@@ -1835,8 +1984,39 @@ impl App {
                                     tdx * tdx + tdy * tdy > 4.0 // target moved >2 tiles from path end
                                 });
                             if needs_repath {
-                                let goal = (tx.floor() as i32, ty.floor() as i32);
                                 let start = (px.floor() as i32, py.floor() as i32);
+                                // Enemies flank: approach from the side instead of head-on
+                                let goal = if is_enemy && dist > 4.0 {
+                                    let adx = tx - px;
+                                    let ady = ty - py;
+                                    let alen = (adx * adx + ady * ady).sqrt().max(0.1);
+                                    // Perpendicular offset, alternating side by pleb ID
+                                    let side = if self.plebs[pi].id % 2 == 0 {
+                                        1.0
+                                    } else {
+                                        -1.0
+                                    };
+                                    let flank_x = (tx + (-ady / alen) * 3.0 * side)
+                                        .clamp(1.0, GRID_W as f32 - 2.0)
+                                        .floor()
+                                        as i32;
+                                    let flank_y = (ty + (adx / alen) * 3.0 * side)
+                                        .clamp(1.0, GRID_H as f32 - 2.0)
+                                        .floor()
+                                        as i32;
+                                    // Use flank if walkable, else direct
+                                    if is_walkable_pos(
+                                        &self.grid_data,
+                                        flank_x as f32 + 0.5,
+                                        flank_y as f32 + 0.5,
+                                    ) {
+                                        (flank_x, flank_y)
+                                    } else {
+                                        (tx.floor() as i32, ty.floor() as i32)
+                                    }
+                                } else {
+                                    (tx.floor() as i32, ty.floor() as i32)
+                                };
                                 self.plebs[pi].path =
                                     pleb::astar_path(&self.grid_data, start, goal);
                                 self.plebs[pi].path_idx = 0;
@@ -1887,8 +2067,30 @@ impl App {
                     } else {
                         // Ranged path: stop moving to aim and fire
                         self.plebs[pi].swing_progress = 0.0;
-                        self.plebs[pi].path.clear();
-                        self.plebs[pi].path_idx = 0;
+
+                        // Drafted friendlies: auto-sidestep to nearby cover
+                        if !is_enemy
+                            && is_drafted
+                            && self.plebs[pi].path_idx >= self.plebs[pi].path.len()
+                            && !is_behind_cover(&self.grid_data, &self.wall_data, px, py, tx, ty)
+                        {
+                            if let Some((cx, cy)) =
+                                find_cover_position(&self.grid_data, px, py, tx, ty, 3)
+                            {
+                                let cd = ((cx as f32 + 0.5 - px).powi(2)
+                                    + (cy as f32 + 0.5 - py).powi(2))
+                                .sqrt();
+                                if cd < 3.5 {
+                                    let start = (px.floor() as i32, py.floor() as i32);
+                                    self.plebs[pi].path =
+                                        pleb::astar_path(&self.grid_data, start, (cx, cy));
+                                    self.plebs[pi].path_idx = 0;
+                                }
+                            }
+                        } else {
+                            self.plebs[pi].path.clear();
+                            self.plebs[pi].path_idx = 0;
+                        }
 
                         // --- Reload check ---
                         let mag_size = wpn_def.map(|w| w.magazine_size).unwrap_or(6);
@@ -1948,8 +2150,10 @@ impl App {
                                 let skill_factor = (shooting_skill / 9.0).clamp(0.0, 1.0);
                                 let aim_tightening =
                                     1.8 - aim_quality * 1.4 * (0.3 + skill_factor * 0.7);
-                                // No artificial cover penalty — physics handles it via bullet arc
-                                let spread = (base_spread * aim_tightening).max(0.02);
+                                // Suppression penalty: being shot at degrades accuracy
+                                let suppress_mul = 1.0 + self.plebs[pi].suppression * 2.0;
+                                let spread =
+                                    (base_spread * aim_tightening * suppress_mul).max(0.02);
 
                                 // Gun height: behind cover = peeking over (0.7), open = chest (1.0)
                                 let shooter_covered = is_behind_cover(
@@ -2322,13 +2526,6 @@ impl App {
             for impact in &impacts {
                 let def = projectile_def(impact.projectile_id);
 
-                if impact.projectile_id == PROJ_BULLET && !impact.debug_info.is_empty() {
-                    events.push(GameEventKind::Generic(
-                        types::EventCategory::Combat,
-                        impact.debug_info.clone(),
-                    ));
-                }
-
                 if impact.destroy_block {
                     self.destroy_block_at(impact.block_x, impact.block_y);
                     log::info!(
@@ -2375,9 +2572,28 @@ impl App {
                     self.fluid_params.splat_active = 1.0;
                 }
 
-                // Fuse gas emission (written to dye texture in render pass)
-                if def.fuse.is_some() {
-                    self.grenade_impacts.push((impact.x, impact.y));
+                // Fuse gas emission — only for toxic grenades (gas[0] > 0.1)
+                if let Some(fuse) = &def.fuse {
+                    if fuse.gas[0] > 0.1 {
+                        self.grenade_impacts.push((impact.x, impact.y));
+                    }
+                }
+            }
+
+            // Suppression: bullets impacting near plebs increase their suppression
+            for impact in &impacts {
+                if impact.projectile_id != PROJ_BULLET {
+                    continue;
+                }
+                for pleb in &mut self.plebs {
+                    if pleb.is_dead {
+                        continue;
+                    }
+                    let d = ((pleb.x - impact.x).powi(2) + (pleb.y - impact.y).powi(2)).sqrt();
+                    if d < 2.5 {
+                        let amount = 0.15 * (1.0 - d / 2.5); // closer = more suppression
+                        pleb.suppression = (pleb.suppression + amount).min(1.0);
+                    }
                 }
             }
 
@@ -2403,6 +2619,27 @@ impl App {
                     body.vz += impulse * 0.3; // upward kick
                     body.spin_x += ny * impulse * 0.2;
                     body.spin_y -= nx * impulse * 0.2;
+                }
+
+                // Spawn fragments (shrapnel) radiating outward
+                if expl.def.damage > 0.0 {
+                    let frag_count = 8 + ((expl.x * 73.1 + expl.y * 137.3) as u32 % 5);
+                    let frag_z = 0.8; // detonation height
+                    for fi in 0..frag_count {
+                        let seed = (fi as f32 * 97.3 + expl.x * 41.7 + expl.y * 311.1) as u32;
+                        let h = |off: u32| -> f32 {
+                            let v = seed
+                                .wrapping_mul(2654435761)
+                                .wrapping_add(off.wrapping_mul(1013904223));
+                            (v >> 16) as f32 / 65535.0
+                        };
+                        let angle = h(1) * std::f32::consts::TAU; // 0–360 degrees
+                        let elev = h(2) * 0.7 - 0.2; // -0.2 to 0.5 radians (mostly flat, some up)
+                        let speed = 40.0 + h(3) * 40.0; // 40–80 tiles/s
+                        self.physics_bodies.push(PhysicsBody::new_fragment(
+                            expl.x, expl.y, frag_z, angle, elev, speed,
+                        ));
+                    }
                 }
 
                 // Knock back plebs
@@ -2439,19 +2676,27 @@ impl App {
                         amplitude: db_to_amplitude(expl.def.sound_db),
                         frequency: 0.0,
                         phase: 0.0,
-                        pattern: 0,
-                        duration: expl.def.sound_duration,
+                        pattern: 7, // explosion boom
+                        duration: expl.def.sound_duration.max(0.3),
                         fresh: true,
                     });
                 }
 
-                // Fluid burst (expanding pressure wave)
+                // Fluid burst: smoke + heat injection
                 self.fluid_params.splat_x = expl.x;
                 self.fluid_params.splat_y = expl.y;
                 self.fluid_params.splat_vx = 0.0;
                 self.fluid_params.splat_vy = 0.0;
-                self.fluid_params.splat_radius = 4.0;
+                self.fluid_params.splat_radius = radius.min(5.0);
                 self.fluid_params.splat_active = 1.0;
+
+                // GPU dust injection for explosion
+                self.dust_injections.push(dust::DustInjection {
+                    x: expl.x,
+                    y: expl.y,
+                    radius: radius * 0.8,
+                    density: 2.0,
+                });
 
                 events.push(GameEventKind::Explosion(expl.x, expl.y));
 
@@ -4340,7 +4585,7 @@ impl App {
 
         // --- Fade blood stains ---
         for stain in &mut self.blood_stains {
-            stain.2 -= dt_game; // countdown fade timer
+            stain.2 -= dt_game;
         }
         self.blood_stains.retain(|s| s.2 > 0.0);
 

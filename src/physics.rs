@@ -12,6 +12,7 @@ pub const PROJ_WOOD_BOX: ProjectileId = 0;
 pub const PROJ_CANNONBALL: ProjectileId = 1;
 pub const PROJ_GRENADE: ProjectileId = 2;
 pub const PROJ_BULLET: ProjectileId = 3;
+pub const PROJ_FRAGMENT: ProjectileId = 4;
 
 /// How a projectile moves through the world.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -133,38 +134,30 @@ fn build_projectile_defs() -> Vec<ProjectileDef> {
             remove_when_stopped: true,
             remove_speed_threshold: 0.5,
         },
-        // PROJ_GRENADE (2) — toxic grenade with fuse + explosion on landing
+        // PROJ_GRENADE (2) — frag grenade: heavy, bouncy, delayed fuse
         ProjectileDef {
-            name: "Toxic Grenade",
-            mass: 0.8,
-            friction: 0.8,
-            bounce: 0.3,
-            size: 0.08,
-            render_height: 0.3,
-            max_speed: 30.0,
+            name: "Frag Grenade",
+            mass: 1.5,     // heavy iron casing
+            friction: 0.9, // high friction — stops rolling quickly
+            bounce: 0.25,  // bounces a few times with thud
+            size: 0.07,
+            render_height: 0.25,
+            max_speed: 18.0, // slower throw than before
             traversal: TraversalMode::Ballistic,
             impact: ImpactEffect {
-                sound_db: 0.0,
-                sound_duration: 0.0, // landing itself is quiet
+                sound_db: 65.0, // heavy landing thud
+                sound_duration: 0.06,
                 destroy_multiplier: 0.0,
                 smoke_radius: 0.0,
-                explosion: Some(ExplosionDef {
-                    radius: 6.0,
-                    force: 20.0,
-                    damage: 0.15,
-                    sound_db: 130.0,
-                    sound_duration: 0.15,
-                    block_ke: 0.0,
-                    fire_radius: 0.0,
-                }),
+                explosion: None, // detonates on fuse expiry, not on landing
                 ricochet: false,
                 ricochet_loss: 0.0,
             },
             fuse: Some(FuseEmission {
-                duration: 12.0,
-                gas: [0.6, 0.2, 0.8, 15.0], // smoke, O2, CO2, temp
-                radius: 1,
-                freeze_on_ground: true,
+                duration: 4.0,              // 4 second fuse
+                gas: [0.03, 0.0, 0.0, 0.0], // faint smoke wisp only, no CO2
+                radius: 0,
+                freeze_on_ground: false, // rolls to a stop naturally via friction
             }),
             hit_damage: 0.0,
             remove_when_stopped: false,
@@ -193,6 +186,30 @@ fn build_projectile_defs() -> Vec<ProjectileDef> {
             hit_damage: 0.2,
             remove_when_stopped: true,
             remove_speed_threshold: 1.0,
+        },
+        // PROJ_FRAGMENT (4) — grenade shrapnel
+        ProjectileDef {
+            name: "Fragment",
+            mass: 0.05,
+            friction: 0.2,
+            bounce: 0.3, // ricochets off walls
+            size: 0.03,
+            render_height: 0.04,
+            max_speed: 80.0,
+            traversal: TraversalMode::Ballistic,
+            impact: ImpactEffect {
+                sound_db: 55.0, // metallic ping on wall hit
+                sound_duration: 0.03,
+                destroy_multiplier: 0.0,
+                smoke_radius: 0.0,
+                explosion: None,
+                ricochet: true,
+                ricochet_loss: 0.5, // loses 50% per bounce
+            },
+            fuse: None,
+            hit_damage: 0.12, // slightly less than bullet (0.2)
+            remove_when_stopped: true,
+            remove_speed_threshold: 2.0, // dies faster than bullets
         },
     ]
 }
@@ -240,6 +257,7 @@ pub enum BodyType {
     Cannonball,
     Grenade,
     Bullet,
+    Fragment,
 }
 
 /// Result of a projectile impact.
@@ -252,7 +270,6 @@ pub struct Impact {
     pub kinetic_energy: f32,
     pub destroy_block: bool,
     pub projectile_id: ProjectileId,
-    pub debug_info: String,
 }
 
 /// What kind of entity was hit by a bullet.
@@ -335,7 +352,7 @@ impl PhysicsBody {
 
     /// Create a toxic grenade thrown from position in a direction with given power (0-1).
     pub fn new_grenade(x: f32, y: f32, dir_x: f32, dir_y: f32, power: f32) -> Self {
-        let speed = 8.0 + power * 14.0; // 8-22 tiles/sec based on charge
+        let speed = 6.0 + power * 14.0; // 6-20 tiles/sec
         let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
         PhysicsBody {
             x,
@@ -343,7 +360,7 @@ impl PhysicsBody {
             z: 1.2,
             vx: dir_x / len * speed,
             vy: dir_y / len * speed,
-            vz: 4.0 + power * 6.0, // higher arc with more power
+            vz: 6.0 + power * 8.0, // steep arc — lobs high
             rot_x: 0.0,
             rot_y: 0.0,
             rot_z: 0.0,
@@ -357,7 +374,7 @@ impl PhysicsBody {
             render_height: 0.3,
             body_type: BodyType::Grenade,
             kind: PROJ_GRENADE,
-            fuse_timer: 12.0,
+            fuse_timer: 4.0, // seconds until detonation after landing
             has_landed: false,
             prev_x: x,
             prev_y: y,
@@ -410,6 +427,41 @@ impl PhysicsBody {
             render_height: 0.05,
             body_type: BodyType::Bullet,
             kind: PROJ_BULLET,
+            fuse_timer: 0.0,
+            has_landed: false,
+            prev_x: x,
+            prev_y: y,
+            shooter_pleb: None,
+        }
+    }
+
+    /// Create a fragment from an explosion at (x, y, z) with a random direction.
+    /// `angle` = radial direction (0–TAU), `elev` = vertical angle (-0.3 to 0.5),
+    /// `speed` = initial speed (varies per fragment).
+    pub fn new_fragment(x: f32, y: f32, z: f32, angle: f32, elev: f32, speed: f32) -> Self {
+        let vx = angle.cos() * speed * elev.cos();
+        let vy = angle.sin() * speed * elev.cos();
+        let vz = elev.sin() * speed;
+        PhysicsBody {
+            x,
+            y,
+            z: z.max(0.1),
+            vx,
+            vy,
+            vz,
+            rot_x: vx * 0.5,
+            rot_y: vy * 0.5,
+            rot_z: angle * 2.0,
+            spin_x: speed * 0.3,
+            spin_y: speed * 0.2,
+            spin_z: speed * 0.5,
+            mass: 0.05,
+            friction: 0.2,
+            bounce: 0.3,
+            size: 0.03,
+            render_height: 0.04,
+            body_type: BodyType::Fragment,
+            kind: PROJ_FRAGMENT,
             fuse_timer: 0.0,
             has_landed: false,
             prev_x: x,
@@ -564,7 +616,6 @@ struct BulletTraceHit {
     x: f32,
     y: f32,           // hit position
     hit_x_face: bool, // true if hit a vertical face (reflect vx), false = horizontal face (reflect vy)
-    debug: String,
 }
 
 pub fn dda_bullet_trace(
@@ -630,7 +681,6 @@ pub fn dda_bullet_trace(
                 x: x0 + dir_x * t,
                 y: y0 + dir_y * t,
                 hit_x_face: t_max_x < t_max_y,
-                debug: format!("OOB({},{})", ix, iy),
             });
         }
 
@@ -678,7 +728,6 @@ pub fn dda_bullet_trace(
                         x: x0 + dir_x * t,
                         y: y0 + dir_y * t,
                         hit_x_face: hit_x,
-                        debug: format!("CELL({},{})bt{}bh{}bz{:.1}", ix, iy, bt, bh, bullet_z_here),
                     });
                 }
             } // end else (bullet below block)
@@ -774,10 +823,6 @@ pub fn dda_bullet_trace(
                     x: x0 + dir_x * t,
                     y: y0 + dir_y * t,
                     hit_x_face: hit_x,
-                    debug: format!(
-                        "EDGE({},{})->({},{})wh{:.0}bz{:.1}wdA{:x}wdB{:x}gA{:.0}gB{:.0}",
-                        prev_ix, prev_iy, ix, iy, wall_h, bullet_z, wd_a, wd_b, grid_h_a, grid_h_b
-                    ),
                 });
             }
         }
@@ -946,7 +991,8 @@ pub fn tick_bodies(
                 body.vy *= 0.8;
                 body.spin_x += body.vy * 0.3;
                 body.spin_y -= body.vx * 0.3;
-                body.has_landed = true;
+                // Don't set has_landed here — explosion check needs it false until detonation
+                // has_landed is set by the explosion section below
             } else {
                 body.vz = 0.0;
             }
@@ -978,7 +1024,6 @@ pub fn tick_bodies(
             // below wall height — collide
             let mut hit_wall_x = false;
             let mut hit_wall_y = false;
-            let mut hit_debug = String::new();
 
             // Fast bodies (>20 tiles/sec) and bullets: use DDA for accurate wall detection
             let move_dist = ((nx - body.x) * (nx - body.x) + (ny - body.y) * (ny - body.y)).sqrt();
@@ -989,7 +1034,6 @@ pub fn tick_bodies(
                 if let Some(hit) =
                     dda_bullet_trace(grid, wall_data, body.x, body.y, nx, ny, body.z, z_end)
                 {
-                    hit_debug = hit.debug.clone();
                     if ricochets_enabled && def.impact.ricochet {
                         let keep = 1.0 - def.impact.ricochet_loss;
                         body.x = hit.x;
@@ -1026,14 +1070,12 @@ pub fn tick_bodies(
                     body.x = nx;
                 } else {
                     hit_wall_x = true;
-                    hit_debug = format!("SLOW_X({:.1},{:.1})z{:.2}", nx, body.y, body.z);
                     body.vx *= -body.bounce;
                 }
                 if body_can_move_z(grid, body.x, ny, body.size, body.z) {
                     body.y = ny;
                 } else {
                     hit_wall_y = true;
-                    hit_debug = format!("SLOW_Y({:.1},{:.1})z{:.2}", body.x, ny, body.z);
                     body.vy *= -body.bounce;
                 }
             }
@@ -1079,7 +1121,6 @@ pub fn tick_bodies(
                     kinetic_energy: ke,
                     destroy_block: destroy,
                     projectile_id: body.kind,
-                    debug_info: hit_debug.clone(),
                 });
             }
         } else {
@@ -1123,21 +1164,41 @@ pub fn tick_bodies(
             && body.on_ground()
             && body.fuse_timer > 0.0
         {
+            let was_positive = body.fuse_timer > 0.0;
             body.fuse_timer -= dt;
             if fuse.freeze_on_ground {
                 body.vx = 0.0;
                 body.vy = 0.0;
             }
-            impacts.push(Impact {
-                x: body.x,
-                y: body.y,
-                block_x: body.x.floor() as i32,
-                block_y: body.y.floor() as i32,
-                kinetic_energy: 0.0,
-                destroy_block: false,
-                projectile_id: body.kind,
-                debug_info: String::new(),
-            });
+            // Fuse expired → detonate
+            if was_positive && body.fuse_timer <= 0.0 {
+                // Frag grenade explosion
+                let grenade_explosion = ExplosionDef {
+                    radius: 5.0,
+                    force: 30.0,
+                    damage: 0.25,
+                    sound_db: 135.0,
+                    sound_duration: 0.3,
+                    block_ke: 20.0,
+                    fire_radius: 0.0, // no fire — prevents plebs fleeing from heat
+                };
+                explosions.push(ExplosionEvent {
+                    x: body.x,
+                    y: body.y,
+                    def: grenade_explosion,
+                });
+                body.fuse_timer = 0.0; // prevent re-trigger
+            } else {
+                impacts.push(Impact {
+                    x: body.x,
+                    y: body.y,
+                    block_x: body.x.floor() as i32,
+                    block_y: body.y.floor() as i32,
+                    kinetic_energy: 0.0,
+                    destroy_block: false,
+                    projectile_id: body.kind,
+                });
+            }
         }
     }
 

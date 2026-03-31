@@ -117,6 +117,122 @@ impl App {
                 self.draw_hover_info(ctx);
                 self.draw_game_log(ctx);
                 self.draw_minimap(ctx);
+
+                // Pause overlay (darkened screen + centered text)
+                if self.time_paused && !self.show_pause_menu {
+                    let screen = ctx.content_rect();
+                    let painter = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("pause_overlay"),
+                    ));
+                    painter.rect_filled(
+                        screen,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 40),
+                    );
+                    painter.text(
+                        screen.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "PAUSED",
+                        egui::FontId::proportional(28.0),
+                        egui::Color32::from_rgba_unmultiplied(220, 220, 220, 180),
+                    );
+                    painter.text(
+                        screen.center() + egui::Vec2::new(0.0, 28.0),
+                        egui::Align2::CENTER_CENTER,
+                        "Space to resume",
+                        egui::FontId::proportional(12.0),
+                        egui::Color32::from_rgba_unmultiplied(160, 160, 160, 140),
+                    );
+                }
+
+                // Game menu (ESC when nothing selected)
+                if self.show_pause_menu {
+                    let screen = ctx.content_rect();
+                    let painter = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("game_menu_bg"),
+                    ));
+                    painter.rect_filled(
+                        screen,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120),
+                    );
+
+                    egui::Area::new(egui::Id::new("game_menu"))
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .interactable(true)
+                        .order(egui::Order::Foreground)
+                        .show(ctx, |ui| {
+                            egui::Frame::window(ui.style())
+                                .fill(egui::Color32::from_rgb(25, 28, 32))
+                                .show(ui, |ui| {
+                                    ui.set_min_width(200.0);
+                                    ui.vertical_centered(|ui| {
+                                        ui.add_space(8.0);
+                                        ui.label(
+                                            egui::RichText::new("RAYWORLD")
+                                                .size(22.0)
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(200, 190, 170)),
+                                        );
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "Day {} \u{2022} {}",
+                                                (self.time_of_day / DAY_DURATION) as u32 + 1,
+                                                {
+                                                    let frac = self.time_of_day / DAY_DURATION;
+                                                    let h = (frac * 24.0) as u32;
+                                                    let m =
+                                                        ((frac * 24.0 - h as f32) * 60.0) as u32;
+                                                    format!("{:02}:{:02}", h, m)
+                                                }
+                                            ))
+                                            .size(11.0)
+                                            .color(egui::Color32::from_gray(120)),
+                                        );
+                                        ui.add_space(12.0);
+                                        ui.separator();
+                                        ui.add_space(8.0);
+
+                                        let btn = |ui: &mut egui::Ui, text: &str| -> bool {
+                                            ui.add_sized(
+                                                egui::vec2(180.0, 32.0),
+                                                egui::Button::new(
+                                                    egui::RichText::new(text).size(14.0),
+                                                ),
+                                            )
+                                            .clicked()
+                                        };
+
+                                        if btn(ui, "\u{25b6} Resume") {
+                                            self.show_pause_menu = false;
+                                            self.time_paused = false;
+                                        }
+                                        ui.add_space(4.0);
+                                        if btn(ui, "\u{2699} Settings") {
+                                            // TODO: settings screen
+                                        }
+                                        ui.add_space(4.0);
+                                        if btn(ui, "\u{1f4be} Save Game") {
+                                            // TODO: save
+                                        }
+                                        ui.add_space(4.0);
+                                        if btn(ui, "\u{1f3e0} Main Menu") {
+                                            self.show_pause_menu = false;
+                                            self.time_paused = false;
+                                            self.game_state = GameState::MainMenu;
+                                        }
+                                        ui.add_space(4.0);
+                                        if btn(ui, "\u{274c} Quit Game") {
+                                            std::process::exit(0);
+                                        }
+                                        ui.add_space(8.0);
+                                    });
+                                });
+                        });
+                }
             }
         }
     }
@@ -1111,6 +1227,16 @@ impl App {
                                         FluidOverlay::Terrain
                                     };
                                 }
+                                if ui
+                                    .selectable_label(*ov == FluidOverlay::Dust, "Dust")
+                                    .clicked()
+                                {
+                                    *ov = if *ov == FluidOverlay::Dust {
+                                        FluidOverlay::None
+                                    } else {
+                                        FluidOverlay::Dust
+                                    };
+                                }
                             });
                         });
                     });
@@ -1847,6 +1973,12 @@ impl App {
                             .clicked()
                         {
                             self.debug_show_cover = !self.debug_show_cover;
+                        }
+                        if ui
+                            .selectable_label(self.debug_show_flock, "Show Flock Links")
+                            .clicked()
+                        {
+                            self.debug_show_flock = !self.debug_show_flock;
                         }
                         ui.separator();
                         if ui
@@ -3858,7 +3990,7 @@ impl App {
                         None
                     }
                 }
-                ContextAction::FireAt(_) => None, // handled directly below
+                ContextAction::FireAt(_) | ContextAction::ThrowGrenade(_, _) => None,
             };
 
             // If shift held and pleb is busy, queue the command instead of executing
@@ -3991,26 +4123,34 @@ impl App {
                     }
                 }
                 ContextAction::MoveTo(wx, wy) => {
-                    if let Some(sel_idx) = self.selected_pleb {
-                        let pleb = &mut self.plebs[sel_idx];
-                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let goal = (wx.floor() as i32, wy.floor() as i32);
-                        let path = astar_path_terrain_wd(
-                            &self.grid_data,
-                            &self.wall_data,
-                            &self.terrain_data,
-                            start,
-                            goal,
-                        );
-                        if !path.is_empty() {
-                            pleb.path = path;
-                            pleb.path_idx = 1;
-                            pleb.activity = PlebActivity::Walking;
-                            pleb.work_target = None;
-                            pleb.harvest_target = None;
-                            pleb.haul_target = None;
+                    let goal = (wx.floor() as i32, wy.floor() as i32);
+                    // Move all group members (or just the selected pleb)
+                    let move_indices: Vec<usize> = if !self.selected_group.is_empty() {
+                        self.selected_group.clone()
+                    } else if let Some(idx) = self.selected_pleb {
+                        vec![idx]
+                    } else {
+                        vec![]
+                    };
+                    for &pi in &move_indices {
+                        if let Some(pleb) = self.plebs.get_mut(pi) {
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let path = astar_path_terrain_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                start,
+                                goal,
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 1;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.clear_targets();
+                            }
                         }
                     }
+                    self.move_marker = Some((wx.floor() + 0.5, wy.floor() + 0.5, 2.0));
                 }
                 ContextAction::DigClay(dx, dy) => {
                     if let Some(sel_idx) = self.selected_pleb {
@@ -4078,25 +4218,61 @@ impl App {
                     }
                 }
                 ContextAction::FireAt(target_idx) => {
+                    // Fire at target with all group members (or just selected pleb)
+                    let fire_indices: Vec<usize> = if !self.selected_group.is_empty() {
+                        self.selected_group.clone()
+                    } else if let Some(idx) = self.selected_pleb {
+                        vec![idx]
+                    } else {
+                        vec![]
+                    };
+                    let target_pos = self.plebs.get(target_idx).map(|e| (e.x, e.y));
+                    for &pi in &fire_indices {
+                        if let Some(pleb) = self.plebs.get_mut(pi) {
+                            if !pleb.is_enemy && !pleb.is_dead {
+                                if !pleb.drafted {
+                                    pleb.drafted = true;
+                                }
+                                pleb.prefer_ranged = true;
+                                pleb.update_equipped_weapon();
+                                pleb.aim_target = Some(target_idx);
+                                pleb.aim_progress = 0.0;
+                                pleb.swing_progress = 0.0;
+                                pleb.path.clear();
+                                pleb.path_idx = 0;
+                                if let Some((ex, ey)) = target_pos {
+                                    pleb.angle = (ey - pleb.y).atan2(ex - pleb.x);
+                                }
+                                pleb.set_bubble(pleb::BubbleKind::Icon('!', [220, 50, 40]), 1.5);
+                            }
+                        }
+                    }
+                }
+                ContextAction::ThrowGrenade(tx, ty) => {
                     if let Some(sel_idx) = self.selected_pleb {
-                        // Snapshot target position before mutable borrow
-                        let target_pos = self.plebs.get(target_idx).map(|e| (e.x, e.y));
-                        let pleb = &mut self.plebs[sel_idx];
-                        if !pleb.is_enemy && !pleb.is_dead {
-                            if !pleb.drafted {
-                                pleb.drafted = true;
+                        let pleb = &self.plebs[sel_idx];
+                        if !pleb.is_dead {
+                            let dx = tx - pleb.x;
+                            let dy = ty - pleb.y;
+                            let dist = (dx * dx + dy * dy).sqrt().max(0.1);
+                            let power = (dist / 18.0).clamp(0.2, 1.0);
+                            let spawn_x = pleb.x + dx / dist * 0.5;
+                            let spawn_y = pleb.y + dy / dist * 0.5;
+                            self.physics_bodies
+                                .push(PhysicsBody::new_grenade(spawn_x, spawn_y, dx, dy, power));
+                            if self.sound_enabled {
+                                self.sound_sources.push(SoundSource {
+                                    x: pleb.x,
+                                    y: pleb.y,
+                                    amplitude: types::db_to_amplitude(60.0),
+                                    frequency: 200.0,
+                                    phase: 0.0,
+                                    pattern: 3,
+                                    duration: 0.08,
+                                    fresh: true,
+                                });
                             }
-                            pleb.prefer_ranged = true;
-                            pleb.update_equipped_weapon();
-                            pleb.aim_target = Some(target_idx);
-                            pleb.aim_progress = 0.0;
-                            pleb.swing_progress = 0.0;
-                            pleb.path.clear();
-                            pleb.path_idx = 0;
-                            if let Some((ex, ey)) = target_pos {
-                                pleb.angle = (ey - pleb.y).atan2(ex - pleb.x);
-                            }
-                            pleb.set_bubble(pleb::BubbleKind::Icon('!', [220, 50, 40]), 1.5);
+                            self.move_marker = Some((tx, ty, 1.5));
                         }
                     }
                 }
@@ -4248,10 +4424,10 @@ impl App {
     fn draw_popups(&mut self, ctx: &egui::Context, bp_cam: (f32, f32, f32, f32, f32)) {
         let bp_ppp = self.ppp();
 
-        // Info tool: hold Shift to inspect any block
-        let ctrl_held = self.pressed_keys.contains(&KeyCode::ControlLeft)
-            || self.pressed_keys.contains(&KeyCode::ControlRight);
-        if ctrl_held {
+        // Info tool: hold Alt to inspect any block
+        let alt_held = self.pressed_keys.contains(&KeyCode::AltLeft)
+            || self.pressed_keys.contains(&KeyCode::AltRight);
+        if alt_held {
             let (wx, wy) = self.hover_world;
             let bx = wx.floor() as i32;
             let by = wy.floor() as i32;
@@ -7131,6 +7307,32 @@ impl App {
                             );
                         }
                     }
+                    physics::BodyType::Fragment => {
+                        // Fragment: orange-red spark, shorter than bullet, brighter
+                        let (gx, gy) = to_screen(body.x, body.y);
+                        let speed = (body.vx * body.vx + body.vy * body.vy).sqrt().max(0.001);
+                        let trail_len = 0.15 * tile_px;
+                        let dx = -body.vx / speed * trail_len;
+                        let dy = -body.vy / speed * trail_len;
+                        // Bright orange-white spark fading to red
+                        let intensity = (speed / 40.0).clamp(0.3, 1.0);
+                        let r = 255;
+                        let g = (180.0 * intensity) as u8;
+                        let b = (80.0 * intensity) as u8;
+                        painter.line_segment(
+                            [
+                                egui::pos2(gx, gy - z_offset),
+                                egui::pos2(gx + dx, gy - z_offset + dy),
+                            ],
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(r, g, b)),
+                        );
+                        // Hot core dot
+                        painter.circle_filled(
+                            egui::pos2(gx, gy - z_offset),
+                            1.5,
+                            egui::Color32::from_rgb(255, (220.0 * intensity) as u8, 100),
+                        );
+                    }
                     physics::BodyType::Grenade => {
                         let shadow_scale = (1.0 - body.z * 0.15).max(0.2);
                         let shadow_r = 0.08 * shadow_scale * tile_px;
@@ -7460,6 +7662,77 @@ impl App {
             }
         }
 
+        // --- Group selection rings ---
+        if self.selected_group.len() >= 2 {
+            let grp_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::new("group_rings"),
+            ));
+            let to_scr = |wx: f32, wy: f32| -> egui::Pos2 {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                egui::pos2(sx, sy)
+            };
+            let r = tile_px * 0.35;
+            for &pi in &self.selected_group {
+                if let Some(p) = self.plebs.get(pi) {
+                    if p.is_dead {
+                        continue;
+                    }
+                    let pos = to_scr(p.x, p.y);
+                    // Cyan ring for group members
+                    grp_painter.circle_stroke(
+                        pos,
+                        r,
+                        egui::Stroke::new(
+                            1.5,
+                            egui::Color32::from_rgba_unmultiplied(80, 200, 220, 160),
+                        ),
+                    );
+                    // Show group ID if assigned
+                    if let Some(gid) = p.group_id {
+                        grp_painter.text(
+                            pos + egui::Vec2::new(0.0, -r - 2.0),
+                            egui::Align2::CENTER_BOTTOM,
+                            format!("G{}", gid),
+                            egui::FontId::proportional(8.0),
+                            egui::Color32::from_rgba_unmultiplied(80, 200, 220, 200),
+                        );
+                    }
+                }
+            }
+        }
+
+        // --- Move-to marker circle ---
+        if let Some((mx, my, timer)) = self.move_marker {
+            let marker_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::new("move_marker"),
+            ));
+            let to_scr = |wx: f32, wy: f32| -> egui::Pos2 {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                egui::pos2(sx, sy)
+            };
+            let pos = to_scr(mx, my);
+            let r = tile_px * 0.4;
+            let fade = (timer / 2.0).min(1.0); // fade over 2 seconds
+            let alpha = (fade * 80.0) as u8;
+            marker_painter.circle_filled(
+                pos,
+                r,
+                egui::Color32::from_rgba_unmultiplied(180, 180, 180, alpha),
+            );
+            marker_painter.circle_stroke(
+                pos,
+                r,
+                egui::Stroke::new(
+                    2.0,
+                    egui::Color32::from_rgba_unmultiplied(220, 220, 220, alpha),
+                ),
+            );
+        }
+
         // --- Debug: show cover positions as circles ---
         if self.debug_show_cover {
             let cover_painter = ctx.layer_painter(egui::LayerId::new(
@@ -7539,6 +7812,45 @@ impl App {
                         cover_painter.circle_stroke(pos, r, egui::Stroke::new(1.5, col));
                     }
                 }
+            }
+        }
+
+        // --- Debug: show flock cohesion links between plebs ---
+        if self.debug_show_flock {
+            let flock_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("flock_debug"),
+            ));
+            let to_scr = |wx: f32, wy: f32| -> egui::Pos2 {
+                let sx = ((wx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((wy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                egui::pos2(sx, sy)
+            };
+
+            let enemy_pos: Vec<(f32, f32)> = self
+                .plebs
+                .iter()
+                .filter(|p| p.is_enemy && !p.is_dead)
+                .map(|p| (p.x, p.y))
+                .collect();
+            let links = comms::compute_flock_links(&self.plebs, &enemy_pos, true);
+
+            for link in &links {
+                let a = to_scr(link.ax, link.ay);
+                let b = to_scr(link.bx, link.by);
+                let alpha = (link.strength * 180.0) as u8;
+                let (r, g, bb) = match link.force {
+                    comms::FlockForce::Separation => (220, 60, 60), // red: too close
+                    comms::FlockForce::Cohesion => (60, 100, 220),  // blue: pulling together
+                    comms::FlockForce::Group => (140, 140, 140),    // gray: in range
+                };
+                let col = egui::Color32::from_rgba_unmultiplied(r, g, bb, alpha);
+                let width = match link.force {
+                    comms::FlockForce::Separation => 2.5,
+                    comms::FlockForce::Cohesion => 1.5,
+                    comms::FlockForce::Group => 0.8,
+                };
+                flock_painter.line_segment([a, b], egui::Stroke::new(width, col));
             }
         }
     }

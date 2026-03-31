@@ -644,6 +644,46 @@ impl App {
             wgpu::TextureFormat::Rgba16Float,
         );
 
+        // --- Dust simulation textures (R32Float, 256x256) ---
+        // R16Float doesn't support STORAGE_BINDING on Metal; R32Float does.
+        let dust_a = make_fluid_tex(
+            "dust-density-a",
+            dust::DUST_SIM_W,
+            dust::DUST_SIM_H,
+            wgpu::TextureFormat::R32Float,
+        );
+        let dust_b = make_fluid_tex(
+            "dust-density-b",
+            dust::DUST_SIM_W,
+            dust::DUST_SIM_H,
+            wgpu::TextureFormat::R32Float,
+        );
+        // Zero-initialize dust textures
+        {
+            let dust_zeros = vec![0u8; (dust::DUST_SIM_W * dust::DUST_SIM_H * 4) as usize]; // 4 bytes per R32Float texel
+            for tex in [&dust_a, &dust_b] {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &dust_zeros,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(dust::DUST_SIM_W * 4), // 4 bytes per R32Float
+                        rows_per_image: Some(dust::DUST_SIM_H),
+                    },
+                    wgpu::Extent3d {
+                        width: dust::DUST_SIM_W,
+                        height: dust::DUST_SIM_H,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+
         // Initialize dye textures with O2 = 1.0 (channel G = f16(1.0) = 0x3C00)
         {
             let texels = (FLUID_DYE_W * FLUID_DYE_H) as usize;
@@ -708,6 +748,8 @@ impl App {
         let fv_dummy_rg = fluid_dummy_rg.create_view(&wgpu::TextureViewDescriptor::default());
         let fv_dummy_r = fluid_dummy_r.create_view(&wgpu::TextureViewDescriptor::default());
         let fv_dummy_r_w = fluid_dummy_r_w.create_view(&wgpu::TextureViewDescriptor::default());
+        // Dust texture views (created early for raytrace bind groups)
+        let fv_dust_b_rt = dust_b.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Upload initial obstacle field
         let obstacle_data = build_obstacle_field(&self.grid_data, &self.wall_data);
@@ -1724,6 +1766,16 @@ impl App {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 27,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1932,10 +1984,18 @@ impl App {
             shadow_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Sound textures (created early for raytrace bind group)
-        let sound_tex_a_early =
-            make_fluid_tex("sound-a", GRID_W, GRID_H, wgpu::TextureFormat::Rg32Float);
-        let sound_tex_b_early =
-            make_fluid_tex("sound-b", GRID_W, GRID_H, wgpu::TextureFormat::Rg32Float);
+        let sound_tex_a_early = make_fluid_tex(
+            "sound-a",
+            GRID_W * 2,
+            GRID_H * 2,
+            wgpu::TextureFormat::Rg32Float,
+        );
+        let sound_tex_b_early = make_fluid_tex(
+            "sound-b",
+            GRID_W * 2,
+            GRID_H * 2,
+            wgpu::TextureFormat::Rg32Float,
+        );
         let sound_sample_view =
             sound_tex_a_early.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -2053,6 +2113,10 @@ impl App {
                     binding: 10,
                     resource: wgpu::BindingResource::TextureView(&output_view_b),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 27,
+                    resource: wgpu::BindingResource::TextureView(&fv_dust_b_rt),
+                },
             ],
         });
         let compute_bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2166,6 +2230,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 10,
                     resource: wgpu::BindingResource::TextureView(&output_view_a),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 27,
+                    resource: wgpu::BindingResource::TextureView(&fv_dust_b_rt),
                 },
             ],
         });
@@ -2281,6 +2349,10 @@ impl App {
                     binding: 10,
                     resource: wgpu::BindingResource::TextureView(&output_view_b),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 27,
+                    resource: wgpu::BindingResource::TextureView(&fv_dust_b_rt),
+                },
             ],
         });
         let compute_bind_group_3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2394,6 +2466,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 10,
                     resource: wgpu::BindingResource::TextureView(&output_view_a),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 27,
+                    resource: wgpu::BindingResource::TextureView(&fv_dust_b_rt),
                 },
             ],
         });
@@ -3049,6 +3125,117 @@ impl App {
             cache: None,
         });
 
+        // --- Dust simulation pipeline ---
+        let dust_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("dust-params"),
+            size: std::mem::size_of::<dust::DustParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dust_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("dust-compute"),
+            source: wgpu::ShaderSource::Wgsl(
+                shader_with_constants(include_str!("shaders/dust.wgsl")).into(),
+            ),
+        });
+        let fv_dust_a = dust_a.create_view(&wgpu::TextureViewDescriptor::default());
+        let fv_dust_b = dust_b.create_view(&wgpu::TextureViewDescriptor::default());
+        let dust_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("dust-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::R32Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let dust_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("dust-bg"),
+            layout: &dust_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&fv_dust_a),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&fv_dust_b),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&fv_vel_b), // vel_b = result after fluid sim
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&fv_obstacle),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: dust_params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let dust_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("dust-pipeline"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("dust-pl"),
+                    bind_group_layouts: &[&dust_bgl],
+                    push_constant_ranges: &[],
+                }),
+            ),
+            module: &dust_shader,
+            entry_point: Some("main_dust"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         self.gfx = Some(GfxState {
             surface,
             device,
@@ -3131,6 +3318,10 @@ impl App {
             water_readback_buffer,
             water_pipeline: water_pipeline_val,
             water_bind_groups: [water_bg_ab, water_bg_ba],
+            dust_textures: [dust_a, dust_b],
+            dust_params_buffer,
+            dust_pipeline,
+            dust_bind_group,
         });
 
         self.window = Some(window);

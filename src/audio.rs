@@ -206,6 +206,7 @@ impl AudioOutput {
             4 => render_slash(duration),
             5 => render_gunshot(duration),
             6 => render_bullet_impact(duration),
+            7 => render_explosion(duration),
             _ => return,
         };
 
@@ -443,6 +444,43 @@ fn render_bullet_impact(duration: f32) -> Vec<f32> {
         let ping = (t * 600.0 * TAU).sin() * (-t * 80.0).exp() * 0.2;
 
         buffer.push((lp_state * tick_env * 0.8 + ping) * 0.6);
+    }
+    buffer
+}
+
+/// Explosion: massive low boom + sharp crack + debris rattle tail.
+fn render_explosion(duration: f32) -> Vec<f32> {
+    let num_samples = (duration.max(0.3) * SAMPLE_RATE as f32) as usize;
+    let mut buffer = Vec::with_capacity(num_samples);
+    let mut rng = Xorshift32::new(0xB00_0001);
+    let mut lp_state = 0.0f32;
+
+    for i in 0..num_samples {
+        let t = i as f32 / SAMPLE_RATE as f32;
+
+        // Phase 1: initial crack (0-10ms) — sharp high-frequency transient
+        let crack = if t < 0.01 {
+            let noise = rng.next_f32() * 2.0 - 1.0;
+            noise * (1.0 - t / 0.01)
+        } else {
+            0.0
+        };
+
+        // Phase 2: deep boom (20-100Hz, slow decay over 200ms)
+        let boom = (t * 40.0 * TAU).sin() * (-t * 8.0).exp() * 0.8
+            + (t * 70.0 * TAU).sin() * (-t * 12.0).exp() * 0.4;
+
+        // Phase 3: mid-frequency blast wave (150-300Hz, medium decay)
+        let blast = (t * 200.0 * TAU).sin() * (-t * 20.0).exp() * 0.3;
+
+        // Phase 4: debris rattle tail (noise, low-pass, slow decay)
+        let noise = rng.next_f32() * 2.0 - 1.0;
+        let alpha = 800.0 * TAU / (SAMPLE_RATE as f32 + 800.0 * TAU);
+        lp_state = alpha * noise + (1.0 - alpha) * lp_state;
+        let rattle = lp_state * (-t * 5.0).exp() * 0.25;
+
+        let sample = crack * 0.9 + boom + blast + rattle;
+        buffer.push(sample.clamp(-1.0, 1.0));
     }
     buffer
 }

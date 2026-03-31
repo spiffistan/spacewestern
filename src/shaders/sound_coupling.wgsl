@@ -52,12 +52,15 @@ fn main_sound_coupling(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Read sound pressure at neighbors to compute gradient
-    let p_here = textureLoad(sound_tex, vec2(x, y), 0).r;
-    let p_left  = textureLoad(sound_tex, clamp(vec2(x - 1, y), vec2(0), vec2(gw - 1, gh - 1)), 0).r;
-    let p_right = textureLoad(sound_tex, clamp(vec2(x + 1, y), vec2(0), vec2(gw - 1, gh - 1)), 0).r;
-    let p_up    = textureLoad(sound_tex, clamp(vec2(x, y - 1), vec2(0), vec2(gw - 1, gh - 1)), 0).r;
-    let p_down  = textureLoad(sound_tex, clamp(vec2(x, y + 1), vec2(0), vec2(gw - 1, gh - 1)), 0).r;
+    // Read sound pressure at neighbors (sound tex is 2x grid resolution)
+    let sx = x * 2;
+    let sy = y * 2;
+    let smax = vec2(gw * 2 - 1, gh * 2 - 1);
+    let p_here = textureLoad(sound_tex, vec2(sx, sy), 0).r;
+    let p_left  = textureLoad(sound_tex, clamp(vec2(sx - 2, sy), vec2(0), smax), 0).r;
+    let p_right = textureLoad(sound_tex, clamp(vec2(sx + 2, sy), vec2(0), smax), 0).r;
+    let p_up    = textureLoad(sound_tex, clamp(vec2(sx, sy - 2), vec2(0), smax), 0).r;
+    let p_down  = textureLoad(sound_tex, clamp(vec2(sx, sy + 2), vec2(0), smax), 0).r;
 
     // Pressure gradient: gas flows DOWN the gradient (away from high pressure)
     let grad_x = (p_right - p_left) * 0.5;

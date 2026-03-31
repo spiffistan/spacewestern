@@ -232,6 +232,8 @@ impl App {
                     p.equipped_weapon = Some(item_defs::ITEM_PISTOL);
                     p.prefer_ranged = true;
                 }
+                // Assign to enemy group 255 (all placed enemies share a group)
+                p.group_id = Some(255);
                 self.plebs.push(p);
                 self.placing_enemy = false;
             }
@@ -265,8 +267,22 @@ impl App {
                 .position(|p| ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt() < PLEB_CLICK_RADIUS);
 
             if let Some(idx) = clicked_pleb {
-                // Clicking a pleb selects it (deselects everything else)
-                self.selected_pleb = Some(idx);
+                let ctrl = self.pressed_keys.contains(&KeyCode::ControlLeft)
+                    || self.pressed_keys.contains(&KeyCode::ControlRight);
+                if ctrl && !self.plebs[idx].is_enemy {
+                    // Ctrl+click: add/remove from multi-selection
+                    if let Some(pos) = self.selected_group.iter().position(|&i| i == idx) {
+                        self.selected_group.remove(pos);
+                    } else {
+                        self.selected_group.push(idx);
+                    }
+                    // Keep single selection on the clicked pleb for the info panel
+                    self.selected_pleb = Some(idx);
+                } else {
+                    // Normal click: select single pleb, clear group
+                    self.selected_pleb = Some(idx);
+                    self.selected_group.clear();
+                }
                 let p = &self.plebs[idx];
                 self.world_sel =
                     WorldSelection::single_pleb(idx, p.x.floor() as i32, p.y.floor() as i32);
@@ -374,6 +390,7 @@ impl App {
                     e.equipped_weapon = Some(item_defs::ITEM_PISTOL);
                     e.prefer_ranged = true;
                 }
+                e.group_id = Some(255); // enemy group
                 *next_id += 1;
                 plebs.push(e);
             };
@@ -474,28 +491,36 @@ impl App {
             match event.physical_key {
                 PhysicalKey::Code(KeyCode::Escape) => {
                     // Close whatever is open, in priority order
-                    if self.context_menu.is_some() {
+                    // When nothing is open: toggle pause menu
+                    if self.show_pause_menu {
+                        self.show_pause_menu = false;
+                        self.time_paused = false;
+                    } else if self.context_menu.is_some() {
                         self.context_menu = None;
-                    } else if self.placing_pleb || self.placing_enemy {
-                        self.placing_pleb = false;
-                        self.placing_enemy = false;
-                    } else if self.terrain_tool.is_some() {
-                        self.terrain_tool = None;
-                    } else if self.debug.mode {
-                        self.debug.mode = false;
-                    } else if self.build_tool != BuildTool::None {
-                        self.build_tool = BuildTool::None;
-                    } else if self.build_category.is_some() {
-                        self.build_category = None;
-                        self.sandbox_tool = SandboxTool::None;
-                    } else if self.selected_pleb.is_some() {
-                        self.selected_pleb = None;
                     } else if self.show_inventory {
                         self.show_inventory = false;
                     } else if self.show_schedule {
                         self.show_schedule = false;
                     } else if self.show_priorities {
                         self.show_priorities = false;
+                    } else if self.placing_pleb || self.placing_enemy {
+                        self.placing_pleb = false;
+                        self.placing_enemy = false;
+                    } else if self.terrain_tool.is_some() {
+                        self.terrain_tool = None;
+                    } else if self.build_tool != BuildTool::None {
+                        self.build_tool = BuildTool::None;
+                    } else if self.build_category.is_some() {
+                        self.build_category = None;
+                        self.sandbox_tool = SandboxTool::None;
+                    } else if self.selected_pleb.is_some() || !self.selected_group.is_empty() {
+                        self.selected_pleb = None;
+                        self.selected_group.clear();
+                        self.world_sel = WorldSelection::none();
+                    } else {
+                        // Nothing open — show pause menu
+                        self.show_pause_menu = true;
+                        self.time_paused = true;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyR) => {
@@ -532,15 +557,11 @@ impl App {
                     }
                 }
                 PhysicalKey::Code(KeyCode::Space) => {
-                    if self.selected_pleb.is_some() && self.burst_queue == 0 {
-                        if self.burst_mode {
-                            self.burst_queue = BURST_SHOT_COUNT;
-                            self.burst_delay = 0.0; // fire first shot immediately
-                        } else {
-                            self.burst_queue = 1;
-                            self.burst_delay = 0.0;
-                        }
-                    } else if self.selected_pleb.is_none() {
+                    // Space always toggles pause
+                    if self.show_pause_menu {
+                        self.show_pause_menu = false;
+                        self.time_paused = false;
+                    } else {
                         self.time_paused = !self.time_paused;
                     }
                 }
@@ -642,18 +663,45 @@ impl App {
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyG) => {
+                    let ctrl = self.pressed_keys.contains(&KeyCode::ControlLeft)
+                        || self.pressed_keys.contains(&KeyCode::ControlRight);
                     let shift = self.pressed_keys.contains(&KeyCode::ShiftLeft)
                         || self.pressed_keys.contains(&KeyCode::ShiftRight);
-                    if let Some(idx) = self.selected_pleb {
-                        // Pleb selected: toggle headlight
+                    if ctrl && shift {
+                        // Ctrl+Shift+G: dissolve group of selected pleb
+                        if let Some(idx) = self.selected_pleb {
+                            if let Some(gid) = self.plebs[idx].group_id {
+                                comms::dissolve_group(&mut self.plebs, gid);
+                                self.selected_group.clear();
+                            }
+                        }
+                    } else if ctrl && self.selected_group.len() >= 2 {
+                        // Ctrl+G: form group from multi-selection
+                        let indices = self.selected_group.clone();
+                        let gid = comms::form_group(&mut self.plebs, &indices);
+                        // Draft all group members
+                        for &i in &indices {
+                            if let Some(p) = self.plebs.get_mut(i) {
+                                if !p.drafted {
+                                    p.drafted = true;
+                                    p.update_equipped_weapon();
+                                }
+                            }
+                        }
+                        // Show bubble on all members
+                        for &i in &indices {
+                            if let Some(p) = self.plebs.get_mut(i) {
+                                p.set_bubble(pleb::BubbleKind::Text(format!("Group {}", gid)), 2.0);
+                            }
+                        }
+                    } else if let Some(idx) = self.selected_pleb {
+                        // G: toggle headlight (no ctrl)
                         if let Some(pleb) = self.plebs.get_mut(idx) {
                             pleb.headlight_on = !pleb.headlight_on;
                         }
                     } else if shift {
-                        // Shift+G: toggle sub-grid overlay
                         self.show_subgrid = !self.show_subgrid;
                     } else {
-                        // G: toggle tile grid overlay
                         self.show_grid = !self.show_grid;
                     }
                 }

@@ -51,6 +51,8 @@ use fluid::{
     FluidParams, build_obstacle_field, f32_to_f16, half_to_f32, smoothstep_f32,
 };
 
+mod comms;
+mod dust;
 mod gpu_init;
 mod pipes;
 mod simulation;
@@ -136,6 +138,7 @@ struct App {
     // Time control
     time_of_day: f32,         // current time in seconds (0..DAY_DURATION)
     time_paused: bool,        // pause auto-advance
+    show_pause_menu: bool,    // ESC game menu (quit, settings, etc.)
     time_speed: f32,          // playback speed multiplier
     last_frame_time: Instant, // for delta-time calculation
     last_click_frame: u32,
@@ -148,9 +151,10 @@ struct App {
     lightmap_frame: u32,
     // Build mode
     build_tool: BuildTool,
-    build_rotation: u32,     // 0=horizontal (E-W), 1=vertical (N-S)
-    wall_thickness: u8,      // 1-4 sub-cells (4=full, default)
-    hover_world: (f32, f32), // world coords under mouse cursor
+    build_rotation: u32,                  // 0=horizontal (E-W), 1=vertical (N-S)
+    wall_thickness: u8,                   // 1-4 sub-cells (4=full, default)
+    hover_world: (f32, f32),              // world coords under mouse cursor
+    move_marker: Option<(f32, f32, f32)>, // (world_x, world_y, fade_timer)
     // Terrain sculpting
     terrain_tool: Option<TerrainTool>,
     terrain_brush_radius: u8, // 1-5
@@ -196,6 +200,7 @@ struct App {
     debug_bullet_slowmo: bool,    // enable bullet slow-mo
     debug_bullet_speed: f32,      // bullet time scale (0.01 = 100x slow, 1.0 = normal)
     debug_show_cover: bool,       // show cover positions as circles
+    debug_show_flock: bool,       // show flock cohesion lines
     audio_output: Option<audio::AudioOutput>,
     sandbox_tool: SandboxTool,            // current sandbox action
     show_pipe_overlay: bool,              // draw gas pipe contents as egui overlay (ventilation)
@@ -214,6 +219,7 @@ struct App {
     // Pleb (character)
     plebs: Vec<Pleb>,
     selected_pleb: Option<usize>, // index into plebs vec
+    selected_group: Vec<usize>,   // multi-selected pleb indices for group commands
     placing_pleb: bool,
     placing_enemy: bool,
     next_pleb_id: usize,
@@ -329,6 +335,9 @@ struct App {
     // Fire system
     burn_progress: std::collections::HashMap<usize, f32>, // grid_idx → 0.0..1.0
     fire_intensity: f32, // sandbox ignite temperature multiplier (0.5 = smolder, 2.0 = inferno)
+    // GPU dust simulation
+    dust_injections: Vec<dust::DustInjection>,
+    dust_storm_active: bool,
 }
 
 const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
@@ -438,6 +447,11 @@ struct GfxState {
     pleb_air_readback_buffer: wgpu::Buffer,
     // Fog of war
     fog_texture: wgpu::Texture,
+    // Dust simulation
+    dust_textures: [wgpu::Texture; 2], // R16Float 256x256 ping-pong
+    dust_params_buffer: wgpu::Buffer,
+    dust_pipeline: wgpu::ComputePipeline,
+    dust_bind_group: wgpu::BindGroup,
 }
 
 struct EguiState {
@@ -528,6 +542,7 @@ impl App {
             start_time: Instant::now(),
             time_of_day: DAY_DURATION * (CAMERA_START_HOUR / 24.0),
             time_paused: false,
+            show_pause_menu: false,
             time_speed: 0.25,
             last_frame_time: Instant::now(),
             last_click_frame: 0,
@@ -540,6 +555,7 @@ impl App {
             build_rotation: 0,
             wall_thickness: 1, // thin walls by default
             hover_world: (0.0, 0.0),
+            move_marker: None,
             terrain_tool: None,
             terrain_brush_radius: 2,
             fluid_params: FluidParams {
@@ -597,6 +613,7 @@ impl App {
             debug_bullet_slowmo: false,
             debug_bullet_speed: 0.02,
             debug_show_cover: false,
+            debug_show_flock: false,
             audio_output: None, // lazy init on first sound (browser requires user gesture)
             sandbox_tool: SandboxTool::None,
             drag_start: None,
@@ -627,6 +644,7 @@ impl App {
                 vec![jeff]
             },
             selected_pleb: Some(0),
+            selected_group: Vec::new(),
             next_pleb_id: 1,
             placing_pleb: false,
             placing_enemy: false,
@@ -730,6 +748,8 @@ impl App {
             fog_start_explored: false, // true = map starts pre-revealed
             burn_progress: std::collections::HashMap::new(),
             fire_intensity: 1.0,
+            dust_injections: Vec::new(),
+            dust_storm_active: false,
         }
     }
 
@@ -910,6 +930,7 @@ impl App {
         let fv_vel_a_view = gfx.fluid_vel[0].create_view(&wgpu::TextureViewDescriptor::default());
         let fv_pres_b_view = gfx.fluid_pres[1].create_view(&wgpu::TextureViewDescriptor::default());
         let water_view = gfx.water_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
+        let dust_b_view = gfx.dust_textures[1].create_view(&wgpu::TextureViewDescriptor::default());
         let shadow_map_view = gfx
             .shadow_map_dummy
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1030,6 +1051,10 @@ impl App {
                         binding: 10,
                         resource: wgpu::BindingResource::TextureView(&output_view_b),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 27,
+                        resource: wgpu::BindingResource::TextureView(&dust_b_view),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1146,6 +1171,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 10,
                         resource: wgpu::BindingResource::TextureView(&output_view_a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 27,
+                        resource: wgpu::BindingResource::TextureView(&dust_b_view),
                     },
                 ],
             }),
@@ -1264,6 +1293,10 @@ impl App {
                         binding: 10,
                         resource: wgpu::BindingResource::TextureView(&output_view_b),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 27,
+                        resource: wgpu::BindingResource::TextureView(&dust_b_view),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1380,6 +1413,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 10,
                         resource: wgpu::BindingResource::TextureView(&output_view_a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 27,
+                        resource: wgpu::BindingResource::TextureView(&dust_b_view),
                     },
                 ],
             }),
@@ -1588,6 +1625,14 @@ impl App {
                         src.fresh = false;
                     }
                 }
+            }
+        }
+
+        // --- Move marker fade ---
+        if let Some((_, _, ref mut timer)) = self.move_marker {
+            *timer -= dt;
+            if *timer <= 0.0 {
+                self.move_marker = None;
             }
         }
 
@@ -2837,6 +2882,116 @@ impl App {
             // Flip dye phase for next frame
             self.fluid_dye_phase = 1 - self.fluid_dye_phase;
 
+            // --- Dust simulation ---
+            // Update DustParams uniform
+            {
+                let dust_dt = self.fluid_params.dt;
+                let params = dust::DustParams {
+                    grid_w: dust::DUST_SIM_W as f32,
+                    grid_h: dust::DUST_SIM_H as f32,
+                    dt: dust_dt,
+                    decay_rate: dust::compute_decay_rate(60.0, dust_dt), // 60s half-life (very heavy)
+                    diffusion: 0.001, // almost no spread (heavy particles settle in place)
+                    wind_follow: 0.05, // 5% of air velocity — barely drifts
+                    wind_x: self.fluid_params.wind_x,
+                    wind_y: self.fluid_params.wind_y,
+                    storm_active: if self.dust_storm_active { 1.0 } else { 0.0 },
+                    storm_edge: dust::windward_edge(
+                        self.fluid_params.wind_x,
+                        self.fluid_params.wind_y,
+                    ),
+                    storm_density: 0.8,
+                    _pad: 0.0,
+                };
+                gfx.queue
+                    .write_buffer(&gfx.dust_params_buffer, 0, bytemuck::bytes_of(&params));
+            }
+            // CPU dust injections — write Gaussian blobs to BOTH dust textures
+            for inj in self.dust_injections.drain(..) {
+                let w = dust::DUST_SIM_W;
+                let h = dust::DUST_SIM_H;
+                let sx = inj.x / GRID_W as f32 * w as f32;
+                let sy = inj.y / GRID_H as f32 * h as f32;
+                let r = inj.radius / GRID_W as f32 * w as f32;
+                let ri = r.ceil() as i32;
+                let x0 = (sx as i32 - ri).max(0) as u32;
+                let y0 = (sy as i32 - ri).max(0) as u32;
+                let x1 = (sx as i32 + ri + 1).min(w as i32) as u32;
+                let y1 = (sy as i32 + ri + 1).min(h as i32) as u32;
+                let patch_w = x1 - x0;
+                let patch_h = y1 - y0;
+                if patch_w == 0 || patch_h == 0 {
+                    continue;
+                }
+                let mut patch = vec![0.0f32; (patch_w * patch_h) as usize];
+                for py in 0..patch_h {
+                    for px in 0..patch_w {
+                        let dx = (x0 + px) as f32 - sx;
+                        let dy = (y0 + py) as f32 - sy;
+                        let dist2 = dx * dx + dy * dy;
+                        let sigma2 = r * r * 0.25;
+                        let val = inj.density * (-dist2 / (2.0 * sigma2)).exp();
+                        patch[(py * patch_w + px) as usize] = val;
+                    }
+                }
+                let patch_bytes = bytemuck::cast_slice(&patch);
+                for tex in &gfx.dust_textures {
+                    gfx.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: x0, y: y0, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        patch_bytes,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(patch_w * 4), // 4 bytes per R32Float
+                            rows_per_image: Some(patch_h),
+                        },
+                        wgpu::Extent3d {
+                            width: patch_w,
+                            height: patch_h,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+            }
+            // Dust advection compute pass (reads A, writes B)
+            {
+                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("dust"),
+                    timestamp_writes: None,
+                });
+                p.set_pipeline(&gfx.dust_pipeline);
+                p.set_bind_group(0, &gfx.dust_bind_group, &[]);
+                p.dispatch_workgroups(
+                    dust::DUST_SIM_W.div_ceil(8),
+                    dust::DUST_SIM_H.div_ceil(8),
+                    1,
+                );
+            }
+            // Copy B → A so next frame reads the advected result
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gfx.dust_textures[1],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gfx.dust_textures[0],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: dust::DUST_SIM_W,
+                    height: dust::DUST_SIM_H,
+                    depth_or_array_layers: 1,
+                },
+            );
+
             // 10. Thermal exchange (256x256)
             {
                 let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -3080,8 +3235,8 @@ impl App {
                 // Dispatch wave equation iterations (ensure even count so result lands in texture A)
                 let iters = (self.sound_iters_per_frame / 2) * 2; // round down to even
                 let iters = iters.max(2);
-                let sw = GRID_W.div_ceil(WORKGROUP_SIZE);
-                let sh = GRID_H.div_ceil(WORKGROUP_SIZE);
+                let sw = (GRID_W * 2).div_ceil(WORKGROUP_SIZE);
+                let sh = (GRID_H * 2).div_ceil(WORKGROUP_SIZE);
                 for _ in 0..iters {
                     let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("sound-pass"),

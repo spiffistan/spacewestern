@@ -1329,6 +1329,21 @@ impl App {
                 ContextAction::MoveTo(wx, wy),
                 true,
             ));
+            // Throw grenade (check range — max ~12 tiles)
+            if let Some(pi) = sel_pleb {
+                if let Some(p) = self.plebs.get(pi) {
+                    let throw_dist = ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt();
+                    let in_range = throw_dist < 18.0;
+                    menu.actions.push((
+                        format!(
+                            "\u{1f4a3} Throw grenade{}",
+                            if in_range { "" } else { " [too far]" }
+                        ),
+                        ContextAction::ThrowGrenade(wx, wy),
+                        in_range,
+                    ));
+                }
+            }
             has_actions = true;
         }
 

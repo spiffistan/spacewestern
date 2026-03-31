@@ -66,9 +66,20 @@ fn has_wall_on_edge_s(height: u32, flags: u32, edge: u32) -> bool {
     return (mask & (1u << edge)) != 0u;
 }
 
+// Sound sim runs at 2x grid resolution (512x512 for 256x256 grid)
+const SOUND_SCALE: i32 = 2;
+
+fn grid_idx(sx: i32, sy: i32) -> u32 {
+    let gx = sx / SOUND_SCALE;
+    let gy = sy / SOUND_SCALE;
+    return u32(gy) * u32(camera.grid_w) + u32(gx);
+}
+
 fn is_wall(x: i32, y: i32) -> bool {
-    if x < 0 || y < 0 || x >= i32(camera.grid_w) || y >= i32(camera.grid_h) { return true; }
-    let b = grid[u32(y) * u32(camera.grid_w) + u32(x)];
+    let gx = x / SOUND_SCALE;
+    let gy = y / SOUND_SCALE;
+    if gx < 0 || gy < 0 || gx >= i32(camera.grid_w) || gy >= i32(camera.grid_h) { return true; }
+    let b = grid[u32(gy) * u32(camera.grid_w) + u32(gx)];
     let bt = block_type(b);
     let bh = block_height(b);
     if bh == 0u { return false; }
@@ -87,8 +98,15 @@ fn is_wall(x: i32, y: i32) -> bool {
 
 // Edge-blocked for sound: check thin wall edge between two adjacent tiles
 fn sound_edge_blocked(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
-    let ddx = bx - ax;
-    let ddy = by - ay;
+    // Convert sound coords to grid coords for edge checks
+    let gax = ax / SOUND_SCALE;
+    let gay = ay / SOUND_SCALE;
+    let gbx = bx / SOUND_SCALE;
+    let gby = by / SOUND_SCALE;
+    // If both sound texels map to the same grid cell, no edge to check
+    if gax == gbx && gay == gby { return false; }
+    let ddx = gbx - gax;
+    let ddy = gby - gay;
     var dir_a = 0u;
     if ddy < 0 { dir_a = 0u; }
     else if ddx > 0 { dir_a = 1u; }
@@ -98,27 +116,27 @@ fn sound_edge_blocked(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
     let gw = i32(camera.grid_w);
     let gh = i32(camera.grid_h);
 
-    // Check wall_data layer first (DN-008)
-    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
-        let a_wd = read_wall_data_s(u32(ay) * u32(gw) + u32(ax));
+    // Check wall_data layer first (DN-008) — use grid coords
+    if gax >= 0 && gay >= 0 && gax < gw && gay < gh {
+        let a_wd = read_wall_data_s(u32(gay) * u32(gw) + u32(gax));
         if wd_has_edge_s(a_wd, dir_a) { return true; }
     }
-    if bx >= 0 && by >= 0 && bx < gw && by < gh {
-        let b_wd = read_wall_data_s(u32(by) * u32(gw) + u32(bx));
+    if gbx >= 0 && gby >= 0 && gbx < gw && gby < gh {
+        let b_wd = read_wall_data_s(u32(gby) * u32(gw) + u32(gbx));
         if wd_has_edge_s(b_wd, dir_b) { return true; }
     }
 
     // Fall back to block grid (legacy)
-    if ax >= 0 && ay >= 0 && ax < gw && ay < gh {
-        let ab = grid[u32(ay) * u32(gw) + u32(ax)];
+    if gax >= 0 && gay >= 0 && gax < gw && gay < gh {
+        let ab = grid[u32(gay) * u32(gw) + u32(gax)];
         let abh = block_height(ab);
         if abh > 0u && !(is_door(ab) && is_open(ab)) {
             let af = (ab >> 16u) & 0xFFu;
             if has_wall_on_edge_s(abh, af, dir_a) { return true; }
         }
     }
-    if bx >= 0 && by >= 0 && bx < gw && by < gh {
-        let bb = grid[u32(by) * u32(gw) + u32(bx)];
+    if gbx >= 0 && gby >= 0 && gbx < gw && gby < gh {
+        let bb = grid[u32(gby) * u32(gw) + u32(gbx)];
         let bbh = block_height(bb);
         if bbh > 0u && !(is_door(bb) && is_open(bb)) {
             let bf = (bb >> 16u) & 0xFFu;
@@ -129,7 +147,9 @@ fn sound_edge_blocked(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
 }
 
 fn read_pressure(from_x: i32, from_y: i32, x: i32, y: i32) -> f32 {
-    if x < 0 || y < 0 || x >= i32(camera.grid_w) || y >= i32(camera.grid_h) { return 0.0; }
+    let sw = i32(camera.grid_w) * SOUND_SCALE;
+    let sh = i32(camera.grid_h) * SOUND_SCALE;
+    if x < 0 || y < 0 || x >= sw || y >= sh { return 0.0; }
     if is_wall(x, y) { return 0.0; }
     // Edge blocking for thin walls
     if sound_edge_blocked(from_x, from_y, x, y) { return 0.0; }
@@ -144,9 +164,9 @@ fn read_pressure(from_x: i32, from_y: i32, x: i32, y: i32) -> f32 {
 fn main_sound(@builtin(global_invocation_id) gid: vec3<u32>) {
     let x = i32(gid.x);
     let y = i32(gid.y);
-    let gw = i32(camera.grid_w);
-    let gh = i32(camera.grid_h);
-    if x >= gw || y >= gh { return; }
+    let sw = i32(camera.grid_w) * SOUND_SCALE;
+    let sh = i32(camera.grid_h) * SOUND_SCALE;
+    if x >= sw || y >= sh { return; }
 
     // Wall cells: zero pressure and velocity
     if is_wall(x, y) {
@@ -174,7 +194,9 @@ fn main_sound(@builtin(global_invocation_id) gid: vec3<u32>) {
     var p_new = p + v_new;
 
     // Glass blocks: attenuate sound passing through (partial transmission)
-    let block = grid[u32(y) * u32(camera.grid_w) + u32(x)];
+    let gx_s = x / SOUND_SCALE;
+    let gy_s = y / SOUND_SCALE;
+    let block = grid[u32(gy_s) * u32(camera.grid_w) + u32(gx_s)];
     if block_type(block) == 5u {
         p_new *= 0.7;
         v_new *= 0.7;
@@ -190,11 +212,11 @@ fn main_sound(@builtin(global_invocation_id) gid: vec3<u32>) {
         let freq = sources[base + 3];
         let phase = sources[base + 4];
         let pattern = sources[base + 5];
-        // Check if this source is at this grid cell
-        let dx = f32(x) + 0.5 - sx;
-        let dy = f32(y) + 0.5 - sy;
+        // Check if this source is at this sound cell (source coords are grid-space)
+        let dx = f32(x) + 0.5 - sx * f32(SOUND_SCALE);
+        let dy = f32(y) + 0.5 - sy * f32(SOUND_SCALE);
         let dist = dx * dx + dy * dy;
-        if dist < 2.0 {  // within ~1.4 tiles
+        if dist < 2.0 * f32(SOUND_SCALE * SOUND_SCALE) {  // radius scales with resolution
             let falloff = max(0.0, 1.0 - sqrt(dist));
             if pattern < 0.5 {
                 // Impulse: amplitude applied once (duration handles timing on CPU)

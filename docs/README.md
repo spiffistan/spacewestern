@@ -1,71 +1,75 @@
-# Docs Structure
+# Docs
+
+All documentation uses **lowercase-kebab-case.md** naming. `README.md` is the only exception (convention).
 
 ## Root Documents
 
+Living documents for the current game state.
+
 | File | Purpose |
 |------|---------|
-| `SPEC.md` | Full game specification — systems, mechanics, world rules |
-| `MASTER_SPEC.md` | High-level vision and design pillars |
-| `PLAN.md` | Implementation roadmap and feature tracking |
-| `CRAFTING.md` | Crafting chain diagram and recipe flow |
+| `spec.md` | Full game specification — systems, mechanics, world rules |
+| `master-spec.md` | High-level vision and design pillars |
+| `plan.md` | Implementation roadmap and feature tracking |
+| `crafting.md` | Crafting chain diagram and recipe flow |
 | `crafting-tree.md` | Mermaid diagram: full crafting/building dependency tree |
-| `AI_SYSTEM.md` | Pleb AI, pathfinding, needs, scheduling |
-| `PHYSICS_SYSTEM.md` | Thermal, fluid, electrical simulation details |
+| `ai-system.md` | Pleb AI, pathfinding, needs, scheduling |
+| `physics-system.md` | Thermal, fluid, electrical simulation details |
+| `game-design.md` | Core game design document |
+| `sprites.md` | Sprite rendering and asset pipeline |
+| `tree-palette.md` | Tree color palette reference |
+| `oak-build.md` | Oak build system notes |
 
 ## Design Notes (`dn/`)
 
-Numbered technical documents for specific architectural decisions. Format: `DN-NNN-short-name.md`. Each has a Status (Proposed / Accepted / Implemented / Superseded).
+Numbered technical decisions. Format: `DN-NNN-short-name.md`.
 
 | File | Status | Topic |
 |------|--------|-------|
 | `DN-001-blender-sprite-pipeline.md` | Proposed | Blender-to-heightmap-sprite asset pipeline |
 | `DN-002-block-vs-surface-items.md` | Proposed | When to use block types vs surface item entities |
-| `DN-003-subgrid-placement.md` | Proposed | 4×4 sub-grid for finer placement snapping of multi-tile objects |
+| `DN-003-subgrid-placement.md` | Proposed | 4x4 sub-grid for finer placement snapping |
 | `DN-004-thin-walls.md` | Proposed | Variable-thickness walls with sub-grid furniture placement |
-| `DN-005-windows-doors-as-wall-features.md` | Proposed | Windows and doors as wall attributes, not separate block types |
-| `DN-006-subgrid-system-implications.md` | Proposed | Full audit of every system affected by the sub-grid architecture |
-| `DN-007-building-patterns.md` | Analysis | Allowed building patterns with thin walls — corners, T-junctions, double walls |
+| `DN-005-windows-doors-as-wall-features.md` | Proposed | Windows and doors as wall attributes, not separate blocks |
+| `DN-006-subgrid-system-implications.md` | Proposed | Full audit of systems affected by sub-grid architecture |
+| `DN-007-building-patterns.md` | Analysis | Allowed building patterns — corners, T-junctions, double walls |
 | `DN-008-three-layer-world-model.md` | Proposed | Three-layer architecture: wall edges, blocks, surface items |
 | `DN-009-pleb-sprites.md` | Proposed | Layered sprite compositing for colonist rendering |
-| `DN-010-discovery-layer.md` | Proposed | Hidden map features: creature dens, minerals, artifacts, metal detector |
-| `DN-011-combat-rework.md` | Proposed | Kinematic bullets, spatial hash collision, creature hits, drag/wind |
-| `DN-012-wound-system.md` | Proposed | Anatomical hit locations, bleeding, infection, treatment, permanent effects |
-| `DN-013-tall-grass.md` | Proposed | Vegetation as gameplay: concealment, fire fuel, harvesting, drying, growth, perimeter management |
+| `DN-010-discovery-layer.md` | Proposed | Hidden features: creature dens, minerals, artifacts |
+| `DN-011-combat-rework.md` | Proposed | Kinematic bullets, spatial hash collision, creature hits |
+| `DN-012-wound-system.md` | Proposed | Anatomical hit locations, bleeding, infection, treatment |
+| `DN-013-communication-flocking.md` | Implemented | Pleb shout communication + boids-like group movement |
+| `DN-014-tall-grass.md` | Proposed | Vegetation as gameplay: concealment, fire fuel, harvesting |
 
 ## Ideas (`ideas/`)
 
-Early-stage design exploration. Not commitments — creative brainstorming for future directions.
+Early-stage exploration. Not commitments — creative brainstorming.
 
 | File | Topic |
 |------|-------|
-| `CHARGEN.md` | "The Manifest" — frontier crew recruitment card system |
-| `CARDS.md` | Cards as narrative meta-layer: events, blueprints, abilities, crises |
-| `ARTSTYLE.md` | Six art direction options (Dust & Iron, Moebius, Dime Novel, etc.) |
-| `SPRITES.md` | Practical sprite design: what needs sprites, production approaches |
-| `WALLS_AND_GROUND.md` | Wall and ground rendering assessment — procedural vs sprites |
-| `MULTI_LEVEL.md` | Underground levels: depth as escalating difficulty, fluid coupling, UX |
-| `CHARACTER_VISUALS.md` | Character visual ideas: wear, emotes, relationships, scars, paper doll |
-| `GAMEPLAY_SYSTEMS.md` | Day/night, weather events, sound, ruins, trade, seasons, fire, reputation, music, animals |
-| `DEEPER_SYSTEMS.md` | Food/cooking, medicine, knowledge/oral tradition, psychology, aesthetics, mapping, comms, endgame |
-| `PHILOSOPHY.md` | Design philosophy: permanence, silence, loneliness, scarcity as teacher, the colony as character |
-| `COMBAT.md` | Real-time tactical combat: RTwP, breaching, cover, suppression, weapons, enemy AI, wounds |
-| `ALIEN_FAUNA.md` | Nocturnal alien creatures: duskweavers, thermogasts, glintcrawlers, hollowcalls, mistmaws, borers. Sound sourcing, system integration. |
-| `EMERGENT_PHYSICS.md` | 20+ gameplay ideas exploiting the physics stack: acoustic ecology, pressure traps, echo location, fire whirls, condensation, thermal footprints, pipe organ, erosion, and more. |
-| `WATER_FLOW.md` | GPU pipe-model water: gravity flow, pooling, volume conservation, dams, channels, erosion, weather cycle |
-| `ASIDES.md` | Quick-capture ideas: thumper, drones, sunskirter (creature + ship + phenomenon) |
-| `TALL_GRASS.md` | Tall grass: concealment, fire fuel, fiber source, creature habitat, perimeter management |
-| `LORE_AND_RESEARCH.md` | Knowledge as physical objects: tacit→written→shared, libraries, lore trading, metal detectors, unreliable narrators, alien translation |
+| `chargen.md` | "The Manifest" — frontier crew recruitment card system |
+| `cards.md` | Cards as narrative meta-layer: events, blueprints, abilities, crises |
+| `artstyle.md` | Six art direction options (Dust & Iron, Moebius, Dime Novel, etc.) |
+| `sprites.md` | Practical sprite design: what needs sprites, production approaches |
+| `walls-and-ground.md` | Wall and ground rendering assessment — procedural vs sprites |
+| `multi-level.md` | Underground levels: depth as difficulty, fluid coupling, UX |
+| `character-visuals.md` | Character visuals: wear, emotes, relationships, scars, paper doll |
+| `gameplay-systems.md` | Day/night, weather, sound, ruins, trade, seasons, fire, reputation |
+| `deeper-systems.md` | Food/cooking, medicine, knowledge, psychology, aesthetics, comms |
+| `philosophy.md` | Design philosophy: permanence, silence, loneliness, scarcity |
+| `combat.md` | Real-time tactical combat: RTwP, breaching, cover, suppression |
+| `alien-fauna.md` | Nocturnal alien creatures: duskweavers, thermogasts, hollowcalls |
+| `emergent-physics.md` | Emergent physics systems and interactions |
+| `lore-and-research.md` | World lore, history, research mechanics |
+| `asides.md` | Misc design asides (thumper, drones, sunskirter) |
+| `tall-grass.md` | Tall grass terrain type design |
+| `water-flow.md` | Water flow, pooling, rain, rivers |
+| `subgrid-features.md` | Sub-grid feature ideas |
+| `group-ai-roadmap.md` | Squad roles, morale contagion, surrender, overwatch, radio/horn |
 
-## Reference (`fluid_mechanics/`)
+## Naming Convention
 
-| File | Topic |
-|------|-------|
-| `INSPIRATON.md` | Fluid mechanics reference and inspiration |
-
-## Conventions
-
-- **Design notes** are for concrete technical decisions that affect architecture. They get a DN number.
-- **Ideas** are for creative exploration with no commitment. They may never be built.
-- **Root docs** are living documents that track the current state of the game design.
-- When a design note is implemented, update its Status field.
-- When an idea graduates to implementation, create a design note or update the relevant root doc.
+- All files: `lowercase-kebab-case.md`
+- Design notes: `DN-NNN-short-name.md` (numbered, sequential)
+- Ideas: descriptive kebab-case, no numbering
+- Root docs: short descriptive names

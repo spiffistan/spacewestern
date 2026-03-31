@@ -105,6 +105,7 @@ struct GpuCreature {
 };
 const MAX_CREATURES: u32 = 32u;
 @group(0) @binding(26) var<storage, read> creature_buf: array<GpuCreature>;
+@group(0) @binding(27) var dust_tex: texture_2d<f32>;
 
 // Bush sprites packed after tree sprites in the same buffer
 const BUSH_SPRITE_SIZE: u32 = 64u;
@@ -3284,6 +3285,21 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if on_shaft || on_head {
             color = vec3(0.85, 0.88, 0.92); // bright white-silver arrow
         }
+
+        // Power indicator LED: small green dot on the output side corner
+        let fan_idx = u32(by) * u32(camera.grid_w) + u32(bx);
+        let fan_v = voltage[fan_idx];
+        if fan_v > 0.5 {
+            // LED position: corner on the output side
+            let led_x = 0.5 + fan_dx * 0.35 + fan_dy * 0.35;
+            let led_y = 0.5 + fan_dy * 0.35 - fan_dx * 0.35;
+            let led_dist = length(vec2(fx - led_x, fy - led_y));
+            if led_dist < 0.06 {
+                // Bright green with subtle pulse
+                let pulse = 0.8 + 0.2 * sin(camera.time * 3.0);
+                color = vec3(0.1, 0.9, 0.2) * pulse;
+            }
+        }
     } else if btype == BT_COMPOST {
         // Compost: brown-green organic heap with texture
         let noise = fract(sin(world_x * 13.7 + world_y * 7.3) * 43758.5);
@@ -4823,32 +4839,27 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Aiming cone (narrows from wide to narrow as aim_progress increases)
+        // Aiming cone: light transparent gray fill that narrows with aim_progress
         if p.aim_progress > 0.01 && !is_corpse {
             let fwd = vec2(cos(p.angle), sin(p.angle));
             let side_a = vec2(-fwd.y, fwd.x);
-            let a_dx = pdx;
-            let a_dy = pdy;
-            let along = a_dx * fwd.x + a_dy * fwd.y;
-            let across = a_dx * side_a.x + a_dy * side_a.y;
+            let along = pdx * fwd.x + pdy * fwd.y;
+            let across = pdx * side_a.x + pdy * side_a.y;
 
-            // Cone: extends forward from pleb, narrowing with progress
-            let cone_len = 4.0;  // tiles long
-            let half_angle_start = 0.4; // radians (~23°) at progress=0
-            let half_angle_end = 0.03;  // radians (~1.7°) at progress=1
-            let half_angle = mix(half_angle_start, half_angle_end, p.aim_progress);
+            let cone_len = 5.0;
+            let half_angle_start = 0.35;
+            let half_angle_end = 0.02;
+            let progress = clamp(p.aim_progress, 0.0, 1.0);
+            let half_angle = mix(half_angle_start, half_angle_end, progress);
 
-            if along > 0.3 && along < cone_len {
+            if along > 0.2 && along < cone_len {
                 let max_width = along * tan(half_angle);
                 if abs(across) < max_width {
-                    // Thin edge lines of the cone
-                    let edge_dist = abs(abs(across) - max_width);
-                    if edge_dist < 0.04 {
-                        let fade = 1.0 - along / cone_len;
-                        let col = mix(vec3(1.0, 0.4, 0.2), vec3(1.0, 0.2, 0.1), p.aim_progress);
-                        color = mix(color, col, fade * 0.6);
-                        drew_pleb = true;
-                    }
+                    // Filled translucent cone — fades with distance and progress
+                    let dist_fade = 1.0 - along / cone_len;
+                    let edge_fade = 1.0 - abs(across) / max_width; // brighter at center
+                    let alpha = dist_fade * edge_fade * mix(0.12, 0.04, progress);
+                    color = mix(color, vec3(0.85, 0.85, 0.85), alpha);
                 }
             }
         }
@@ -4932,11 +4943,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Weapon rendering: anchored to right side of body, rotated by facing
+        // Weapon rendering: anchored to right side at torso height
         if p.weapon_type > 0.5 && !is_corpse && !drew_pleb {
-            // Right shoulder: offset rightward from body center + slight forward
-            let wpn_ox = s * 0.22 + head_dx * 0.3;
-            let wpn_oy = -s * 0.40 + bob;
+            let wpn_ox = s * 0.20 + head_dx * 0.3;
+            let wpn_oy = -s * 0.48 + bob; // higher — mid-torso, not waist
 
             let is_pistol = p.weapon_type > 3.5; // type 4 = pistol
 
@@ -4963,9 +4973,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                     color = vec3(0.25, 0.22, 0.20); // dark metal
                     drew_pleb = true;
                 }
-                // Grip (below barrel, angled down)
+                // Grip (above barrel in screen space — negative wly)
                 if wlx > -grip_len * 0.3 && wlx < grip_len * 0.7
-                    && wly > barrel_w && wly < barrel_w + grip_len {
+                    && wly < -barrel_w && wly > -barrel_w - grip_len {
                     color = vec3(0.35, 0.25, 0.15); // wood grip
                     drew_pleb = true;
                 }
@@ -5165,8 +5175,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         // Subtle sound ripple (always-on when sound is active)
         {
-            let sc = vec2<i32>(bx, by);
-            let sp = textureLoad(sound_tex, clamp(sc, vec2(0), vec2(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1)), 0).r;
+            let sc = vec2<i32>(bx * 2, by * 2); // sound tex is 2x grid resolution
+            let sp = textureLoad(sound_tex, clamp(sc, vec2(0), vec2(i32(camera.grid_w) * 2 - 1, i32(camera.grid_h) * 2 - 1)), 0).r;
             let ripple = clamp(sp * 0.06, -0.04, 0.04);
             color += vec3(ripple * 0.5, ripple * 0.3, ripple * 0.8);
         }
@@ -5474,8 +5484,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if camera.fluid_overlay < 14.5 {
         // Sound overlay (14): dB-scaled pressure visualization
         // Colors match the decibel scale legend (green → yellow → orange → red → magenta → purple)
-        let sound_cell = vec2<i32>(bx, by);
-        let sp = textureLoad(sound_tex, clamp(sound_cell, vec2(0), vec2(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1)), 0);
+        let sound_cell = vec2<i32>(bx * 2, by * 2); // sound tex is 2x grid resolution
+        let sp = textureLoad(sound_tex, clamp(sound_cell, vec2(0), vec2(i32(camera.grid_w) * 2 - 1, i32(camera.grid_h) * 2 - 1)), 0);
         let pressure = sp.r;
         let velocity = sp.g;
         let amp = abs(pressure);
@@ -5556,6 +5566,32 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color *= 0.4; // dim non-ground
         }
+    } else if camera.fluid_overlay < 16.5 {
+        // Dust density overlay (16): bilinear sampled heatmap
+        let duv = vec2<f32>(
+            world_x / camera.grid_w * 512.0 - 0.5,
+            world_y / camera.grid_h * 512.0 - 0.5
+        );
+        let dip = vec2<i32>(floor(duv));
+        let dfp = fract(duv);
+        let d00 = textureLoad(dust_tex, clamp(dip, vec2(0), vec2(511)), 0).r;
+        let d10 = textureLoad(dust_tex, clamp(dip + vec2(1, 0), vec2(0), vec2(511)), 0).r;
+        let d01 = textureLoad(dust_tex, clamp(dip + vec2(0, 1), vec2(0), vec2(511)), 0).r;
+        let d11 = textureLoad(dust_tex, clamp(dip + vec2(1, 1), vec2(0), vec2(511)), 0).r;
+        let d = mix(mix(d00, d10, dfp.x), mix(d01, d11, dfp.x), dfp.y);
+        // Heatmap: black (0) → brown (low) → orange (mid) → yellow (high)
+        var dc = vec3(0.0);
+        if d > 0.005 {
+            let t = clamp(d / 1.5, 0.0, 1.0);
+            if t < 0.33 {
+                dc = mix(vec3(0.1, 0.05, 0.02), vec3(0.55, 0.30, 0.12), t / 0.33);
+            } else if t < 0.66 {
+                dc = mix(vec3(0.55, 0.30, 0.12), vec3(0.85, 0.55, 0.15), (t - 0.33) / 0.33);
+            } else {
+                dc = mix(vec3(0.85, 0.55, 0.15), vec3(1.0, 0.95, 0.5), (t - 0.66) / 0.34);
+            }
+        }
+        color = mix(color * 0.2, dc, 0.85);
     }
 
     // Velocity arrow overlay (when fractional part of fluid_overlay > 0.1)
@@ -5731,6 +5767,26 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let edge = smoothstep(0.08, 0.0, min(edge_x, edge_y));
                 color = mix(color, hover_tint, edge * 0.25);
             }
+        }
+    }
+
+    // Dust layer — reddish brown, GPU-simulated (manual bilinear for smooth look)
+    {
+        let dust_uv = vec2<f32>(
+            world_x / camera.grid_w * 512.0 - 0.5,
+            world_y / camera.grid_h * 512.0 - 0.5
+        );
+        let ip = vec2<i32>(floor(dust_uv));
+        let fp = fract(dust_uv);
+        let c00 = textureLoad(dust_tex, clamp(ip, vec2(0), vec2(511)), 0).r;
+        let c10 = textureLoad(dust_tex, clamp(ip + vec2(1, 0), vec2(0), vec2(511)), 0).r;
+        let c01 = textureLoad(dust_tex, clamp(ip + vec2(0, 1), vec2(0), vec2(511)), 0).r;
+        let c11 = textureLoad(dust_tex, clamp(ip + vec2(1, 1), vec2(0), vec2(511)), 0).r;
+        let dust_d = mix(mix(c00, c10, fp.x), mix(c01, c11, fp.x), fp.y);
+        if dust_d > 0.005 {
+            let dust_color = vec3(0.55, 0.35, 0.22);
+            let dust_alpha = clamp(dust_d * 0.7, 0.0, 0.8);
+            color = mix(color, dust_color, dust_alpha);
         }
     }
 

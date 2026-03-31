@@ -11,3 +11,4 @@ assets/sprites/raw/
 
 # macOS
 .DS_Store
+.claude/worktrees/

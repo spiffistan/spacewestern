@@ -275,6 +275,10 @@ pub struct Pleb {
     pub reload_timer: f32,                 // >0 = currently reloading (seconds remaining)
     pub bubble: Option<(BubbleKind, f32)>, // (kind, seconds_remaining)
     pub weapon_swap_timer: f32,            // >0 = switching weapons (can't attack)
+    pub suppression: f32,                  // 0.0–1.0: accuracy penalty from near-miss bullets
+    pub last_shout_timer: f32,             // cooldown between shouts (decays each frame)
+    pub prev_health_band: u8,              // health threshold tracking (0=full, 1=<50%, 2=<35%)
+    pub group_id: Option<u8>,              // explicit group membership (None = ungrouped)
     pub work_priorities: [u8; 4],          // [haul, farm, build, craft] — 0=off, 1-3=priority
     pub command_queue: Vec<PlebCommand>,   // shift-click queued commands
 }
@@ -401,6 +405,10 @@ impl Pleb {
             reload_timer: 0.0,
             bubble: None,
             weapon_swap_timer: 0.0,
+            suppression: 0.0,
+            last_shout_timer: 0.0,
+            prev_health_band: 0,
+            group_id: None,
             work_priorities: crate::zones::default_work_priorities(),
             command_queue: Vec::new(),
         }
@@ -476,6 +484,13 @@ impl Pleb {
         }
         self.equipped_weapon = best.map(|(id, _)| id);
         self.aim_progress = 0.0;
+    }
+
+    /// Clear all work/harvest/haul targets (common pattern after re-tasking).
+    pub fn clear_targets(&mut self) {
+        self.work_target = None;
+        self.haul_target = None;
+        self.harvest_target = None;
     }
 
     /// Set a bubble, respecting priority (higher priority replaces lower).
