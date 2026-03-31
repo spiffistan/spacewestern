@@ -202,6 +202,10 @@ impl AudioOutput {
             0 => render_impulse(amplitude, duration),
             1 => render_sine(frequency, duration),
             2 => render_noise(frequency, duration),
+            3 => render_thud(duration),
+            4 => render_slash(duration),
+            5 => render_gunshot(duration),
+            6 => render_bullet_impact(duration),
             _ => return,
         };
 
@@ -330,6 +334,115 @@ fn render_noise(frequency: f32, duration: f32) -> Vec<f32> {
         let fade = 1.0 - frac;
 
         buffer.push(hp * click_env * fade * 1.5);
+    }
+    buffer
+}
+
+/// Blunt melee impact: low-frequency thud with sub-bass punch.
+fn render_thud(duration: f32) -> Vec<f32> {
+    let num_samples = (duration.max(0.06) * SAMPLE_RATE as f32) as usize;
+    let mut buffer = Vec::with_capacity(num_samples);
+    let mut rng = Xorshift32::new(0xBEEF);
+    let mut lp_state = 0.0f32;
+
+    for i in 0..num_samples {
+        let t = i as f32 / SAMPLE_RATE as f32;
+        let env = (-t * 30.0).exp(); // fast exponential decay
+
+        // Low-pass filtered noise at ~200Hz
+        let noise = rng.next_f32() * 2.0 - 1.0;
+        let alpha = 200.0 * TAU / (SAMPLE_RATE as f32 + 200.0 * TAU);
+        lp_state = alpha * noise + (1.0 - alpha) * lp_state;
+
+        // Sub-bass thump at 60Hz
+        let sub = (t * 60.0 * TAU).sin() * (-t * 40.0).exp();
+
+        buffer.push((lp_state * 0.6 + sub * 0.4) * env * 0.8);
+    }
+    buffer
+}
+
+/// Sharp melee impact: high-mid frequency slash with rapid decay.
+fn render_slash(duration: f32) -> Vec<f32> {
+    let num_samples = (duration.max(0.04) * SAMPLE_RATE as f32) as usize;
+    let mut buffer = Vec::with_capacity(num_samples);
+    let mut rng = Xorshift32::new(0xFACE);
+    let mut lp_state = 0.0f32;
+    let mut hp_prev_in = 0.0f32;
+    let mut hp_prev_out = 0.0f32;
+
+    for i in 0..num_samples {
+        let t = i as f32 / SAMPLE_RATE as f32;
+        let env = (-t * 50.0).exp(); // very rapid decay
+
+        let noise = rng.next_f32() * 2.0 - 1.0;
+
+        // Band-pass around 2kHz: low-pass at 3kHz, high-pass at 1kHz
+        let alpha_lp = 3000.0 * TAU / (SAMPLE_RATE as f32 + 3000.0 * TAU);
+        lp_state = alpha_lp * noise + (1.0 - alpha_lp) * lp_state;
+
+        let alpha_hp = SAMPLE_RATE as f32 / (SAMPLE_RATE as f32 + 1000.0 * TAU);
+        let hp = alpha_hp * (hp_prev_out + lp_state - hp_prev_in);
+        hp_prev_in = lp_state;
+        hp_prev_out = hp;
+
+        buffer.push(hp * env * 1.2);
+    }
+    buffer
+}
+
+/// Gunshot: sharp transient crack + low boom tail. Two-phase sound.
+fn render_gunshot(duration: f32) -> Vec<f32> {
+    let num_samples = (duration.max(0.12) * SAMPLE_RATE as f32) as usize;
+    let mut buffer = Vec::with_capacity(num_samples);
+    let mut rng = Xorshift32::new(0xBA_0006);
+    let mut lp_state = 0.0f32;
+
+    for i in 0..num_samples {
+        let t = i as f32 / SAMPLE_RATE as f32;
+
+        // Phase 1: sharp high-frequency crack (first 5ms)
+        let crack_env = (-t * 200.0).exp();
+        let crack = rng.next_f32() * 2.0 - 1.0;
+
+        // Phase 2: low boom/report (60-120Hz, slower decay)
+        let boom = (t * 80.0 * TAU).sin() * (-t * 25.0).exp() * 0.6;
+
+        // Phase 3: mid-frequency ring-down (300-500Hz)
+        let ring = (t * 400.0 * TAU).sin() * (-t * 40.0).exp() * 0.3;
+
+        // Low-pass the crack slightly to avoid pure white noise harshness
+        let alpha = 4000.0 * TAU / (SAMPLE_RATE as f32 + 4000.0 * TAU);
+        lp_state = alpha * crack + (1.0 - alpha) * lp_state;
+
+        let sample = lp_state * crack_env * 0.7 + boom + ring;
+        buffer.push(sample.clamp(-1.0, 1.0));
+    }
+    buffer
+}
+
+/// Bullet impact on terrain: short sharp tick + dust scatter.
+fn render_bullet_impact(duration: f32) -> Vec<f32> {
+    let num_samples = (duration.max(0.05) * SAMPLE_RATE as f32) as usize;
+    let mut buffer = Vec::with_capacity(num_samples);
+    let mut rng = Xorshift32::new(0xD1_2700);
+    let mut lp_state = 0.0f32;
+
+    for i in 0..num_samples {
+        let t = i as f32 / SAMPLE_RATE as f32;
+
+        // Sharp initial tick
+        let tick_env = (-t * 150.0).exp();
+        let noise = rng.next_f32() * 2.0 - 1.0;
+
+        // Low-pass to ~1.5kHz for earthy thump quality
+        let alpha = 1500.0 * TAU / (SAMPLE_RATE as f32 + 1500.0 * TAU);
+        lp_state = alpha * noise + (1.0 - alpha) * lp_state;
+
+        // Small resonant ping (stone/dirt)
+        let ping = (t * 600.0 * TAU).sin() * (-t * 80.0).exp() * 0.2;
+
+        buffer.push((lp_state * tick_env * 0.8 + ping) * 0.6);
     }
     buffer
 }

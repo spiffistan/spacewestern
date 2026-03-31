@@ -181,8 +181,8 @@ fn build_projectile_defs() -> Vec<ProjectileDef> {
             max_speed: 120.0,
             traversal: TraversalMode::Ballistic,
             impact: ImpactEffect {
-                sound_db: 0.0,
-                sound_duration: 0.0,
+                sound_db: 70.0,
+                sound_duration: 0.05,
                 destroy_multiplier: 0.0,
                 smoke_radius: 0.0,
                 explosion: None,
@@ -231,6 +231,7 @@ pub struct PhysicsBody {
     pub has_landed: bool,   // true after first ground contact (for one-time explosion)
     pub prev_x: f32,        // position at start of frame (for line-segment collision)
     pub prev_y: f32,
+    pub shooter_pleb: Option<usize>, // pleb index who fired this (skip for self-hit)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -251,6 +252,7 @@ pub struct Impact {
     pub kinetic_energy: f32,
     pub destroy_block: bool,
     pub projectile_id: ProjectileId,
+    pub debug_info: String,
 }
 
 /// What kind of entity was hit by a bullet.
@@ -295,6 +297,7 @@ impl PhysicsBody {
             has_landed: false,
             prev_x: x,
             prev_y: y,
+            shooter_pleb: None,
         }
     }
 
@@ -326,6 +329,7 @@ impl PhysicsBody {
             has_landed: false,
             prev_x: x,
             prev_y: y,
+            shooter_pleb: None,
         }
     }
 
@@ -357,20 +361,42 @@ impl PhysicsBody {
             has_landed: false,
             prev_x: x,
             prev_y: y,
+            shooter_pleb: None,
         }
     }
 
-    /// Create a bullet fired from position in a direction.
+    /// Create a flat bullet (no aimed arc). Used for cannons and non-aimed fire.
     pub fn new_bullet(x: f32, y: f32, dir_x: f32, dir_y: f32) -> Self {
-        let speed = 120.0; // very fast — crosses screen in ~2s
+        Self::new_bullet_aimed(x, y, dir_x, dir_y, 1.0, 1.0, 20.0)
+    }
+
+    /// Create a bullet fired from position in a direction.
+    /// `gun_z`: height of the gun muzzle. `target_dist`: distance to target.
+    /// Computes an aimed arc so the bullet arrives at `target_z` at the target distance.
+    pub fn new_bullet_aimed(
+        x: f32,
+        y: f32,
+        dir_x: f32,
+        dir_y: f32,
+        gun_z: f32,
+        target_z: f32,
+        target_dist: f32,
+    ) -> Self {
+        let speed = 120.0;
         let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
+        let gravity = 25.0;
+        // Time for bullet to reach target
+        let t = (target_dist / speed).max(0.001);
+        // vz needed: target_z = gun_z + vz*t - 0.5*g*t²
+        // vz = (target_z - gun_z + 0.5*g*t²) / t
+        let vz = (target_z - gun_z + 0.5 * gravity * t * t) / t;
         PhysicsBody {
             x,
             y,
-            z: 1.0,
+            z: gun_z,
             vx: dir_x / len * speed,
             vy: dir_y / len * speed,
-            vz: 0.0,
+            vz,
             rot_x: 0.0,
             rot_y: 0.0,
             rot_z: dir_y.atan2(dir_x),
@@ -388,6 +414,7 @@ impl PhysicsBody {
             has_landed: false,
             prev_x: x,
             prev_y: y,
+            shooter_pleb: None,
         }
     }
 
@@ -412,6 +439,11 @@ impl PhysicsBody {
 
 /// Check if a physics body can occupy position (x, y) without overlapping walls.
 pub fn body_can_move(grid: &[u32], x: f32, y: f32, size: f32) -> bool {
+    body_can_move_z(grid, x, y, size, 2.0)
+}
+
+/// Like body_can_move but with a Z height check — low walls are passable if z > cover height.
+pub fn body_can_move_z(grid: &[u32], x: f32, y: f32, size: f32, z: f32) -> bool {
     // Check 4 corners of bounding box
     for &(cx, cy) in &[
         (x - size, y - size),
@@ -426,18 +458,60 @@ pub fn body_can_move(grid: &[u32], x: f32, y: f32, size: f32) -> bool {
         }
         let b = grid[(by as u32 * GRID_W + bx as u32) as usize];
         let bt = block_type_rs(b);
-        let bh = (b >> 8) & 0xFF;
+        let bh = block_height_rs(b) as u32;
         let is_door = (b >> 16) & 1 != 0;
         let is_open = (b >> 16) & 4 != 0;
+        // Low walls: passable if body Z > cover height
+        if bt == BT_LOW_WALL {
+            if z > bh as f32 * 0.33 {
+                continue;
+            }
+            return false; // bullet below cover = blocked
+        }
         // Solid blocks that bodies can't pass through
+        // Terrain (air=0, dirt=2, dug=32, rock=34) and furniture/plants are passable
         if bh > 0
-            && !matches!(bt, 6 | 7 | 8 | 10 | 11 | 13 | 15 | 16 | 17 | 18)
+            && !bt_is!(
+                bt,
+                BT_AIR,
+                BT_DIRT,
+                BT_DUG_GROUND,
+                BT_ROCK,
+                BT_FIREPLACE,
+                BT_CEILING_LIGHT,
+                BT_TREE,
+                BT_FLOOR_LAMP,
+                BT_TABLE_LAMP,
+                BT_COMPOST,
+                BT_BERRY_BUSH,
+                BT_CROP
+            )
             && !(is_door && is_open)
         {
             return false;
         }
     }
     true
+}
+
+/// Check if a position adjacent to `(wx,wy)` is blocked by a wall edge in the direction
+/// of motion, considering low walls are passable.
+fn wall_edge_blocks_body(
+    grid: &[u32],
+    wall_data: &[u16],
+    old_x: f32,
+    old_y: f32,
+    new_x: f32,
+    new_y: f32,
+) -> bool {
+    let ox = old_x.floor() as i32;
+    let oy = old_y.floor() as i32;
+    let nx = new_x.floor() as i32;
+    let ny = new_y.floor() as i32;
+    if ox == nx && oy == ny {
+        return false; // same tile
+    }
+    edge_blocked_wd(grid, wall_data, ox, oy, nx, ny)
 }
 
 /// Check if a pleb at (px, py) would collide with any ground-level physics body.
@@ -490,15 +564,18 @@ struct BulletTraceHit {
     x: f32,
     y: f32,           // hit position
     hit_x_face: bool, // true if hit a vertical face (reflect vx), false = horizontal face (reflect vy)
+    debug: String,
 }
 
-fn dda_bullet_trace(
+pub fn dda_bullet_trace(
     grid: &[u32],
     wall_data: &[u16],
     x0: f32,
     y0: f32,
     x1: f32,
     y1: f32,
+    z_start: f32,
+    z_end: f32,
 ) -> Option<BulletTraceHit> {
     let dx = x1 - x0;
     let dy = y1 - y0;
@@ -553,6 +630,7 @@ fn dda_bullet_trace(
                 x: x0 + dir_x * t,
                 y: y0 + dir_y * t,
                 hit_x_face: t_max_x < t_max_y,
+                debug: format!("OOB({},{})", ix, iy),
             });
         }
 
@@ -562,31 +640,51 @@ fn dda_bullet_trace(
         let is_door = (block >> 16) & 1 != 0;
         let is_open = (block >> 16) & 4 != 0;
 
-        // Bullet stops on: solid blocks with height, except passable types and open doors
-        let passable = bt_is!(
-            bt,
-            BT_TREE,
-            BT_FIREPLACE,
-            BT_CAMPFIRE,
-            BT_CEILING_LIGHT,
-            BT_FLOOR_LAMP,
-            BT_BERRY_BUSH,
-            BT_CROP
-        );
-        // Thin walls: passable through open sub-cells
-        let is_thin = is_wall_block(bt) && bh > 0 && thin_wall_is_walkable(block);
-        #[allow(clippy::nonminimal_bool)]
-        if bh > 0 && !passable && !is_thin && !(is_door && is_open) {
-            let t = t_max_x.min(t_max_y).max(0.0);
-            let hit_x = t_max_x <= t_max_y;
-            return Some(BulletTraceHit {
-                x: x0 + dir_x * t,
-                y: y0 + dir_y * t,
-                hit_x_face: hit_x,
-            });
+        // Bullet stops on: solid blocks with height
+        // Passable: terrain, vegetation, furniture
+        if bh > 0 {
+            // Z-aware: bullet flies over if Z > block height
+            let t_frac = (t_max_x.min(t_max_y) / dist).clamp(0.0, 1.0);
+            let bullet_z_here = z_start + (z_end - z_start) * t_frac;
+            // Map block height to physical Z: low walls (h=1) = 0.5, full walls (h=3) = 3.0
+            let block_h = match bh {
+                1 => 0.5,
+                2 => 1.5,
+                h => h as f32,
+            };
+            if bullet_z_here > block_h {
+                // Bullet is above this block, skip
+            } else {
+                let passable = bt_is!(
+                    bt,
+                    BT_AIR,
+                    BT_DIRT,
+                    BT_DUG_GROUND,
+                    BT_TREE,
+                    BT_FIREPLACE,
+                    BT_CAMPFIRE,
+                    BT_CEILING_LIGHT,
+                    BT_FLOOR_LAMP,
+                    BT_BERRY_BUSH,
+                    BT_CROP,
+                    BT_ROCK
+                );
+                let is_thin = is_wall_block(bt) && thin_wall_is_walkable(block);
+                #[allow(clippy::nonminimal_bool)]
+                if !passable && !is_thin && !(is_door && is_open) {
+                    let t = t_max_x.min(t_max_y).max(0.0);
+                    let hit_x = t_max_x <= t_max_y;
+                    return Some(BulletTraceHit {
+                        x: x0 + dir_x * t,
+                        y: y0 + dir_y * t,
+                        hit_x_face: hit_x,
+                        debug: format!("CELL({},{})bt{}bh{}bz{:.1}", ix, iy, bt, bh, bullet_z_here),
+                    });
+                }
+            } // end else (bullet below block)
         }
 
-        // Step to next cell — check edge blocking at the transition
+        // Step to next cell
         let prev_ix = ix;
         let prev_iy = iy;
         if t_max_x < t_max_y {
@@ -602,15 +700,86 @@ fn dda_bullet_trace(
             iy += step_y;
             t_max_y += t_delta_y;
         }
-        // Thin wall edge blocks bullet at tile transition
+
+        // Edge blocking at tile transition — Z-aware for wall height
         if edge_blocked_wd(grid, wall_data, prev_ix, prev_iy, ix, iy) {
-            let t = t_max_x.min(t_max_y).max(0.0);
-            let hit_x = ix != prev_ix;
-            return Some(BulletTraceHit {
-                x: x0 + dir_x * t,
-                y: y0 + dir_y * t,
-                hit_x_face: hit_x,
-            });
+            // Check wall height vs bullet Z — bullets fly over short walls
+            let t_frac = (t_max_x.min(t_max_y) / dist).clamp(0.0, 1.0);
+            let bullet_z = z_start + (z_end - z_start) * t_frac;
+            // Get the wall height from wall_data on both tiles
+            let wd_a = if prev_ix >= 0
+                && prev_iy >= 0
+                && prev_ix < GRID_W as i32
+                && prev_iy < GRID_H as i32
+            {
+                let ai = (prev_iy as u32 * GRID_W + prev_ix as u32) as usize;
+                if ai < wall_data.len() {
+                    wall_data[ai]
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            let wd_b = if ix >= 0 && iy >= 0 && ix < GRID_W as i32 && iy < GRID_H as i32 {
+                let bi = (iy as u32 * GRID_W + ix as u32) as usize;
+                if bi < wall_data.len() {
+                    wall_data[bi]
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            // Wall height from wall_data (edges with explicit height)
+            let wd_h = wd_physical_height(wd_a).max(wd_physical_height(wd_b));
+            // Also check grid block heights (for blocks placed in grid_data)
+            let phys_h = |raw: u8| -> f32 {
+                match raw {
+                    1 => 0.5,
+                    2 => 1.5,
+                    h => h as f32,
+                }
+            };
+            let grid_h_a = if prev_ix >= 0
+                && prev_iy >= 0
+                && prev_ix < GRID_W as i32
+                && prev_iy < GRID_H as i32
+            {
+                let b = grid[(prev_iy as u32 * GRID_W + prev_ix as u32) as usize];
+                if is_wall_block(block_type_rs(b)) {
+                    phys_h(block_height_rs(b))
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            let grid_h_b = if ix >= 0 && iy >= 0 && ix < GRID_W as i32 && iy < GRID_H as i32 {
+                let b = grid[(iy as u32 * GRID_W + ix as u32) as usize];
+                if is_wall_block(block_type_rs(b)) {
+                    phys_h(block_height_rs(b))
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            let wall_h = wd_h.max(grid_h_a).max(grid_h_b);
+
+            if bullet_z <= wall_h {
+                let t = t_max_x.min(t_max_y).max(0.0);
+                let hit_x = ix != prev_ix;
+                return Some(BulletTraceHit {
+                    x: x0 + dir_x * t,
+                    y: y0 + dir_y * t,
+                    hit_x_face: hit_x,
+                    debug: format!(
+                        "EDGE({},{})->({},{})wh{:.0}bz{:.1}wdA{:x}wdB{:x}gA{:.0}gB{:.0}",
+                        prev_ix, prev_iy, ix, iy, wall_h, bullet_z, wd_a, wd_b, grid_h_a, grid_h_b
+                    ),
+                });
+            }
         }
     }
 
@@ -809,12 +978,18 @@ pub fn tick_bodies(
             // below wall height — collide
             let mut hit_wall_x = false;
             let mut hit_wall_y = false;
+            let mut hit_debug = String::new();
 
-            // Fast bodies (>20 tiles/sec): use DDA for accurate wall detection
+            // Fast bodies (>20 tiles/sec) and bullets: use DDA for accurate wall detection
             let move_dist = ((nx - body.x) * (nx - body.x) + (ny - body.y) * (ny - body.y)).sqrt();
-            if move_dist > 0.5 {
+            let use_dda = move_dist > 0.5 || body.kind == PROJ_BULLET;
+            if use_dda && move_dist > 0.001 {
                 // DDA trace: catches thin walls and prevents tunneling
-                if let Some(hit) = dda_bullet_trace(grid, wall_data, body.x, body.y, nx, ny) {
+                let z_end = body.z + body.vz * dt;
+                if let Some(hit) =
+                    dda_bullet_trace(grid, wall_data, body.x, body.y, nx, ny, body.z, z_end)
+                {
+                    hit_debug = hit.debug.clone();
                     if ricochets_enabled && def.impact.ricochet {
                         let keep = 1.0 - def.impact.ricochet_loss;
                         body.x = hit.x;
@@ -823,12 +998,12 @@ pub fn tick_bodies(
                             body.vx = -body.vx * keep;
                             body.vy *= keep;
                             body.x += if body.vx > 0.0 { 0.05 } else { -0.05 };
-                            hit_wall_x = true;
+                            hit_wall_x = true; // path=DDA_RICOCHET_X (KE=111)
                         } else {
                             body.vy = -body.vy * keep;
                             body.vx *= keep;
                             body.y += if body.vy > 0.0 { 0.05 } else { -0.05 };
-                            hit_wall_y = true;
+                            hit_wall_y = true; // path=DDA_RICOCHET_Y (KE=112)
                         }
                         if body.vx.abs() + body.vy.abs() < def.remove_speed_threshold {
                             body.vx = 0.0;
@@ -846,23 +1021,27 @@ pub fn tick_bodies(
                     body.y = ny;
                 }
             } else {
-                // Slow bodies: simple single-tile collision
-                if body_can_move(grid, nx, body.y, body.size) {
+                // Slow bodies: simple single-tile collision (Z-aware for low walls)
+                if body_can_move_z(grid, nx, body.y, body.size, body.z) {
                     body.x = nx;
                 } else {
                     hit_wall_x = true;
+                    hit_debug = format!("SLOW_X({:.1},{:.1})z{:.2}", nx, body.y, body.z);
                     body.vx *= -body.bounce;
                 }
-                if body_can_move(grid, body.x, ny, body.size) {
+                if body_can_move_z(grid, body.x, ny, body.size, body.z) {
                     body.y = ny;
                 } else {
                     hit_wall_y = true;
+                    hit_debug = format!("SLOW_Y({:.1},{:.1})z{:.2}", body.x, ny, body.z);
                     body.vy *= -body.bounce;
                 }
             }
 
-            // Projectile impact on wall hit (block destruction check)
-            if def.impact.destroy_multiplier > 0.0 && (hit_wall_x || hit_wall_y) {
+            // Projectile impact on wall hit (block destruction + sound)
+            if (def.impact.destroy_multiplier > 0.0 || def.impact.sound_db > 0.0)
+                && (hit_wall_x || hit_wall_y)
+            {
                 let ke = 0.5 * body.mass * speed * speed * def.impact.destroy_multiplier;
                 let hit_bx = if hit_wall_x {
                     nx.floor() as i32
@@ -900,6 +1079,7 @@ pub fn tick_bodies(
                     kinetic_energy: ke,
                     destroy_block: destroy,
                     projectile_id: body.kind,
+                    debug_info: hit_debug.clone(),
                 });
             }
         } else {
@@ -956,6 +1136,7 @@ pub fn tick_bodies(
                 kinetic_energy: 0.0,
                 destroy_block: false,
                 projectile_id: body.kind,
+                debug_info: String::new(),
             });
         }
     }
@@ -984,7 +1165,8 @@ pub fn tick_bodies(
 
         // Check plebs
         for &(px, py, pi) in all_plebs {
-            if Some(pi) == selected_pleb {
+            // Skip the pleb who fired this bullet (no self-hit)
+            if body.shooter_pleb == Some(pi) || Some(pi) == selected_pleb {
                 continue;
             }
             let t = if seg_len_sq > 0.0001 {
@@ -1073,4 +1255,122 @@ pub fn tick_bodies(
     });
 
     (impacts, bullet_hits, explosions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grid::*;
+
+    /// Wall_data with height=1 (low cover) at tile, all edges
+    fn make_low_wall_wd(wx: i32, wy: i32) -> (Vec<u32>, Vec<u16>) {
+        let size = (GRID_W * GRID_H) as usize;
+        let grid = vec![make_block(BT_AIR as u8, 0, 0); size];
+        let mut wd = vec![0u16; size];
+        let idx = (wy as u32 * GRID_W + wx as u32) as usize;
+        wd[idx] = pack_wall_data(WD_EDGE_MASK, 4, WMAT_MUD) | (1u16 << WD_HEIGHT_SHIFT);
+        (grid, wd)
+    }
+
+    /// Wall_data with height=0 (full/3.0) at tile, all edges
+    fn make_full_wall_wd(wx: i32, wy: i32) -> (Vec<u32>, Vec<u16>) {
+        let size = (GRID_W * GRID_H) as usize;
+        let grid = vec![make_block(BT_AIR as u8, 0, 0); size];
+        let mut wd = vec![0u16; size];
+        let idx = (wy as u32 * GRID_W + wx as u32) as usize;
+        wd[idx] = pack_wall_data(WD_EDGE_MASK, 4, WMAT_STONE);
+        (grid, wd)
+    }
+
+    #[test]
+    fn bullet_over_low_wall_horizontal() {
+        let (grid, wd) = make_low_wall_wd(5, 5);
+        let result = dda_bullet_trace(&grid, &wd, 3.5, 5.5, 8.5, 5.5, 1.5, 1.5);
+        assert!(
+            result.is_none(),
+            "z=1.5 bullet should pass over height-1 wall"
+        );
+    }
+
+    #[test]
+    fn bullet_hits_low_wall_when_low_z() {
+        let (grid, wd) = make_low_wall_wd(5, 5);
+        let result = dda_bullet_trace(&grid, &wd, 3.5, 5.5, 8.5, 5.5, 0.5, 0.5);
+        assert!(result.is_some(), "z=0.5 bullet should hit height-1 wall");
+    }
+
+    #[test]
+    fn bullet_hits_full_wall() {
+        let (grid, wd) = make_full_wall_wd(5, 5);
+        let result = dda_bullet_trace(&grid, &wd, 3.5, 5.5, 8.5, 5.5, 1.0, 1.0);
+        assert!(result.is_some(), "z=1.0 bullet should hit full-height wall");
+    }
+
+    #[test]
+    fn bullet_over_full_wall_when_very_high() {
+        let (grid, wd) = make_full_wall_wd(5, 5);
+        let result = dda_bullet_trace(&grid, &wd, 3.5, 5.5, 8.5, 5.5, 4.0, 4.0);
+        assert!(
+            result.is_none(),
+            "z=4.0 bullet should pass over full-height wall"
+        );
+    }
+
+    #[test]
+    fn bullet_over_low_wall_diagonal() {
+        let (grid, wd) = make_low_wall_wd(5, 5);
+        let result = dda_bullet_trace(&grid, &wd, 3.5, 3.5, 7.5, 7.5, 1.5, 1.5);
+        assert!(
+            result.is_none(),
+            "diagonal bullet should pass over low wall"
+        );
+    }
+
+    #[test]
+    fn bullet_over_low_wall_adjacent() {
+        let (grid, wd) = make_low_wall_wd(5, 5);
+        let result = dda_bullet_trace(&grid, &wd, 4.8, 5.5, 6.5, 5.5, 1.5, 1.5);
+        assert!(
+            result.is_none(),
+            "adjacent bullet should pass over low wall"
+        );
+    }
+
+    #[test]
+    fn bullet_over_low_wall_neighbor_edges() {
+        let size = (GRID_W * GRID_H) as usize;
+        let grid = vec![make_block(BT_AIR as u8, 0, 0); size];
+        let mut wd = vec![0u16; size];
+        let low = pack_wall_data(WD_EDGE_MASK, 4, WMAT_MUD) | (1u16 << WD_HEIGHT_SHIFT);
+        let center = (5u32 * GRID_W + 5) as usize;
+        let left = (5u32 * GRID_W + 4) as usize;
+        let right = (5u32 * GRID_W + 6) as usize;
+        wd[center] = low;
+        wd[left] = pack_wall_data(WD_EDGE_E, 4, WMAT_MUD) | (1u16 << WD_HEIGHT_SHIFT);
+        wd[right] = pack_wall_data(WD_EDGE_W, 4, WMAT_MUD) | (1u16 << WD_HEIGHT_SHIFT);
+        let result = dda_bullet_trace(&grid, &wd, 3.5, 5.5, 8.5, 5.5, 1.5, 1.5);
+        assert!(
+            result.is_none(),
+            "bullet should pass over low wall edges on neighbors"
+        );
+    }
+
+    #[test]
+    fn bullet_over_extracted_low_wall() {
+        let size = (GRID_W * GRID_H) as usize;
+        let mut grid = vec![make_block(BT_AIR as u8, 0, 0); size];
+        let idx = (5u32 * GRID_W + 5) as usize;
+        grid[idx] = make_block(BT_LOW_WALL as u8, 1, 0);
+        let wd = extract_wall_data_from_grid(&grid);
+        // extract should set height=1 in wall_data
+        assert!(
+            wd_height(wd[idx]) == 1,
+            "extracted wall_data should have height=1"
+        );
+        let result = dda_bullet_trace(&grid, &wd, 3.5, 5.5, 8.5, 5.5, 1.5, 1.5);
+        assert!(
+            result.is_none(),
+            "bullet should pass over extracted low wall"
+        );
+    }
 }

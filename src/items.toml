@@ -87,6 +87,12 @@ name = "Stone Axe"
 icon = "🪓"
 category = "tool"
 stack_max = 1
+melee_damage = 0.15
+melee_speed = 1.0
+melee_range = 1.2
+melee_knockback = 1.0
+melee_bleed = 0.3
+weapon_type = 1
 
 [[item]]
 id = 21
@@ -94,6 +100,12 @@ name = "Wooden Shovel"
 icon = "⛏"
 category = "tool"
 stack_max = 1
+melee_damage = 0.08
+melee_speed = 1.2
+melee_range = 1.4
+melee_knockback = 3.0
+melee_bleed = 0.0
+weapon_type = 3
 
 [[item]]
 id = 22
@@ -101,6 +113,12 @@ name = "Stone Pick"
 icon = "⛏"
 category = "tool"
 stack_max = 1
+melee_damage = 0.12
+melee_speed = 1.4
+melee_range = 1.0
+melee_knockback = 0.5
+melee_bleed = 0.2
+weapon_type = 2
 
 [[item]]
 id = 23
@@ -108,3 +126,16 @@ name = "Plank"
 icon = "📏"
 category = "intermediate"
 stack_max = 20
+
+[[item]]
+id = 30
+name = "Pistol"
+icon = "🔫"
+category = "weapon"
+stack_max = 1
+weapon_type = 4
+is_ranged = true
+ranged_spread = 0.10
+ranged_aim_speed = 1.5
+magazine_size = 6
+reload_time = 2.5

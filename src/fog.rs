@@ -51,7 +51,7 @@ fn blocks_vision(
     }
 
     // Glass and trees: don't block (can see through)
-    if bt_is!(bt, BT_GLASS, BT_TREE, BT_BERRY_BUSH, BT_CROP) {
+    if bt_is!(bt, BT_GLASS, BT_TREE, BT_BERRY_BUSH, BT_CROP, BT_LOW_WALL) {
         return false;
     }
 

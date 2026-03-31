@@ -18,6 +18,14 @@ pub const ITEM_STONE_AXE: u16 = 20;
 pub const ITEM_WOODEN_SHOVEL: u16 = 21;
 pub const ITEM_STONE_PICK: u16 = 22;
 pub const ITEM_PLANK: u16 = 23;
+pub const ITEM_PISTOL: u16 = 30;
+
+// Weapon type constants (matches shader)
+pub const WEAPON_NONE: u8 = 0;
+pub const WEAPON_AXE: u8 = 1;
+pub const WEAPON_PICK: u8 = 2;
+pub const WEAPON_SHOVEL: u8 = 3;
+pub const WEAPON_PISTOL: u8 = 4;
 
 #[derive(Deserialize)]
 struct ItemFile {
@@ -37,6 +45,38 @@ pub struct ItemDef {
     pub nutrition: f32,
     #[serde(default)]
     pub liquid_capacity: u16,
+    #[serde(default)]
+    pub melee_damage: f32,
+    #[serde(default)]
+    pub melee_speed: f32,
+    #[serde(default)]
+    pub melee_range: f32,
+    #[serde(default)]
+    pub melee_knockback: f32,
+    #[serde(default)]
+    pub melee_bleed: f32,
+    #[serde(default)]
+    pub weapon_type: u8,
+    #[serde(default)]
+    pub is_ranged: bool,
+    #[serde(default)]
+    pub ranged_spread: f32,
+    #[serde(default)]
+    pub ranged_aim_speed: f32,
+    #[serde(default)]
+    pub magazine_size: u8,
+    #[serde(default)]
+    pub reload_time: f32,
+}
+
+impl ItemDef {
+    pub fn is_melee_weapon(&self) -> bool {
+        self.melee_damage > 0.0
+    }
+
+    pub fn is_ranged_weapon(&self) -> bool {
+        self.is_ranged
+    }
 }
 
 fn default_stack_max() -> u16 {

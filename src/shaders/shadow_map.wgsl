@@ -67,6 +67,9 @@ struct Camera {
     hover_y: f32,
     shadow_intensity: f32,
     pleb_scale: f32,
+    contour_opacity: f32,
+    contour_interval: f32,
+    contour_major_mul: f32,
 };
 
 @group(0) @binding(0) var shadow_out: texture_storage_2d<rgba8unorm, write>;
@@ -80,7 +83,7 @@ fn block_height(b: u32) -> u32 {
     let h = (b >> 8u) & 0xFFu;
     let bt = b & 0xFFu;
     if bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
-        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL { return h & 0xFu; }
+        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL || bt == BT_LOW_WALL { return h & 0xFu; }
     return h;
 }
 fn block_flags(b: u32) -> u32 { return (b >> 16u) & 0xFFu; }

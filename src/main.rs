@@ -151,6 +151,9 @@ struct App {
     build_rotation: u32,     // 0=horizontal (E-W), 1=vertical (N-S)
     wall_thickness: u8,      // 1-4 sub-cells (4=full, default)
     hover_world: (f32, f32), // world coords under mouse cursor
+    // Terrain sculpting
+    terrain_tool: Option<TerrainTool>,
+    terrain_brush_radius: u8, // 1-5
     // Fluid simulation
     fluid_params: FluidParams,
     fluid_dye_phase: usize, // 0 or 1: which dye texture is current (readable)
@@ -165,6 +168,10 @@ struct App {
     fluid_speed: f32,            // fluid simulation speed multiplier
     enable_terrain_detail: bool, // procedural terrain variation (grass, pebbles, etc.)
     terrain_ao_strength: f32,    // terrain ambient occlusion strength (0-1)
+    show_contours: bool,         // contour lines on/off
+    contour_opacity: f32,        // contour line intensity (0 = off, 1 = full)
+    contour_interval: f32,       // minor contour line spacing (elevation units)
+    contour_major_mul: f32,      // major line every N minor intervals
     enable_prox_glow: bool,      // per-pixel proximity glow (expensive)
     enable_dir_bleed: bool,      // directional light bleed (expensive)
     enable_temporal: bool,       // temporal reprojection (reuse previous frame)
@@ -186,7 +193,9 @@ struct App {
     dye_h: u32,                   // current dye texture height
     sandbox_mode: bool,           // enables sandbox build category + debug tools
     debug_creatures_always: bool, // spawn creatures regardless of time of day
-    debug_bullet_slowmo: bool,    // slow bullets 50× and show kinematic labels
+    debug_bullet_slowmo: bool,    // enable bullet slow-mo
+    debug_bullet_speed: f32,      // bullet time scale (0.01 = 100x slow, 1.0 = normal)
+    debug_show_cover: bool,       // show cover positions as circles
     audio_output: Option<audio::AudioOutput>,
     sandbox_tool: SandboxTool,            // current sandbox action
     show_pipe_overlay: bool,              // draw gas pipe contents as egui overlay (ventilation)
@@ -504,6 +513,9 @@ impl App {
                 hover_y: -1.0,
                 shadow_intensity: 1.0,
                 pleb_scale: 1.75,
+                contour_opacity: 1.0,
+                contour_interval: 1.0,
+                contour_major_mul: 3.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -528,6 +540,8 @@ impl App {
             build_rotation: 0,
             wall_thickness: 1, // thin walls by default
             hover_world: (0.0, 0.0),
+            terrain_tool: None,
+            terrain_brush_radius: 2,
             fluid_params: FluidParams {
                 sim_w: FLUID_SIM_W as f32,
                 sim_h: FLUID_SIM_H as f32,
@@ -556,10 +570,14 @@ impl App {
             fluid_speed: 1.0,
             enable_terrain_detail: true,
             terrain_ao_strength: 2.5,
+            show_contours: false,
+            contour_opacity: 1.0,
+            contour_interval: 1.0,
+            contour_major_mul: 3.0,
             enable_prox_glow: !cfg!(target_arch = "wasm32"),
             enable_dir_bleed: true,
             enable_temporal: true,
-            enable_ricochets: true,
+            enable_ricochets: false,
             hires_fluid: false,
             fluid_pressure_iters: FLUID_PRESSURE_ITERS,
             lightmap_interval: LIGHTMAP_UPDATE_INTERVAL,
@@ -577,6 +595,8 @@ impl App {
             sandbox_mode: false,
             debug_creatures_always: false,
             debug_bullet_slowmo: false,
+            debug_bullet_speed: 0.02,
+            debug_show_cover: false,
             audio_output: None, // lazy init on first sound (browser requires user gesture)
             sandbox_tool: SandboxTool::None,
             drag_start: None,
@@ -1571,6 +1591,143 @@ impl App {
             }
         }
 
+        // --- Terrain tool: clear if another build tool selected ---
+        if self.build_tool != BuildTool::None {
+            self.terrain_tool = None;
+        }
+
+        // --- Terrain tool application (while mouse held) ---
+        if self.mouse_pressed
+            && self.terrain_tool.is_some()
+            && self.game_state == GameState::Playing
+        {
+            let tool = self.terrain_tool.unwrap();
+            let (hx, hy) = self.hover_world;
+            let cx = hx.floor() as i32;
+            let cy = hy.floor() as i32;
+            let r = self.terrain_brush_radius as i32;
+            let sigma = r as f32 / 2.5;
+            let shift_held = self.pressed_keys.contains(&KeyCode::ShiftLeft)
+                || self.pressed_keys.contains(&KeyCode::ShiftRight);
+            let strength = 2.0 * dt;
+
+            // For flatten: compute weighted average first
+            let flatten_target = if tool == TerrainTool::Flatten {
+                let mut sum = 0.0f32;
+                let mut wsum = 0.0f32;
+                for dy in -r..=r {
+                    for dx in -r..=r {
+                        let w = (-(dx * dx + dy * dy) as f32 / (2.0 * sigma * sigma)).exp();
+                        if w < 0.05 {
+                            continue;
+                        }
+                        let tx = cx + dx;
+                        let ty = cy + dy;
+                        if tx >= 0 && ty >= 0 && tx < GRID_W as i32 && ty < GRID_H as i32 {
+                            let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            if idx < self.elevation_data.len() {
+                                sum += self.elevation_data[idx] * w;
+                                wsum += w;
+                            }
+                        }
+                    }
+                }
+                if wsum > 0.0 { sum / wsum } else { 0.0 }
+            } else {
+                0.0
+            };
+
+            let mut changed = false;
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let w = (-(dx * dx + dy * dy) as f32 / (2.0 * sigma * sigma)).exp();
+                    if w < 0.05 {
+                        continue;
+                    }
+                    let tx = cx + dx;
+                    let ty = cy + dy;
+                    if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                        continue;
+                    }
+                    let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                    if idx >= self.elevation_data.len() {
+                        continue;
+                    }
+                    // Skip tiles with buildings
+                    let bt = block_type_rs(self.grid_data[idx]);
+                    if bt != BT_DIRT && bt != BT_AIR && bt != BT_DUG_GROUND {
+                        continue;
+                    }
+
+                    let delta = match tool {
+                        TerrainTool::Raise => {
+                            let dir = if shift_held { -1.0 } else { 1.0 };
+                            w * strength * dir
+                        }
+                        TerrainTool::Lower => {
+                            let dir = if shift_held { 1.0 } else { -1.0 };
+                            w * strength * dir
+                        }
+                        TerrainTool::Flatten => {
+                            (flatten_target - self.elevation_data[idx]) * w * 3.0 * dt
+                        }
+                        TerrainTool::Smooth => {
+                            let cur = self.elevation_data[idx];
+                            let mut avg = 0.0f32;
+                            let mut count = 0.0f32;
+                            for &(ndx, ndy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
+                                let nx = tx + ndx;
+                                let ny = ty + ndy;
+                                if nx >= 0 && ny >= 0 && nx < GRID_W as i32 && ny < GRID_H as i32 {
+                                    let ni = (ny as u32 * GRID_W + nx as u32) as usize;
+                                    if ni < self.elevation_data.len() {
+                                        avg += self.elevation_data[ni];
+                                        count += 1.0;
+                                    }
+                                }
+                            }
+                            if count > 0.0 {
+                                avg /= count;
+                                (avg - cur) * w * 2.0 * dt
+                            } else {
+                                0.0
+                            }
+                        }
+                    };
+                    self.elevation_data[idx] = (self.elevation_data[idx] + delta).clamp(0.0, 8.0);
+                    changed = true;
+                }
+            }
+
+            if changed {
+                // Re-upload elevation + AO to GPU
+                if let Some(gfx) = &self.gfx {
+                    let grid_size = (GRID_W * GRID_H) as usize;
+                    let ao = grid::compute_terrain_ao(&self.elevation_data);
+                    let mut elev_ao = vec![0.0f32; grid_size * 2];
+                    for i in 0..grid_size {
+                        elev_ao[i * 2] = self.elevation_data[i];
+                        elev_ao[i * 2 + 1] = ao[i];
+                    }
+                    gfx.queue.write_buffer(
+                        &gfx.elevation_buffer,
+                        0,
+                        bytemuck::cast_slice(&elev_ao),
+                    );
+                    // Adjust water table for new elevation
+                    grid::adjust_water_table_for_elevation(
+                        &mut self.water_table,
+                        &self.elevation_data,
+                    );
+                    gfx.queue.write_buffer(
+                        &gfx.water_table_buffer,
+                        0,
+                        bytemuck::cast_slice(&self.water_table),
+                    );
+                }
+            }
+        }
+
         // Generate hints every 30 frames
         if self.frame_count.is_multiple_of(30) {
             self.generate_hints();
@@ -2020,6 +2177,13 @@ impl App {
         self.camera.use_shadow_map = 0.0; // shadow map removed, per-pixel ray trace only
         self.camera.enable_terrain_detail = if self.enable_terrain_detail { 1.0 } else { 0.0 };
         self.camera.terrain_ao_strength = self.terrain_ao_strength;
+        self.camera.contour_opacity = if self.show_contours {
+            self.contour_opacity
+        } else {
+            0.0
+        };
+        self.camera.contour_interval = self.contour_interval;
+        self.camera.contour_major_mul = self.contour_major_mul;
         self.camera.fog_enabled = if self.fog_enabled { 1.0 } else { 0.0 };
         self.camera.hover_x = self.hover_world.0;
         self.camera.hover_y = self.hover_world.1;
@@ -3428,7 +3592,14 @@ impl ApplicationHandler for App {
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 50.0,
                 };
                 let base_zoom = (self.camera.screen_w / 64.0).min(self.camera.screen_h / 64.0);
-                if scroll > 0.0 {
+                if self.terrain_tool.is_some() {
+                    // Scroll adjusts brush size when terrain tool is active
+                    if scroll > 0.0 && self.terrain_brush_radius < 5 {
+                        self.terrain_brush_radius += 1;
+                    } else if scroll < 0.0 && self.terrain_brush_radius > 1 {
+                        self.terrain_brush_radius -= 1;
+                    }
+                } else if scroll > 0.0 {
                     self.camera.zoom *= ZOOM_FACTOR;
                 } else if scroll < 0.0 {
                     self.camera.zoom /= ZOOM_FACTOR;

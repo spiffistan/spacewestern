@@ -66,6 +66,9 @@ struct Camera {
     hover_y: f32,
     shadow_intensity: f32,
     pleb_scale: f32,
+    contour_opacity: f32,
+    contour_interval: f32,
+    contour_major_mul: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -334,8 +337,8 @@ struct GpuPleb {
     torch: f32, headlight: f32, carrying: f32, health: f32,
     skin_r: f32, skin_g: f32, skin_b: f32, hair_style: f32,
     hair_r: f32, hair_g: f32, hair_b: f32, aim_progress: f32,
-    shirt_r: f32, shirt_g: f32, shirt_b: f32, _pad3: f32,
-    pants_r: f32, pants_g: f32, pants_b: f32, _pad4: f32,
+    shirt_r: f32, shirt_g: f32, shirt_b: f32, weapon_type: f32,
+    pants_r: f32, pants_g: f32, pants_b: f32, swing_progress: f32,
 };
 
 const MAX_PLEBS: u32 = 16u;
@@ -365,7 +368,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 62u)];
+    return materials[min(bt, 63u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -435,7 +438,7 @@ fn block_height_raw(b: u32) -> u32 { return (b >> 8u) & 0xFFu; }
 // Wall blocks store edge bitmask in height bits 4-7. Mask to lower 4 for visual height.
 fn is_wall_type_h(bt: u32) -> bool {
     return bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
-        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL;
+        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL || bt == BT_LOW_WALL;
 }
 fn block_height(b: u32) -> u32 {
     let h = (b >> 8u) & 0xFFu;
@@ -485,7 +488,7 @@ fn pixel_is_wall(fx: f32, fy: f32, height: u32, flags: u32) -> bool {
 // Structural wall types that form the building envelope (not equipment/furniture)
 fn matches_wall_type(bt: u32) -> bool {
     return bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
-        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL;
+        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL || bt == BT_LOW_WALL;
 }
 
 fn get_block(x: i32, y: i32) -> u32 {
@@ -2825,10 +2828,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Terrain elevation slope face — disabled for now (causes sharp lines at low oblique).
-    // TODO: re-enable with dedicated slope strength parameter independent of wall oblique.
-    let is_slope_face = false;
-    let slope_face_t = 0.0;
+    // (slope face disabled — edge darkening handles depth perception)
 
     // Sun parameters precomputed on CPU (no per-pixel trig)
     let sun_dir = vec2<f32>(camera.sun_dir_x, camera.sun_dir_y);
@@ -2956,6 +2956,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
+        // Low wall face: earthy, shorter, sandy mud color
+        if btype == BT_LOW_WALL {
+            let mud_v = fract(sin(fx * 37.1 + wall_face_t * 73.7) * 43758.5) * 0.06 - 0.03;
+            face_color = vec3<f32>(0.55 + mud_v, 0.42 + mud_v * 0.8, 0.28 + mud_v * 0.5);
+            let bulge = sin(wall_face_t * 3.14159) * 0.08;
+            face_color *= 0.88 + bulge;
+            // Rounded top edge
+            if wall_face_t < 0.12 {
+                face_color *= 0.7 + (wall_face_t / 0.12) * 0.3;
+            }
+        }
+
         // South face is always mostly in shade (sun stays north in our model).
         // Slight indirect bounce: south face catches a tiny bit of reflected ground light.
         let indirect = sun_color * camera.sun_intensity * 0.12;
@@ -2970,30 +2982,6 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                   + face_glow * face_glow_mul * 0.08;
         }
 
-        color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-        textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
-        return;
-    }
-
-    // --- Terrain slope face (elevation-based oblique) ---
-    if is_slope_face {
-        // Earth/soil slope face — darker at bottom, grassy variation
-        let slope_noise = value_noise(vec2(world_x * 3.0, slope_face_t * 5.0 + world_y));
-        let soil_dark = vec3<f32>(0.32, 0.24, 0.14); // deep soil
-        let soil_surface = vec3<f32>(0.42, 0.34, 0.20); // surface soil
-        var slope_color = mix(soil_surface, soil_dark, slope_face_t);
-        // Grass at the top edge of the slope
-        if slope_face_t < 0.25 {
-            let grass_t = 1.0 - slope_face_t / 0.25;
-            slope_color = mix(slope_color, vec3(0.25, 0.38, 0.15), grass_t * 0.6);
-        }
-        // Soil texture
-        slope_color += vec3((slope_noise - 0.5) * 0.04);
-        // Ambient occlusion at bottom
-        slope_color *= (0.65 + 0.35 * (1.0 - slope_face_t));
-        // Lighting: slope faces south so mostly in shade, slight indirect
-        let indirect = sun_color * camera.sun_intensity * 0.10;
-        color = slope_color * (ambient * 0.5 + indirect);
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
         textureStore(output, vec2<u32>(px, py), vec4<f32>(color, 1.0));
         return;
@@ -4193,6 +4181,25 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if dist > 0.38 {
             color *= 0.7;
         }
+    } else if btype == BT_LOW_WALL {
+        // Low cover wall: earthy mound, visually shorter/lighter than mud wall
+        let cx = fx - 0.5;
+        let cy = fy - 0.5;
+        let crag = fract(sin(world_x * 37.1 + world_y * 73.7) * 43758.5) * 0.05;
+        let dist = length(vec2<f32>(cx, cy)) + crag - 0.03;
+        let mud_var = (crag - 0.025) * 3.0;
+        color = vec3<f32>(0.56 + mud_var, 0.44 + mud_var * 0.8, 0.30 + mud_var * 0.5);
+        // Subtler cracks than full mud wall
+        let crack = abs(fract(fx * 4.0 + crag * 3.0 + fy * 0.4) - 0.5);
+        if crack < 0.05 {
+            color *= 0.85;
+        }
+        // Rounded brightness
+        let height_fade = 1.0 - smoothstep(0.15, 0.42, dist);
+        color *= 0.88 + height_fade * 0.12;
+        if dist > 0.36 {
+            color *= 0.75;
+        }
     } else if btype == BT_DIAGONAL {
         // Diagonal wall: half-cell wall, half floor
         let diag_variant = (bflags >> 3u) & 3u;
@@ -4358,9 +4365,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = rough_floor_detail(world_x, world_y);
     }
 
+    // (slope face disabled — terrain AO handles depth)
+
     // --- Elevation visual cues (ground-level blocks only) ---
     // Uses bilinear-interpolated elevation for smooth gradients (no tile-edge jaggies).
-    if camera.enable_terrain_detail > 0.5 && !is_tree_pixel && (bheight == 0u || is_transparent_vegetation) {
+    if camera.enable_terrain_detail > 0.5 && !is_tree_pixel && bheight == 0u && btype != BT_TREE && btype != BT_BERRY_BUSH {
         let elev = sample_elevation(world_x, world_y);
 
         // 1. Altitude brightness: higher = lighter, lower = darker (topographic convention)
@@ -4386,6 +4395,42 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if camera.terrain_ao_strength > 0.01 {
             let terrain_ao = sample_terrain_ao(world_x, world_y);
             color *= mix(1.0, terrain_ao, camera.terrain_ao_strength);
+        }
+    }
+
+    // --- Elevation depth cues (edge darkening + hypsometric tinting) ---
+    if bheight == 0u && !is_wall_face && !is_tree_pixel && btype != BT_TREE && btype != BT_BERRY_BUSH && camera.enable_terrain_detail > 0.5 {
+        let e_here = sample_elevation(world_x, world_y);
+
+        // Edge darkening: darken where terrain drops to neighbors (crevice shadows)
+        let e_n = sample_elevation(world_x, world_y - 0.5);
+        let e_s = sample_elevation(world_x, world_y + 0.5);
+        let e_e = sample_elevation(world_x + 0.5, world_y);
+        let e_w = sample_elevation(world_x - 0.5, world_y);
+        let drop = max(
+            max(max(e_here - e_n, 0.0), max(e_here - e_s, 0.0)),
+            max(max(e_here - e_e, 0.0), max(e_here - e_w, 0.0))
+        );
+        let edge_shadow = smoothstep(0.0, 2.0, drop) * 0.20;
+        color *= 1.0 - edge_shadow;
+
+        // Hypsometric tinting: valleys cooler, hills warmer
+        let hyp = clamp(e_here / 5.0, 0.0, 1.0);
+        color *= mix(vec3(0.96, 0.97, 1.0), vec3(1.02, 1.0, 0.97), hyp);
+
+        // Contour lines (controlled by camera uniforms)
+        // Only draw where there's actual elevation — skip flat ground near zero
+        if camera.contour_opacity > 0.01 && e_here > 0.15 {
+            let c_iv = camera.contour_interval;
+            let c_phase = fract(e_here / c_iv);
+            let c_dist = abs(c_phase - 0.5) - 0.48;
+            let c_line = smoothstep(0.01, -0.01, c_dist) * 0.05;
+            let m_iv = c_iv * camera.contour_major_mul;
+            let m_phase = fract(e_here / m_iv);
+            let m_dist = abs(m_phase - 0.5) - 0.47;
+            let m_line = smoothstep(0.015, -0.015, m_dist) * 0.10;
+            let line = max(c_line, m_line) * camera.contour_opacity;
+            color = mix(color, vec3(0.15, 0.12, 0.08), line);
         }
     }
 
@@ -4779,7 +4824,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // Aiming cone (narrows from wide to narrow as aim_progress increases)
-        if p.aim_progress > 0.01 {
+        if p.aim_progress > 0.01 && !is_corpse {
             let fwd = vec2(cos(p.angle), sin(p.angle));
             let side_a = vec2(-fwd.y, fwd.x);
             let a_dx = pdx;
@@ -4884,6 +4929,77 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let rv = fract(sin(world_x * 53.1 + world_y * 97.3) * 43758.5) * 0.04;
                 color = vec3(0.30 + rv, 0.28 + rv, 0.26 + rv);
                 if cd > s * 0.07 { color = vec3(0.16, 0.15, 0.13); }
+            }
+        }
+
+        // Weapon rendering: anchored to right side of body, rotated by facing
+        if p.weapon_type > 0.5 && !is_corpse && !drew_pleb {
+            // Right shoulder: offset rightward from body center + slight forward
+            let wpn_ox = s * 0.22 + head_dx * 0.3;
+            let wpn_oy = -s * 0.40 + bob;
+
+            let is_pistol = p.weapon_type > 3.5; // type 4 = pistol
+
+            // Melee: swing arc animation. Ranged: steady aim along facing.
+            let wpn_angle = select(
+                mix(-0.8, 0.8, p.swing_progress) + p.angle,  // melee swing
+                p.angle,                                       // ranged aim
+                is_pistol
+            );
+            let wc = cos(wpn_angle);
+            let ws = sin(wpn_angle);
+            let wlx = (lx - wpn_ox) * wc + (ly - wpn_oy) * ws;
+            let wly = -(lx - wpn_ox) * ws + (ly - wpn_oy) * wc;
+
+            if is_pistol {
+                // Pistol: short barrel + grip
+                let barrel_len = s * 0.22;
+                let barrel_w = s * 0.02;
+                let grip_len = s * 0.08;
+                let grip_w = s * 0.025;
+
+                // Barrel
+                if wlx > 0.0 && wlx < barrel_len && abs(wly) < barrel_w {
+                    color = vec3(0.25, 0.22, 0.20); // dark metal
+                    drew_pleb = true;
+                }
+                // Grip (below barrel, angled down)
+                if wlx > -grip_len * 0.3 && wlx < grip_len * 0.7
+                    && wly > barrel_w && wly < barrel_w + grip_len {
+                    color = vec3(0.35, 0.25, 0.15); // wood grip
+                    drew_pleb = true;
+                }
+                // Muzzle flash (when aim_progress near 1.0)
+                if p.aim_progress > 0.9 {
+                    let flash_d = length(vec2(wlx - barrel_len, wly));
+                    if flash_d < s * 0.06 {
+                        let flash_bright = (p.aim_progress - 0.9) * 10.0;
+                        color = mix(vec3(1.0, 0.8, 0.3), vec3(1.0, 1.0, 0.9), flash_bright);
+                        drew_pleb = true;
+                    }
+                }
+            } else {
+                // Melee weapons: handle + head
+                let handle_len = s * 0.35;
+                let handle_w = s * 0.025;
+                let head_len = s * 0.10;
+                let head_w = select(s * 0.05, s * 0.07, p.weapon_type > 2.5);
+
+                if wlx > 0.0 && wlx < handle_len && abs(wly) < handle_w {
+                    color = vec3(0.35, 0.25, 0.15);
+                    drew_pleb = true;
+                }
+                if wlx > handle_len - head_len * 0.2 && wlx < handle_len + head_len
+                    && abs(wly) < head_w {
+                    if p.weapon_type < 1.5 {
+                        color = vec3(0.45, 0.42, 0.40); // stone axe
+                    } else if p.weapon_type < 2.5 {
+                        color = vec3(0.50, 0.48, 0.45); // stone pick
+                    } else {
+                        color = vec3(0.30, 0.25, 0.18); // wooden shovel
+                    }
+                    drew_pleb = true;
+                }
             }
         }
 

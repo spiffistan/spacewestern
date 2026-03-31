@@ -6,6 +6,134 @@ use crate::recipe_defs;
 use crate::zones::*;
 use crate::*;
 
+/// Find a cover position near `pos` that puts a low wall between the pleb and the threat.
+fn find_cover_position(
+    grid: &[u32],
+    px: f32,
+    py: f32,
+    threat_x: f32,
+    threat_y: f32,
+    search_radius: i32,
+) -> Option<(i32, i32)> {
+    let bx = px.floor() as i32;
+    let by = py.floor() as i32;
+    let mut best: Option<(i32, i32, f32)> = None;
+
+    for dy in -search_radius..=search_radius {
+        for dx in -search_radius..=search_radius {
+            let wx = bx + dx;
+            let wy = by + dy;
+            if wx < 0 || wy < 0 || wx >= GRID_W as i32 || wy >= GRID_H as i32 {
+                continue;
+            }
+            let idx = (wy as u32 * GRID_W + wx as u32) as usize;
+            let block = grid[idx];
+            if block_type_rs(block) != BT_LOW_WALL {
+                continue;
+            }
+
+            // Check adjacent walkable tiles as potential cover positions
+            for &(adx, ady) in &[(0i32, -1), (0, 1), (-1, 0), (1, 0)] {
+                let cx = wx + adx;
+                let cy = wy + ady;
+                if cx < 0 || cy < 0 || cx >= GRID_W as i32 || cy >= GRID_H as i32 {
+                    continue;
+                }
+                let cidx = (cy as u32 * GRID_W + cx as u32) as usize;
+                let cblock = grid[cidx];
+                let cbt = block_type_rs(cblock);
+                let cbh = block_height_rs(cblock);
+                // Must be walkable (air/dirt/floor at height 0)
+                if cbh > 0 && !bt_is!(cbt, BT_TREE, BT_BERRY_BUSH, BT_CROP) {
+                    continue;
+                }
+
+                // Wall must be between cover position and threat (dot product check)
+                let wall_dx = (wx - cx) as f32;
+                let wall_dy = (wy - cy) as f32;
+                let threat_dx = threat_x - cx as f32;
+                let threat_dy = threat_y - cy as f32;
+                let dot = wall_dx * threat_dx + wall_dy * threat_dy;
+                if dot <= 0.0 {
+                    continue; // wall is on wrong side
+                }
+
+                let dist_sq = (cx as f32 + 0.5 - px).powi(2) + (cy as f32 + 0.5 - py).powi(2);
+                let score = dot / (dist_sq + 1.0);
+                if best.map_or(true, |(_, _, s)| score > s) {
+                    best = Some((cx, cy, score));
+                }
+            }
+        }
+    }
+    best.map(|(x, y, _)| (x, y))
+}
+
+/// Check if pleb at (px,py) is adjacent to a low wall that faces toward (tx,ty).
+/// Returns true if the pleb is "behind cover" relative to the target.
+fn is_behind_cover(grid: &[u32], wall_data: &[u16], px: f32, py: f32, tx: f32, ty: f32) -> bool {
+    let bx = px.floor() as i32;
+    let by = py.floor() as i32;
+    let threat_dx = tx - px;
+    let threat_dy = ty - py;
+    // Check 4 adjacent tiles for a low wall between pleb and threat
+    for &(adx, ady) in &[(0i32, -1), (0, 1), (-1, 0), (1, 0)] {
+        let wx = bx + adx;
+        let wy = by + ady;
+        if wx < 0 || wy < 0 || wx >= GRID_W as i32 || wy >= GRID_H as i32 {
+            continue;
+        }
+        let idx = (wy as u32 * GRID_W + wx as u32) as usize;
+        // Check wall_data for low wall edges
+        if idx < wall_data.len() {
+            let wd = wall_data[idx];
+            if wd_edges(wd) != 0 && wd_height(wd) > 0 && wd_height(wd) < 3 {
+                // Wall tile is toward the threat?
+                let dot = adx as f32 * threat_dx + ady as f32 * threat_dy;
+                if dot > 0.0 {
+                    return true;
+                }
+            }
+        }
+        // Also check grid_data
+        let block = grid[idx];
+        let bt = block_type_rs(block);
+        let bh = block_height_rs(block);
+        if bt == BT_LOW_WALL && bh > 0 {
+            let dot = adx as f32 * threat_dx + ady as f32 * threat_dy;
+            if dot > 0.0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if a low wall provides cover between two points (simplified DDA walk).
+fn has_low_wall_cover(grid: &[u32], sx: f32, sy: f32, tx: f32, ty: f32) -> bool {
+    let dx = tx - sx;
+    let dy = ty - sy;
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist < 0.5 {
+        return false;
+    }
+    let steps = (dist * 2.0) as i32; // 2 checks per tile
+    for i in 1..steps {
+        let t = i as f32 / steps as f32;
+        let cx = (sx + dx * t).floor() as i32;
+        let cy = (sy + dy * t).floor() as i32;
+        if cx < 0 || cy < 0 || cx >= GRID_W as i32 || cy >= GRID_H as i32 {
+            continue;
+        }
+        let idx = (cy as u32 * GRID_W + cx as u32) as usize;
+        let block = grid[idx];
+        if block_type_rs(block) == BT_LOW_WALL && block_height_rs(block) > 0 {
+            return true;
+        }
+    }
+    false
+}
+
 impl App {
     /// Update all simulation state. Returns frame delta time.
     pub(crate) fn update_simulation(&mut self) -> f32 {
@@ -399,34 +527,109 @@ impl App {
             self.grenade_charge = (self.grenade_charge + dt * 0.8).min(1.0); // ~1.25s to full charge
         }
 
-        // --- Enemy random walk AI ---
+        // --- Enemy random walk AI (with cover-seeking) ---
+        // Collect friendly positions for threat detection
+        let friendly_positions: Vec<(f32, f32)> = self
+            .plebs
+            .iter()
+            .filter(|p| !p.is_enemy && !p.is_dead)
+            .map(|p| (p.x, p.y))
+            .collect();
+
         for pleb in self.plebs.iter_mut() {
             if !pleb.is_enemy {
                 continue;
             }
             pleb.wander_timer -= dt * self.time_speed;
             if pleb.wander_timer <= 0.0 && pleb.path_idx >= pleb.path.len() {
-                // Pick a random nearby walkable tile
-                let seed = ((pleb.x * 137.0 + pleb.y * 311.0 + self.time_of_day * 1000.0) as u32)
-                    .wrapping_mul(2654435761);
-                let dx = ((seed & 0xFF) as f32 / 255.0 - 0.5) * 16.0;
-                let dy = (((seed >> 8) & 0xFF) as f32 / 255.0 - 0.5) * 16.0;
-                let target_x = (pleb.x + dx).clamp(1.0, GRID_W as f32 - 2.0) as i32;
-                let target_y = (pleb.y + dy).clamp(1.0, GRID_H as f32 - 2.0) as i32;
-                let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                let path = astar_path_terrain_wd(
-                    &self.grid_data,
-                    &self.wall_data,
-                    &self.terrain_data,
-                    start,
-                    (target_x, target_y),
-                );
-                if !path.is_empty() {
-                    pleb.path = path;
-                    pleb.path_idx = 0;
-                }
-                // Next wander in 5-15 seconds
-                pleb.wander_timer = 5.0 + ((seed >> 16) & 0xFF) as f32 / 255.0 * 10.0;
+                // Check for nearby threats
+                let nearest_threat: Option<(f32, f32, f32)> = friendly_positions
+                    .iter()
+                    .map(|&(fx, fy)| {
+                        let d = ((pleb.x - fx).powi(2) + (pleb.y - fy).powi(2)).sqrt();
+                        (fx, fy, d)
+                    })
+                    .filter(|&(_, _, d)| d < 25.0)
+                    .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+
+                // If under threat and has ranged weapon, seek cover
+                // But if already at a cover position, stay put (don't re-pathfind)
+                let already_at_cover = if let Some((threat_x, threat_y, _)) = nearest_threat {
+                    is_behind_cover(
+                        &self.grid_data,
+                        &self.wall_data,
+                        pleb.x,
+                        pleb.y,
+                        threat_x,
+                        threat_y,
+                    )
+                } else {
+                    false
+                };
+
+                if already_at_cover {
+                    // Stay at cover, just reset timer
+                    pleb.wander_timer = 3.0;
+                } else {
+                    let sought_cover = if let Some((threat_x, threat_y, _)) = nearest_threat {
+                        if pleb.prefer_ranged {
+                            find_cover_position(
+                                &self.grid_data,
+                                pleb.x,
+                                pleb.y,
+                                threat_x,
+                                threat_y,
+                                8,
+                            )
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some((cx, cy)) = sought_cover {
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            start,
+                            (cx, cy),
+                        );
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 0;
+                        }
+                        pleb.wander_timer = 3.0;
+                    } else {
+                        // Normal random wander
+                        let seed = ((pleb.x * 137.0 + pleb.y * 311.0 + self.time_of_day * 1000.0)
+                            as u32)
+                            .wrapping_mul(2654435761);
+                        let dx = ((seed & 0xFF) as f32 / 255.0 - 0.5) * 16.0;
+                        let dy = (((seed >> 8) & 0xFF) as f32 / 255.0 - 0.5) * 16.0;
+                        let target_x = (pleb.x + dx).clamp(1.0, GRID_W as f32 - 2.0) as i32;
+                        let target_y = (pleb.y + dy).clamp(1.0, GRID_H as f32 - 2.0) as i32;
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            start,
+                            (target_x, target_y),
+                        );
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 0;
+                        }
+                    }
+                    // Next wander in 5-15 seconds
+                    let timer_seed = ((pleb.x * 137.0 + pleb.y * 311.0 + self.time_of_day * 1000.0)
+                        as u32)
+                        .wrapping_mul(2654435761);
+                    pleb.wander_timer = 5.0 + ((timer_seed >> 16) & 0xFF) as f32 / 255.0 * 10.0;
+                } // end else (not already at cover)
             }
         }
 
@@ -450,6 +653,23 @@ impl App {
             if pleb.is_dead {
                 continue;
             } // corpses don't act
+
+            // Tick down stagger (hit stun)
+            if pleb.stagger_timer > 0.0 {
+                pleb.stagger_timer = (pleb.stagger_timer - dt * self.time_speed).max(0.0);
+            }
+            if pleb.weapon_swap_timer > 0.0 {
+                pleb.weapon_swap_timer = (pleb.weapon_swap_timer - dt * self.time_speed).max(0.0);
+            }
+
+            // Tick down bubble timer
+            if let Some((_, ref mut timer)) = pleb.bubble {
+                *timer -= dt * self.time_speed;
+                if *timer <= 0.0 {
+                    pleb.bubble = None;
+                }
+            }
+
             let is_selected = sel == Some(i);
 
             // Q/E rotation for selected pleb
@@ -509,7 +729,18 @@ impl App {
                     let ndx = ddx / dist;
                     let ndy = ddy / dist;
                     pleb.angle = ndy.atan2(ndx);
-                    let effective_speed = move_speed * speed_mul * self.time_speed;
+                    // Injury slowdown: sqrt(health) curve — 50% HP → 71% speed, 25% HP → 50% speed
+                    let injury_mul = pleb.needs.health.clamp(0.05, 1.0).sqrt();
+                    // Bleeding drag: heavy bleeding slows further
+                    let bleed_mul = 1.0 - pleb.bleeding * 0.3; // bleeding 1.0 → 70% speed
+                    // Stagger: frozen briefly after being hit
+                    let stagger_mul = if pleb.stagger_timer > 0.0 { 0.0 } else { 1.0 };
+                    let effective_speed = move_speed
+                        * speed_mul
+                        * injury_mul
+                        * bleed_mul
+                        * stagger_mul
+                        * self.time_speed;
                     let step_x = ndx * effective_speed * dt;
                     let step_y = ndy * effective_speed * dt;
                     let nx = pleb.x + step_x;
@@ -1412,8 +1643,20 @@ impl App {
 
         // (Auto-close replaced by physical door tick above — doors swing shut via damping/latch)
 
-        // --- Combat: drafted friendlies + all enemies auto-target and fire ---
-        let fire_actions: Vec<(f32, f32, f32, f32, String, f32)>; // (x, y, dx, dy, name, spread)
+        // --- Combat: drafted friendlies + all enemies auto-target and fight ---
+        // Melee strike actions deferred to avoid borrow issues: (attacker_idx, target_idx)
+        struct MeleeStrike {
+            attacker: usize,
+            target: usize,
+            damage: f32,
+            knockback: f32,
+            bleed: f32,
+            weapon_type: u8,
+            hit: bool, // false = missed
+        }
+        let mut melee_strikes: Vec<MeleeStrike> = Vec::new();
+        // (x, y, dx, dy, name, spread, gun_z, target_z, target_dist, shooter_idx)
+        let fire_actions: Vec<(f32, f32, f32, f32, String, f32, f32, f32, f32, usize)>;
         {
             // Collect positions by faction
             let enemies: Vec<(usize, f32, f32)> = self
@@ -1431,7 +1674,14 @@ impl App {
                 .map(|(i, p)| (i, p.x, p.y))
                 .collect();
 
-            let mut pending_fires: Vec<(f32, f32, f32, f32, String, f32)> = Vec::new();
+            let mut pending_fires: Vec<(f32, f32, f32, f32, String, f32, f32, f32, f32, usize)> =
+                Vec::new();
+
+            // Bare fist fallback stats
+            const FIST_DAMAGE: f32 = 0.03;
+            const FIST_SPEED: f32 = 0.8;
+            const FIST_RANGE: f32 = 0.8;
+            const FIST_KNOCKBACK: f32 = 1.5;
 
             for pi in 0..self.plebs.len() {
                 if self.plebs[pi].is_dead {
@@ -1446,78 +1696,475 @@ impl App {
                     continue;
                 }
 
-                // Config per faction
-                let combat_range = 25.0f32; // matches fog vision radius
-                let (targets, max_range, aim_speed, spread) = if is_enemy {
-                    (&friendlies, combat_range, 2.5f32, 0.22f32) // enemies: slower aim, less accurate
-                } else {
-                    (&enemies, combat_range, 1.5f32, 0.10f32) // friendlies: faster aim, better accuracy
-                };
+                let combat_range = 25.0f32;
+                let targets = if is_enemy { &friendlies } else { &enemies };
 
                 let px = self.plebs[pi].x;
                 let py = self.plebs[pi].y;
                 let mut best: Option<(usize, f32, f32, f32)> = None;
                 for &(ti, tx, ty) in targets {
                     let d = ((px - tx).powi(2) + (py - ty).powi(2)).sqrt();
-                    if d < max_range && best.map_or(true, |(_, bd, _, _)| d < bd) {
+                    if d < combat_range && best.map_or(true, |(_, bd, _, _)| d < bd) {
                         best = Some((ti, d, tx, ty));
                     }
                 }
 
-                if let Some((target_idx, _, tx, ty)) = best {
-                    let dx = tx - self.plebs[pi].x;
-                    let dy = ty - self.plebs[pi].y;
+                // Get equipped weapon stats
+                let reg = item_defs::ItemRegistry::cached();
+                let wpn_def = self.plebs[pi].equipped_weapon.and_then(|id| reg.get(id));
+
+                let mut use_melee = !wpn_def.map_or(false, |d| d.is_ranged_weapon());
+
+                // Auto-switch: ranged pleb with enemy in melee range → swap to melee
+                // Only if pleb has a melee weapon in inventory
+                const CLOSE_QUARTERS_RANGE: f32 = 2.0;
+                if !use_melee {
+                    if let Some((_, close_dist, _, _)) = best {
+                        if close_dist < CLOSE_QUARTERS_RANGE {
+                            // Check if pleb has a melee weapon to switch to
+                            let has_melee =
+                                self.plebs[pi].inventory.stacks.iter().any(|s| {
+                                    reg.get(s.item_id).map_or(false, |d| d.is_melee_weapon())
+                                });
+                            if has_melee && self.plebs[pi].weapon_swap_timer <= 0.0 {
+                                // Initiate swap: delay based on melee skill (faster for experienced fighters)
+                                let melee_skill = self.plebs[pi].skills[1] as f32;
+                                let swap_time = (0.8 - melee_skill * 0.05).max(0.3); // 0.8s (skill 0) to 0.35s (skill 9)
+                                self.plebs[pi].weapon_swap_timer = swap_time;
+                                self.plebs[pi].prefer_ranged = false;
+                                self.plebs[pi].update_equipped_weapon();
+                                self.plebs[pi].aim_progress = 0.0;
+                                self.plebs[pi].swing_progress = 0.0;
+                                self.plebs[pi].set_bubble(
+                                    pleb::BubbleKind::Text("Switching...".into()),
+                                    swap_time,
+                                );
+                                use_melee = true;
+                            }
+                        }
+                    }
+                }
+
+                // Melee stats (from equipped melee weapon or fists)
+                let melee_wpn = if use_melee {
+                    wpn_def.filter(|d| d.is_melee_weapon())
+                } else {
+                    None
+                };
+                let (melee_damage, melee_speed, melee_range, melee_kb, melee_bleed, wpn_type) =
+                    if let Some(w) = melee_wpn {
+                        (
+                            w.melee_damage,
+                            w.melee_speed,
+                            w.melee_range,
+                            w.melee_knockback,
+                            w.melee_bleed,
+                            w.weapon_type,
+                        )
+                    } else if use_melee {
+                        (
+                            FIST_DAMAGE,
+                            FIST_SPEED,
+                            FIST_RANGE,
+                            FIST_KNOCKBACK,
+                            0.0,
+                            0u8,
+                        )
+                    } else {
+                        (0.0, 0.0, 0.0, 0.0, 0.0, 0u8)
+                    };
+
+                if let Some((target_idx, dist, tx, ty)) = best {
+                    let dx = tx - px;
+                    let dy = ty - py;
                     self.plebs[pi].angle = dy.atan2(dx);
 
-                    if self.plebs[pi].aim_target == Some(target_idx) {
-                        self.plebs[pi].aim_progress =
-                            (self.plebs[pi].aim_progress + dt / aim_speed).min(1.0);
-                    } else {
-                        self.plebs[pi].aim_target = Some(target_idx);
-                        self.plebs[pi].aim_progress = 0.0;
+                    // "!" on first combat engagement only (aim_progress >= 0 = fresh, < 0 = was in combat)
+                    if self.plebs[pi].aim_target.is_none() && self.plebs[pi].aim_progress >= 0.0 {
+                        self.plebs[pi].set_bubble(pleb::BubbleKind::Icon('!', [220, 50, 40]), 1.5);
                     }
 
-                    if self.plebs[pi].aim_progress >= 1.0 {
-                        let fx = self.plebs[pi].x;
-                        let fy = self.plebs[pi].y;
-                        let name = self.plebs[pi].name.clone();
-                        pending_fires.push((fx, fy, dx, dy, name, spread));
+                    // If enemy is behind cover, don't charge through it — stay and fight
+                    let at_cover = is_enemy
+                        && is_behind_cover(&self.grid_data, &self.wall_data, px, py, tx, ty);
+                    if at_cover && use_melee {
+                        // Behind cover with melee — stand ground, don't pathfind into wall
+                        self.plebs[pi].path.clear();
+                        self.plebs[pi].path_idx = 0;
+                        self.plebs[pi].aim_target = Some(target_idx);
+                        // Only swing if target is actually in melee range
+                        if dist <= melee_range {
+                            self.plebs[pi].swing_progress =
+                                (self.plebs[pi].swing_progress + dt / melee_speed).min(1.0);
+                            if self.plebs[pi].swing_progress >= 1.0 {
+                                let melee_skill = self.plebs[pi].skills[1] as f32;
+                                let hit_chance = (0.40 + melee_skill * 0.06).clamp(0.05, 0.95);
+                                let roll_seed =
+                                    (px * 137.3 + py * 311.7 + self.time_of_day * 7919.0) as u32;
+                                let roll =
+                                    (roll_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                                melee_strikes.push(MeleeStrike {
+                                    attacker: pi,
+                                    target: target_idx,
+                                    damage: melee_damage,
+                                    knockback: melee_kb,
+                                    bleed: melee_bleed,
+                                    weapon_type: wpn_type,
+                                    hit: roll < hit_chance,
+                                });
+                                self.plebs[pi].swing_progress = 0.0;
+                            }
+                        }
+                    } else if use_melee {
+                        // Clear ranged state
                         self.plebs[pi].aim_progress = 0.0;
+
+                        // Can't attack while swapping weapons
+                        if self.plebs[pi].weapon_swap_timer > 0.0 {
+                            self.plebs[pi].swing_progress = 0.0;
+                            self.plebs[pi].aim_target = Some(target_idx);
+                        } else if dist > melee_range {
+                            // Phase 1: Close distance — pathfind toward target
+                            self.plebs[pi].swing_progress = 0.0;
+
+                            // Only repath when current path is exhausted or target moved far
+                            let needs_repath = self.plebs[pi].path_idx >= self.plebs[pi].path.len()
+                                || self.plebs[pi].path.last().map_or(true, |&(gx, gy)| {
+                                    let tdx = gx as f32 + 0.5 - tx;
+                                    let tdy = gy as f32 + 0.5 - ty;
+                                    tdx * tdx + tdy * tdy > 4.0 // target moved >2 tiles from path end
+                                });
+                            if needs_repath {
+                                let goal = (tx.floor() as i32, ty.floor() as i32);
+                                let start = (px.floor() as i32, py.floor() as i32);
+                                self.plebs[pi].path =
+                                    pleb::astar_path(&self.grid_data, start, goal);
+                                self.plebs[pi].path_idx = 0;
+                            }
+                        } else {
+                            // Phase 2 & 3: In range — windup and strike
+                            self.plebs[pi].path.clear();
+                            self.plebs[pi].path_idx = 0;
+
+                            if self.plebs[pi].aim_target == Some(target_idx) {
+                                self.plebs[pi].swing_progress =
+                                    (self.plebs[pi].swing_progress + dt / melee_speed).min(1.0);
+                            } else {
+                                self.plebs[pi].aim_target = Some(target_idx);
+                                self.plebs[pi].swing_progress = 0.0;
+                            }
+
+                            // Strike!
+                            if self.plebs[pi].swing_progress >= 1.0 {
+                                // Hit probability: 40% base + melee skill * 6% (0-9 → 0-54%)
+                                let melee_skill = self.plebs[pi].skills[1] as f32;
+                                let cover_mod =
+                                    if has_low_wall_cover(&self.grid_data, px, py, tx, ty) {
+                                        -0.25
+                                    } else {
+                                        0.0
+                                    };
+                                let hit_chance =
+                                    (0.40 + melee_skill * 0.06 + cover_mod).clamp(0.05, 0.95);
+                                let roll_seed =
+                                    (px * 137.3 + py * 311.7 + self.time_of_day * 7919.0) as u32;
+                                let roll =
+                                    (roll_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                                let did_hit = roll < hit_chance;
+
+                                melee_strikes.push(MeleeStrike {
+                                    attacker: pi,
+                                    target: target_idx,
+                                    damage: melee_damage,
+                                    knockback: melee_kb,
+                                    bleed: melee_bleed,
+                                    weapon_type: wpn_type,
+                                    hit: did_hit,
+                                });
+                                self.plebs[pi].swing_progress = 0.0;
+                            }
+                        }
+                    } else {
+                        // Ranged path: stop moving to aim and fire
+                        self.plebs[pi].swing_progress = 0.0;
+                        self.plebs[pi].path.clear();
+                        self.plebs[pi].path_idx = 0;
+
+                        // --- Reload check ---
+                        let mag_size = wpn_def.map(|w| w.magazine_size).unwrap_or(6);
+                        let reload_base = wpn_def.map(|w| w.reload_time).unwrap_or(2.5);
+
+                        if self.plebs[pi].reload_timer > 0.0 {
+                            // Currently reloading — count down, can't fire
+                            self.plebs[pi].reload_timer -= dt * self.time_speed;
+                            self.plebs[pi].aim_progress = 0.0;
+                            if self.plebs[pi].reload_timer <= 0.0 {
+                                self.plebs[pi].reload_timer = 0.0;
+                                self.plebs[pi].ammo_loaded = mag_size;
+                            }
+                        } else if self.plebs[pi].ammo_loaded == 0 && mag_size > 0 {
+                            // Empty — start reload with ±25% variance
+                            let rld_seed =
+                                (px * 97.3 + py * 211.7 + self.time_of_day * 5003.0) as u32;
+                            let rld_rng =
+                                (rld_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                            let rld_time = reload_base * (0.75 + rld_rng * 0.5);
+                            self.plebs[pi].reload_timer = rld_time;
+                            self.plebs[pi].aim_progress = 0.0;
+                            self.plebs[pi].set_bubble(
+                                pleb::BubbleKind::Text("Reloading...".into()),
+                                rld_time,
+                            );
+                        } else {
+                            // --- Aiming & firing ---
+                            let shooting_skill = self.plebs[pi].skills[0] as f32;
+
+                            // Per-pleb stable random factor
+                            let pleb_hash = (self.plebs[pi].id as u32).wrapping_mul(2654435761);
+                            let pleb_rng = (pleb_hash & 0xFFFF) as f32 / 65535.0;
+
+                            // Aim speed with per-pleb variance
+                            let base_aim = wpn_def.map(|w| w.ranged_aim_speed).unwrap_or(2.0);
+                            let enemy_penalty = if is_enemy { 1.4 } else { 1.0 };
+                            let skill_aim_mul = (1.0 - shooting_skill * 0.05).max(0.5);
+                            let aim_variance = 0.8 + pleb_rng * 0.4;
+                            let aim_speed = base_aim * enemy_penalty * skill_aim_mul * aim_variance;
+
+                            // Fire threshold: skilled shooters wait longer
+                            let patience = (0.6 + shooting_skill * 0.035 + pleb_rng * 0.1).min(1.0);
+
+                            if self.plebs[pi].aim_target == Some(target_idx) {
+                                self.plebs[pi].aim_progress =
+                                    (self.plebs[pi].aim_progress + dt / aim_speed).min(1.0);
+                            } else {
+                                self.plebs[pi].aim_target = Some(target_idx);
+                                self.plebs[pi].aim_progress = 0.0;
+                            }
+
+                            if self.plebs[pi].aim_progress >= patience {
+                                // --- Fire! ---
+                                let aim_quality = self.plebs[pi].aim_progress;
+                                let base_spread = wpn_def.map(|w| w.ranged_spread).unwrap_or(0.20);
+                                let skill_factor = (shooting_skill / 9.0).clamp(0.0, 1.0);
+                                let aim_tightening =
+                                    1.8 - aim_quality * 1.4 * (0.3 + skill_factor * 0.7);
+                                // No artificial cover penalty — physics handles it via bullet arc
+                                let spread = (base_spread * aim_tightening).max(0.02);
+
+                                // Gun height: behind cover = peeking over (0.7), open = chest (1.0)
+                                let shooter_covered = is_behind_cover(
+                                    &self.grid_data,
+                                    &self.wall_data,
+                                    px,
+                                    py,
+                                    tx,
+                                    ty,
+                                );
+                                let gun_z = if shooter_covered { 0.7 } else { 1.0 };
+
+                                // Target height: behind cover = only head exposed (0.75),
+                                // open = full chest (1.0)
+                                let target_covered = is_behind_cover(
+                                    &self.grid_data,
+                                    &self.wall_data,
+                                    tx,
+                                    ty,
+                                    px,
+                                    py, // reversed: target's cover relative to shooter
+                                );
+                                let target_z = if target_covered { 0.75 } else { 1.0 };
+                                let target_dist = dist;
+
+                                let name = self.plebs[pi].name.clone();
+                                pending_fires.push((
+                                    px,
+                                    py,
+                                    dx,
+                                    dy,
+                                    name,
+                                    spread,
+                                    gun_z,
+                                    target_z,
+                                    target_dist,
+                                    pi,
+                                ));
+
+                                // Consume ammo
+                                self.plebs[pi].ammo_loaded =
+                                    self.plebs[pi].ammo_loaded.saturating_sub(1);
+
+                                // Random cooldown between shots (varies per shot)
+                                let shot_seed = (px * 137.3
+                                    + py * 311.7
+                                    + self.time_of_day * 7919.0
+                                    + self.plebs[pi].ammo_loaded as f32 * 41.0)
+                                    as u32;
+                                let shot_rng =
+                                    (shot_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                                let cooldown = 0.2 + shot_rng * 0.6; // 0.2–0.8s
+                                self.plebs[pi].aim_progress = -cooldown;
+                            }
+                        }
                     }
                 } else {
-                    self.plebs[pi].aim_target = None;
-                    self.plebs[pi].aim_progress = 0.0;
+                    // No target found — use grace period before clearing combat state
+                    // (prevents oscillation when target is at range boundary)
+                    if self.plebs[pi].aim_target.is_some() {
+                        // Decay aim progress as a grace timer — only clear after it fully drains
+                        self.plebs[pi].aim_progress -= dt * 2.0;
+                        if self.plebs[pi].aim_progress < -1.0 {
+                            self.plebs[pi]
+                                .set_bubble(pleb::BubbleKind::Icon('?', [80, 140, 220]), 1.0);
+                            self.plebs[pi].aim_target = None;
+                            self.plebs[pi].aim_progress = 0.0;
+                            self.plebs[pi].swing_progress = 0.0;
+                        }
+                    }
                 }
             }
             fire_actions = pending_fires;
         }
-        // Apply deferred fire actions (with accuracy spread)
-        for (fx, fy, dx, dy, name, base_spread) in fire_actions {
+
+        // Apply deferred melee strikes (only hits deal damage)
+        for strike in &melee_strikes {
+            if !strike.hit {
+                continue;
+            }
+            let (ax, ay) = (self.plebs[strike.attacker].x, self.plebs[strike.attacker].y);
+            if let Some(target) = self.plebs.get_mut(strike.target) {
+                if target.is_dead {
+                    continue;
+                }
+                target.needs.health -= strike.damage;
+                target.bleeding = (target.bleeding + strike.bleed).min(1.0);
+                target.stagger_timer = 0.15; // brief flinch on melee hit
+
+                // Knockback in hit direction
+                let dx = target.x - ax;
+                let dy = target.y - ay;
+                let d = (dx * dx + dy * dy).sqrt().max(0.01);
+                target.knockback_vx += dx / d * strike.knockback;
+                target.knockback_vy += dy / d * strike.knockback;
+            }
+        }
+        // Blood spatter + sound + log for melee strikes
+        for strike in &melee_strikes {
+            let (ax, ay) = (self.plebs[strike.attacker].x, self.plebs[strike.attacker].y);
+            let (tx, ty) = (self.plebs[strike.target].x, self.plebs[strike.target].y);
+            let attacker_name = self.plebs[strike.attacker].name.clone();
+            let target_name = self.plebs[strike.target].name.clone();
+
+            if strike.hit {
+                // Blood spray: 3-6 drops in hit direction
+                let hit_angle = (ty - ay).atan2(tx - ax);
+                let drop_count =
+                    3 + ((ax * 137.3 + ty * 311.7 + self.time_of_day * 999.0) as u32 % 4);
+                for i in 0..drop_count {
+                    let seed = (i as f32 * 73.1 + ax * 41.3 + ty * 97.7) as u32;
+                    let rng = (seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                    let spread = (rng - 0.5) * 1.0;
+                    let dist = 0.3 + rng * 0.7;
+                    let bx = tx + (hit_angle + spread).cos() * dist;
+                    let by = ty + (hit_angle + spread).sin() * dist;
+                    self.blood_stains.push((bx, by, 5.0));
+                }
+
+                // Impact sound (hit)
+                if self.sound_enabled {
+                    let (pattern, freq) = if strike.weapon_type == item_defs::WEAPON_SHOVEL {
+                        (3u32, 200.0f32)
+                    } else {
+                        (4u32, 2000.0f32)
+                    };
+                    self.sound_sources.push(SoundSource {
+                        x: tx,
+                        y: ty,
+                        amplitude: types::db_to_amplitude(80.0),
+                        frequency: freq,
+                        phase: 0.0,
+                        pattern,
+                        duration: 0.08,
+                        fresh: true,
+                    });
+                }
+
+                let verb = if strike.weapon_type == 0 {
+                    "punches"
+                } else {
+                    "strikes"
+                };
+                events.push(GameEventKind::Generic(
+                    types::EventCategory::Combat,
+                    format!("{} {} {}!", attacker_name, verb, target_name),
+                ));
+            } else {
+                // Miss: lighter whoosh sound
+                if self.sound_enabled {
+                    self.sound_sources.push(SoundSource {
+                        x: tx,
+                        y: ty,
+                        amplitude: types::db_to_amplitude(60.0),
+                        frequency: 1500.0,
+                        phase: 0.0,
+                        pattern: 4, // slash whoosh
+                        duration: 0.04,
+                        fresh: true,
+                    });
+                }
+                events.push(GameEventKind::Generic(
+                    types::EventCategory::Combat,
+                    format!("{} swings at {} — miss!", attacker_name, target_name),
+                ));
+                self.plebs[strike.attacker].set_bubble(pleb::BubbleKind::Text("Miss!".into()), 0.8);
+            }
+        }
+
+        // Cap blood stains
+        if self.blood_stains.len() > 200 {
+            let excess = self.blood_stains.len() - 200;
+            self.blood_stains.drain(0..excess);
+        }
+
+        // Apply deferred ranged fire actions (with accuracy spread + aimed arc)
+        for (fx, fy, dx, dy, name, base_spread, gun_z, target_z, target_dist, shooter_idx) in
+            fire_actions
+        {
             let rng_seed = (fx * 137.3 + fy * 311.7 + self.time_of_day * 1000.0) as u32;
             let rng_val = (rng_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+            // Horizontal spread
             let spread_angle = (rng_val - 0.5) * 2.0 * base_spread;
             let cos_s = spread_angle.cos();
             let sin_s = spread_angle.sin();
             let sdx = dx * cos_s - dy * sin_s;
             let sdy = dx * sin_s + dy * cos_s;
 
-            self.physics_bodies
-                .push(PhysicsBody::new_bullet(fx, fy, sdx, sdy));
+            let mut bullet =
+                PhysicsBody::new_bullet_aimed(fx, fy, sdx, sdy, gun_z, target_z, target_dist);
+            bullet.shooter_pleb = Some(shooter_idx);
+            // Vertical spread: affects vz (poor shots aim too high or too low)
+            // Wider vertical spread when target is behind cover (smaller exposed area)
+            let vert_mul = if target_z < 0.9 { 25.0 } else { 15.0 };
+            let rng_seed2 = rng_seed.wrapping_mul(1013904223).wrapping_add(0xBEEF);
+            let rng_val2 = (rng_seed2 & 0xFFFF) as f32 / 65535.0;
+            let vz_spread = (rng_val2 - 0.5) * base_spread * vert_mul;
+            bullet.vz += vz_spread;
+
+            self.physics_bodies.push(bullet);
             if self.sound_enabled {
                 self.sound_sources.push(SoundSource {
                     x: fx,
                     y: fy,
-                    amplitude: types::db_to_amplitude(100.0),
+                    amplitude: types::db_to_amplitude(105.0),
                     frequency: 0.0,
                     phase: 0.0,
-                    pattern: 0,
-                    duration: 0.05,
+                    pattern: 5, // gunshot
+                    duration: 0.12,
                     fresh: true,
                 });
             }
             events.push(GameEventKind::Generic(
                 types::EventCategory::Combat,
-                format!("{} fires at enemy!", name),
+                format!("{} fires!", name),
             ));
         }
 
@@ -1553,7 +2200,7 @@ impl App {
                 })
                 .collect();
             let physics_dt = if self.debug_bullet_slowmo {
-                dt * 0.02
+                dt * self.debug_bullet_speed
             } else {
                 dt
             };
@@ -1583,10 +2230,33 @@ impl App {
                                 hp_pct: (pleb.needs.health - dmg).max(0.0) * 100.0,
                             });
                             pleb.needs.health -= dmg;
+                            pleb.bleeding = (pleb.bleeding + 0.25).min(1.0);
+                            pleb.stagger_timer = 0.25; // bullet hit stagger
                             self.fluid_params.splat_x = hit.x;
                             self.fluid_params.splat_y = hit.y;
                             self.fluid_params.splat_radius = 0.3;
                             self.fluid_params.splat_active = 1.0;
+                            // Blood spray from bullet hit
+                            for i in 0..3u32 {
+                                let seed = (hit.x * 41.3 + hit.y * 97.7 + i as f32 * 73.1) as u32;
+                                let rng = (seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                                let bx = hit.x + (rng - 0.5) * 0.8;
+                                let by = hit.y + (rng * 0.7 - 0.35) * 0.8;
+                                self.blood_stains.push((bx, by, 5.0));
+                            }
+                        }
+                        // Bullet-flesh impact sound
+                        if self.sound_enabled {
+                            self.sound_sources.push(SoundSource {
+                                x: hit.x,
+                                y: hit.y,
+                                amplitude: types::db_to_amplitude(75.0),
+                                frequency: 0.0,
+                                phase: 0.0,
+                                pattern: 3, // thud
+                                duration: 0.06,
+                                fresh: true,
+                            });
                         }
                     }
                     physics::HitTarget::Creature(ci) => {
@@ -1652,6 +2322,13 @@ impl App {
             for impact in &impacts {
                 let def = projectile_def(impact.projectile_id);
 
+                if impact.projectile_id == PROJ_BULLET && !impact.debug_info.is_empty() {
+                    events.push(GameEventKind::Generic(
+                        types::EventCategory::Combat,
+                        impact.debug_info.clone(),
+                    ));
+                }
+
                 if impact.destroy_block {
                     self.destroy_block_at(impact.block_x, impact.block_y);
                     log::info!(
@@ -1662,15 +2339,27 @@ impl App {
                     );
                 }
 
-                // Impact sound
+                // Debug: track any bullet impact
+                if impact.projectile_id == PROJ_BULLET {
+                    events.push(GameEventKind::Generic(
+                        types::EventCategory::Combat,
+                        format!("IMPACT at ({:.0},{:.0})", impact.x, impact.y),
+                    ));
+                }
+                // Impact sound (bullets use pattern 6, others use impulse)
                 if def.impact.sound_db > 0.0 && self.sound_enabled {
+                    let snd_pattern = if impact.projectile_id == PROJ_BULLET {
+                        6u32
+                    } else {
+                        0u32
+                    };
                     self.sound_sources.push(SoundSource {
                         x: impact.x,
                         y: impact.y,
                         amplitude: db_to_amplitude(def.impact.sound_db),
                         frequency: 0.0,
                         phase: 0.0,
-                        pattern: 0,
+                        pattern: snd_pattern,
                         duration: def.impact.sound_duration,
                         fresh: true,
                     });
@@ -2438,7 +3127,7 @@ impl App {
 
         // --- Construction: plebs build blueprints ---
         // 1. Handle Building activity progress
-        let mut wall_placements: Vec<(i32, i32, u16, u16, u16)> = Vec::new();
+        let mut wall_placements: Vec<(i32, i32, u16, u16, u16, u16)> = Vec::new(); // edges, thick, mat, height
         let mut dig_marks: Vec<(i32, i32)> = Vec::new(); // tiles to mark as dug (mud wall auto-dig)
         for pleb in self.plebs.iter_mut() {
             if pleb.is_enemy {
@@ -2477,6 +3166,7 @@ impl App {
                                         bp.wall_edges,
                                         bp.wall_thickness,
                                         bp.wall_material,
+                                        bp.wall_height,
                                     ));
                                     self.grid_dirty = true;
                                     events.push(GameEventKind::Built {
@@ -2553,8 +3243,8 @@ impl App {
         }
 
         // Apply deferred wall placements from blueprint completion
-        for (tx, ty, edges, thickness, material) in wall_placements {
-            self.place_wall_edge(tx, ty, edges, thickness, material);
+        for (tx, ty, edges, thickness, material, height) in wall_placements {
+            self.place_wall_edge_h(tx, ty, edges, thickness, material, height);
         }
 
         // Apply dig marks from mud wall auto-dig — add hole to nearest dirt tile
@@ -3169,15 +3859,43 @@ impl App {
             }
         }
 
+        // --- Pleb bleeding: blood loss + blood drops (mirrors creature bleeding) ---
+        for pleb in &mut self.plebs {
+            if pleb.is_dead || pleb.bleeding <= 0.0 {
+                continue;
+            }
+            pleb.needs.health -= pleb.bleeding * 0.02 * dt;
+            pleb.bleeding = (pleb.bleeding - 0.05 * dt).max(0.0);
+            pleb.blood_drop_timer -= dt;
+            if pleb.blood_drop_timer <= 0.0 {
+                pleb.blood_drop_timer = 0.5 / pleb.bleeding.max(0.1);
+                self.blood_stains.push((pleb.x, pleb.y, 5.0));
+            }
+        }
+
+        // --- Critical health / heavy bleeding bubbles ---
+        for pleb in &mut self.plebs {
+            if pleb.is_dead {
+                continue;
+            }
+            if pleb.needs.health < 0.2 && pleb.needs.health > 0.0 {
+                pleb.set_bubble(pleb::BubbleKind::Icon('!', [200, 40, 40]), 2.0);
+            }
+        }
+
         // --- Mark dead plebs as corpses ---
         for pleb in &mut self.plebs {
-            if pleb.needs.health <= 0.0 && !pleb.is_dead {
+            if pleb.needs.health <= 0.01 && !pleb.is_dead {
                 pleb.is_dead = true;
+                pleb.needs.health = 0.0;
                 pleb.activity = PlebActivity::Idle;
                 pleb.path.clear();
                 pleb.work_target = None;
                 pleb.haul_target = None;
                 pleb.harvest_target = None;
+                pleb.aim_target = None;
+                pleb.aim_progress = 0.0;
+                pleb.swing_progress = 0.0;
                 events.push(GameEventKind::PlebDied(pleb.name.clone()));
             }
         }

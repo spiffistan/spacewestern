@@ -215,6 +215,16 @@ impl PlebTrait {
     }
 }
 
+// --- Terrain Tools ---
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TerrainTool {
+    Raise,
+    Lower,
+    Flatten,
+    Smooth,
+}
+
 // --- Game State ---
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -644,6 +654,8 @@ pub enum ContextAction {
     HandCraft(u16),
     /// Gather branches from a tree without felling it (grid_x, grid_y)
     GatherBranches(i32, i32),
+    /// Focus fire on a specific enemy pleb (target pleb index)
+    FireAt(usize),
 }
 
 /// A context menu action entry: (label, action, enabled).
@@ -751,6 +763,7 @@ pub struct Blueprint {
     pub wall_edges: u16,     // 0 = block blueprint, >0 = wall_data edges to place
     pub wall_thickness: u16, // wall_data thickness (1-4)
     pub wall_material: u16,  // wall_data material index
+    pub wall_height: u16,    // wall z-height (0=full/3, 1-7=explicit)
 }
 
 impl Blueprint {
@@ -766,6 +779,7 @@ impl Blueprint {
             // --- Walls ---
             BT_WOOD_WALL => (4.0, 2, 0, 0, 0, 0), // raw logs, no saw needed
             BT_MUD_WALL => (1.2, 0, 0, 0, 0, 0),  // auto-dug from ground, no material cost
+            BT_LOW_WALL => (0.8, 0, 0, 0, 0, 0),  // quick mud cover, no material cost
             BT_STONE | BT_WALL | BT_SANDSTONE | BT_GRANITE | BT_LIMESTONE => (3.0, 0, 0, 0, 3, 0),
             BT_GLASS => (3.0, 0, 0, 0, 2, 0),
             BT_INSULATED => (4.0, 0, 2, 2, 0, 0),
@@ -832,15 +846,28 @@ impl Blueprint {
             wall_edges: 0,
             wall_thickness: 0,
             wall_material: 0,
+            wall_height: 0,
         }
     }
 
     /// Create a wall blueprint (writes to wall_data on completion).
     pub fn new_wall(block_type: u32, edges: u16, thickness: u16, material: u16) -> Self {
+        Self::new_wall_h(block_type, edges, thickness, material, 0)
+    }
+
+    /// Wall blueprint with explicit height (0=full, 1-7=explicit tiles).
+    pub fn new_wall_h(
+        block_type: u32,
+        edges: u16,
+        thickness: u16,
+        material: u16,
+        height: u16,
+    ) -> Self {
         let mut bp = Self::new(make_block(block_type as u8, 0, 0));
         bp.wall_edges = edges;
         bp.wall_thickness = thickness;
         bp.wall_material = material;
+        bp.wall_height = height;
         bp
     }
 
@@ -863,6 +890,7 @@ impl Blueprint {
             wall_edges: 0,
             wall_thickness: 0,
             wall_material: 0,
+            wall_height: 0,
         }
     }
 

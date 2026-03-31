@@ -1021,3 +1021,22 @@ icon = "🪵"
 label = "Campfire"
 click = "simple"
 place_height = 1
+
+[[block]]
+id = 63
+name = "Low Mud Wall"
+color = [0.55, 0.42, 0.28]
+is_solid = true
+fluid_obstacle = false
+default_height = 1.0
+shows_wall_face = true
+is_wall = true
+is_removable = true
+thermal = { heat_capacity = 3.0, conductivity = 0.004, solar_absorption = 0.5 }
+[block.placement]
+category = "Walls"
+icon = "🧱"
+label = "Low"
+click = "simple"
+place_height = 1
+drag = "hollow_rect"

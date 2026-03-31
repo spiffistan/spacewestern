@@ -221,6 +221,17 @@ impl App {
                 p.appearance.pants_r = 0.25;
                 p.appearance.pants_g = 0.18;
                 p.appearance.pants_b = 0.15;
+                // Randomize enemy weapon: ~60% melee, ~40% ranged
+                let wpn_roll = (id as u32).wrapping_mul(2654435761) % 10;
+                if wpn_roll < 6 {
+                    p.inventory.add(item_defs::ITEM_STONE_AXE, 1);
+                    p.equipped_weapon = Some(item_defs::ITEM_STONE_AXE);
+                    p.prefer_ranged = false;
+                } else {
+                    p.inventory.add(item_defs::ITEM_PISTOL, 1);
+                    p.equipped_weapon = Some(item_defs::ITEM_PISTOL);
+                    p.prefer_ranged = true;
+                }
                 self.plebs.push(p);
                 self.placing_enemy = false;
             }
@@ -353,6 +364,16 @@ impl App {
                 e.appearance.hair_r = 0.1;
                 e.appearance.hair_g = 0.05;
                 e.appearance.hair_b = 0.05;
+                let wpn_roll = seed.wrapping_mul(2654435761) % 10;
+                if wpn_roll < 6 {
+                    e.inventory.add(item_defs::ITEM_STONE_AXE, 1);
+                    e.equipped_weapon = Some(item_defs::ITEM_STONE_AXE);
+                    e.prefer_ranged = false;
+                } else {
+                    e.inventory.add(item_defs::ITEM_PISTOL, 1);
+                    e.equipped_weapon = Some(item_defs::ITEM_PISTOL);
+                    e.prefer_ranged = true;
+                }
                 *next_id += 1;
                 plebs.push(e);
             };
@@ -452,13 +473,29 @@ impl App {
         if event.state.is_pressed() {
             match event.physical_key {
                 PhysicalKey::Code(KeyCode::Escape) => {
-                    self.placing_pleb = false;
-                    if self.debug.mode {
+                    // Close whatever is open, in priority order
+                    if self.context_menu.is_some() {
+                        self.context_menu = None;
+                    } else if self.placing_pleb || self.placing_enemy {
+                        self.placing_pleb = false;
+                        self.placing_enemy = false;
+                    } else if self.terrain_tool.is_some() {
+                        self.terrain_tool = None;
+                    } else if self.debug.mode {
                         self.debug.mode = false;
-                    } else if self.selected_pleb.is_some() {
-                        self.selected_pleb = None;
                     } else if self.build_tool != BuildTool::None {
                         self.build_tool = BuildTool::None;
+                    } else if self.build_category.is_some() {
+                        self.build_category = None;
+                        self.sandbox_tool = SandboxTool::None;
+                    } else if self.selected_pleb.is_some() {
+                        self.selected_pleb = None;
+                    } else if self.show_inventory {
+                        self.show_inventory = false;
+                    } else if self.show_schedule {
+                        self.show_schedule = false;
+                    } else if self.show_priorities {
+                        self.show_priorities = false;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyR) => {
@@ -484,6 +521,7 @@ impl App {
                     if let Some(idx) = self.selected_pleb {
                         if let Some(pleb) = self.plebs.get_mut(idx) {
                             pleb.drafted = !pleb.drafted;
+                            pleb.update_equipped_weapon();
                             if !pleb.drafted {
                                 // Returning to autonomous: clear manual targets
                                 pleb.work_target = None;

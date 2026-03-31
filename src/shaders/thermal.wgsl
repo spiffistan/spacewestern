@@ -18,7 +18,7 @@ struct Camera {
     prev_center_x: f32, prev_center_y: f32, prev_zoom: f32, prev_time: f32,
     rain_intensity: f32, cloud_cover: f32, wind_magnitude: f32, wind_angle: f32,
     use_shadow_map: f32, shadow_map_scale: f32, sound_speed: f32, sound_damping: f32,
-    sound_coupling: f32, enable_terrain_detail: f32, terrain_ao_strength: f32, fog_enabled: f32, hover_x: f32, hover_y: f32, shadow_intensity: f32, pleb_scale: f32,
+    sound_coupling: f32, enable_terrain_detail: f32, terrain_ao_strength: f32, fog_enabled: f32, hover_x: f32, hover_y: f32, shadow_intensity: f32, pleb_scale: f32, contour_opacity: f32, contour_interval: f32, contour_major_mul: f32,
 };
 
 struct GpuMaterial {
@@ -48,7 +48,7 @@ fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 62u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 63u)]; }
 
 // --- Thin wall edge helpers ---
 fn has_wall_on_edge_t(height: u32, flags: u32, edge: u32) -> bool {

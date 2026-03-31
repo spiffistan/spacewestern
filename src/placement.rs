@@ -289,6 +289,19 @@ impl App {
         thickness: u16,
         material: u16,
     ) {
+        self.place_wall_edge_h(tx, ty, edges, thickness, material, 0);
+    }
+
+    /// Place a wall edge with explicit height (0 = full/3, 1-7 = explicit).
+    pub(crate) fn place_wall_edge_h(
+        &mut self,
+        tx: i32,
+        ty: i32,
+        edges: u16,
+        thickness: u16,
+        material: u16,
+        height: u16,
+    ) {
         if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
             return;
         }
@@ -299,7 +312,8 @@ impl App {
         let existing = self.wall_data[idx];
         let existing_edges = wd_edges(existing);
         let merged_edges = existing_edges | edges;
-        self.wall_data[idx] = pack_wall_data(merged_edges, thickness, material);
+        self.wall_data[idx] =
+            pack_wall_data(merged_edges, thickness, material) | ((height & 7) << WD_HEIGHT_SHIFT);
         // Preserve door/window flags from existing
         self.wall_data[idx] |= existing & (WD_HAS_DOOR | WD_DOOR_OPEN | WD_HAS_WINDOW);
         self.grid_dirty = true;
@@ -933,6 +947,7 @@ impl App {
 
                             let wd_mat = wall_block_to_material(block_type_id);
                             let wd_thick = self.wall_thickness as u16;
+                            let wd_h = height as u16; // wall height from blocks.toml place_height
 
                             // Rule 2: auto-merge edges if tile already has a wall
                             if self.tile_has_walls(tx, ty) {
@@ -943,10 +958,15 @@ impl App {
                                     new_edge_bit
                                 };
                                 if self.sandbox_mode {
-                                    self.place_wall_edge(tx, ty, edges, wd_thick, wd_mat);
+                                    self.place_wall_edge_h(tx, ty, edges, wd_thick, wd_mat, wd_h);
                                 } else {
-                                    let bp =
-                                        Blueprint::new_wall(block_type_id, edges, wd_thick, wd_mat);
+                                    let bp = Blueprint::new_wall_h(
+                                        block_type_id,
+                                        edges,
+                                        wd_thick,
+                                        wd_mat,
+                                        wd_h,
+                                    );
                                     self.blueprints.insert((tx, ty), bp);
                                 }
                                 continue;
@@ -960,10 +980,15 @@ impl App {
                                 new_edge_bit
                             };
                             if self.sandbox_mode {
-                                self.place_wall_edge(tx, ty, edges, wd_thick, wd_mat);
+                                self.place_wall_edge_h(tx, ty, edges, wd_thick, wd_mat, wd_h);
                             } else {
-                                let bp =
-                                    Blueprint::new_wall(block_type_id, edges, wd_thick, wd_mat);
+                                let bp = Blueprint::new_wall_h(
+                                    block_type_id,
+                                    edges,
+                                    wd_thick,
+                                    wd_mat,
+                                    wd_h,
+                                );
                                 self.blueprints.insert((tx, ty), bp);
                             }
                             continue;
@@ -971,10 +996,22 @@ impl App {
                             // Full-thickness walls
                             let wd_mat = wall_block_to_material(block_type_id);
                             if self.sandbox_mode {
-                                self.place_wall_edge(tx, ty, WD_EDGE_MASK, 4, wd_mat);
+                                self.place_wall_edge_h(
+                                    tx,
+                                    ty,
+                                    WD_EDGE_MASK,
+                                    4,
+                                    wd_mat,
+                                    height as u16,
+                                );
                             } else {
-                                let bp =
-                                    Blueprint::new_wall(block_type_id, WD_EDGE_MASK, 4, wd_mat);
+                                let bp = Blueprint::new_wall_h(
+                                    block_type_id,
+                                    WD_EDGE_MASK,
+                                    4,
+                                    wd_mat,
+                                    height as u16,
+                                );
                                 self.blueprints.insert((tx, ty), bp);
                             }
                         } else {
@@ -1197,6 +1234,36 @@ impl App {
                     true,
                 ));
                 has_actions = true;
+            }
+        }
+
+        // Enemy pleb at this position: fire at target
+        if sel_pleb.is_some() {
+            for (ei, enemy) in self.plebs.iter().enumerate() {
+                if !enemy.is_enemy || enemy.is_dead {
+                    continue;
+                }
+                let edist = ((wx - enemy.x).abs()).max((wy - enemy.y).abs());
+                if edist < 0.8 {
+                    menu.title = enemy.name.clone();
+                    let has_ranged = sel_pleb
+                        .and_then(|pi| self.plebs.get(pi))
+                        .map(|p| {
+                            p.inventory.stacks.iter().any(|s| {
+                                item_defs::ItemRegistry::cached()
+                                    .get(s.item_id)
+                                    .map_or(false, |d| d.is_ranged_weapon())
+                            })
+                        })
+                        .unwrap_or(false);
+                    menu.actions.push((
+                        format!("\u{1f52b} Fire at {} ({})", enemy.name, pleb_name),
+                        ContextAction::FireAt(ei),
+                        has_ranged,
+                    ));
+                    has_actions = true;
+                    break;
+                }
             }
         }
 

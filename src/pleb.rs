@@ -93,6 +93,27 @@ impl PlebActivity {
 
 pub use crate::resources::PlebInventory;
 
+/// Floating bubble above a pleb's head.
+#[derive(Clone, Debug)]
+pub enum BubbleKind {
+    /// Large icon character (e.g. '!', '?') with a color
+    Icon(char, [u8; 3]),
+    /// Short text string
+    Text(String),
+}
+
+/// Priority tiers for bubbles (higher = more important, replaces lower).
+impl BubbleKind {
+    pub fn priority(&self) -> u8 {
+        match self {
+            BubbleKind::Icon('!', _) => 3, // danger
+            BubbleKind::Icon('?', _) => 1, // curious
+            BubbleKind::Text(_) => 2,      // action text
+            BubbleKind::Icon(_, _) => 2,   // other icons
+        }
+    }
+}
+
 /// Appearance data for rendering a pleb (Rimworld-style).
 #[derive(Clone, Debug)]
 pub struct PlebAppearance {
@@ -206,11 +227,11 @@ pub struct GpuPleb {
     pub shirt_r: f32,
     pub shirt_g: f32,
     pub shirt_b: f32,
-    pub _pad3: f32,
+    pub weapon_type: f32, // 0=unarmed, 1=axe, 2=pick, 3=shovel
     pub pants_r: f32,
     pub pants_g: f32,
     pub pants_b: f32,
-    pub _pad4: f32,
+    pub swing_progress: f32, // 0.0=idle, 0.01-0.99=windup, 1.0=strike
 }
 
 pub struct Pleb {
@@ -232,17 +253,30 @@ pub struct Pleb {
     pub harvest_target: Option<(i32, i32)>, // grid coords of bush being harvested
     pub haul_target: Option<(i32, i32)>,    // grid coords of storage crate to deliver to
     pub is_enemy: bool,
+    pub backstory_name: String,     // display name from Backstory
+    pub trait_name: Option<String>, // display name from PlebTrait
+    pub skills: [u8; 6],            // [shooting, melee, crafting, farming, medical, construction]
     pub wander_timer: f32,
     pub work_target: Option<(i32, i32)>, // position of current work task
     pub schedule: PlebSchedule,
     pub knockback_vx: f32, // explosion knockback velocity (decays over time)
     pub knockback_vy: f32,
-    pub is_dead: bool,                   // corpse: stays in world but doesn't act
-    pub drafted: bool,                   // true = player controls only, no autonomous behavior
-    pub aim_target: Option<usize>,       // index of enemy pleb being targeted
-    pub aim_progress: f32,               // 0.0 = just started aiming, 1.0 = ready to fire
-    pub work_priorities: [u8; 4],        // [haul, farm, build, craft] — 0=off, 1-3=priority
-    pub command_queue: Vec<PlebCommand>, // shift-click queued commands
+    pub is_dead: bool,                     // corpse: stays in world but doesn't act
+    pub drafted: bool,                     // true = player controls only, no autonomous behavior
+    pub aim_target: Option<usize>,         // index of enemy pleb being targeted
+    pub aim_progress: f32,                 // 0.0 = just started aiming, 1.0 = ready to fire
+    pub equipped_weapon: Option<u16>,      // item_id of held weapon (melee or ranged)
+    pub prefer_ranged: bool,               // true = use pistol, false = use melee
+    pub swing_progress: f32,               // melee swing: 0.0 = idle, 1.0 = strike
+    pub bleeding: f32,                     // blood loss rate (0.0–1.0)
+    pub blood_drop_timer: f32,             // countdown to next blood drop on ground
+    pub stagger_timer: f32,                // seconds of movement freeze after being hit
+    pub ammo_loaded: u8,                   // rounds left in magazine (0 = need reload)
+    pub reload_timer: f32,                 // >0 = currently reloading (seconds remaining)
+    pub bubble: Option<(BubbleKind, f32)>, // (kind, seconds_remaining)
+    pub weapon_swap_timer: f32,            // >0 = switching weapons (can't attack)
+    pub work_priorities: [u8; 4],          // [haul, farm, build, craft] — 0=off, 1-3=priority
+    pub command_queue: Vec<PlebCommand>,   // shift-click queued commands
 }
 
 /// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
@@ -305,6 +339,22 @@ impl PlebShift {
 
 impl Pleb {
     pub fn new(id: usize, name: String, x: f32, y: f32, seed: u32) -> Self {
+        // Random skills from seed (backstory/trait names set later by caller)
+        let h = |s: u32, off: u32| -> u32 {
+            s.wrapping_mul(2654435761)
+                .wrapping_add(off.wrapping_mul(1013904223))
+                >> 16
+        };
+        // Random skill levels 1-7
+        let skills = [
+            (h(seed, 1) % 7 + 1) as u8,
+            (h(seed, 2) % 7 + 1) as u8,
+            (h(seed, 3) % 7 + 1) as u8,
+            (h(seed, 4) % 7 + 1) as u8,
+            (h(seed, 5) % 7 + 1) as u8,
+            (h(seed, 6) % 7 + 1) as u8,
+        ];
+
         Pleb {
             id,
             name,
@@ -320,10 +370,18 @@ impl Pleb {
             prev_x: x,
             prev_y: y,
             activity: PlebActivity::Idle,
-            inventory: PlebInventory::default(),
+            inventory: {
+                let mut inv = PlebInventory::default();
+                inv.add(crate::item_defs::ITEM_STONE_AXE, 1);
+                inv.add(crate::item_defs::ITEM_PISTOL, 1);
+                inv
+            },
             harvest_target: None,
             haul_target: None,
             is_enemy: false,
+            backstory_name: String::new(),
+            trait_name: None,
+            skills,
             wander_timer: 0.0,
             work_target: None,
             schedule: PlebSchedule::default(),
@@ -333,6 +391,16 @@ impl Pleb {
             drafted: false,
             aim_target: None,
             aim_progress: 0.0,
+            equipped_weapon: None,
+            prefer_ranged: true,
+            swing_progress: 0.0,
+            bleeding: 0.0,
+            blood_drop_timer: 0.0,
+            stagger_timer: 0.0,
+            ammo_loaded: 6,
+            reload_timer: 0.0,
+            bubble: None,
+            weapon_swap_timer: 0.0,
             work_priorities: crate::zones::default_work_priorities(),
             command_queue: Vec::new(),
         }
@@ -364,12 +432,61 @@ impl Pleb {
             shirt_r: a.shirt_r,
             shirt_g: a.shirt_g,
             shirt_b: a.shirt_b,
-            _pad3: 0.0,
+            weapon_type: self
+                .equipped_weapon
+                .and_then(|id| crate::item_defs::ItemRegistry::cached().get(id))
+                .map(|d| d.weapon_type as f32)
+                .unwrap_or(0.0),
             pants_r: a.pants_r,
             pants_g: a.pants_g,
             pants_b: a.pants_b,
-            _pad4: 0.0,
+            swing_progress: self.swing_progress,
         }
+    }
+
+    /// Auto-equip the best weapon from inventory based on prefer_ranged toggle.
+    pub fn update_equipped_weapon(&mut self) {
+        if !self.drafted {
+            self.equipped_weapon = None;
+            self.swing_progress = 0.0;
+            self.aim_progress = 0.0;
+            return;
+        }
+        let reg = crate::item_defs::ItemRegistry::cached();
+        if self.prefer_ranged {
+            // Look for ranged weapon first
+            for stack in &self.inventory.stacks {
+                if let Some(def) = reg.get(stack.item_id) {
+                    if def.is_ranged_weapon() {
+                        self.equipped_weapon = Some(stack.item_id);
+                        self.swing_progress = 0.0;
+                        return;
+                    }
+                }
+            }
+        }
+        // Fall back to best melee weapon
+        let mut best: Option<(u16, f32)> = None;
+        for stack in &self.inventory.stacks {
+            if let Some(def) = reg.get(stack.item_id) {
+                if def.is_melee_weapon() && best.map_or(true, |(_, bd)| def.melee_damage > bd) {
+                    best = Some((stack.item_id, def.melee_damage));
+                }
+            }
+        }
+        self.equipped_weapon = best.map(|(id, _)| id);
+        self.aim_progress = 0.0;
+    }
+
+    /// Set a bubble, respecting priority (higher priority replaces lower).
+    pub fn set_bubble(&mut self, kind: BubbleKind, duration: f32) {
+        let new_pri = kind.priority();
+        if let Some((ref existing, remaining)) = self.bubble {
+            if existing.priority() > new_pri && remaining > 0.2 {
+                return; // don't override a more important active bubble
+            }
+        }
+        self.bubble = Some((kind, duration));
     }
 }
 

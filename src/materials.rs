@@ -4,7 +4,7 @@
 //! This module owns the `GpuMaterial` struct definition (must match all WGSL shaders)
 //! and re-exports the table builder for convenience.
 
-pub const NUM_MATERIALS: usize = 63;
+pub const NUM_MATERIALS: usize = 64;
 
 /// GPU-side material struct. Must match the GpuMaterial layout in all WGSL shaders exactly.
 #[repr(C)]

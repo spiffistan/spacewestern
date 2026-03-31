@@ -67,6 +67,7 @@ pub const BT_WELL: u32 = 59;
 pub const BT_ROUGH_FLOOR: u32 = 60;
 pub const BT_SAW_HORSE: u32 = 61;
 pub const BT_CAMPFIRE: u32 = 62;
+pub const BT_LOW_WALL: u32 = 63;
 
 /// Generate WGSL `const BT_*: u32 = N;` lines for all block type constants.
 /// Prepend this to shader source so WGSL can use the same names as Rust.
@@ -136,6 +137,7 @@ pub fn wgsl_block_constants() -> String {
         ("BT_ROUGH_FLOOR", BT_ROUGH_FLOOR),
         ("BT_SAW_HORSE", BT_SAW_HORSE),
         ("BT_CAMPFIRE", BT_CAMPFIRE),
+        ("BT_LOW_WALL", BT_LOW_WALL),
     ];
     for &(name, val) in consts {
         s.push_str(&format!("const {}: u32 = {}u;\n", name, val));
@@ -207,6 +209,8 @@ pub const WD_MAT_SHIFT: u32 = 6;
 pub const WD_HAS_DOOR: u16 = 0x0400;
 pub const WD_DOOR_OPEN: u16 = 0x0800;
 pub const WD_HAS_WINDOW: u16 = 0x1000;
+pub const WD_HEIGHT_SHIFT: u32 = 13;
+pub const WD_HEIGHT_MASK: u16 = 0xE000; // bits 13-15: wall height (0=full/3, 1-7 = explicit)
 
 /// Wall material indices
 pub const WMAT_STONE: u16 = 0;
@@ -232,7 +236,7 @@ pub fn wall_block_to_material(bt: u32) -> u16 {
         BT_SANDSTONE => WMAT_SANDSTONE,
         BT_GRANITE => WMAT_GRANITE,
         BT_LIMESTONE => WMAT_LIMESTONE,
-        BT_MUD_WALL => WMAT_MUD,
+        BT_MUD_WALL | BT_LOW_WALL => WMAT_MUD,
         _ => WMAT_GENERIC,
     }
 }
@@ -260,6 +264,24 @@ pub fn wd_thickness(wd: u16) -> u16 {
 /// Read material index
 pub fn wd_material(wd: u16) -> u16 {
     (wd >> WD_MAT_SHIFT) & 0xF
+}
+/// Read wall height (0 = full height/3, 1-7 = explicit height in tiles)
+pub fn wd_height(wd: u16) -> u16 {
+    (wd >> WD_HEIGHT_SHIFT) & 7
+}
+/// Physical wall Z-height for bullet collision.
+/// Returns 0 for empty wall_data.
+/// Height encoding: 0=full wall (3.0), 1=low cover (0.5), 2=chest (1.5), 3+=full (3.0)
+pub fn wd_physical_height(wd: u16) -> f32 {
+    if wd_edges(wd) == 0 {
+        return 0.0; // no wall here
+    }
+    match wd_height(wd) {
+        0 => 3.0, // default full-height wall
+        1 => 0.5, // low cover (waist height, below bullet z=1.0)
+        2 => 1.5, // chest-height barrier
+        _ => 3.0, // full wall
+    }
 }
 
 /// Check if wall_data has a wall on the given edge (0=N, 1=E, 2=S, 3=W)
@@ -378,6 +400,11 @@ pub fn extract_wall_data_from_grid(grid: &[u32]) -> Vec<u16> {
         let is_open = (flags & 4) != 0;
 
         let mut w = pack_wall_data(edges, thickness, material);
+        // Store wall height from block height (low walls = 1, full walls = 3 → stored as 0)
+        let block_h = visual_h as u16;
+        if block_h > 0 && block_h < 3 {
+            w |= (block_h & 7) << WD_HEIGHT_SHIFT;
+        }
         if is_door {
             w |= WD_HAS_DOOR;
         }
@@ -715,7 +742,8 @@ pub fn is_wall_block(bt: u32) -> bool {
         BT_GRANITE,
         BT_LIMESTONE,
         BT_MUD_WALL,
-        BT_DIAGONAL
+        BT_DIAGONAL,
+        BT_LOW_WALL
     )
 }
 
@@ -850,7 +878,8 @@ pub fn compute_roof_heights_wd(grid: &mut [u32], wall_data: &[u16]) {
                                 BT_WIRE_BRIDGE,
                                 BT_LIQUID_INTAKE,
                                 BT_LIQUID_PUMP,
-                                BT_LIQUID_OUTPUT
+                                BT_LIQUID_OUTPUT,
+                                BT_LOW_WALL
                             );
                             if !skip {
                                 walls_found += 1;
@@ -940,7 +969,8 @@ pub fn compute_roof_heights_wd(grid: &mut [u32], wall_data: &[u16]) {
                         BT_WIRE_BRIDGE,
                         BT_LIQUID_INTAKE,
                         BT_LIQUID_PUMP,
-                        BT_LIQUID_OUTPUT
+                        BT_LIQUID_OUTPUT,
+                        BT_LOW_WALL
                     );
                     // Check wall_data layer: wall edges count as walls
                     let n_has_wd = nidx < wall_data.len() && wd_edges(wall_data[nidx]) != 0;
