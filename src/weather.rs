@@ -119,7 +119,7 @@ pub fn tick_wetness(
         let is_outdoor = roof_h == 0;
         let is_ground = bt_is!(
             bt,
-            BT_DIRT,
+            BT_GROUND,
             BT_WOOD_FLOOR,
             BT_STONE_FLOOR,
             BT_CONCRETE_FLOOR,

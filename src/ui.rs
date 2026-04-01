@@ -2759,7 +2759,7 @@ impl App {
                                 "Gas" => 9,
                                 "Liquid" => 5,
                                 "Zones" => 2,
-                                "Terrain" => 4,
+                                "Terrain" => if self.sandbox_mode { 7 } else { 2 },
                                 _ => 5,
                             };
                             let items_per_row = if item_count > 10 {
@@ -3053,25 +3053,44 @@ impl App {
                                             );
                                         }
                                         "Terrain" => {
-                                            let mut terrain_btn = |ui: &mut egui::Ui, tool: TerrainTool, icon: &str, label: &str| {
-                                                let sel = self.terrain_tool == Some(tool);
-                                                let btn = ui.add(egui::Button::new(
-                                                    egui::RichText::new(format!("{} {}", icon, label))
-                                                        .size(icon_s * 0.6),
-                                                ).selected(sel));
-                                                if btn.clicked() {
-                                                    if sel {
-                                                        self.terrain_tool = None;
-                                                    } else {
-                                                        self.terrain_tool = Some(tool);
-                                                        self.build_tool = BuildTool::None;
+                                            // Sandbox terrain sculpting (direct, no plebs)
+                                            if self.sandbox_mode {
+                                                let mut terrain_btn = |ui: &mut egui::Ui, tool: TerrainTool, icon: &str, label: &str| {
+                                                    let sel = self.terrain_tool == Some(tool);
+                                                    let btn = ui.add(egui::Button::new(
+                                                        egui::RichText::new(format!("{} {}", icon, label))
+                                                            .size(icon_s * 0.6),
+                                                    ).selected(sel));
+                                                    if btn.clicked() {
+                                                        if sel {
+                                                            self.terrain_tool = None;
+                                                        } else {
+                                                            self.terrain_tool = Some(tool);
+                                                            self.build_tool = BuildTool::None;
+                                                        }
                                                     }
-                                                }
-                                            };
-                                            terrain_btn(ui, TerrainTool::Raise, "\u{1f53a}", "Raise");
-                                            terrain_btn(ui, TerrainTool::Lower, "\u{1f53b}", "Lower");
-                                            terrain_btn(ui, TerrainTool::Flatten, "\u{2b1c}", "Flatten");
-                                            terrain_btn(ui, TerrainTool::Smooth, "\u{1f300}", "Smooth");
+                                                };
+                                                terrain_btn(ui, TerrainTool::Raise, "\u{1f53a}", "Raise");
+                                                terrain_btn(ui, TerrainTool::Lower, "\u{1f53b}", "Lower");
+                                                terrain_btn(ui, TerrainTool::Flatten, "\u{2b1c}", "Flatten");
+                                                terrain_btn(ui, TerrainTool::Smooth, "\u{1f300}", "Smooth");
+                                                ui.separator();
+                                            }
+                                            // Zone-based terrain tools (pleb work tasks)
+                                            let dz_sel = self.build_tool == BuildTool::DigZone;
+                                            if ui.add(egui::Button::new(
+                                                egui::RichText::new("\u{26cf} Dig").size(8.0),
+                                            ).selected(dz_sel)).clicked() {
+                                                self.build_tool = if dz_sel { BuildTool::None } else { BuildTool::DigZone };
+                                                self.terrain_tool = None;
+                                            }
+                                            let bz_sel = self.build_tool == BuildTool::BermZone;
+                                            if ui.add(egui::Button::new(
+                                                egui::RichText::new("\u{26f0} Berm").size(8.0),
+                                            ).selected(bz_sel)).clicked() {
+                                                self.build_tool = if bz_sel { BuildTool::None } else { BuildTool::BermZone };
+                                                self.terrain_tool = None;
+                                            }
                                         }
                                         "Sandbox" if self.sandbox_mode => {
                                             // handled below (outside icon_btn scope)
@@ -3382,7 +3401,9 @@ impl App {
                                     BuildTool::WoodBox => "Click to drop".to_string(),
                                     BuildTool::Window | BuildTool::Door => "Click wall".to_string(),
                                     BuildTool::Roof => "Drag (needs support)".to_string(),
-                                    BuildTool::Dig => "Click to dig 20%".to_string(),
+                                    BuildTool::Dig => "Sandbox: instant dig".to_string(),
+                                    BuildTool::DigZone => "Drag to mark dig area".to_string(),
+                                    BuildTool::BermZone => "Drag to mark berm area".to_string(),
                                     _ => "Click/drag".to_string(),
                                 };
                                 ui.label(egui::RichText::new(hint).weak().size(13.0));
@@ -3515,6 +3536,8 @@ impl App {
                                     };
                                     format!("Mental break: {}", kind)
                                 }
+                                PlebActivity::Digging => "Digging".to_string(),
+                                PlebActivity::Filling => "Building berm".to_string(),
                                 PlebActivity::Staggering(_) => "Staggering!".to_string(),
                                 PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                             };
@@ -5243,6 +5266,12 @@ impl App {
                     }
                     zones::ZoneKind::Storage => {
                         egui::Color32::from_rgba_unmultiplied(200, 80, 140, 35)
+                    }
+                    zones::ZoneKind::Dig => {
+                        egui::Color32::from_rgba_unmultiplied(140, 100, 50, 45) // brown
+                    }
+                    zones::ZoneKind::Berm => {
+                        egui::Color32::from_rgba_unmultiplied(180, 140, 60, 45) // tan
                     }
                 };
                 for &(tx, ty) in &zone.tiles {
@@ -7757,7 +7786,7 @@ impl App {
                             && !bt_is!(
                                 cbt,
                                 BT_AIR,
-                                BT_DIRT,
+                                BT_GROUND,
                                 BT_DUG_GROUND,
                                 BT_TREE,
                                 BT_BERRY_BUSH,
@@ -8070,6 +8099,12 @@ impl App {
                             }
                             PlebActivity::MentalBreak(_, _) => {
                                 (Some("Mental break!"), egui::Color32::from_rgb(200, 60, 200))
+                            }
+                            PlebActivity::Digging => {
+                                (Some("Digging"), egui::Color32::from_rgb(140, 100, 50))
+                            }
+                            PlebActivity::Filling => {
+                                (Some("Building berm"), egui::Color32::from_rgb(180, 140, 60))
                             }
                             PlebActivity::Staggering(_) => {
                                 (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40))
@@ -8729,7 +8764,7 @@ impl App {
 
         // Line 2: terrain type + modifiers
         let mut detail = String::new();
-        if !terrain_name.is_empty() && (bt == BT_DIRT || bt == BT_AIR) {
+        if !terrain_name.is_empty() && (bt == BT_GROUND || bt == BT_AIR) {
             detail.push_str(terrain_name);
         }
         if bh > 0 {
@@ -9011,6 +9046,8 @@ impl App {
                 PlebActivity::Farming(_) => "Farming",
                 PlebActivity::Building(_) => "Building",
                 PlebActivity::Crafting(_, _) => "Crafting",
+                PlebActivity::Digging => "Digging",
+                PlebActivity::Filling => "Building berm",
                 PlebActivity::Drinking(_) => "Drinking",
                 PlebActivity::MentalBreak(_, _) => "Mental break",
                 PlebActivity::Staggering(_) => "Staggering",

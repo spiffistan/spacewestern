@@ -210,7 +210,7 @@ fn main_advect_dye(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Check if block is flammable AND hot enough to be burning
         let burn_bh = (burn_block >> 8u) & 0xFFu;
         let burn_flags = (burn_block >> 16u) & 0xFFu;
-        let is_grass_fire = burn_bt == BT_DIRT && (burn_flags & 1u) == 0u; // only unscorched dirt (has grass)
+        let is_grass_fire = burn_bt == BT_GROUND && (burn_flags & 1u) == 0u; // only unscorched dirt (has grass)
         let is_burning = (burn_bt == BT_TREE || burn_bt == BT_BENCH || burn_bt == BT_WOOD_WALL
             || burn_bt == BT_WOOD_FLOOR || burn_bt == BT_ROUGH_FLOOR || burn_bt == BT_BED || burn_bt == BT_BERRY_BUSH
             || burn_bt == BT_CRATE || burn_bt == BT_CROP || is_grass_fire) && btemp > 200.0;

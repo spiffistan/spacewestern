@@ -633,7 +633,7 @@ impl App {
                 }
                 let idx = (ty as u32 * GRID_W + tx as u32) as usize;
                 let bt = self.grid_data[idx] & 0xFF;
-                if bt == BT_DIRT {
+                if bt == BT_GROUND {
                     if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing)
                     {
                         zone.tiles.insert((tx, ty));
@@ -827,7 +827,7 @@ impl App {
                     && self.wall_thickness < 4
                     && (has_wd_walls || (is_wall_block(bt) && bh > 0));
 
-                if ((bt == BT_AIR || bt == BT_DIRT) && bh == 0)
+                if ((bt == BT_AIR || bt == BT_GROUND) && bh == 0)
                     || (wire_anywhere && bt != BT_WIRE)
                     || (is_line_type && same_type)
                     || thin_wall_merge
@@ -913,7 +913,7 @@ impl App {
                             self.grid_data[idx] =
                                 make_block(block_type_id as u8, height, roof_flag) | roof_h;
                         }
-                    } else if wire_anywhere && bt != BT_AIR && bt != BT_DIRT {
+                    } else if wire_anywhere && bt != BT_AIR && bt != BT_GROUND {
                         self.grid_data[idx] |= 0x80 << 16; // wire overlay flag
                     } else {
                         let roof_flag = block_flags_rs(block) & 2;
@@ -1130,7 +1130,7 @@ impl App {
         let always_instant = matches!(
             bt,
             BT_AIR
-                | BT_DIRT
+                | BT_GROUND
                 | BT_WATER
                 | BT_TREE
                 | BT_BERRY_BUSH
@@ -1661,9 +1661,9 @@ impl App {
                         || (id == BT_RESTRICTOR && bt_is!(bt, BT_PIPE, BT_RESTRICTOR))
                         || (id == BT_LIQUID_PIPE && bt_is!(bt, BT_LIQUID_PIPE, BT_PIPE_BRIDGE))
                         || (bt_is!(id, BT_SWITCH, BT_DIMMER, BT_BREAKER)
-                            && bt_is!(bt, BT_WIRE, BT_AIR, BT_DIRT));
+                            && bt_is!(bt, BT_WIRE, BT_AIR, BT_GROUND));
                     if can_place && click_mode != block_defs::ClickMode::None {
-                        if id == BT_WIRE && bt != BT_AIR && bt != BT_DIRT {
+                        if id == BT_WIRE && bt != BT_AIR && bt != BT_GROUND {
                             // Wire on non-ground: add wire flag to existing block (bit 7)
                             self.grid_data[idx] |= 0x80 << 16; // set wire overlay flag
                         } else {
@@ -1882,22 +1882,29 @@ impl App {
                     // Don't deselect — can place multiple
                 }
                 BuildTool::Dig => {
-                    // Dig: 20% per click, max depth 5 (= 1 full block).
-                    // Water appears at depth >= 1 (20%).
+                    // Legacy sandbox dig — now uses elevation system instead of block types
                     if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
                         let bt_dig = block_type_rs(block);
-                        let roof_h = block & 0xFF000000;
-                        if bt_dig == BT_DIRT
-                            || bt_is!(
-                                bt_dig,
-                                BT_WOOD_FLOOR,
-                                BT_STONE_FLOOR,
-                                BT_CONCRETE_FLOOR,
-                                BT_ROUGH_FLOOR
-                            )
-                        {
-                            self.grid_data[idx] = make_block(BT_DUG_GROUND as u8, 1, 0) | roof_h;
-                            self.grid_dirty = true;
+                        if bt_dig == BT_GROUND || bt_dig == BT_DUG_GROUND {
+                            // Lower sub-tile elevation directly (sandbox instant dig)
+                            let wx = bx as f32 + 0.5;
+                            let wy = by as f32 + 0.5;
+                            let current =
+                                crate::terrain::sample_elevation(&self.sub_elevation, wx, wy);
+                            crate::terrain::apply_dig_stroke(
+                                &mut self.sub_elevation,
+                                wx,
+                                wy,
+                                0.15,                 // deeper per click than pleb strokes
+                                |_, _| current - 2.0, // allow digging up to 2.0 deep
+                            );
+                            self.sub_elevation_dirty = true;
+                            // Mark terrain as disturbed
+                            if idx < self.terrain_data.len() {
+                                self.terrain_data[idx] |= 0x3 << 13;
+                                self.terrain_data[idx] &= !0x1F000000;
+                                self.terrain_dirty = true;
+                            }
                             // Clay terrain yields clay items when dug
                             if idx < self.terrain_data.len()
                                 && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY
@@ -1909,29 +1916,11 @@ impl App {
                                     2,
                                 ));
                             }
-                        } else if bt_dig == BT_DUG_GROUND {
-                            let depth = block_height_rs(block) as u32;
-                            if depth < 5 {
-                                self.grid_data[idx] =
-                                    make_block(BT_DUG_GROUND as u8, (depth + 1) as u8, 0) | roof_h;
-                                self.grid_dirty = true;
-                                // More clay on deeper digs
-                                if idx < self.terrain_data.len()
-                                    && terrain_type(self.terrain_data[idx]) == TERRAIN_CLAY
-                                {
-                                    self.ground_items.push(resources::GroundItem::new(
-                                        bx as f32 + 0.5,
-                                        by as f32 + 0.5,
-                                        item_defs::ITEM_CLAY,
-                                        1,
-                                    ));
-                                }
-                            }
                         }
                     }
                 }
                 BuildTool::GrowingZone => {
-                    if bt == BT_DIRT {
+                    if bt == BT_GROUND {
                         if let Some(zone) =
                             self.zones.iter_mut().find(|z| z.kind == ZoneKind::Growing)
                         {
@@ -1953,6 +1942,62 @@ impl App {
                             zone.tiles.insert((bx, by));
                         } else {
                             let mut zone = Zone::new(ZoneKind::Storage);
+                            zone.tiles.insert((bx, by));
+                            self.zones.push(zone);
+                        }
+                    }
+                }
+                BuildTool::DigZone => {
+                    // Add to dig zone (any diggable terrain)
+                    let bt_dig = block_type_rs(block);
+                    if bt_dig == BT_GROUND || bt_dig == BT_DUG_GROUND {
+                        if let Some(dz) = self.dig_zones.first_mut() {
+                            dz.tiles.insert((bx, by));
+                        } else {
+                            let mut dz = zones::DigZone {
+                                tiles: std::collections::HashSet::new(),
+                                target_depth: 0.8, // default: trench depth
+                                profile: crate::terrain::CrossProfile::VShape,
+                                width: 0.0,
+                            };
+                            dz.tiles.insert((bx, by));
+                            self.dig_zones.push(dz);
+                        }
+                        // Also register as a regular zone for overlay rendering
+                        if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Dig)
+                        {
+                            zone.tiles.insert((bx, by));
+                        } else {
+                            let mut zone = Zone::new(ZoneKind::Dig);
+                            zone.tiles.insert((bx, by));
+                            self.zones.push(zone);
+                        }
+                    }
+                }
+                BuildTool::BermZone => {
+                    // Add to berm zone (any ground tile)
+                    let bt_berm = block_type_rs(block);
+                    if bt_berm == BT_GROUND || bt_berm == BT_DUG_GROUND {
+                        let base_elev = crate::terrain::sample_elevation(
+                            &self.sub_elevation,
+                            bx as f32 + 0.5,
+                            by as f32 + 0.5,
+                        );
+                        if let Some(bz) = self.berm_zones.first_mut() {
+                            bz.tiles.insert((bx, by));
+                        } else {
+                            let mut bz = zones::BermZone {
+                                tiles: std::collections::HashSet::new(),
+                                target_height: base_elev + 0.5, // raise 0.5 above current
+                            };
+                            bz.tiles.insert((bx, by));
+                            self.berm_zones.push(bz);
+                        }
+                        if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Berm)
+                        {
+                            zone.tiles.insert((bx, by));
+                        } else {
+                            let mut zone = Zone::new(ZoneKind::Berm);
                             zone.tiles.insert((bx, by));
                             self.zones.push(zone);
                         }

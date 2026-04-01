@@ -3191,6 +3191,12 @@ impl App {
                         .wrapping_add(k * 1013904223);
                     let idx = (hash as usize) % grid_size;
                     terrain_decay_compaction(&mut self.terrain_data[idx]);
+                    // Decay roughness: disturbed earth settles over time (1 in 16 chance per sample)
+                    if terrain_roughness(self.terrain_data[idx]) > 0 && (hash >> 12) % 16 == 0 {
+                        let cur = terrain_roughness(self.terrain_data[idx]);
+                        self.terrain_data[idx] =
+                            (self.terrain_data[idx] & !(0x3 << 13)) | ((cur - 1) << 13);
+                    }
                     // Slowly heal dig holes (1 in 8 chance per sample when raining, 1 in 30 otherwise)
                     if terrain_dig_holes(self.terrain_data[idx]) > 0 {
                         let heal_chance = if self.camera.rain_intensity > 0.3 {
@@ -3214,6 +3220,18 @@ impl App {
         {
             let mut farm_tasks =
                 generate_work_tasks(&self.zones, &self.grid_data, GRID_W, &self.active_work);
+            // Earthwork tasks (dig/fill) — assigned under WORK_BUILD priority
+            let mut earthwork_tasks: Vec<WorkTask> = Vec::new();
+            earthwork_tasks.extend(zones::generate_dig_tasks(
+                &self.dig_zones,
+                &self.sub_elevation,
+                &self.active_work,
+            ));
+            earthwork_tasks.extend(zones::generate_fill_tasks(
+                &self.berm_zones,
+                &self.sub_elevation,
+                &self.active_work,
+            ));
             for task in self.manual_tasks.drain(..) {
                 let pos = task.position();
                 if !self.active_work.contains(&pos) {
@@ -3294,6 +3312,7 @@ impl App {
                                     let task_name = match task {
                                         WorkTask::Plant(_, _) => "plant",
                                         WorkTask::Harvest(_, _) => "harvest",
+                                        _ => "work",
                                     };
                                     events.push(GameEventKind::TaskAssigned {
                                         pleb: pleb.name.clone(),
@@ -3414,6 +3433,50 @@ impl App {
                                     }
                                 }
                             }
+                            zones::WORK_BUILD => {
+                                // Find nearest earthwork task (dig/fill)
+                                let mut best: Option<(usize, f32)> = None;
+                                for (i, task) in earthwork_tasks.iter().enumerate() {
+                                    let (tx, ty) = task.position();
+                                    let dist = (pleb.x - tx as f32 - 0.5).powi(2)
+                                        + (pleb.y - ty as f32 - 0.5).powi(2);
+                                    if best.is_none_or(|(_, bd)| dist < bd) {
+                                        best = Some((i, dist));
+                                    }
+                                }
+                                if let Some((task_idx, _)) = best {
+                                    let task = &earthwork_tasks[task_idx];
+                                    let (tx, ty) = task.position();
+                                    let task_name = match task {
+                                        WorkTask::Dig(_, _) => "dig",
+                                        WorkTask::Fill(_, _) => "fill",
+                                        _ => "work",
+                                    };
+                                    events.push(GameEventKind::TaskAssigned {
+                                        pleb: pleb.name.clone(),
+                                        task: task_name,
+                                        x: tx,
+                                        y: ty,
+                                    });
+                                    self.active_work.insert((tx, ty));
+                                    pleb.work_target = Some((tx, ty));
+                                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                    let path = astar_path_terrain_wd(
+                                        &self.grid_data,
+                                        &self.wall_data,
+                                        &self.terrain_data,
+                                        start,
+                                        (tx, ty),
+                                    );
+                                    if !path.is_empty() {
+                                        pleb.path = path;
+                                        pleb.path_idx = 0;
+                                        pleb.activity = PlebActivity::Walking;
+                                    }
+                                    assigned = true;
+                                    earthwork_tasks.remove(task_idx);
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -3455,7 +3518,7 @@ impl App {
                             if tidx < self.grid_data.len() {
                                 let tblock = self.grid_data[tidx];
                                 let tbt = tblock & 0xFF;
-                                if tbt == BT_DIRT {
+                                if tbt == BT_GROUND {
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = block_flags_rs(tblock) as u32;
                                     self.grid_data[tidx] =
@@ -3468,7 +3531,7 @@ impl App {
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = block_flags_rs(tblock) as u32;
                                     self.grid_data[tidx] =
-                                        make_block(BT_DIRT as u8, 0, fflags as u8) | roof_h;
+                                        make_block(BT_GROUND as u8, 0, fflags as u8) | roof_h;
                                     self.crop_timers.remove(&(tidx as u32));
                                     self.grid_dirty = true;
                                     // Drop harvest on ground near pleb
@@ -3521,7 +3584,7 @@ impl App {
                                                 let nroof = self.grid_data[nidx] & 0xFF000000;
                                                 let nflags = (self.grid_data[nidx] >> 16) & 2;
                                                 self.grid_data[nidx] =
-                                                    make_block(BT_DIRT as u8, 0, nflags as u8)
+                                                    make_block(BT_GROUND as u8, 0, nflags as u8)
                                                         | nroof;
                                             }
                                         }
@@ -3563,6 +3626,115 @@ impl App {
                         pleb.activity = PlebActivity::Idle;
                     } else {
                         pleb.activity = PlebActivity::Farming(new_progress);
+                    }
+                }
+
+                // Handle Digging activity: pleb digs terrain at work_target
+                if pleb.activity == PlebActivity::Digging {
+                    if let Some((tx, ty)) = pleb.work_target {
+                        // Swing animation drives dig strokes
+                        pleb.swing_progress += dt * self.time_speed * terrain::DIG_SPEED_SHOVEL;
+                        if pleb.swing_progress >= 1.0 {
+                            pleb.swing_progress = 0.0;
+                            // Apply dig stroke at the work target tile center
+                            let wx = tx as f32 + 0.5;
+                            let wy = ty as f32 + 0.5;
+                            let target_depth = self
+                                .dig_zones
+                                .first()
+                                .map(|dz| dz.target_depth)
+                                .unwrap_or(0.8);
+                            let original_elev =
+                                terrain::sample_elevation(&self.sub_elevation, wx, wy);
+                            let target_elev = original_elev - target_depth;
+                            let dirt = terrain::apply_dig_stroke(
+                                &mut self.sub_elevation,
+                                wx,
+                                wy,
+                                terrain::DIG_DEPTH_PER_STROKE,
+                                |_, _| target_elev,
+                            );
+                            if dirt > 0.001 {
+                                self.sub_elevation_dirty = true;
+                                // Mark terrain as freshly disturbed (max roughness, zero compaction)
+                                let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                                if tidx < self.terrain_data.len() {
+                                    // Set roughness to max (3) — bits 13-14
+                                    self.terrain_data[tidx] |= 0x3 << 13;
+                                    // Zero compaction — bits 24-28
+                                    self.terrain_data[tidx] &= !0x1F000000;
+                                    self.terrain_dirty = true;
+                                }
+                                // Produce dirt resource
+                                let dirt_items = (dirt * terrain::DIRT_PER_VOLUME) as u16;
+                                if dirt_items > 0 {
+                                    self.ground_items.push(resources::GroundItem::new(
+                                        pleb.x,
+                                        pleb.y,
+                                        item_defs::ITEM_CLAY, // use clay as dirt for now
+                                        dirt_items,
+                                    ));
+                                }
+                            } else {
+                                // No more dirt to dig — done with this tile
+                                self.active_work.remove(&(tx, ty));
+                                pleb.work_target = None;
+                                pleb.activity = PlebActivity::Idle;
+                            }
+                        }
+                    } else {
+                        pleb.activity = PlebActivity::Idle;
+                    }
+                }
+
+                // Handle Filling activity: pleb dumps dirt at berm zone
+                if pleb.activity == PlebActivity::Filling {
+                    if let Some((tx, ty)) = pleb.work_target {
+                        pleb.swing_progress += dt * self.time_speed * terrain::DIG_SPEED_SHOVEL;
+                        if pleb.swing_progress >= 1.0 {
+                            pleb.swing_progress = 0.0;
+                            let wx = tx as f32 + 0.5;
+                            let wy = ty as f32 + 0.5;
+                            let target_h = self
+                                .berm_zones
+                                .first()
+                                .map(|bz| bz.target_height)
+                                .unwrap_or(1.0);
+                            let dirt_used = terrain::apply_fill_stroke(
+                                &mut self.sub_elevation,
+                                wx,
+                                wy,
+                                terrain::FILL_HEIGHT_PER_STROKE,
+                                |_, _| target_h,
+                            );
+                            if dirt_used > 0.001 {
+                                self.sub_elevation_dirty = true;
+                                // Consume dirt from inventory
+                                let consume =
+                                    (dirt_used * terrain::DIRT_PER_VOLUME).max(1.0) as u16;
+                                pleb.inventory.remove(item_defs::ITEM_CLAY, consume);
+                                // Mark terrain as disturbed
+                                let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                                if tidx < self.terrain_data.len() {
+                                    self.terrain_data[tidx] |= 0x3 << 13; // max roughness
+                                    self.terrain_data[tidx] &= !0x1F000000; // zero compaction
+                                    self.terrain_dirty = true;
+                                }
+                                // Check if pleb ran out of dirt
+                                if pleb.inventory.count_of(item_defs::ITEM_CLAY) == 0 {
+                                    self.active_work.remove(&(tx, ty));
+                                    pleb.work_target = None;
+                                    pleb.activity = PlebActivity::Idle;
+                                }
+                            } else {
+                                // Berm complete at this tile
+                                self.active_work.remove(&(tx, ty));
+                                pleb.work_target = None;
+                                pleb.activity = PlebActivity::Idle;
+                            }
+                        }
+                    } else {
+                        pleb.activity = PlebActivity::Idle;
                     }
                 }
 
@@ -3692,11 +3864,28 @@ impl App {
                         } else if tbt == BT_WELL {
                             // Start drinking at well
                             pleb.activity = PlebActivity::Drinking(0.0);
-                        } else if tbt == BT_DIRT
+                        } else if self.dig_zones.iter().any(|dz| dz.tiles.contains(&(tx, ty))) {
+                            // Dig zone target: start digging
+                            pleb.activity = PlebActivity::Digging;
+                        } else if self
+                            .berm_zones
+                            .iter()
+                            .any(|bz| bz.tiles.contains(&(tx, ty)))
+                        {
+                            // Berm zone target: start filling (requires dirt in inventory)
+                            if pleb.inventory.count_of(item_defs::ITEM_CLAY) > 0 {
+                                pleb.activity = PlebActivity::Filling;
+                            } else {
+                                // No dirt — release task, go find some
+                                self.active_work.remove(&(tx, ty));
+                                pleb.work_target = None;
+                                pleb.activity = PlebActivity::Idle;
+                            }
+                        } else if tbt == BT_GROUND
                             && tidx < self.terrain_data.len()
                             && terrain_dig_holes(self.terrain_data[tidx]) < 7
                         {
-                            // Dig earth: add a hole (no elevation change, tile stays BT_DIRT)
+                            // Dig earth: add a hole (no elevation change, tile stays BT_GROUND)
                             let is_clay_terrain =
                                 terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY;
                             terrain_add_dig_hole(&mut self.terrain_data[tidx]);
@@ -3865,7 +4054,7 @@ impl App {
                             continue;
                         }
                         let nidx = (ny as u32 * GRID_W + nx as u32) as usize;
-                        if (self.grid_data[nidx] & 0xFF) == BT_DIRT
+                        if (self.grid_data[nidx] & 0xFF) == BT_GROUND
                             && nidx < self.terrain_data.len()
                             && terrain_dig_holes(self.terrain_data[nidx]) < 7
                         {

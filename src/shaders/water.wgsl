@@ -32,11 +32,14 @@ struct Camera {
 @group(0) @binding(2) var<storage, read> grid: array<u32>;
 @group(0) @binding(3) var<uniform> camera: Camera;
 @group(0) @binding(4) var<storage, read> water_table: array<f32>;
+@group(0) @binding(5) var elevation_tex: texture_2d<f32>; // 1024x1024 sub-tile elevation
 
 const W: u32 = 256u;
 const H: u32 = 256u;
 
-const FLOW_RATE: f32 = 0.12;
+// Flow rate must be < 0.25 for stability (4 neighbors × rate < 1.0).
+// At 0.15, max drain per step = 60%, leaving headroom for numerical safety.
+const FLOW_RATE: f32 = 0.15;
 const RAIN_RATE: f32 = 0.003;
 const EVAP_BASE: f32 = 0.00005;
 // Seep rate factor: how fast water wells up from the water table
@@ -52,27 +55,33 @@ fn block_height(b: u32) -> u32 {
 }
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 
-// Get ground elevation for a tile. Surface = 0, dug ground = negative.
-fn get_elevation(b: u32) -> f32 {
+// Sample sub-tile elevation for a grid cell (center of 4x4 patch)
+fn sample_sub_elevation(x: i32, y: i32) -> f32 {
+    let ep = vec2<i32>(x * 4 + 2, y * 4 + 2); // center of 4x4 sub-tile patch
+    let clamped = clamp(ep, vec2(0), vec2(1023));
+    return textureLoad(elevation_tex, clamped, 0).r;
+}
+
+// Get ground elevation for a tile — uses sub-tile heightmap when available,
+// falls back to block data for walls/obstacles.
+fn get_elevation(b: u32, x: i32, y: i32) -> f32 {
     let bt = block_type(b);
     let bh = block_height(b);
-    if bt == BT_DUG_GROUND {
-        // Dug ground: depth stored in height byte, negative elevation
-        return -f32(bh);
-    }
     // Walls and solid blocks: treated as very high (water can't flow onto them)
     if bh > 0u && bt != BT_TREE && bt != BT_FIREPLACE && bt != BT_CEILING_LIGHT && bt != BT_FLOOR_LAMP && bt != BT_BERRY_BUSH
         && bt != BT_CRATE && bt != BT_ROCK && bt != BT_WIRE && bt != BT_DIMMER && bt != BT_CROP
         && bt != BT_BREAKER && bt != BT_RESTRICTOR && bt != BT_WALL_TORCH && bt != BT_WALL_LAMP
         && !(bt >= BT_PIPE && bt <= BT_INLET) // gas pipe components
-        && bt != BT_LIQUID_PIPE && bt != BT_PIPE_BRIDGE && bt != BT_LIQUID_INTAKE && bt != BT_LIQUID_PUMP && bt != BT_LIQUID_OUTPUT {
+        && bt != BT_LIQUID_PIPE && bt != BT_PIPE_BRIDGE && bt != BT_LIQUID_INTAKE && bt != BT_LIQUID_PUMP && bt != BT_LIQUID_OUTPUT
+        && bt != BT_DUG_GROUND {
         return 10.0; // effectively a wall — water won't flow here
     }
-    return 0.0; // ground level
+    // Use sub-tile elevation heightmap (includes dug terrain)
+    return sample_sub_elevation(x, y);
 }
 
-fn is_wall_for_water(b: u32) -> bool {
-    return get_elevation(b) >= 10.0;
+fn is_wall_for_water(b: u32, x: i32, y: i32) -> bool {
+    return get_elevation(b, x, y) >= 10.0;
 }
 
 @compute @workgroup_size(8, 8)
@@ -85,10 +94,10 @@ fn main_water(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let block = grid[idx];
     let bt = block_type(block);
-    let elev = get_elevation(block);
+    let elev = get_elevation(block, x, y);
 
     // Walls: no water
-    if is_wall_for_water(block) {
+    if is_wall_for_water(block, x, y) {
         textureStore(water_out, vec2<i32>(x, y), vec4<f32>(0.0));
         return;
     }
@@ -125,45 +134,39 @@ fn main_water(@builtin(global_invocation_id) gid: vec3<u32>) {
         water -= evap * wind_factor;
     }
 
-    // --- Flow: water moves from high to low total height ---
+    // --- Flow: symmetric uncapped scheme (volume-conserving) ---
+    // Both outflow and inflow use identical formula: diff * FLOW_RATE.
+    // No caps needed because FLOW_RATE < 0.25 guarantees max 4×rate < 100% drain.
+    // What A sends to B = what B receives from A (symmetric, conserves volume).
     let my_total = elev + water;
-    var total_outflow = 0.0;
-    var total_inflow = 0.0;
+    var net_flow = 0.0; // positive = net outflow, negative = net inflow
 
-    // Check 4 neighbors
     let dirs = array<vec2<i32>, 4>(vec2(1, 0), vec2(-1, 0), vec2(0, 1), vec2(0, -1));
     for (var d = 0u; d < 4u; d++) {
         let nx = x + dirs[d].x;
         let ny = y + dirs[d].y;
 
         if nx < 0 || ny < 0 || nx >= i32(W) || ny >= i32(H) {
-            // Edge: water drains off the map
-            total_outflow += max(water * FLOW_RATE, 0.0);
+            // Edge: small drain
+            net_flow += water * 0.02;
             continue;
         }
 
         let nidx = u32(ny) * W + u32(nx);
         let nb = grid[nidx];
-        if is_wall_for_water(nb) { continue; }
+        if is_wall_for_water(nb, nx, ny) { continue; }
 
-        let n_elev = get_elevation(nb);
+        let n_elev = get_elevation(nb, nx, ny);
         let n_water = textureLoad(water_in, vec2<i32>(nx, ny), 0).r;
         let n_total = n_elev + n_water;
 
+        // Symmetric: positive diff = I'm higher (send), negative = they're higher (receive)
         let diff = my_total - n_total;
-        if diff > 0.0 {
-            // Outflow: we're higher, water flows out
-            let flow = min(diff * FLOW_RATE, water * 0.25); // cap at 25% per neighbor
-            total_outflow += flow;
-        } else if diff < 0.0 {
-            // Inflow: neighbor is higher, water flows in
-            let flow = min(-diff * FLOW_RATE, n_water * 0.25);
-            total_inflow += flow;
-        }
+        net_flow += diff * FLOW_RATE;
     }
 
-    water = water - total_outflow + total_inflow;
-    water = clamp(water, 0.0, 5.0); // cap at 5 units (full deep pool)
+    water = max(0.0, water - net_flow);
+    water = min(water, 5.0);
 
     textureStore(water_out, vec2<i32>(x, y), vec4<f32>(water));
 }

@@ -8,6 +8,25 @@ use std::collections::HashSet;
 pub enum ZoneKind {
     Growing,
     Storage,
+    Dig,
+    Berm,
+}
+
+/// A dig zone with target depth and cross-section profile.
+#[derive(Clone, Debug)]
+pub struct DigZone {
+    pub tiles: HashSet<(i32, i32)>,
+    pub target_depth: f32,
+    pub profile: crate::terrain::CrossProfile,
+    /// Width of the zone in tiles (for profile depth calculation). 0 = auto-detect.
+    pub width: f32,
+}
+
+/// A berm zone: terrain is raised by dumping dirt here.
+#[derive(Clone, Debug)]
+pub struct BermZone {
+    pub tiles: HashSet<(i32, i32)>,
+    pub target_height: f32, // how far above current surface to raise
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +49,8 @@ impl Zone {
 pub enum WorkTask {
     Plant(i32, i32),   // plant a crop at this position
     Harvest(i32, i32), // harvest any plant (crop, berry bush, etc.)
+    Dig(i32, i32),     // dig terrain at this position
+    Fill(i32, i32),    // dump dirt to raise terrain at this position
 }
 
 /// Work priority ordering (legacy, used for plant/harvest preference).
@@ -58,7 +79,10 @@ pub fn default_work_priorities() -> [u8; WORK_TYPE_COUNT] {
 impl WorkTask {
     pub fn position(&self) -> (i32, i32) {
         match self {
-            WorkTask::Plant(x, y) | WorkTask::Harvest(x, y) => (*x, *y),
+            WorkTask::Plant(x, y)
+            | WorkTask::Harvest(x, y)
+            | WorkTask::Dig(x, y)
+            | WorkTask::Fill(x, y) => (*x, *y),
         }
     }
 }
@@ -233,7 +257,7 @@ pub fn generate_work_tasks(
                     let bt = block_type_rs(block);
                     let bh = block_height_rs(block) as u32;
 
-                    if bt == BT_DIRT && bh == 0 {
+                    if bt == BT_GROUND && bh == 0 {
                         // Empty dirt in growing zone → needs planting
                         tasks.push(WorkTask::Plant(x, y));
                     } else if bt == BT_CROP && bh >= CROP_MATURE {
@@ -242,9 +266,83 @@ pub fn generate_work_tasks(
                     }
                 }
             }
-            ZoneKind::Storage => {
-                // Storage zones don't generate work tasks directly.
-                // Items are hauled there via context menu or auto-haul.
+            ZoneKind::Storage | ZoneKind::Dig | ZoneKind::Berm => {
+                // Storage: hauled via context menu.
+                // Dig/Berm: handled separately via generate_dig/fill_tasks.
+            }
+        }
+    }
+
+    tasks
+}
+
+/// Generate dig tasks from dig zones. Checks sub-tile elevation to see if work remains.
+pub fn generate_dig_tasks(
+    dig_zones: &[DigZone],
+    sub_elevation: &[f32],
+    active_tasks: &HashSet<(i32, i32)>,
+) -> Vec<WorkTask> {
+    let mut tasks = Vec::new();
+
+    for dz in dig_zones {
+        for &(x, y) in &dz.tiles {
+            if active_tasks.contains(&(x, y)) {
+                continue;
+            }
+            // Check if any sub-cell under this tile still needs digging
+            let sx_base = (x as u32) * crate::terrain::ELEV_SCALE;
+            let sy_base = (y as u32) * crate::terrain::ELEV_SCALE;
+            let mut needs_dig = false;
+            for dy in 0..crate::terrain::ELEV_SCALE {
+                for dx in 0..crate::terrain::ELEV_SCALE {
+                    let sx = sx_base + dx;
+                    let sy = sy_base + dy;
+                    if sx >= crate::terrain::ELEV_W || sy >= crate::terrain::ELEV_H {
+                        continue;
+                    }
+                    let idx = (sy * crate::terrain::ELEV_W + sx) as usize;
+                    if idx < sub_elevation.len() {
+                        let current = sub_elevation[idx];
+                        // Profile depth at this sub-cell position (simplified: use flat for now)
+                        let target = current - dz.target_depth;
+                        if current > target + 0.02 {
+                            needs_dig = true;
+                            break;
+                        }
+                    }
+                }
+                if needs_dig {
+                    break;
+                }
+            }
+            if needs_dig {
+                tasks.push(WorkTask::Dig(x, y));
+            }
+        }
+    }
+
+    tasks
+}
+
+/// Generate fill/berm tasks. Checks if tile elevation is below target height.
+pub fn generate_fill_tasks(
+    berm_zones: &[BermZone],
+    sub_elevation: &[f32],
+    active_tasks: &HashSet<(i32, i32)>,
+) -> Vec<WorkTask> {
+    let mut tasks = Vec::new();
+
+    for bz in berm_zones {
+        let target_h = bz.target_height;
+
+        for &(x, y) in &bz.tiles {
+            if active_tasks.contains(&(x, y)) {
+                continue;
+            }
+            let cur =
+                crate::terrain::sample_elevation(sub_elevation, x as f32 + 0.5, y as f32 + 0.5);
+            if cur < target_h - 0.02 {
+                tasks.push(WorkTask::Fill(x, y));
             }
         }
     }

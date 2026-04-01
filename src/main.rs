@@ -292,7 +292,9 @@ struct App {
     // Zones & work queue
     zones: Vec<Zone>,
     active_work: std::collections::HashSet<(i32, i32)>,
-    manual_tasks: Vec<zones::WorkTask>, // player-ordered tasks (harvest bush, etc.)
+    manual_tasks: Vec<zones::WorkTask>,
+    dig_zones: Vec<zones::DigZone>,
+    berm_zones: Vec<zones::BermZone>,
     work_priority: zones::WorkPriority,
     crop_timers: std::collections::HashMap<u32, f32>,
     water_phase: usize,
@@ -454,6 +456,8 @@ struct GfxState {
     pleb_air_readback_buffer: wgpu::Buffer,
     // Fog of war
     fog_texture: wgpu::Texture,
+    // Sub-tile elevation heightmap (1024x1024 R32Float)
+    elevation_tex: wgpu::Texture,
     // Dust simulation
     dust_textures: [wgpu::Texture; 2], // R16Float 256x256 ping-pong
     dust_params_buffer: wgpu::Buffer,
@@ -720,6 +724,8 @@ impl App {
             zones: Vec::new(),
             active_work: std::collections::HashSet::new(),
             manual_tasks: Vec::new(),
+            dig_zones: Vec::new(),
+            berm_zones: Vec::new(),
             work_priority: zones::WorkPriority::PlantFirst,
             crop_timers: std::collections::HashMap::new(),
             water_phase: 0,
@@ -943,6 +949,9 @@ impl App {
         let fv_vel_a_view = gfx.fluid_vel[0].create_view(&wgpu::TextureViewDescriptor::default());
         let fv_pres_b_view = gfx.fluid_pres[1].create_view(&wgpu::TextureViewDescriptor::default());
         let water_view = gfx.water_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
+        let elev_view = gfx
+            .elevation_tex
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let dust_b_view = gfx.dust_textures[1].create_view(&wgpu::TextureViewDescriptor::default());
         let shadow_map_view = gfx
             .shadow_map_dummy
@@ -1068,6 +1077,10 @@ impl App {
                         binding: 27,
                         resource: wgpu::BindingResource::TextureView(&dust_b_view),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 28,
+                        resource: wgpu::BindingResource::TextureView(&elev_view),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1188,6 +1201,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 27,
                         resource: wgpu::BindingResource::TextureView(&dust_b_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 28,
+                        resource: wgpu::BindingResource::TextureView(&elev_view),
                     },
                 ],
             }),
@@ -1310,6 +1327,10 @@ impl App {
                         binding: 27,
                         resource: wgpu::BindingResource::TextureView(&dust_b_view),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 28,
+                        resource: wgpu::BindingResource::TextureView(&elev_view),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1430,6 +1451,10 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 27,
                         resource: wgpu::BindingResource::TextureView(&dust_b_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 28,
+                        resource: wgpu::BindingResource::TextureView(&elev_view),
                     },
                 ],
             }),
@@ -1713,7 +1738,7 @@ impl App {
                     }
                     // Skip tiles with buildings
                     let bt = block_type_rs(self.grid_data[idx]);
-                    if bt != BT_DIRT && bt != BT_AIR && bt != BT_DUG_GROUND {
+                    if bt != BT_GROUND && bt != BT_AIR && bt != BT_DUG_GROUND {
                         continue;
                     }
 
@@ -1856,12 +1881,12 @@ impl App {
                 let bx = (idx % GRID_W as usize) as i32;
                 let by = (idx / GRID_W as usize) as i32;
                 let bt = block_type_rs(self.grid_data[idx]);
-                if bt == BT_DIRT {
+                if bt == BT_GROUND {
                     // Grass burned away — scorch the dirt (flags bit 3), don't destroy
                     // Bit 3 chosen to avoid conflict with bit 0 (door flag)
                     let flags = ((self.grid_data[idx] >> 16) & 0xFF) as u8;
                     let roof_h = self.grid_data[idx] & 0xFF000000;
-                    self.grid_data[idx] = make_block(BT_DIRT as u8, 0, flags | 8) | roof_h;
+                    self.grid_data[idx] = make_block(BT_GROUND as u8, 0, flags | 8) | roof_h;
                 } else {
                     let replacement = fire::burn_replacement_pub(bt);
                     let roof_h = self.grid_data[idx] & 0xFF000000;
@@ -2040,6 +2065,30 @@ impl App {
                 bytemuck::cast_slice(&self.terrain_data),
             );
             self.terrain_dirty = false;
+        }
+
+        // Re-upload sub-tile elevation if dirty (digging changed it)
+        if self.sub_elevation_dirty {
+            gfx.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gfx.elevation_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&self.sub_elevation),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(terrain::ELEV_W * 4),
+                    rows_per_image: Some(terrain::ELEV_H),
+                },
+                wgpu::Extent3d {
+                    width: terrain::ELEV_W,
+                    height: terrain::ELEV_H,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.sub_elevation_dirty = false;
         }
 
         // Upload fog texture when changed
@@ -2400,9 +2449,11 @@ impl App {
                             _ => vec![(hbx, hby)],
                         }
                     }
-                    BuildTool::Destroy | BuildTool::GrowingZone | BuildTool::StorageZone => {
-                        Self::filled_rect_tiles(sx, sy, hbx, hby)
-                    }
+                    BuildTool::Destroy
+                    | BuildTool::GrowingZone
+                    | BuildTool::StorageZone
+                    | BuildTool::DigZone
+                    | BuildTool::BermZone => Self::filled_rect_tiles(sx, sy, hbx, hby),
                     BuildTool::Roof | BuildTool::RemoveRoof => {
                         Self::filled_rect_tiles(sx, sy, hbx, hby)
                     }
@@ -3037,9 +3088,9 @@ impl App {
                 }
             }
 
-            // 12. Ground water simulation (256x256, every 4 frames)
+            // 12. Ground water simulation (256x256, every frame for smooth flow)
             self.water_frame += 1;
-            if self.water_frame.is_multiple_of(4) && !self.time_paused {
+            if !self.time_paused {
                 let tw = GRID_W.div_ceil(8);
                 let th = GRID_H.div_ceil(8);
                 let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -3835,7 +3886,9 @@ impl ApplicationHandler for App {
                                 | BuildTool::RemoveFloor
                                 | BuildTool::RemoveRoof
                                 | BuildTool::GrowingZone
-                                | BuildTool::StorageZone => true,
+                                | BuildTool::StorageZone
+                                | BuildTool::DigZone
+                                | BuildTool::BermZone => true,
                                 BuildTool::Place(id) => {
                                     let reg = block_defs::BlockRegistry::cached();
                                     reg.get(id)

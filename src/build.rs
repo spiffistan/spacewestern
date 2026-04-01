@@ -14,6 +14,8 @@ pub enum BuildTool {
     WoodBox,     // special: spawns physics body, not grid block
     GrowingZone, // paint growing zone overlay on dirt tiles
     StorageZone, // paint storage zone overlay — each tile stores one item stack
+    DigZone,     // paint dig zone — plebs will dig terrain to target depth
+    BermZone,    // paint berm zone — plebs dump dirt to raise terrain
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

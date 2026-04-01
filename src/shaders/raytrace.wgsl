@@ -106,6 +106,7 @@ struct GpuCreature {
 const MAX_CREATURES: u32 = 32u;
 @group(0) @binding(26) var<storage, read> creature_buf: array<GpuCreature>;
 @group(0) @binding(27) var dust_tex: texture_2d<f32>;
+@group(0) @binding(28) var elevation_tex: texture_2d<f32>;
 
 // Bush sprites packed after tree sprites in the same buffer
 const BUSH_SPRITE_SIZE: u32 = 64u;
@@ -767,6 +768,20 @@ fn terrain_detail(
     let grain_val = value_noise(pos * grain_freq);
     let grain_strength = 0.03 + t_rough * 0.05; // rougher = more variation
     color += vec3((grain_val - 0.5) * grain_strength);
+
+    // Freshly dug earth: max roughness creates a disturbed look
+    if t_rough > 0.9 {
+        // Clumpy, dark, uneven — visible soil chunks and exposed subsurface
+        let clump = value_noise(pos * 8.0);
+        let streak = value_noise(pos * vec2(2.0, 12.0)); // directional streaks (shovel marks)
+        // Darken overall (exposed subsurface is darker)
+        color *= 0.8 + clump * 0.15;
+        // Add warm brown tint (fresh earth vs weathered surface)
+        color = mix(color, vec3(0.25, 0.18, 0.10), 0.15 + streak * 0.1);
+        // Heightmap-style clumps: light/dark variation for 3D feel
+        let lump = value_noise(pos * 6.0 + vec2(97.0, 41.0));
+        color += vec3((lump - 0.5) * 0.08);
+    }
 
     // --- 5. Surface detail per terrain type ---
     // Pebbles/stones: more common with high roughness
@@ -3668,7 +3683,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if is_tree_pixel {
             color = bush_sp.xyz * (0.90 + bush_hash * 0.2);
         } else {
-            color = block_base_color(BT_DIRT, 0u);
+            color = block_base_color(BT_GROUND, 0u);
         }
     } else if btype == BT_DUG_GROUND {
         // Dug ground: excavated pit, 20% per depth level (max 5 = one full block)
@@ -3761,7 +3776,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         if is_tree_pixel {
             color = rock_sp.xyz * (0.85 + rock_hash * 0.2);
         } else {
-            color = block_base_color(BT_DIRT, 0u);
+            color = block_base_color(BT_GROUND, 0u);
         }
     } else if btype == BT_WIRE || btype == BT_WIRE_BRIDGE {
         // Wire / Wire Bridge: copper conductor with directional segments
@@ -4350,9 +4365,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Procedural terrain detail (ground-level blocks only) ---
     // Replace this block with sprite sampling when migrating to sprites.
-    let is_scorched_dirt = btype == BT_DIRT && (bflags & 8u) != 0u; // bit 3 = scorched
+    let is_scorched_dirt = btype == BT_GROUND && (bflags & 8u) != 0u; // bit 3 = scorched
     let is_transparent_vegetation = (btype == BT_TREE || btype == BT_BERRY_BUSH) && !is_tree_pixel;
-    let is_ground_tile = btype == BT_DIRT || btype == BT_AIR || btype == BT_DUG_GROUND
+    let is_ground_tile = btype == BT_GROUND || btype == BT_AIR || btype == BT_DUG_GROUND
         || btype == BT_ROCK || is_transparent_vegetation;
     if camera.enable_terrain_detail > 0.5 && !is_tree_pixel && (bheight == 0u || is_transparent_vegetation) && is_ground_tile && !is_scorched_dirt {
         // Dirt / air (ground): full terrain detail with grass, flowers, pebbles
@@ -4474,11 +4489,25 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color += vec3<f32>(effective_fheight * 0.03);
     }
 
-    // Ground water rendering: surface water + water table influence
-    let water_level = textureLoad(water_tex, vec2<i32>(bx, by), 0).r;
+    // Ground water rendering: edge-blended for smooth shorelines
+    let wmax = vec2<i32>(i32(camera.grid_w) - 1, i32(camera.grid_h) - 1);
+    let wc = textureLoad(water_tex, clamp(vec2<i32>(bx, by), vec2(0), wmax), 0).r;
+    let wn = textureLoad(water_tex, clamp(vec2<i32>(bx, by - 1), vec2(0), wmax), 0).r;
+    let ws = textureLoad(water_tex, clamp(vec2<i32>(bx, by + 1), vec2(0), wmax), 0).r;
+    let we = textureLoad(water_tex, clamp(vec2<i32>(bx + 1, by), vec2(0), wmax), 0).r;
+    let ww = textureLoad(water_tex, clamp(vec2<i32>(bx - 1, by), vec2(0), wmax), 0).r;
+    let edge_w = smoothstep(0.4, 0.0, fx);
+    let edge_e = smoothstep(0.6, 1.0, fx);
+    let edge_n = smoothstep(0.4, 0.0, fy);
+    let edge_s = smoothstep(0.6, 1.0, fy);
+    let water_level = wc
+        + (ww - wc) * edge_w * 0.5
+        + (we - wc) * edge_e * 0.5
+        + (wn - wc) * edge_n * 0.5
+        + (ws - wc) * edge_s * 0.5;
     let wt_idx = u32(by) * 256u + u32(bx);
     let wt_depth = water_table_buf[wt_idx]; // negative = below ground, positive = spring
-    let is_floor_tile = btype == BT_DIRT || btype == BT_WOOD_FLOOR || btype == BT_STONE_FLOOR || btype == BT_CONCRETE_FLOOR || btype == BT_ROUGH_FLOOR || btype == BT_DUG_GROUND;
+    let is_floor_tile = btype == BT_GROUND || btype == BT_WOOD_FLOOR || btype == BT_STONE_FLOOR || btype == BT_CONCRETE_FLOOR || btype == BT_ROUGH_FLOOR || btype == BT_DUG_GROUND;
     if is_floor_tile && !is_tree_pixel && effective_height == 0u {
         // Water table coloring: subtle moisture for high water table (even without surface water)
         let wt_moisture = clamp((wt_depth + 1.5) / 2.0, 0.0, 0.5); // 0 at -1.5, 0.5 at +0.5
@@ -4550,6 +4579,27 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             color = ow_col;
         }
     }
+
+    // Sub-tile elevation: sample 1024x1024 heightmap for slope shading
+    let elev_uv_x = world_x * 4.0;
+    let elev_uv_y = world_y * 4.0;
+    let elev_x0 = i32(floor(elev_uv_x));
+    let elev_y0 = i32(floor(elev_uv_y));
+    let elev_max = vec2<i32>(i32(camera.grid_w) * 4 - 1, i32(camera.grid_h) * 4 - 1);
+    // Bilinear sample elevation
+    let e00 = textureLoad(elevation_tex, clamp(vec2(elev_x0, elev_y0), vec2(0), elev_max), 0).r;
+    let e10 = textureLoad(elevation_tex, clamp(vec2(elev_x0 + 1, elev_y0), vec2(0), elev_max), 0).r;
+    let e01 = textureLoad(elevation_tex, clamp(vec2(elev_x0, elev_y0 + 1), vec2(0), elev_max), 0).r;
+    let e11 = textureLoad(elevation_tex, clamp(vec2(elev_x0 + 1, elev_y0 + 1), vec2(0), elev_max), 0).r;
+    let efx = fract(elev_uv_x);
+    let efy = fract(elev_uv_y);
+    let sub_elev = mix(mix(e00, e10, efx), mix(e01, e11, efx), efy);
+    // Slope shading: darken steep terrain (ditch walls, hillsides)
+    let slope_dx = e10 - e00;
+    let slope_dy = e01 - e00;
+    let slope_mag = length(vec2(slope_dx, slope_dy));
+    let slope_shade = 1.0 - clamp(slope_mag * 3.0, 0.0, 0.35);
+    color *= slope_shade;
 
     // Save pre-lighting base color for pleb torch/headlight illumination
     let base_color_prelit = color;
@@ -4648,62 +4698,88 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = lit + light_color_out * light_intensity_out * pl_mul;
     }
 
-    // Water effect (type 3 = water, type 32 depth>=1 = ground water at 20%+)
-    let is_water = btype == BT_WATER || (btype == BT_DUG_GROUND && bheight >= 1u);
-    if is_water {
+    // --- Per-pixel water rendering using sub-tile elevation ---
+    // Water surface level from the sim (per-tile) or block type
+    var water_surface = water_level;
+    if btype == BT_WATER {
+        water_surface = max(water_surface, 0.5); // natural water bodies have minimum depth
+    }
+    if btype == BT_DUG_GROUND && bheight >= 1u {
+        water_surface = max(water_surface, f32(bheight) * 0.2);
+    }
+
+    // Per-pixel water depth: water surface minus terrain elevation at this exact pixel
+    let pixel_water_depth = water_surface - sub_elev;
+
+    if pixel_water_depth > 0.005 {
         let t = camera.time;
-        // Multi-octave ripple normals
-        let rip1 = sin(world_x * 11.0 + world_y * 7.0 + t * 2.0);
-        let rip2 = sin(world_x * 5.3 - world_y * 13.0 + t * 1.3);
-        let rip3 = sin(world_x * 23.0 + world_y * 3.0 + t * 3.1) * 0.5;
-        let ripple = (rip1 + rip2 + rip3) * 0.02;
+        let depth = pixel_water_depth;
+        let terrain_below = color; // save terrain color for transparency blending
 
-        // Depth-dependent base color (deeper = darker blue)
-        let depth_factor = select(1.0, f32(bheight) / 5.0, btype == BT_DUG_GROUND);
-        let shallow = vec3<f32>(0.15, 0.38, 0.55);
-        let deep = vec3<f32>(0.06, 0.18, 0.40);
-        var water_color = mix(shallow, deep, depth_factor * 0.7);
+        // --- Ripples: wind-aligned + depth-scaled ---
+        let wind_dir = vec2(camera.wind_angle, camera.wind_angle + 1.57);
+        let wind_along = dot(vec2(world_x, world_y), normalize(wind_dir));
+        // Large swells (wind-driven)
+        let swell = sin(wind_along * 4.0 - t * 1.5) * 0.015 * min(depth * 3.0, 1.0);
+        // Small chop (multi-directional)
+        let chop1 = sin(world_x * 11.0 + world_y * 7.0 + t * 2.0) * 0.008;
+        let chop2 = sin(world_x * 5.3 - world_y * 13.0 + t * 1.3) * 0.006;
+        let chop3 = sin(world_x * 23.0 + world_y * 3.0 + t * 3.1) * 0.004;
+        let ripple = swell + (chop1 + chop2 + chop3) * min(depth * 5.0, 1.0);
 
-        // Animated caustic patterns (sun-modulated)
-        let caust1 = abs(sin(world_x * 17.0 + t * 0.7) * sin(world_y * 19.0 + t * 0.9));
-        let caust2 = abs(sin(world_x * 11.0 - t * 0.5) * sin(world_y * 13.0 + t * 1.1));
-        let caustic = caust1 * caust2;
-        water_color += vec3<f32>(0.02, 0.06, 0.10) * caustic * light_factor;
+        // Surface normal from ripple (for specular/reflection)
+        let nx = cos(world_x * 11.0 + t * 2.0) * 0.3 + cos(wind_along * 4.0 - t * 1.5) * 0.5;
+        let ny = cos(world_y * 13.0 + t * 1.3) * 0.3;
 
-        // Sky reflection (simple fresnel approximation from above)
-        let sky_color = vec3<f32>(0.5, 0.6, 0.8) * (camera.sun_intensity * 0.5 + 0.1);
-        let reflect_amount = 0.15 + ripple * 2.0;
-        water_color = mix(water_color, sky_color, clamp(reflect_amount, 0.0, 0.3));
+        // --- Depth-dependent water color ---
+        let shallow_col = vec3<f32>(0.18, 0.40, 0.55);
+        let mid_col = vec3<f32>(0.08, 0.25, 0.45);
+        let deep_col = vec3<f32>(0.04, 0.12, 0.30);
+        let depth_t = clamp(depth * 2.0, 0.0, 1.0);
+        var water_col = mix(shallow_col, mid_col, smoothstep(0.0, 0.5, depth_t));
+        water_col = mix(water_col, deep_col, smoothstep(0.5, 1.0, depth_t));
 
-        // Specular highlight from sun
-        let spec = pow(max(rip1 * 0.5 + 0.5, 0.0), 16.0) * camera.sun_intensity * 0.3;
-        water_color += vec3<f32>(spec);
-
-        // Surface shimmer
-        water_color += vec3<f32>(ripple * 0.3, ripple * 0.5, ripple * 0.8);
-
-        // Edge darkening (shoreline)
-        if btype == BT_WATER {
-            let edge_dist = min(min(fx, 1.0 - fx), min(fy, 1.0 - fy));
-            // Check neighbors for non-water
-            let n_n = block_type(get_block(bx, by - 1));
-            let n_s = block_type(get_block(bx, by + 1));
-            let n_e = block_type(get_block(bx + 1, by));
-            let n_w = block_type(get_block(bx - 1, by));
-            let shore_n = f32(n_n != BT_WATER) * smoothstep(0.3, 0.0, fy);
-            let shore_s = f32(n_s != BT_WATER) * smoothstep(0.7, 1.0, fy);
-            let shore_e = f32(n_e != BT_WATER) * smoothstep(0.7, 1.0, fx);
-            let shore_w = f32(n_w != BT_WATER) * smoothstep(0.3, 0.0, fx);
-            let shore = max(max(shore_n, shore_s), max(shore_e, shore_w));
-            water_color = mix(water_color, vec3<f32>(0.30, 0.28, 0.22), shore * 0.5);
+        // --- Caustics (only visible in shallow water, modulated by sunlight) ---
+        if depth < 0.4 {
+            let caust_strength = (1.0 - depth / 0.4) * light_factor * 0.8;
+            let c1 = abs(sin(world_x * 17.0 + t * 0.7) * sin(world_y * 19.0 + t * 0.9));
+            let c2 = abs(sin(world_x * 11.0 - t * 0.5) * sin(world_y * 13.0 + t * 1.1));
+            let caustic = c1 * c2;
+            water_col += vec3(0.03, 0.08, 0.12) * caustic * caust_strength;
         }
 
-        // Apply the same lighting as terrain (ambient + sun), so water darkens at night
-        water_color = water_color * (ambient + sun_color * light_factor * 0.85);
-        // Add point light contribution (torches, lamps illuminate water at night)
+        // --- Sky reflection (fresnel: more reflection at shallow viewing angle) ---
+        let sky_col = vec3<f32>(0.45, 0.55, 0.75) * (camera.sun_intensity * 0.4 + 0.15);
+        let fresnel = 0.1 + 0.15 * (1.0 + nx * 0.1); // simplified top-down fresnel
+        water_col = mix(water_col, sky_col, clamp(fresnel + ripple * 1.5, 0.0, 0.35));
+
+        // --- Specular highlight from sun ---
+        let spec_base = nx * 0.5 + 0.5;
+        let spec = pow(max(spec_base, 0.0), 32.0) * camera.sun_intensity * 0.4;
+        water_col += vec3(spec * 0.8, spec * 0.9, spec);
+
+        // --- Shore foam (where depth approaches zero) ---
+        let foam_t = smoothstep(0.04, 0.0, depth);
+        // Animated foam line: oscillates with time
+        let foam_wave = sin(t * 1.5 + world_x * 3.0 + world_y * 5.0) * 0.01;
+        let foam_depth = smoothstep(0.06 + foam_wave, 0.0, depth);
+        let foam = max(foam_t, foam_depth * 0.7);
+        water_col = mix(water_col, vec3(0.85, 0.88, 0.92), foam * 0.6);
+
+        // --- Lighting: ambient + sun ---
+        water_col = water_col * (ambient + sun_color * light_factor * 0.85);
         let water_pl_mul = select(camera.light_bleed_mul, camera.indoor_glow_mul, is_indoor);
-        water_color += light_color_out * light_intensity_out * water_pl_mul * 0.5;
-        color = water_color;
+        water_col += light_color_out * light_intensity_out * water_pl_mul * 0.5;
+
+        // --- Transparency: shallow water shows terrain through it ---
+        let alpha = smoothstep(0.0, 0.25, depth);
+        // Tint terrain below with blue (looking through water)
+        let tinted_terrain = terrain_below * vec3(0.7, 0.8, 0.9);
+        color = mix(tinted_terrain, water_col, clamp(alpha, 0.15, 0.95));
+    } else if pixel_water_depth > -0.08 {
+        // Wet terrain near waterline (moisture darkening)
+        let moisture = smoothstep(-0.08, 0.0, pixel_water_depth);
+        color *= 1.0 - moisture * 0.25;
     }
 
     // Door detail: open doors show floor, closed doors show planks + handle
@@ -5689,7 +5765,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         else if tt == 6u { tc = vec3(0.30, 0.35, 0.22); }  // Marsh
         else if tt == 7u { tc = vec3(0.38, 0.30, 0.18); }  // Loam
         // Blend with subtle base color for depth
-        let ground = bheight == 0u && (btype == BT_DIRT || btype == BT_AIR);
+        let ground = bheight == 0u && (btype == BT_GROUND || btype == BT_AIR);
         if ground {
             color = mix(color * 0.3, tc, 0.75);
         } else {
@@ -5781,7 +5857,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Fire overlay for burning blocks (applied AFTER lighting so flames are emissive) ---
     // Skip scorched dirt (flags bit 3) — grass already burned away
-    let skip_fire = btype == BT_DIRT && (bflags & 8u) != 0u;
+    let skip_fire = btype == BT_GROUND && (bflags & 8u) != 0u;
     if mat.is_flammable > 0.5 && !skip_fire {
         let fire_tidx = u32(by) * u32(camera.grid_w) + u32(bx);
         let fire_temp = block_temps[fire_tidx];

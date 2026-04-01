@@ -6,7 +6,7 @@ pub const GRID_H: u32 = 256;
 // Block type IDs (must match blocks.toml). u32 for direct comparison with extracted block types.
 pub const BT_AIR: u32 = 0;
 pub const BT_STONE: u32 = 1;
-pub const BT_DIRT: u32 = 2;
+pub const BT_GROUND: u32 = 2;
 pub const BT_WATER: u32 = 3;
 pub const BT_WALL: u32 = 4;
 pub const BT_GLASS: u32 = 5;
@@ -76,7 +76,7 @@ pub fn wgsl_block_constants() -> String {
     let consts: &[(&str, u32)] = &[
         ("BT_AIR", BT_AIR),
         ("BT_STONE", BT_STONE),
-        ("BT_DIRT", BT_DIRT),
+        ("BT_GROUND", BT_GROUND),
         ("BT_WATER", BT_WATER),
         ("BT_WALL", BT_WALL),
         ("BT_GLASS", BT_GLASS),
@@ -718,7 +718,7 @@ pub fn is_ground_block(bt: u32) -> bool {
     bt_is!(
         bt,
         BT_AIR,
-        BT_DIRT,
+        BT_GROUND,
         BT_WATER,
         BT_WOOD_FLOOR,
         BT_STONE_FLOOR,
@@ -1003,7 +1003,7 @@ pub fn compute_roof_heights_wd(grid: &mut [u32], wall_data: &[u16]) {
 
 /// Generate a natural world with trees, bushes, and rocks.
 pub fn generate_world(seed: u32) -> Vec<u32> {
-    let dirt_block = make_block(BT_DIRT as u8, 0, 0);
+    let dirt_block = make_block(BT_GROUND as u8, 0, 0);
     let mut grid = vec![dirt_block; (GRID_W * GRID_H) as usize];
     let w = GRID_W;
 
@@ -2181,7 +2181,7 @@ mod tests {
     fn can_place_on_block(place_id: u8, existing_bt: u32, existing_h: u8) -> bool {
         let empty_ground = existing_h == 0
             && (existing_bt == BT_AIR
-                || existing_bt == BT_DIRT
+                || existing_bt == BT_GROUND
                 || existing_bt == BT_WOOD_FLOOR
                 || existing_bt == BT_STONE_FLOOR
                 || existing_bt == BT_CONCRETE_FLOOR);
@@ -2197,7 +2197,7 @@ mod tests {
                 && (existing_bt == BT_LIQUID_PIPE || existing_bt == BT_PIPE_BRIDGE))
             || (pid == BT_PUMP && existing_bt == BT_PIPE)
             || ((pid == BT_SWITCH || pid == BT_DIMMER || pid == BT_BREAKER)
-                && (existing_bt == BT_WIRE || existing_bt == BT_AIR || existing_bt == BT_DIRT))
+                && (existing_bt == BT_WIRE || existing_bt == BT_AIR || existing_bt == BT_GROUND))
     }
 
     #[test]
@@ -2216,9 +2216,9 @@ mod tests {
 
     #[test]
     fn test_pipe_placeable_on_ground() {
-        assert!(can_place_on_block(BT_PIPE as u8, BT_DIRT, 0));
-        assert!(can_place_on_block(BT_LIQUID_PIPE as u8, BT_DIRT, 0));
-        assert!(can_place_on_block(BT_RESTRICTOR as u8, BT_DIRT, 0));
+        assert!(can_place_on_block(BT_PIPE as u8, BT_GROUND, 0));
+        assert!(can_place_on_block(BT_LIQUID_PIPE as u8, BT_GROUND, 0));
+        assert!(can_place_on_block(BT_RESTRICTOR as u8, BT_GROUND, 0));
     }
 
     #[test]
@@ -2237,7 +2237,7 @@ mod tests {
 
     #[test]
     fn test_wire_placeable_anywhere() {
-        assert!(can_place_on_block(BT_WIRE as u8, BT_DIRT, 0));
+        assert!(can_place_on_block(BT_WIRE as u8, BT_GROUND, 0));
         assert!(can_place_on_block(BT_WIRE as u8, BT_STONE, 3)); // on walls
         assert!(can_place_on_block(BT_WIRE as u8, BT_PIPE, 1)); // on pipes
         assert!(!can_place_on_block(BT_WIRE as u8, BT_WIRE, 0)); // NOT on existing wire
@@ -2252,7 +2252,7 @@ mod tests {
                 id
             );
             assert!(
-                can_place_on_block(id as u8, BT_DIRT, 0),
+                can_place_on_block(id as u8, BT_GROUND, 0),
                 "ID {} should place on ground",
                 id
             );
@@ -2262,7 +2262,7 @@ mod tests {
     #[test]
     fn test_pump_on_pipe() {
         assert!(can_place_on_block(BT_PUMP as u8, BT_PIPE, 1));
-        assert!(can_place_on_block(BT_PUMP as u8, BT_DIRT, 0)); // also on ground
+        assert!(can_place_on_block(BT_PUMP as u8, BT_GROUND, 0)); // also on ground
     }
 
     #[test]
@@ -2271,10 +2271,10 @@ mod tests {
         // This tests the individual tile acceptance (both ground and water tiles should be valid)
         let dug = make_block(BT_DUG_GROUND as u8, 1, 0);
         let water = make_block(BT_WATER as u8, 0, 0);
-        let dirt = make_block(BT_DIRT as u8, 0, 0);
+        let dirt = make_block(BT_GROUND as u8, 0, 0);
         assert_eq!(block_type_rs(dug), BT_DUG_GROUND);
         assert_eq!(block_type_rs(water), BT_WATER);
-        assert_eq!(block_type_rs(dirt), BT_DIRT);
+        assert_eq!(block_type_rs(dirt), BT_GROUND);
     }
 
     #[test]
@@ -2326,7 +2326,7 @@ mod tests {
         let is_ground = |bt: u32, bh: u8| {
             bh == 0
                 && (bt == BT_AIR
-                    || bt == BT_DIRT
+                    || bt == BT_GROUND
                     || bt == BT_WOOD_FLOOR
                     || bt == BT_STONE_FLOOR
                     || bt == BT_CONCRETE_FLOOR)
@@ -2344,14 +2344,14 @@ mod tests {
     #[test]
     fn test_liquid_intake_ground_plus_water() {
         // Ground first, water second
-        assert!(intake_valid(BT_DIRT, 0, BT_WATER, 0).is_some());
-        assert!(intake_valid(BT_DIRT, 0, BT_DUG_GROUND, 1).is_some());
+        assert!(intake_valid(BT_GROUND, 0, BT_WATER, 0).is_some());
+        assert!(intake_valid(BT_GROUND, 0, BT_DUG_GROUND, 1).is_some());
     }
 
     #[test]
     fn test_liquid_intake_water_plus_ground() {
         // Water first, ground second (reversed click direction)
-        let r = intake_valid(BT_WATER, 0, BT_DIRT, 0);
+        let r = intake_valid(BT_WATER, 0, BT_GROUND, 0);
         assert!(r.is_some());
         assert_eq!(
             r.unwrap(),
@@ -2363,7 +2363,7 @@ mod tests {
     #[test]
     fn test_liquid_intake_both_ground_invalid() {
         // Both tiles are ground — no water source, invalid
-        assert!(intake_valid(BT_DIRT, 0, BT_DIRT, 0).is_none());
+        assert!(intake_valid(BT_GROUND, 0, BT_GROUND, 0).is_none());
     }
 
     #[test]
@@ -2583,7 +2583,7 @@ mod tests {
         // [2][2][2][2]
         // [ ][ ][ ][ ]   ← open: east/south/west pass through
         // [ ][ ][ ][ ]
-        let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+        let mut grid = vec![make_block(BT_GROUND as u8, 0, 0); (GRID_W * GRID_H) as usize];
         let (flags, mask) = make_thin_wall_flags(0, 0, 2); // N edge, thickness 2
         grid[(5 * GRID_W + 5) as usize] =
             make_block(BT_WALL as u8, make_wall_height(3, mask), flags);
@@ -2604,7 +2604,7 @@ mod tests {
         // [ ][ ][ ][1]   ← E
         // [ ][ ][ ][1]
         // [1][1][1][1]   ← S
-        let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+        let mut grid = vec![make_block(BT_GROUND as u8, 0, 0); (GRID_W * GRID_H) as usize];
         let mask = WALL_EDGE_N | WALL_EDGE_E | WALL_EDGE_S;
         let thick_bits: u8 = 4 - 1;
         let flags = (thick_bits & 3) << 5;

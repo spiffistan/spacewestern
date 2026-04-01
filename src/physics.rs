@@ -526,7 +526,7 @@ pub fn body_can_move_z(grid: &[u32], x: f32, y: f32, size: f32, z: f32) -> bool 
             && !bt_is!(
                 bt,
                 BT_AIR,
-                BT_DIRT,
+                BT_GROUND,
                 BT_DUG_GROUND,
                 BT_ROCK,
                 BT_FIREPLACE,
@@ -663,7 +663,7 @@ fn dda_bullet_trace(
                 let passable = bt_is!(
                     bt,
                     BT_AIR,
-                    BT_DIRT,
+                    BT_GROUND,
                     BT_DUG_GROUND,
                     BT_TREE,
                     BT_FIREPLACE,

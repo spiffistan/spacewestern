@@ -141,7 +141,7 @@ impl App {
 
         // Grid storage buffer (blank until map gen screen generates the world)
         if self.grid_data.len() != (GRID_W * GRID_H) as usize {
-            self.grid_data = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+            self.grid_data = vec![make_block(BT_GROUND as u8, 0, 0); (GRID_W * GRID_H) as usize];
         }
         compute_roof_heights_wd(&mut self.grid_data, &self.wall_data);
         self.pipe_network.rebuild(&self.grid_data);
@@ -684,6 +684,14 @@ impl App {
             }
         }
 
+        // --- Sub-tile elevation texture (R32Float, 1024x1024) ---
+        let elevation_tex = make_fluid_tex(
+            "sub-elevation",
+            crate::terrain::ELEV_W,
+            crate::terrain::ELEV_H,
+            wgpu::TextureFormat::R32Float,
+        );
+
         // Initialize dye textures with O2 = 1.0 (channel G = f16(1.0) = 0x3C00)
         {
             let texels = (FLUID_DYE_W * FLUID_DYE_H) as usize;
@@ -750,6 +758,8 @@ impl App {
         let fv_dummy_r_w = fluid_dummy_r_w.create_view(&wgpu::TextureViewDescriptor::default());
         // Dust texture views (created early for raytrace bind groups)
         let fv_dust_b_rt = dust_b.create_view(&wgpu::TextureViewDescriptor::default());
+        // Sub-tile elevation view for raytrace
+        let fv_elevation_rt = elevation_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Upload initial obstacle field
         let obstacle_data = build_obstacle_field(&self.grid_data, &self.wall_data);
@@ -1776,6 +1786,17 @@ impl App {
                         },
                         count: None,
                     },
+                    // Sub-tile elevation heightmap (1024x1024 R32Float)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 28,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1914,6 +1935,25 @@ impl App {
 
         // Sub-tile elevation: 1024x1024 heightmap for smooth terrain and digging
         self.sub_elevation = crate::terrain::generate_elevation(&self.elevation_data);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &elevation_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&self.sub_elevation),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(crate::terrain::ELEV_W * 4),
+                rows_per_image: Some(crate::terrain::ELEV_H),
+            },
+            wgpu::Extent3d {
+                width: crate::terrain::ELEV_W,
+                height: crate::terrain::ELEV_H,
+                depth_or_array_layers: 1,
+            },
+        );
 
         // Adjust water table for elevation (hilltops drier, valleys wetter)
         adjust_water_table_for_elevation(&mut self.water_table, &self.elevation_data);
@@ -2120,6 +2160,10 @@ impl App {
                     binding: 27,
                     resource: wgpu::BindingResource::TextureView(&fv_dust_b_rt),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 28,
+                    resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
+                },
             ],
         });
         let compute_bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2237,6 +2281,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 27,
                     resource: wgpu::BindingResource::TextureView(&fv_dust_b_rt),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 28,
+                    resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
                 },
             ],
         });
@@ -2356,6 +2404,10 @@ impl App {
                     binding: 27,
                     resource: wgpu::BindingResource::TextureView(&fv_dust_b_rt),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 28,
+                    resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
+                },
             ],
         });
         let compute_bind_group_3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2473,6 +2525,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 27,
                     resource: wgpu::BindingResource::TextureView(&fv_dust_b_rt),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 28,
+                    resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
                 },
             ],
         });
@@ -2903,6 +2959,17 @@ impl App {
                     },
                     count: None,
                 },
+                // Sub-tile elevation heightmap (1024x1024 R32Float)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let water_bg_ab = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2929,6 +2996,10 @@ impl App {
                     binding: 4,
                     resource: water_table_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
+                },
             ],
         });
         let water_bg_ba = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2954,6 +3025,10 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: water_table_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
                 },
             ],
         });
@@ -3321,6 +3396,7 @@ impl App {
             water_readback_buffer,
             water_pipeline: water_pipeline_val,
             water_bind_groups: [water_bg_ab, water_bg_ba],
+            elevation_tex,
             dust_textures: [dust_a, dust_b],
             dust_params_buffer,
             dust_pipeline,

@@ -136,6 +136,52 @@ pub fn apply_dig_stroke(
     dirt
 }
 
+// --- Fill/Berm constants ---
+pub const FILL_BRUSH_RADIUS: f32 = 1.6; // slightly tighter than dig brush
+pub const FILL_HEIGHT_PER_STROKE: f32 = 0.03; // elevation units per dump
+
+/// Apply a single fill brush stroke at a world position (raises terrain).
+/// Returns the amount of dirt consumed.
+pub fn apply_fill_stroke(
+    elevation: &mut [f32],
+    world_x: f32,
+    world_y: f32,
+    height_per_stroke: f32,
+    max_elevation_at: impl Fn(u32, u32) -> f32, // target max elevation at each sub-cell
+) -> f32 {
+    let cx = (world_x * ELEV_SCALE as f32) as i32;
+    let cy = (world_y * ELEV_SCALE as f32) as i32;
+    let r = FILL_BRUSH_RADIUS.ceil() as i32;
+    let mut dirt_used = 0.0f32;
+
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let sx = cx + dx;
+            let sy = cy + dy;
+            if sx < 0 || sy < 0 || sx >= ELEV_W as i32 || sy >= ELEV_H as i32 {
+                continue;
+            }
+            let dist = ((dx as f32).powi(2) + (dy as f32).powi(2)).sqrt();
+            if dist > FILL_BRUSH_RADIUS {
+                continue;
+            }
+
+            let falloff = smoothstep(FILL_BRUSH_RADIUS, 0.0, dist);
+            let idx = (sy as u32 * ELEV_W + sx as u32) as usize;
+            let max_h = max_elevation_at(sx as u32, sy as u32);
+            let remaining = (max_h - elevation[idx]).max(0.0);
+            let fill = (height_per_stroke * falloff).min(remaining);
+
+            if fill > 0.0001 {
+                elevation[idx] += fill;
+                dirt_used += fill;
+            }
+        }
+    }
+
+    dirt_used
+}
+
 /// Sample elevation at a world position with bilinear interpolation (CPU-side).
 pub fn sample_elevation(elevation: &[f32], world_x: f32, world_y: f32) -> f32 {
     let sx = world_x * ELEV_SCALE as f32 - 0.5;

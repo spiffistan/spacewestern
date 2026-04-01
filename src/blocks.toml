@@ -22,7 +22,7 @@ thermal = { heat_capacity = 8.0, conductivity = 0.012, solar_absorption = 0.7 }
 
 [[block]]
 id = 2
-name = "Dirt"
+name = "Ground"
 color = [0.45, 0.35, 0.20]
 light_transmission = 1.0
 walkable = true

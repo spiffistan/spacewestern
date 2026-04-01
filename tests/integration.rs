@@ -22,7 +22,7 @@ fn all_block_ids_fit_in_materials() {
 #[test]
 fn ground_block_classification() {
     assert!(is_ground_block(BT_AIR));
-    assert!(is_ground_block(BT_DIRT));
+    assert!(is_ground_block(BT_GROUND));
     assert!(is_ground_block(BT_WATER));
     assert!(is_ground_block(BT_WOOD_FLOOR));
     assert!(is_ground_block(BT_DUG_GROUND));
@@ -38,7 +38,7 @@ fn wall_block_classification() {
     assert!(is_wall_block(BT_STEEL_WALL));
     assert!(is_wall_block(BT_GLASS));
     assert!(is_wall_block(BT_DIAGONAL));
-    assert!(!is_wall_block(BT_DIRT));
+    assert!(!is_wall_block(BT_GROUND));
     assert!(!is_wall_block(BT_PIPE));
     assert!(!is_wall_block(BT_WIRE));
 }
@@ -51,7 +51,7 @@ fn wire_block_classification() {
     assert!(is_wire_block(BT_BREAKER));
     assert!(is_wire_block(BT_WIRE_BRIDGE));
     assert!(!is_wire_block(BT_PIPE));
-    assert!(!is_wire_block(BT_DIRT));
+    assert!(!is_wire_block(BT_GROUND));
 }
 
 #[test]
@@ -421,7 +421,7 @@ fn obstacle_field_complete_room_sealed() {
 
 #[test]
 fn thin_wall_north_edge_blocks_northward() {
-    let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+    let mut grid = vec![make_block(BT_GROUND as u8, 0, 0); (GRID_W * GRID_H) as usize];
     // Place a thin wall on tile (5, 5) with north edge, thickness 1
     let (flags, edge_mask) = make_thin_wall_flags(0, 0, 1); // edge=N, thickness=1
     grid[(5 * GRID_W + 5) as usize] =
@@ -437,7 +437,7 @@ fn thin_wall_north_edge_blocks_northward() {
 
 #[test]
 fn thin_wall_corner_blocks_two_edges() {
-    let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+    let mut grid = vec![make_block(BT_GROUND as u8, 0, 0); (GRID_W * GRID_H) as usize];
     // Place NE corner (N+E edges, thickness=2)
     let (flags, edge_mask) = make_thin_wall_corner_flags(0, 0, 2); // edge=N, thickness=2, corner
     grid[(5 * GRID_W + 5) as usize] =
@@ -455,7 +455,7 @@ fn thin_wall_corner_blocks_two_edges() {
 
 #[test]
 fn full_wall_blocks_all_edges() {
-    let mut grid = vec![make_block(BT_DIRT as u8, 0, 0); (GRID_W * GRID_H) as usize];
+    let mut grid = vec![make_block(BT_GROUND as u8, 0, 0); (GRID_W * GRID_H) as usize];
     // Full wall (thickness 4, flags bits 5-6 = 0 = full)
     grid[(5 * GRID_W + 5) as usize] = make_block(BT_STONE as u8, 3, 0);
 

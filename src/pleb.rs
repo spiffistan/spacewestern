@@ -100,6 +100,8 @@ pub enum PlebActivity {
     Farming(f32),                      // progress 0-1, planting or harvesting a crop
     Building(f32),                     // progress 0-1, constructing a blueprint
     Crafting(u16, f32),                // (recipe_id, progress 0-1)
+    Digging,                           // digging terrain at work_target
+    Filling,                           // dumping dirt at berm zone work_target
     Drinking(f32),                     // progress 0-1, drinking at a well
     Staggering(f32),                   // knockback recovery timer (seconds remaining)
     MentalBreak(MentalBreakKind, f32), // (kind, seconds remaining)

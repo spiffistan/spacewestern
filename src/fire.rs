@@ -24,7 +24,7 @@ const WET_IGNITE_DAMPING: f32 = 0.7; // how much wetness reduces ignite chance
 fn burn_time(bt: u32) -> Option<f32> {
     match bt {
         BT_TREE => Some(30.0),
-        BT_DIRT => Some(5.0), // grass burns fast
+        BT_GROUND => Some(5.0), // grass burns fast
         BT_BENCH => Some(15.0),
         BT_WOOD_WALL => Some(25.0),
         BT_WOOD_FLOOR => Some(20.0),
@@ -43,11 +43,11 @@ pub fn burn_replacement_pub(bt: u32) -> u32 {
 }
 fn burn_replacement(bt: u32) -> u32 {
     match bt {
-        BT_WOOD_WALL => BT_AIR,                       // wall collapses
-        BT_BENCH | BT_BED | BT_CRATE => BT_AIR,       // furniture gone
-        BT_TREE | BT_BERRY_BUSH | BT_CROP => BT_DIRT, // charred ground
-        BT_WOOD_FLOOR | BT_ROUGH_FLOOR => BT_DIRT,    // exposed dirt beneath
-        _ => BT_DIRT,
+        BT_WOOD_WALL => BT_AIR,                         // wall collapses
+        BT_BENCH | BT_BED | BT_CRATE => BT_AIR,         // furniture gone
+        BT_TREE | BT_BERRY_BUSH | BT_CROP => BT_GROUND, // charred ground
+        BT_WOOD_FLOOR | BT_ROUGH_FLOOR => BT_GROUND,    // exposed dirt beneath
+        _ => BT_GROUND,
     }
 }
 
@@ -84,7 +84,7 @@ pub fn tick_fire(
 
         // Scorched dirt (flags bit 0) — already burned, remove
         let bf = block_flags_rs(block);
-        if bt == BT_DIRT && (bf & 1) != 0 {
+        if bt == BT_GROUND && (bf & 1) != 0 {
             burn_progress.remove(&idx);
             continue;
         }
@@ -174,7 +174,7 @@ pub fn tick_fire(
 
                 // Scorched dirt (flags bit 0) — grass already burned, skip
                 let nbf = block_flags_rs(nb);
-                if nbt == BT_DIRT && (nbf & 1) != 0 {
+                if nbt == BT_GROUND && (nbf & 1) != 0 {
                     continue;
                 }
 
