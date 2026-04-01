@@ -358,12 +358,11 @@ impl App {
             }
 
             // Click on ground item: select it
-            if let Some(gi) = self
+            if let Some(_gi) = self
                 .ground_items
                 .iter()
                 .position(|item| item.x.floor() as i32 == bx && item.y.floor() as i32 == by)
             {
-                let _gi_ref = &self.ground_items[gi]; // validates index
                 self.world_sel = WorldSelection::single(bx, by, 1, 1, 0);
                 self.context_menu = None;
                 // If a pleb is selected, open context menu for hauling
@@ -806,6 +805,35 @@ impl App {
                                 p.peek_timer = 0.0;
                             }
                         }
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyV) => {
+                    // V: Rally command (leader only)
+                    let indices: Vec<usize> = if !self.selected_group.is_empty() {
+                        self.selected_group.clone()
+                    } else if let Some(idx) = self.selected_pleb {
+                        vec![idx]
+                    } else {
+                        vec![]
+                    };
+                    // Find first available leader
+                    let leader = indices.iter().copied().find(|&i| {
+                        self.plebs
+                            .get(i)
+                            .is_some_and(|p| p.is_leader && !p.is_dead && p.command_cooldown <= 0.0)
+                    });
+                    if let Some(li) = leader {
+                        let (lx, ly) = (self.plebs[li].x, self.plebs[li].y);
+                        self.plebs[li].command_cooldown = morale::COMMAND_COOLDOWN;
+                        self.plebs[li]
+                            .set_bubble(pleb::BubbleKind::Text("Hold the line!".into()), 2.0);
+                        self.pending_command_shouts.push(comms::Shout {
+                            kind: comms::ShoutKind::Rally,
+                            x: lx,
+                            y: ly,
+                            pleb_idx: li,
+                            is_enemy: false,
+                        });
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyF) => {

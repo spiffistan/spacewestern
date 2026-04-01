@@ -65,6 +65,10 @@ pub enum ShoutKind {
     Help,     // "I'm hit!"
     Covering, // "Covering!"
     Clear,    // "All clear"
+    // Leader commands
+    Rally,    // "Hold the line!" — stress relief
+    Advance,  // "Move up!" — allies advance toward leader facing
+    FallBack, // "Pull back!" — allies disengage and retreat
 }
 
 impl ShoutKind {
@@ -75,6 +79,7 @@ impl ShoutKind {
             ShoutKind::Help => 20.0,
             ShoutKind::Covering => 10.0,
             ShoutKind::Clear => 15.0,
+            ShoutKind::Rally | ShoutKind::Advance | ShoutKind::FallBack => 12.0,
         }
     }
 
@@ -85,6 +90,9 @@ impl ShoutKind {
             ShoutKind::Help => "I'm hit!",
             ShoutKind::Covering => "Covering!",
             ShoutKind::Clear => "Clear!",
+            ShoutKind::Rally => "Hold the line!",
+            ShoutKind::Advance => "Move up!",
+            ShoutKind::FallBack => "Pull back!",
         }
     }
 
@@ -95,12 +103,16 @@ impl ShoutKind {
             ShoutKind::Help => 400.0,
             ShoutKind::Covering => 350.0,
             ShoutKind::Clear => 280.0,
+            ShoutKind::Rally => 320.0,
+            ShoutKind::Advance => 340.0,
+            ShoutKind::FallBack => 260.0,
         }
     }
 
     pub fn sound_db(self) -> f32 {
         match self {
             ShoutKind::Help => 70.0,
+            ShoutKind::Rally | ShoutKind::Advance | ShoutKind::FallBack => 75.0, // loud commands
             _ => 60.0,
         }
     }
@@ -247,15 +259,40 @@ pub fn process_shouts(plebs: &mut [Pleb], shouts: &[Shout], grid: &[u32], wall_d
                     if p.drafted && p.aim_target.is_none() {
                         p.angle = (shout.y - p.y).atan2(shout.x - p.x);
                     }
+                    crate::morale::apply_stress(p, 5.0); // mild stress from contact alert
                 }
                 ShoutKind::Help => {
                     // If close and drafted with no target, move toward caller
                     if p.drafted && p.aim_target.is_none() && dist < 10.0 {
                         p.angle = (shout.y - p.y).atan2(shout.x - p.x);
                     }
+                    crate::morale::apply_stress(p, crate::morale::STRESS_ALLY_WOUNDED);
                 }
-                ShoutKind::Retreat | ShoutKind::Covering | ShoutKind::Clear => {
+                ShoutKind::Retreat => {
+                    crate::morale::apply_stress(p, crate::morale::STRESS_ALLY_WOUNDED * 0.5);
+                }
+                ShoutKind::Clear => {
+                    crate::morale::apply_relief(p, crate::morale::RELIEF_CLEAR_SHOUT);
+                }
+                ShoutKind::Covering => {
                     // Information only — no forced behavior change
+                }
+                ShoutKind::Rally => {
+                    crate::morale::apply_relief(p, crate::morale::RALLY_RELIEF);
+                }
+                ShoutKind::Advance => {
+                    // Move toward the leader's facing direction
+                    if p.drafted {
+                        p.angle = (shout.y - p.y).atan2(shout.x - p.x);
+                    }
+                    // Small stress cost: advancing takes courage
+                    crate::morale::apply_stress(p, 5.0);
+                }
+                ShoutKind::FallBack => {
+                    // Disengage: clear combat target, move away from shout origin
+                    p.aim_target = None;
+                    p.aim_progress = 0.0;
+                    crate::morale::apply_relief(p, 10.0);
                 }
             }
         }

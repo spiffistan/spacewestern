@@ -340,7 +340,7 @@ struct GpuPleb {
     hair_r: f32, hair_g: f32, hair_b: f32, aim_progress: f32,
     shirt_r: f32, shirt_g: f32, shirt_b: f32, weapon_type: f32,
     pants_r: f32, pants_g: f32, pants_b: f32, swing_progress: f32,
-    crouch: f32, _pad1: f32, _pad2: f32, _pad3: f32,
+    crouch: f32, stress: f32, _pad2: f32, _pad3: f32,
 };
 
 const MAX_PLEBS: u32 = 16u;
@@ -5114,7 +5114,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let bar_cx = lx;
             let bar_cy = ly + s * 0.10;
             let bar_hw = s * 0.28;  // half-width
-            let bar_hh = 0.045;     // half-height (nearly 2x previous)
+            let bar_hh = 0.045;     // half-height
             let outline = 0.015;
             // Dark outline
             if abs(bar_cy) < bar_hh + outline && abs(bar_cx) < bar_hw + outline {
@@ -5131,6 +5131,40 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                     color = bar_col;
                 } else {
                     color = vec3(0.15, 0.12, 0.10);
+                }
+            }
+        }
+
+        // Stress bar (below health bar, visible when stress > 0.25)
+        if p.health > 0.0 && p.stress > 0.25 {
+            let sbar_cx = lx;
+            let sbar_cy = ly + s * 0.10 + 0.12; // below health bar
+            let sbar_hw = s * 0.22; // slightly narrower than health bar
+            let sbar_hh = 0.025;    // thinner than health bar
+            let sbar_outline = 0.01;
+            // Dark outline
+            if abs(sbar_cy) < sbar_hh + sbar_outline && abs(sbar_cx) < sbar_hw + sbar_outline {
+                color = vec3(0.04, 0.04, 0.04);
+                drew_pleb = true;
+            }
+            // Bar fill: blue (calm) → yellow (stressed) → red (breaking)
+            if abs(sbar_cy) < sbar_hh && abs(sbar_cx) < sbar_hw {
+                let sbar_t = (sbar_cx + sbar_hw) / (sbar_hw * 2.0);
+                if sbar_t < p.stress {
+                    var scol = vec3(0.3, 0.5, 0.8); // blue-ish calm
+                    if p.stress > 0.7 {
+                        scol = mix(vec3(0.85, 0.6, 0.1), vec3(0.9, 0.2, 0.1), (p.stress - 0.7) / 0.3);
+                    } else if p.stress > 0.4 {
+                        scol = mix(vec3(0.3, 0.5, 0.8), vec3(0.85, 0.6, 0.1), (p.stress - 0.4) / 0.3);
+                    }
+                    // Pulse when near breaking (>0.85)
+                    if p.stress > 0.85 {
+                        let pulse = sin(camera.time * 6.0) * 0.3 + 0.7;
+                        scol *= pulse;
+                    }
+                    color = scol;
+                } else {
+                    color = vec3(0.08, 0.08, 0.10);
                 }
             }
         }

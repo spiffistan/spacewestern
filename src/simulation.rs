@@ -6,6 +6,17 @@ use crate::recipe_defs;
 use crate::zones::*;
 use crate::*;
 
+/// Smoothly interpolate between two angles, handling wraparound.
+#[inline]
+fn lerp_angle(from: f32, to: f32, t: f32) -> f32 {
+    let diff = ((to - from) + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    from + diff * t
+}
+
+const TURN_SPEED_WALK: f32 = 10.0; // radians/sec — smooth walking turn
+const TURN_SPEED_COMBAT: f32 = 16.0; // radians/sec — faster snap for aiming
+
 /// Find a cover position near `pos` that puts a low wall between the pleb and the threat.
 fn find_cover_position(
     grid: &[u32],
@@ -128,6 +139,24 @@ fn has_low_wall_cover(grid: &[u32], sx: f32, sy: f32, tx: f32, ty: f32) -> bool 
         let idx = (cy as u32 * GRID_W + cx as u32) as usize;
         let block = grid[idx];
         if block_type_rs(block) == BT_LOW_WALL && block_height_rs(block) > 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if any adjacent tile has a low wall (for morale cover recovery).
+fn has_low_wall_cover_any_direction(grid: &[u32], px: f32, py: f32) -> bool {
+    let bx = px.floor() as i32;
+    let by = py.floor() as i32;
+    for &(dx, dy) in &[(0, -1), (0, 1), (-1, 0), (1, 0)] {
+        let nx = bx + dx;
+        let ny = by + dy;
+        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+            continue;
+        }
+        let idx = (ny as u32 * GRID_W + nx as u32) as usize;
+        if block_type_rs(grid[idx]) == BT_LOW_WALL && block_height_rs(grid[idx]) > 0 {
             return true;
         }
     }
@@ -721,6 +750,23 @@ impl App {
             if pleb.suppression > 0.0 {
                 pleb.suppression = (pleb.suppression - dt * 0.5).max(0.0);
             }
+            // Command cooldown
+            if pleb.command_cooldown > 0.0 {
+                pleb.command_cooldown = (pleb.command_cooldown - dt * self.time_speed).max(0.0);
+            }
+            // Firefight tracking: detect combat end after 5s with no target
+            if pleb.aim_target.is_some() || pleb.aim_pos.is_some() {
+                pleb.combat_participated = true;
+                pleb.no_enemy_timer = 0.0;
+            } else if pleb.combat_participated {
+                pleb.no_enemy_timer += dt * self.time_speed;
+                if pleb.no_enemy_timer > 5.0 {
+                    // Firefight ended — survived
+                    pleb.firefights_survived = pleb.firefights_survived.saturating_add(1);
+                    pleb.combat_participated = false;
+                    pleb.no_enemy_timer = 0.0;
+                }
+            }
             // Smooth crouch transition (~0.25s)
             {
                 let target = if pleb.crouching { 1.0f32 } else { 0.0 };
@@ -731,6 +777,9 @@ impl App {
                     pleb.crouch_progress = (pleb.crouch_progress - dt * speed).max(target);
                 }
             }
+
+            // Combat stress: suppression builds stress, safe conditions recover it
+            morale::tick_suppression_stress(pleb, dt * self.time_speed);
 
             // Tick down bubble timer
             if let Some((_, ref mut timer)) = pleb.bubble {
@@ -798,7 +847,9 @@ impl App {
 
                     let ndx = ddx / dist;
                     let ndy = ddy / dist;
-                    pleb.angle = ndy.atan2(ndx);
+                    let target_angle = ndy.atan2(ndx);
+                    pleb.angle =
+                        lerp_angle(pleb.angle, target_angle, (TURN_SPEED_WALK * dt).min(1.0));
                     // Injury slowdown: sqrt(health) curve — 50% HP → 71% speed, 25% HP → 50% speed
                     let injury_mul = pleb.needs.health.clamp(0.05, 1.0).sqrt();
                     // Bleeding drag: heavy bleeding slows further
@@ -1817,7 +1868,30 @@ impl App {
                     });
                 }
             }
-            comms::process_shouts(&mut self.plebs, &shouts, &self.grid_data, &self.wall_data);
+            // Include command shouts from UI (Rally, Advance, FallBack)
+            let cmd_shouts: Vec<comms::Shout> = self.pending_command_shouts.drain(..).collect();
+            for shout in &cmd_shouts {
+                if self.sound_enabled {
+                    self.sound_sources.push(SoundSource {
+                        x: shout.x,
+                        y: shout.y,
+                        amplitude: types::db_to_amplitude(shout.kind.sound_db()),
+                        frequency: shout.kind.sound_freq(),
+                        phase: 0.0,
+                        pattern: 1,
+                        duration: 0.2,
+                        fresh: true,
+                    });
+                }
+            }
+            let mut all_shouts = shouts;
+            all_shouts.extend(cmd_shouts);
+            comms::process_shouts(
+                &mut self.plebs,
+                &all_shouts,
+                &self.grid_data,
+                &self.wall_data,
+            );
         }
 
         // --- Combat: drafted friendlies + all enemies auto-target and fight ---
@@ -1957,7 +2031,12 @@ impl App {
                         let dx = ax - px;
                         let dy = ay - py;
                         let dist = (dx * dx + dy * dy).sqrt();
-                        self.plebs[pi].angle = dy.atan2(dx);
+                        let target_angle = dy.atan2(dx);
+                        self.plebs[pi].angle = lerp_angle(
+                            self.plebs[pi].angle,
+                            target_angle,
+                            (TURN_SPEED_COMBAT * dt).min(1.0),
+                        );
 
                         // Stop moving to fire
                         self.plebs[pi].path.clear();
@@ -1992,7 +2071,11 @@ impl App {
                             let base_aim = wpn_def.map(|w| w.ranged_aim_speed).unwrap_or(2.0);
                             let skill_aim_mul = (1.0 - shooting_skill * 0.05).max(0.5);
                             let aim_variance = 0.8 + pleb_rng * 0.4;
-                            let aim_speed = base_aim * skill_aim_mul * aim_variance;
+                            let stress_aim =
+                                morale::aim_speed_multiplier(self.plebs[pi].needs.stress);
+                            let rank_aim = self.plebs[pi].rank().aim_modifier();
+                            let aim_speed = base_aim * skill_aim_mul * aim_variance * rank_aim
+                                / stress_aim.max(0.1);
                             let patience = (0.6 + shooting_skill * 0.035 + pleb_rng * 0.1).min(1.0);
 
                             self.plebs[pi].aim_progress =
@@ -2005,8 +2088,11 @@ impl App {
                                 let aim_tightening =
                                     1.8 - aim_quality * 1.4 * (0.3 + skill_factor * 0.7);
                                 let suppress_mul = 1.0 + self.plebs[pi].suppression * 2.0;
+                                let stress_spread =
+                                    morale::spread_multiplier(self.plebs[pi].needs.stress);
                                 let spread =
-                                    (base_spread * aim_tightening * suppress_mul).max(0.02);
+                                    (base_spread * aim_tightening * suppress_mul * stress_spread)
+                                        .max(0.02);
                                 let gun_z = 1.0;
                                 let target_z = 0.5; // aiming at ground level
                                 let target_dist = dist.max(0.5);
@@ -2050,7 +2136,12 @@ impl App {
                 if let Some((target_idx, dist, tx, ty)) = best {
                     let dx = tx - px;
                     let dy = ty - py;
-                    self.plebs[pi].angle = dy.atan2(dx);
+                    let target_angle = dy.atan2(dx);
+                    self.plebs[pi].angle = lerp_angle(
+                        self.plebs[pi].angle,
+                        target_angle,
+                        (TURN_SPEED_COMBAT * dt).min(1.0),
+                    );
 
                     // "!" on first combat engagement only (aim_progress >= 0 = fresh, < 0 = was in combat)
                     if self.plebs[pi].aim_target.is_none() && self.plebs[pi].aim_progress >= 0.0 {
@@ -2269,7 +2360,12 @@ impl App {
                             let enemy_penalty = if is_enemy { 1.4 } else { 1.0 };
                             let skill_aim_mul = (1.0 - shooting_skill * 0.05).max(0.5);
                             let aim_variance = 0.8 + pleb_rng * 0.4;
-                            let aim_speed = base_aim * enemy_penalty * skill_aim_mul * aim_variance;
+                            let stress_aim =
+                                morale::aim_speed_multiplier(self.plebs[pi].needs.stress);
+                            let rank_aim = self.plebs[pi].rank().aim_modifier();
+                            let aim_speed =
+                                base_aim * enemy_penalty * skill_aim_mul * aim_variance * rank_aim
+                                    / stress_aim.max(0.1);
 
                             // Fire threshold: skilled shooters wait longer
                             let patience = (0.6 + shooting_skill * 0.035 + pleb_rng * 0.1).min(1.0);
@@ -2299,10 +2395,13 @@ impl App {
                                 let skill_factor = (shooting_skill / 9.0).clamp(0.0, 1.0);
                                 let aim_tightening =
                                     1.8 - aim_quality * 1.4 * (0.3 + skill_factor * 0.7);
-                                // Suppression penalty: being shot at degrades accuracy
+                                // Suppression + stress penalty
                                 let suppress_mul = 1.0 + self.plebs[pi].suppression * 2.0;
+                                let stress_spread =
+                                    morale::spread_multiplier(self.plebs[pi].needs.stress);
                                 let spread =
-                                    (base_spread * aim_tightening * suppress_mul).max(0.02);
+                                    (base_spread * aim_tightening * suppress_mul * stress_spread)
+                                        .max(0.02);
 
                                 // Gun height: use pleb's Z-height (crouched+peeking=0.7, standing=1.0)
                                 let gun_z = self.plebs[pi].z_height();
@@ -2373,6 +2472,97 @@ impl App {
             fire_actions = pending_fires;
         }
 
+        // --- Morale recovery: tick for all living plebs ---
+        {
+            for pi in 0..self.plebs.len() {
+                if self.plebs[pi].is_dead {
+                    continue;
+                }
+                let px = self.plebs[pi].x;
+                let py = self.plebs[pi].y;
+                // Count nearby allies (same faction, within 8 tiles)
+                let is_enemy = self.plebs[pi].is_enemy;
+                let mut nearby_allies = 0u32;
+                let mut any_panicking = false;
+                let mut near_leader = false;
+                let mut near_hardened = false;
+                for pj in 0..self.plebs.len() {
+                    if pj == pi || self.plebs[pj].is_dead || self.plebs[pj].is_enemy != is_enemy {
+                        continue;
+                    }
+                    let d = (self.plebs[pj].x - px).powi(2) + (self.plebs[pj].y - py).powi(2);
+                    if d < 64.0 {
+                        // 8² tiles
+                        nearby_allies += 1;
+                        if self.plebs[pj].needs.stress >= morale::BREAK_THRESHOLD {
+                            any_panicking = true;
+                        }
+                        if self.plebs[pj].is_leader {
+                            near_leader = true;
+                        }
+                        if self.plebs[pj].rank() == pleb::CombatRank::Hardened {
+                            near_hardened = true;
+                        }
+                    }
+                }
+                // Check if behind cover (any low wall between pleb and nearest enemy)
+                let in_cover = self.plebs[pi].crouching
+                    && has_low_wall_cover_any_direction(&self.grid_data, px, py);
+
+                morale::tick_recovery(
+                    &mut self.plebs[pi],
+                    dt * self.time_speed,
+                    in_cover,
+                    nearby_allies,
+                    near_leader,
+                    near_hardened,
+                );
+
+                // Panic contagion: nearby ally breaking spreads stress
+                if any_panicking {
+                    morale::apply_stress(
+                        &mut self.plebs[pi],
+                        morale::STRESS_ALLY_PANICKING * dt * self.time_speed,
+                    );
+                }
+
+                // Stress-induced breaking: flee when stress > 85
+                if morale::should_break(&self.plebs[pi])
+                    && self.plebs[pi].aim_target.is_some()
+                    && !self.plebs[pi].is_enemy
+                {
+                    self.plebs[pi].aim_target = None;
+                    self.plebs[pi].aim_pos = None;
+                    self.plebs[pi].aim_progress = 0.0;
+                    self.plebs[pi].set_bubble(pleb::BubbleKind::Icon('!', [220, 50, 40]), 2.0);
+                    // Flee away from nearest enemy
+                    let my_enemy = self.plebs[pi].is_enemy;
+                    let flee_dir = self
+                        .plebs
+                        .iter()
+                        .filter(|p| !p.is_dead && p.is_enemy != my_enemy)
+                        .map(|p| {
+                            let fdx = px - p.x;
+                            let fdy = py - p.y;
+                            let fd = (fdx * fdx + fdy * fdy).sqrt().max(0.1);
+                            (fdx / fd, fdy / fd, fd)
+                        })
+                        .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+                        .map(|(fx, fy, _)| (fx, fy))
+                        .unwrap_or((0.0, 1.0));
+                    let flee_x = (px + flee_dir.0 * 8.0).clamp(1.0, GRID_W as f32 - 2.0);
+                    let flee_y = (py + flee_dir.1 * 8.0).clamp(1.0, GRID_H as f32 - 2.0);
+                    let start = (px.floor() as i32, py.floor() as i32);
+                    let goal = (flee_x.floor() as i32, flee_y.floor() as i32);
+                    let path = pleb::astar_path(&self.grid_data, start, goal);
+                    if !path.is_empty() {
+                        self.plebs[pi].path = path;
+                        self.plebs[pi].path_idx = 0;
+                    }
+                }
+            }
+        }
+
         // Apply deferred melee strikes (only hits deal damage)
         for strike in &melee_strikes {
             if !strike.hit {
@@ -2385,7 +2575,8 @@ impl App {
                 }
                 target.needs.health -= strike.damage;
                 target.bleeding = (target.bleeding + strike.bleed).min(1.0);
-                target.stagger_timer = 0.15; // brief flinch on melee hit
+                target.stagger_timer = 0.15;
+                morale::apply_stress(target, morale::STRESS_WOUNDED);
 
                 // Knockback in hit direction
                 let dx = target.x - ax;
@@ -2568,6 +2759,7 @@ impl App {
             );
 
             // Apply bullet hits to entities
+            let mut kill_credits: Vec<usize> = Vec::new(); // shooter indices
             for hit in &bullet_hits {
                 match hit.target {
                     physics::HitTarget::Pleb(pi) => {
@@ -2577,9 +2769,17 @@ impl App {
                                 pleb: pleb.name.clone(),
                                 hp_pct: (pleb.needs.health - dmg).max(0.0) * 100.0,
                             });
+                            let lethal =
+                                pleb.needs.health > 0.01 && pleb.needs.health - dmg <= 0.01;
                             pleb.needs.health -= dmg;
                             pleb.bleeding = (pleb.bleeding + 0.25).min(1.0);
-                            pleb.stagger_timer = 0.25; // bullet hit stagger
+                            pleb.stagger_timer = 0.25;
+                            morale::apply_stress(pleb, morale::STRESS_WOUNDED);
+                            if lethal {
+                                if let Some(si) = hit.shooter {
+                                    kill_credits.push(si);
+                                }
+                            }
                             self.fluid_params.splat_x = hit.x;
                             self.fluid_params.splat_y = hit.y;
                             self.fluid_params.splat_radius = 0.3;
@@ -2741,6 +2941,13 @@ impl App {
                 }
             }
 
+            // Apply kill credits
+            for si in kill_credits {
+                if let Some(shooter) = self.plebs.get_mut(si) {
+                    shooter.kills += 1;
+                }
+            }
+
             // Process explosion events — blast force, knockback, sound, fluid burst
             for expl in &explosion_events {
                 let radius = expl.def.radius;
@@ -2809,6 +3016,14 @@ impl App {
                     if expl.def.damage > 0.0 {
                         let dmg = expl.def.damage / (dist * dist).max(1.0);
                         pleb.needs.health = (pleb.needs.health - dmg).max(0.0);
+                    }
+                    // Explosion stress (within 6 tiles)
+                    if dist < 6.0 {
+                        let stress_falloff = 1.0 - dist / 6.0;
+                        morale::apply_stress(
+                            pleb,
+                            morale::STRESS_EXPLOSION_NEARBY * stress_falloff,
+                        );
                     }
                 }
 
@@ -4273,8 +4488,10 @@ impl App {
         }
 
         // --- Mark dead plebs as corpses ---
+        let mut death_positions: Vec<(f32, f32, bool, bool)> = Vec::new(); // (x, y, is_enemy, is_leader)
         for pleb in &mut self.plebs {
             if pleb.needs.health <= 0.01 && !pleb.is_dead {
+                death_positions.push((pleb.x, pleb.y, pleb.is_enemy, pleb.is_leader));
                 pleb.is_dead = true;
                 pleb.needs.health = 0.0;
                 pleb.activity = PlebActivity::Idle;
@@ -4286,6 +4503,30 @@ impl App {
                 pleb.aim_progress = 0.0;
                 pleb.swing_progress = 0.0;
                 events.push(GameEventKind::PlebDied(pleb.name.clone()));
+            }
+        }
+        // Apply morale effects from deaths to nearby plebs
+        for &(dx, dy, died_enemy, died_leader) in &death_positions {
+            for pleb in &mut self.plebs {
+                if pleb.is_dead {
+                    continue;
+                }
+                let d = (pleb.x - dx).powi(2) + (pleb.y - dy).powi(2);
+                if d > 144.0 {
+                    continue;
+                } // 12 tiles
+                if pleb.is_enemy == died_enemy {
+                    // Same faction died: stress (extra if leader)
+                    let stress = if died_leader {
+                        morale::LEADER_DEATH_STRESS
+                    } else {
+                        morale::STRESS_ALLY_DIED
+                    };
+                    morale::apply_stress(pleb, stress);
+                } else {
+                    // Enemy died: relief + kill credit
+                    morale::apply_relief(pleb, morale::RELIEF_ENEMY_KILLED);
+                }
             }
         }
 

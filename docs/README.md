@@ -40,6 +40,8 @@ Numbered technical decisions. Format: `DN-NNN-short-name.md`.
 | `DN-012-wound-system.md` | Proposed | Anatomical hit locations, bleeding, infection, treatment |
 | `DN-013-communication-flocking.md` | Implemented | Pleb shout communication + boids-like group movement |
 | `DN-014-tall-grass.md` | Proposed | Vegetation as gameplay: concealment, fire fuel, harvesting |
+| `DN-015-leaders-and-ranks.md` | Implementing | Leaders, combat ranks, command shouts, morale aura |
+| `DN-016-terrain-elevation-and-water.md` | Proposed | 1024x1024 elevation, GPU water flow, digging, moats |
 
 ## Ideas (`ideas/`)
 
@@ -67,6 +69,7 @@ Early-stage exploration. Not commitments — creative brainstorming.
 | `water-flow.md` | Water flow, pooling, rain, rivers |
 | `subgrid-features.md` | Sub-grid feature ideas |
 | `group-ai-roadmap.md` | Squad roles, morale contagion, surrender, overwatch, radio/horn |
+| `compound-defenses.md` | Palisades, earthworks, platforms, moats, self-sustaining compound design |
 
 ## Naming Convention
 

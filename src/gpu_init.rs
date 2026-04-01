@@ -1912,6 +1912,9 @@ impl App {
         let elevation_data = generate_elevation(&self.grid_data);
         self.elevation_data = elevation_data.clone();
 
+        // Sub-tile elevation: 1024x1024 heightmap for smooth terrain and digging
+        self.sub_elevation = crate::terrain::generate_elevation(&self.elevation_data);
+
         // Adjust water table for elevation (hilltops drier, valleys wetter)
         adjust_water_table_for_elevation(&mut self.water_table, &self.elevation_data);
         queue.write_buffer(

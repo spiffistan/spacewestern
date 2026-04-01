@@ -224,7 +224,6 @@ pub fn projectile_def(id: ProjectileId) -> &'static ProjectileDef {
 /// A physics body in the world (continuous position, not grid-aligned).
 #[derive(Clone, Debug)]
 pub struct PhysicsBody {
-    #[allow(dead_code)]
     pub x: f32,
     pub y: f32,
     pub z: f32, // height above ground (0 = on ground)
@@ -286,6 +285,7 @@ pub struct BulletHit {
     pub x: f32,
     pub y: f32,
     pub kinetic_energy: f32,
+    pub shooter: Option<usize>, // pleb index who fired (for kill credit)
 }
 
 impl PhysicsBody {
@@ -546,51 +546,6 @@ pub fn body_can_move_z(grid: &[u32], x: f32, y: f32, size: f32, z: f32) -> bool 
     true
 }
 
-/// Check if a position adjacent to `(wx,wy)` is blocked by a wall edge in the direction
-/// of motion, considering low walls are passable.
-fn wall_edge_blocks_body(
-    grid: &[u32],
-    wall_data: &[u16],
-    old_x: f32,
-    old_y: f32,
-    new_x: f32,
-    new_y: f32,
-) -> bool {
-    let ox = old_x.floor() as i32;
-    let oy = old_y.floor() as i32;
-    let nx = new_x.floor() as i32;
-    let ny = new_y.floor() as i32;
-    if ox == nx && oy == ny {
-        return false; // same tile
-    }
-    edge_blocked_wd(grid, wall_data, ox, oy, nx, ny)
-}
-
-/// Check if a pleb at (px, py) would collide with any ground-level physics body.
-/// Returns adjusted position (pushed away from bodies).
-#[allow(dead_code)]
-pub fn pleb_body_collision(bodies: &[PhysicsBody], px: f32, py: f32) -> (f32, f32) {
-    let pleb_r = 0.25;
-    let mut ax = px;
-    let mut ay = py;
-    for body in bodies {
-        if !body.on_ground() {
-            continue;
-        } // only collide with grounded boxes
-        let ddx = ax - body.x;
-        let ddy = ay - body.y;
-        let dist = (ddx * ddx + ddy * ddy).sqrt();
-        let min_dist = pleb_r + body.size;
-        if dist < min_dist && dist > 0.001 {
-            // Push pleb out
-            let overlap = min_dist - dist;
-            ax += (ddx / dist) * overlap;
-            ay += (ddy / dist) * overlap;
-        }
-    }
-    (ax, ay)
-}
-
 /// Find the nearest ground-level body within range of position.
 pub fn nearest_body(bodies: &[PhysicsBody], x: f32, y: f32, range: f32) -> Option<usize> {
     let mut best = None;
@@ -618,7 +573,7 @@ struct BulletTraceHit {
     hit_x_face: bool, // true if hit a vertical face (reflect vx), false = horizontal face (reflect vy)
 }
 
-pub fn dda_bullet_trace(
+fn dda_bullet_trace(
     grid: &[u32],
     wall_data: &[u16],
     x0: f32,
@@ -1239,14 +1194,14 @@ pub fn tick_bodies(
             let cx = bx0 + t * seg_dx;
             let cy = by0 + t * seg_dy;
             let dist = ((cx - px) * (cx - px) + (cy - py) * (cy - py)).sqrt();
-            // Z-height check: bullet must be at or below pleb's height
-            let bullet_z_at_t = body.z; // approximate (current frame z)
-            if dist < pleb_hit_radius && bullet_z_at_t <= pz_height {
+            // Z-height check: bullet's current Z must be at or below pleb's height
+            if dist < pleb_hit_radius && body.z <= pz_height {
                 bullet_hits.push(BulletHit {
                     target: HitTarget::Pleb(pi),
                     x: cx,
                     y: cy,
                     kinetic_energy: ke,
+                    shooter: body.shooter_pleb,
                 });
                 bullets_hit.insert(bi);
                 break;
@@ -1273,6 +1228,7 @@ pub fn tick_bodies(
                     x: cx,
                     y: cy,
                     kinetic_energy: ke,
+                    shooter: body.shooter_pleb,
                 });
                 bullets_hit.insert(bi);
                 break;

@@ -9,6 +9,7 @@ impl App {
         let seed = self.terrain_params.seed;
         self.grid_data = grid::generate_world(seed);
         self.elevation_data = grid::generate_elevation_seeded(&self.grid_data, seed);
+        self.sub_elevation = crate::terrain::generate_elevation(&self.elevation_data);
         self.water_table = grid::generate_water_table_seeded(&self.grid_data, seed);
         grid::adjust_water_table_for_elevation(&mut self.water_table, &self.elevation_data);
         self.terrain_data = grid::generate_terrain_with_params(
@@ -3687,8 +3688,6 @@ impl App {
                         });
                     });
                 });
-
-            // (Draft/melee buttons moved to bottom action bar)
         }
 
         // Schedule window (all plebs)
@@ -5049,7 +5048,7 @@ impl App {
                 egui::Order::Background,
                 egui::Id::new("grid_lines"),
             ));
-            let _screen_rect = ctx.screen_rect();
+            let _screen_rect = ctx.content_rect();
             // Dark lines during day (contrast against bright ground), light at night
             let sun = self.camera.sun_intensity;
             let brightness = (200.0 * (1.0 - sun * 0.9)) as u8;
@@ -8144,8 +8143,6 @@ impl App {
                     }
                 }
 
-                // (Fire mode moved to action bar)
-
                 // Grenade charge bar above selected pleb
                 if self.grenade_charging
                     && let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i))
@@ -8674,7 +8671,7 @@ impl App {
             .sum();
 
         // Build the info lines
-        let screen = ctx.input(|i| i.screen_rect());
+        let screen = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground,
             egui::Id::new("hover_info"),
@@ -8959,6 +8956,12 @@ impl App {
                 .unwrap_or(0)
         };
 
+        let any_leader = friendly.iter().any(|&i| self.plebs[i].is_leader);
+        let leader_can_command = any_leader
+            && friendly
+                .iter()
+                .any(|&i| self.plebs[i].is_leader && self.plebs[i].command_cooldown <= 0.0);
+
         // Weapon info for single pleb
         let weapon_info: Option<(String, u8, u8)> = if count == 1 && any_drafted {
             let p = &self.plebs[friendly[0]];
@@ -9071,6 +9074,9 @@ impl App {
         }
         if count > 1 {
             n_tiles += 1; // spacing
+        }
+        if any_leader && any_drafted {
+            n_tiles += 1; // command
         }
         n_tiles += 1; // info
 
@@ -9569,6 +9575,87 @@ impl App {
                                 }
                             }
 
+                            // --- Command [V] (leader only) ---
+                            if any_leader && any_drafted {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if leader_can_command {
+                                    egui::Color32::from_rgb(60, 55, 40)
+                                } else {
+                                    egui::Color32::from_rgb(35, 35, 38)
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    "\u{1f4e3}", // megaphone
+                                    icon_font.clone(),
+                                    if leader_can_command {
+                                        egui::Color32::WHITE
+                                    } else {
+                                        egui::Color32::from_rgb(100, 100, 100)
+                                    },
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    "Rally",
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "V");
+                                if response.clicked() && leader_can_command {
+                                    // Issue Rally shout from the first leader
+                                    for &i in &friendly {
+                                        if self.plebs[i].is_leader
+                                            && self.plebs[i].command_cooldown <= 0.0
+                                        {
+                                            self.plebs[i].command_cooldown =
+                                                morale::COMMAND_COOLDOWN;
+                                            self.plebs[i].set_bubble(
+                                                pleb::BubbleKind::Text("Hold the line!".into()),
+                                                2.0,
+                                            );
+                                            // Emit rally shout for processing
+                                            self.pending_command_shouts.push(comms::Shout {
+                                                kind: comms::ShoutKind::Rally,
+                                                x: self.plebs[i].x,
+                                                y: self.plebs[i].y,
+                                                pleb_idx: i,
+                                                is_enemy: false,
+                                            });
+                                            break;
+                                        }
+                                    }
+                                }
+                                if response.secondary_clicked() && leader_can_command {
+                                    // Right-click: cycle command (Advance)
+                                    for &i in &friendly {
+                                        if self.plebs[i].is_leader
+                                            && self.plebs[i].command_cooldown <= 0.0
+                                        {
+                                            self.plebs[i].command_cooldown =
+                                                morale::COMMAND_COOLDOWN;
+                                            self.plebs[i].set_bubble(
+                                                pleb::BubbleKind::Text("Move up!".into()),
+                                                2.0,
+                                            );
+                                            self.pending_command_shouts.push(comms::Shout {
+                                                kind: comms::ShoutKind::Advance,
+                                                x: self.plebs[i].x,
+                                                y: self.plebs[i].y,
+                                                pleb_idx: i,
+                                                is_enemy: false,
+                                            });
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
                             // --- Info [I] ---
                             {
                                 let (rect, response) = ui.allocate_exact_size(
@@ -9734,7 +9821,7 @@ impl App {
                 egui::Color32::from_gray(210)
             };
             let font = egui::FontId::proportional(13.0);
-            let screen = ctx.input(|i| i.screen_rect());
+            let screen = ctx.content_rect();
             let pos = egui::pos2(screen.max.x - 10.0, screen.max.y - 320.0);
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
@@ -9855,9 +9942,9 @@ impl App {
             .anchor(egui::Align2::CENTER_TOP, [0.0, 32.0])
             .interactable(true)
             .show(ctx, |ui| {
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 25, 200))
-                    .rounding(6.0)
+                    .corner_radius(6.0)
                     .inner_margin(8.0)
                     .show(ui, |ui| {
                         let mut hovered_idx = None;

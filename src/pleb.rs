@@ -5,6 +5,46 @@ use crate::materials::{NUM_MATERIALS, build_material_table};
 use crate::needs::PlebNeeds;
 use std::sync::OnceLock;
 
+/// Combat rank — derived from firefight experience and kills.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CombatRank {
+    Green,    // 0-2 firefights: nervous, inaccurate
+    Trained,  // 3-7 firefights: baseline
+    Veteran,  // 8+ firefights, 2+ kills: steady, accurate
+    Hardened, // 15+ firefights: unshakeable, passive rally aura
+}
+
+impl CombatRank {
+    /// Stress gain multiplier (lower = more resilient).
+    pub fn stress_modifier(self) -> f32 {
+        match self {
+            CombatRank::Green => 1.2,
+            CombatRank::Trained => 1.0,
+            CombatRank::Veteran => 0.85,
+            CombatRank::Hardened => 0.7,
+        }
+    }
+
+    /// Aim speed multiplier (higher = faster aiming).
+    pub fn aim_modifier(self) -> f32 {
+        match self {
+            CombatRank::Green => 0.9,
+            CombatRank::Trained => 1.0,
+            CombatRank::Veteran => 1.1,
+            CombatRank::Hardened => 1.15,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CombatRank::Green => "Green",
+            CombatRank::Trained => "Trained",
+            CombatRank::Veteran => "Veteran",
+            CombatRank::Hardened => "Hardened",
+        }
+    }
+}
+
 /// Cached walkable lookup table indexed by block type. True = walkable at height 0.
 static WALKABLE_TABLE: OnceLock<[bool; NUM_MATERIALS]> = OnceLock::new();
 
@@ -233,7 +273,7 @@ pub struct GpuPleb {
     pub pants_b: f32,
     pub swing_progress: f32, // 0.0=idle, 0.01-0.99=windup, 1.0=strike
     pub crouch: f32,         // 0.0=standing, 0.5=peeking, 1.0=crouching
-    pub _pad1: f32,
+    pub stress: f32,         // 0.0-1.0 normalized stress (0=calm, 1=breaking)
     pub _pad2: f32,
     pub _pad3: f32,
 }
@@ -289,6 +329,12 @@ pub struct Pleb {
     pub group_id: Option<u8>, // explicit group membership (None = ungrouped)
     pub work_priorities: [u8; 4], // [haul, farm, build, craft] — 0=off, 1-3=priority
     pub command_queue: Vec<PlebCommand>, // shift-click queued commands
+    pub is_leader: bool, // can issue rally/command shouts
+    pub firefights_survived: u16, // combat experience counter
+    pub kills: u16,      // confirmed enemy kills
+    pub combat_participated: bool, // had aim_target during current engagement
+    pub no_enemy_timer: f32, // seconds since last enemy in range (for firefight end detection)
+    pub command_cooldown: f32, // seconds until next command shout allowed
 }
 
 /// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
@@ -423,6 +469,12 @@ impl Pleb {
             group_id: None,
             work_priorities: crate::zones::default_work_priorities(),
             command_queue: Vec::new(),
+            is_leader: false,
+            firefights_survived: 0,
+            kills: 0,
+            combat_participated: false,
+            no_enemy_timer: 0.0,
+            command_cooldown: 0.0,
         }
     }
 
@@ -466,7 +518,7 @@ impl Pleb {
             } else {
                 self.crouch_progress
             },
-            _pad1: 0.0,
+            stress: (self.needs.stress / 100.0).clamp(0.0, 1.0),
             _pad2: 0.0,
             _pad3: 0.0,
         }
@@ -506,7 +558,19 @@ impl Pleb {
         self.aim_progress = 0.0;
     }
 
-    /// Clear all work/harvest/haul targets (common pattern after re-tasking).
+    /// Combat rank derived from experience.
+    pub fn rank(&self) -> CombatRank {
+        if self.firefights_survived >= 15 {
+            CombatRank::Hardened
+        } else if self.firefights_survived >= 8 && self.kills >= 2 {
+            CombatRank::Veteran
+        } else if self.firefights_survived >= 3 {
+            CombatRank::Trained
+        } else {
+            CombatRank::Green
+        }
+    }
+
     /// Current Z-height for bullet collision. Smooth: 1.0 standing, 0.7 peeking, 0.4 crouched.
     pub fn z_height(&self) -> f32 {
         let base = 1.0 - self.crouch_progress * 0.6; // 1.0 → 0.4
@@ -517,6 +581,7 @@ impl Pleb {
         }
     }
 
+    /// Clear all work/harvest/haul targets (common pattern after re-tasking).
     pub fn clear_targets(&mut self) {
         self.work_target = None;
         self.haul_target = None;

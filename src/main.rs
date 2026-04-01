@@ -33,6 +33,7 @@ use pleb::{
     adjacent_walkable, astar_path_terrain_wd, is_walkable_pos, is_walkable_pos_wd, random_name,
 };
 
+mod morale;
 mod needs;
 use needs::{
     AirReadback, BERRY_HUNGER_RESTORE, BreathingState, HEAT_CRISIS_TEMP, WELL_DRINK_TIME,
@@ -65,6 +66,7 @@ use physics::{PROJ_BULLET, PhysicsBody, nearest_body, projectile_def, tick_bodie
 mod zones;
 use zones::{Zone, ZoneKind};
 
+mod terrain;
 mod weather;
 use weather::{WeatherState, tick_weather, tick_wetness};
 
@@ -134,7 +136,7 @@ struct App {
     // Right-click drag to move light sources
     dragging_light: Option<(u32, u32)>, // grid position of light being dragged
     #[allow(dead_code)]
-    start_time: Instant,
+    start_time: Instant, // kept for potential profiling use
     // Time control
     time_of_day: f32,         // current time in seconds (0..DAY_DURATION)
     time_paused: bool,        // pause auto-advance
@@ -273,6 +275,7 @@ struct App {
     burst_delay: f32,  // seconds until next burst shot
     attack_mode: bool, // click-to-attack targeting mode
     flock_spacing: crate::comms::FlockSpacing, // group spacing preset
+    pending_command_shouts: Vec<comms::Shout>, // command shouts queued from UI
     // Weather system
     weather: WeatherState,
     weather_timer: f32,
@@ -295,7 +298,9 @@ struct App {
     water_phase: usize,
     water_frame: u32,
     water_table: Vec<f32>, // static water table height map (CPU copy for info overlay)
-    elevation_data: Vec<f32>, // terrain elevation (0.0–6.0 tiles of height)
+    elevation_data: Vec<f32>, // terrain elevation at grid res (256x256)
+    sub_elevation: Vec<f32>, // sub-tile elevation heightmap (1024x1024)
+    sub_elevation_dirty: bool, // true when sub_elevation needs re-upload
     terrain_data: Vec<u32>, // per-tile terrain type, vegetation, richness etc.
     terrain_dirty: bool,   // true when terrain_data needs re-upload to GPU
     terrain_params: grid::TerrainParams,
@@ -643,6 +648,7 @@ impl App {
                 let cy = (GRID_H / 2) as f32 + 0.5;
                 let mut jeff = Pleb::new(0, "Jeff".to_string(), cx, cy, 42);
                 jeff.headlight_mode = 2; // normal beam
+                jeff.is_leader = true;
                 vec![jeff]
             },
             selected_pleb: Some(0),
@@ -700,6 +706,7 @@ impl App {
             burst_delay: 0.0,
             attack_mode: false,
             flock_spacing: crate::comms::FlockSpacing::Normal,
+            pending_command_shouts: Vec::new(),
             weather: WeatherState::Clear,
             weather_timer: 45.0,
             lightning_timer: 10.0,
@@ -718,8 +725,10 @@ impl App {
             water_phase: 0,
             water_frame: 0,
             water_table: Vec::new(),
-            elevation_data: Vec::new(), // populated after grid gen in init_gfx_async
-            terrain_data: Vec::new(),   // populated after grid gen in init_gfx_async
+            elevation_data: Vec::new(),
+            sub_elevation: Vec::new(),
+            sub_elevation_dirty: false,
+            terrain_data: Vec::new(),
             terrain_dirty: false,
             terrain_params: grid::TerrainParams::default(),
             game_state: GameState::MainMenu,
