@@ -699,7 +699,8 @@ impl App {
             .filter(|p| p.is_enemy && !p.is_dead)
             .map(|p| (p.x, p.y))
             .collect();
-        let flock_adjustments = comms::compute_flocking(&self.plebs, &flock_enemy_pos);
+        let flock_adjustments =
+            comms::compute_flocking(&self.plebs, &flock_enemy_pos, self.flock_spacing);
 
         // --- Update all plebs ---
         let move_speed = 20.0f32;
@@ -719,6 +720,16 @@ impl App {
             }
             if pleb.suppression > 0.0 {
                 pleb.suppression = (pleb.suppression - dt * 0.5).max(0.0);
+            }
+            // Smooth crouch transition (~0.25s)
+            {
+                let target = if pleb.crouching { 1.0f32 } else { 0.0 };
+                let speed = 4.0 * self.time_speed; // 1/0.25s
+                if pleb.crouch_progress < target {
+                    pleb.crouch_progress = (pleb.crouch_progress + dt * speed).min(target);
+                } else if pleb.crouch_progress > target {
+                    pleb.crouch_progress = (pleb.crouch_progress - dt * speed).max(target);
+                }
             }
 
             // Tick down bubble timer
@@ -794,11 +805,14 @@ impl App {
                     let bleed_mul = 1.0 - pleb.bleeding * 0.3; // bleeding 1.0 → 70% speed
                     // Stagger: frozen briefly after being hit
                     let stagger_mul = if pleb.stagger_timer > 0.0 { 0.0 } else { 1.0 };
+                    // Crouch: 40% speed when crouch-walking
+                    let crouch_mul = if pleb.crouching { 0.4 } else { 1.0 };
                     let effective_speed = move_speed
                         * speed_mul
                         * injury_mul
                         * bleed_mul
                         * stagger_mul
+                        * crouch_mul
                         * self.time_speed;
                     // Apply flocking adjustment (separation/cohesion forces)
                     let flock = flock_adjustments.iter().find(|a| a.pleb_idx == i);
@@ -855,6 +869,20 @@ impl App {
                             if terrain_compaction(self.terrain_data[tidx]) != before {
                                 self.terrain_dirty = true;
                             }
+                        }
+                    }
+                }
+            } else {
+                // Idle pleb: still apply separation force to prevent stacking
+                if let Some(flock) = flock_adjustments.iter().find(|a| a.pleb_idx == i) {
+                    let fdx = flock.dx * dt;
+                    let fdy = flock.dy * dt;
+                    if fdx.abs() > 0.0001 || fdy.abs() > 0.0001 {
+                        let nx = pleb.x + fdx;
+                        let ny = pleb.y + fdy;
+                        if is_walkable_pos_wd(&self.grid_data, &self.wall_data, nx, ny) {
+                            pleb.x = nx;
+                            pleb.y = ny;
                         }
                     }
                 }
@@ -1752,7 +1780,7 @@ impl App {
                 self.camera.pleb_angle = pleb.angle;
                 self.camera.pleb_selected = 1.0;
                 self.camera.pleb_torch = if pleb.torch_on { 1.0 } else { 0.0 };
-                self.camera.pleb_headlight = if pleb.headlight_on { 1.0 } else { 0.0 };
+                self.camera.pleb_headlight = pleb.headlight_mode as f32;
             }
         } else if let Some(pleb) = self.plebs.first() {
             // Show first pleb even if not selected (for lighting)
@@ -1761,7 +1789,7 @@ impl App {
             self.camera.pleb_angle = pleb.angle;
             self.camera.pleb_selected = 0.0;
             self.camera.pleb_torch = if pleb.torch_on { 1.0 } else { 0.0 };
-            self.camera.pleb_headlight = if pleb.headlight_on { 1.0 } else { 0.0 };
+            self.camera.pleb_headlight = pleb.headlight_mode as f32;
         } else {
             self.camera.pleb_x = 0.0;
             self.camera.pleb_y = 0.0;
@@ -1922,6 +1950,102 @@ impl App {
                     } else {
                         (0.0, 0.0, 0.0, 0.0, 0.0, 0u8)
                     };
+
+                // Manual aim_pos overrides automatic target selection (for ranged only)
+                if let Some((ax, ay)) = self.plebs[pi].aim_pos {
+                    if !use_melee {
+                        let dx = ax - px;
+                        let dy = ay - py;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        self.plebs[pi].angle = dy.atan2(dx);
+
+                        // Stop moving to fire
+                        self.plebs[pi].path.clear();
+                        self.plebs[pi].path_idx = 0;
+
+                        let mag_size = wpn_def.map(|w| w.magazine_size).unwrap_or(6);
+                        let reload_base = wpn_def.map(|w| w.reload_time).unwrap_or(2.5);
+
+                        if self.plebs[pi].reload_timer > 0.0 {
+                            self.plebs[pi].reload_timer -= dt * self.time_speed;
+                            self.plebs[pi].aim_progress = 0.0;
+                            if self.plebs[pi].reload_timer <= 0.0 {
+                                self.plebs[pi].reload_timer = 0.0;
+                                self.plebs[pi].ammo_loaded = mag_size;
+                            }
+                        } else if self.plebs[pi].ammo_loaded == 0 && mag_size > 0 {
+                            let rld_seed =
+                                (px * 97.3 + py * 211.7 + self.time_of_day * 5003.0) as u32;
+                            let rld_rng =
+                                (rld_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                            let rld_time = reload_base * (0.75 + rld_rng * 0.5);
+                            self.plebs[pi].reload_timer = rld_time;
+                            self.plebs[pi].aim_progress = 0.0;
+                            self.plebs[pi].set_bubble(
+                                pleb::BubbleKind::Text("Reloading...".into()),
+                                rld_time,
+                            );
+                        } else {
+                            let shooting_skill = self.plebs[pi].skills[0] as f32;
+                            let pleb_hash = (self.plebs[pi].id as u32).wrapping_mul(2654435761);
+                            let pleb_rng = (pleb_hash & 0xFFFF) as f32 / 65535.0;
+                            let base_aim = wpn_def.map(|w| w.ranged_aim_speed).unwrap_or(2.0);
+                            let skill_aim_mul = (1.0 - shooting_skill * 0.05).max(0.5);
+                            let aim_variance = 0.8 + pleb_rng * 0.4;
+                            let aim_speed = base_aim * skill_aim_mul * aim_variance;
+                            let patience = (0.6 + shooting_skill * 0.035 + pleb_rng * 0.1).min(1.0);
+
+                            self.plebs[pi].aim_progress =
+                                (self.plebs[pi].aim_progress + dt / aim_speed).min(1.0);
+
+                            if self.plebs[pi].aim_progress >= patience {
+                                let aim_quality = self.plebs[pi].aim_progress;
+                                let base_spread = wpn_def.map(|w| w.ranged_spread).unwrap_or(0.20);
+                                let skill_factor = (shooting_skill / 9.0).clamp(0.0, 1.0);
+                                let aim_tightening =
+                                    1.8 - aim_quality * 1.4 * (0.3 + skill_factor * 0.7);
+                                let suppress_mul = 1.0 + self.plebs[pi].suppression * 2.0;
+                                let spread =
+                                    (base_spread * aim_tightening * suppress_mul).max(0.02);
+                                let gun_z = 1.0;
+                                let target_z = 0.5; // aiming at ground level
+                                let target_dist = dist.max(0.5);
+                                let ndx = dx / dist.max(0.01);
+                                let ndy = dy / dist.max(0.01);
+                                let name = self.plebs[pi].name.clone();
+                                pending_fires.push((
+                                    px,
+                                    py,
+                                    ndx,
+                                    ndy,
+                                    name,
+                                    spread,
+                                    gun_z,
+                                    target_z,
+                                    target_dist,
+                                    pi,
+                                ));
+                                self.plebs[pi].ammo_loaded =
+                                    self.plebs[pi].ammo_loaded.saturating_sub(1);
+                                let shot_seed = (px * 137.3
+                                    + py * 311.7
+                                    + self.time_of_day * 7919.0
+                                    + self.plebs[pi].ammo_loaded as f32 * 41.0)
+                                    as u32;
+                                let shot_rng =
+                                    (shot_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                                let cooldown = 0.2 + shot_rng * 0.6;
+                                self.plebs[pi].aim_progress = -cooldown;
+                                // Clear aim_pos after firing (single shot at position)
+                                self.plebs[pi].aim_pos = None;
+                            }
+                        }
+                        continue; // skip normal target logic
+                    } else {
+                        // Can't melee a position — clear it
+                        self.plebs[pi].aim_pos = None;
+                    }
+                }
 
                 if let Some((target_idx, dist, tx, ty)) = best {
                     let dx = tx - px;
@@ -2092,6 +2216,21 @@ impl App {
                             self.plebs[pi].path_idx = 0;
                         }
 
+                        // Auto-crouch: behind low wall facing enemy → crouch
+                        let behind_low_wall = has_low_wall_cover(&self.grid_data, px, py, tx, ty);
+                        if behind_low_wall && !self.plebs[pi].crouching {
+                            self.plebs[pi].crouching = true;
+                        }
+                        // Suppression-forced crouch (>0.6)
+                        if self.plebs[pi].suppression > 0.6 && !self.plebs[pi].crouching {
+                            self.plebs[pi].crouching = true;
+                        }
+
+                        // Peek-fire cycle: crouched plebs must peek to aim
+                        if self.plebs[pi].crouching {
+                            self.plebs[pi].peek_timer -= dt * self.time_speed;
+                        }
+
                         // --- Reload check ---
                         let mag_size = wpn_def.map(|w| w.magazine_size).unwrap_or(6);
                         let reload_base = wpn_def.map(|w| w.reload_time).unwrap_or(2.5);
@@ -2135,9 +2274,19 @@ impl App {
                             // Fire threshold: skilled shooters wait longer
                             let patience = (0.6 + shooting_skill * 0.035 + pleb_rng * 0.1).min(1.0);
 
+                            // Peek-fire: crouched plebs must peek up before aim advances
+                            let is_crouched = self.plebs[pi].crouching;
+                            if is_crouched && self.plebs[pi].peek_timer <= 0.0 {
+                                // Not peeking yet — start peek
+                                self.plebs[pi].peek_timer = 0.6; // peek window duration
+                            }
+                            let can_aim = !is_crouched || self.plebs[pi].peek_timer > 0.0;
+
                             if self.plebs[pi].aim_target == Some(target_idx) {
-                                self.plebs[pi].aim_progress =
-                                    (self.plebs[pi].aim_progress + dt / aim_speed).min(1.0);
+                                if can_aim {
+                                    self.plebs[pi].aim_progress =
+                                        (self.plebs[pi].aim_progress + dt / aim_speed).min(1.0);
+                                }
                             } else {
                                 self.plebs[pi].aim_target = Some(target_idx);
                                 self.plebs[pi].aim_progress = 0.0;
@@ -2155,28 +2304,15 @@ impl App {
                                 let spread =
                                     (base_spread * aim_tightening * suppress_mul).max(0.02);
 
-                                // Gun height: behind cover = peeking over (0.7), open = chest (1.0)
-                                let shooter_covered = is_behind_cover(
-                                    &self.grid_data,
-                                    &self.wall_data,
-                                    px,
-                                    py,
-                                    tx,
-                                    ty,
-                                );
-                                let gun_z = if shooter_covered { 0.7 } else { 1.0 };
+                                // Gun height: use pleb's Z-height (crouched+peeking=0.7, standing=1.0)
+                                let gun_z = self.plebs[pi].z_height();
 
-                                // Target height: behind cover = only head exposed (0.75),
-                                // open = full chest (1.0)
-                                let target_covered = is_behind_cover(
-                                    &self.grid_data,
-                                    &self.wall_data,
-                                    tx,
-                                    ty,
-                                    px,
-                                    py, // reversed: target's cover relative to shooter
-                                );
-                                let target_z = if target_covered { 0.75 } else { 1.0 };
+                                // Target height: use target pleb's Z-height
+                                let target_z = self
+                                    .plebs
+                                    .get(target_idx)
+                                    .map(|t| t.z_height())
+                                    .unwrap_or(1.0);
                                 let target_dist = dist;
 
                                 let name = self.plebs[pi].name.clone();
@@ -2207,6 +2343,11 @@ impl App {
                                     (shot_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
                                 let cooldown = 0.2 + shot_rng * 0.6; // 0.2–0.8s
                                 self.plebs[pi].aim_progress = -cooldown;
+
+                                // Duck back after firing when crouched
+                                if self.plebs[pi].crouching {
+                                    self.plebs[pi].peek_timer = -0.8; // stay ducked 0.8s before next peek
+                                }
                             }
                         }
                     }
@@ -2222,6 +2363,9 @@ impl App {
                             self.plebs[pi].aim_target = None;
                             self.plebs[pi].aim_progress = 0.0;
                             self.plebs[pi].swing_progress = 0.0;
+                            // Stand up when combat ends (unless manually crouched)
+                            self.plebs[pi].crouching = false;
+                            self.plebs[pi].peek_timer = 0.0;
                         }
                     }
                 }
@@ -2376,12 +2520,12 @@ impl App {
         {
             let sel_pleb = self.selected_pleb.and_then(|i| self.plebs.get(i));
             let pleb_data = sel_pleb.map(|p| (p.x, p.y, 0.0f32, 0.0f32, p.angle));
-            // Collect pleb positions for bullet collision
-            let pleb_positions: Vec<(f32, f32, usize)> = self
+            // Collect pleb positions for bullet collision (with Z-height for crouch)
+            let pleb_positions: Vec<(f32, f32, usize, f32)> = self
                 .plebs
                 .iter()
                 .enumerate()
-                .map(|(i, p)| (p.x, p.y, i))
+                .map(|(i, p)| (p.x, p.y, i, p.z_height()))
                 .collect();
             // Extract sound source data for physics body force coupling
             let sound_data: Vec<(f32, f32, f32)> = self
@@ -4254,7 +4398,7 @@ impl App {
             .plebs
             .iter()
             .filter(|p| !p.is_dead && !p.is_enemy)
-            .map(|p| (p.x, p.y, p.torch_on || p.headlight_on))
+            .map(|p| (p.x, p.y, p.torch_on || p.headlight_mode > 0))
             .collect();
 
         for ci in 0..self.creatures.len() {

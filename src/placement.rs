@@ -1351,27 +1351,43 @@ impl App {
             // If the only action is "Move here", execute it directly
             if menu.actions.len() == 1 {
                 if let Some((_, ContextAction::MoveTo(mx, my), true)) = menu.actions.first() {
-                    if let Some(sel_idx) = sel_pleb {
-                        let (mx, my) = (*mx, *my);
-                        let pleb = &mut self.plebs[sel_idx];
-                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let goal = (mx.floor() as i32, my.floor() as i32);
-                        let path = astar_path_terrain_wd(
-                            &self.grid_data,
-                            &self.wall_data,
-                            &self.terrain_data,
-                            start,
-                            goal,
-                        );
-                        if !path.is_empty() {
-                            pleb.path = path;
-                            pleb.path_idx = 1;
-                            pleb.activity = PlebActivity::Walking;
-                            pleb.work_target = None;
-                            pleb.haul_target = None;
-                            pleb.harvest_target = None;
+                    let (mx, my) = (*mx, *my);
+                    // Collect move indices: group or single pleb
+                    let move_indices: Vec<usize> = if !self.selected_group.is_empty() {
+                        self.selected_group.clone()
+                    } else if let Some(idx) = sel_pleb {
+                        vec![idx]
+                    } else {
+                        vec![]
+                    };
+                    let offsets = crate::comms::spread_offsets(
+                        move_indices.len(),
+                        self.flock_spacing.min_spacing(),
+                    );
+                    for (k, &pi) in move_indices.iter().enumerate() {
+                        if let Some(pleb) = self.plebs.get_mut(pi) {
+                            let (ox, oy) = offsets[k];
+                            let gx = (mx + ox).floor() as i32;
+                            let gy = (my + oy).floor() as i32;
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let path = astar_path_terrain_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                start,
+                                (gx, gy),
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 1;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.work_target = None;
+                                pleb.haul_target = None;
+                                pleb.harvest_target = None;
+                            }
                         }
                     }
+                    self.move_marker = Some((mx.floor() + 0.5, my.floor() + 0.5, 2.0));
                     return;
                 }
             }

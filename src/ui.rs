@@ -110,6 +110,7 @@ impl App {
                 self.draw_overlays_and_popups(ctx, bp_cam, bp_ppp, dt);
                 self.draw_world_overlays(ctx, bp_cam, &blueprint_tiles);
                 self.draw_world_labels(ctx, bp_cam);
+                self.draw_action_bar(ctx);
                 self.draw_selection_info(ctx);
                 self.draw_notifications(ctx);
                 self.draw_hints(ctx, bp_cam, bp_ppp);
@@ -2724,7 +2725,10 @@ impl App {
         // --- Build items / Selection actions panel (center bottom, single column) ---
         // Shows build tools when a category is active, or selection actions when items are selected.
         // These are mutually exclusive: selecting something closes build menu.
-        let has_selection = !self.world_sel.is_empty();
+        // Skip selection actions panel when only plebs are selected (action bar handles that)
+        let has_pleb_only_sel =
+            !self.world_sel.is_empty() && self.world_sel.items.iter().all(|i| i.pleb_idx.is_some());
+        let has_selection = !self.world_sel.is_empty() && !has_pleb_only_sel;
         let show_build = self.build_category.is_some() && !has_selection;
 
         if show_build || has_selection {
@@ -3416,6 +3420,7 @@ impl App {
                 is_crisis: bool,
                 crisis_reason: Option<&'static str>,
                 shift_label: &'static str,
+                group_id: Option<u8>,
             }
             let pleb_display: Vec<PlebDisplay> = self
                 .plebs
@@ -3522,6 +3527,7 @@ impl App {
                         is_crisis: p.activity.is_crisis(),
                         crisis_reason: p.activity.crisis_reason(),
                         shift_label: p.schedule.preset.label(),
+                        group_id: p.group_id,
                     }
                 })
                 .collect();
@@ -3653,6 +3659,18 @@ impl App {
                                     health_color,
                                 );
 
+                                // Group number badge (top-left corner)
+                                if let Some(gid) = pd.group_id {
+                                    let badge_pos = rect.left_top() + egui::Vec2::new(3.0, 2.0);
+                                    painter.text(
+                                        badge_pos,
+                                        egui::Align2::LEFT_TOP,
+                                        &format!("{}", gid),
+                                        egui::FontId::proportional(8.0),
+                                        egui::Color32::from_rgb(120, 200, 220),
+                                    );
+                                }
+
                                 if response.clicked() {
                                     if is_sel {
                                         // Click again on selected pleb → toggle inventory
@@ -3670,64 +3688,7 @@ impl App {
                     });
                 });
 
-            // Draft button below colonist bar (when a pleb is selected)
-            if let Some(sel_idx) = self.selected_pleb {
-                if let Some(pleb) = self.plebs.get(sel_idx) {
-                    if !pleb.is_enemy {
-                        let is_drafted = pleb.drafted;
-                        let prefer_ranged = pleb.prefer_ranged;
-                        egui::Area::new(egui::Id::new("draft_button"))
-                            .anchor(egui::Align2::CENTER_TOP, [0.0, 72.0])
-                            .interactable(true)
-                            .show(ctx, |ui| {
-                                let (icon, label, col) = if is_drafted {
-                                    ("\u{2694}", "Drafted", egui::Color32::from_rgb(220, 90, 60))
-                                } else {
-                                    ("\u{1f6e1}", "Draft", egui::Color32::from_rgb(120, 120, 120))
-                                };
-                                let btn_text = egui::RichText::new(format!("{} {}", icon, label))
-                                    .size(13.0)
-                                    .color(col);
-                                let btn = ui
-                                    .add_sized(egui::vec2(80.0, 26.0), egui::Button::new(btn_text));
-                                if btn.clicked() {
-                                    if let Some(p) = self.plebs.get_mut(sel_idx) {
-                                        p.drafted = !p.drafted;
-                                        p.update_equipped_weapon();
-                                        if !p.drafted {
-                                            p.work_target = None;
-                                            p.haul_target = None;
-                                            p.harvest_target = None;
-                                        }
-                                    }
-                                }
-                                // Melee/Ranged toggle (only when drafted)
-                                if is_drafted {
-                                    let (m_icon, m_label) = if prefer_ranged {
-                                        ("\u{1f52b}", "Ranged")
-                                    } else {
-                                        ("\u{1fa93}", "Melee")
-                                    };
-                                    let mode_text =
-                                        egui::RichText::new(format!("{} {}", m_icon, m_label))
-                                            .size(11.0);
-                                    if ui
-                                        .add_sized(
-                                            egui::vec2(80.0, 22.0),
-                                            egui::Button::new(mode_text),
-                                        )
-                                        .clicked()
-                                    {
-                                        if let Some(p) = self.plebs.get_mut(sel_idx) {
-                                            p.prefer_ranged = !p.prefer_ranged;
-                                            p.update_equipped_weapon();
-                                        }
-                                    }
-                                }
-                            });
-                    }
-                }
-            }
+            // (Draft/melee buttons moved to bottom action bar)
         }
 
         // Schedule window (all plebs)
@@ -4123,7 +4084,6 @@ impl App {
                     }
                 }
                 ContextAction::MoveTo(wx, wy) => {
-                    let goal = (wx.floor() as i32, wy.floor() as i32);
                     // Move all group members (or just the selected pleb)
                     let move_indices: Vec<usize> = if !self.selected_group.is_empty() {
                         self.selected_group.clone()
@@ -4132,8 +4092,14 @@ impl App {
                     } else {
                         vec![]
                     };
-                    for &pi in &move_indices {
+                    let offsets = crate::comms::spread_offsets(
+                        move_indices.len(),
+                        self.flock_spacing.min_spacing(),
+                    );
+                    for (k, &pi) in move_indices.iter().enumerate() {
                         if let Some(pleb) = self.plebs.get_mut(pi) {
+                            let (ox, oy) = offsets[k];
+                            let goal = ((wx + ox).floor() as i32, (wy + oy).floor() as i32);
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                             let path = astar_path_terrain_wd(
                                 &self.grid_data,
@@ -5195,14 +5161,11 @@ impl App {
             ));
             let stroke = egui::Stroke::new(2.0, egui::Color32::WHITE);
             for item in &self.world_sel.items {
-                // Plebs: use live position, not grid position
-                let (wx0, wy0, wx1, wy1) = if let Some(pi) = item.pleb_idx {
-                    if let Some(pleb) = self.plebs.get(pi) {
-                        (pleb.x - 0.4, pleb.y - 0.4, pleb.x + 0.4, pleb.y + 0.4)
-                    } else {
-                        continue;
-                    }
-                } else {
+                // Plebs have the ring from the shader — skip the box
+                if item.pleb_idx.is_some() {
+                    continue;
+                }
+                let (wx0, wy0, wx1, wy1) = {
                     (
                         item.x as f32,
                         item.y as f32,
@@ -7833,7 +7796,8 @@ impl App {
                 .filter(|p| p.is_enemy && !p.is_dead)
                 .map(|p| (p.x, p.y))
                 .collect();
-            let links = comms::compute_flock_links(&self.plebs, &enemy_pos, true);
+            let links =
+                comms::compute_flock_links(&self.plebs, &enemy_pos, true, self.flock_spacing);
 
             for link in &links {
                 let a = to_scr(link.ax, link.ay);
@@ -8180,21 +8144,7 @@ impl App {
                     }
                 }
 
-                // Fire mode indicator above selected pleb
-                if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i))
-                    && !pleb.is_enemy
-                {
-                    let mode_pos = to_screen(pleb.x, pleb.y - 0.8);
-                    let mode_text = if self.burst_mode { "BURST" } else { "SINGLE" };
-                    Self::world_label(
-                        &label_painter,
-                        mode_pos,
-                        egui::Align2::CENTER_BOTTOM,
-                        mode_text,
-                        9.0,
-                        egui::Color32::from_rgb(180, 180, 100),
-                    );
-                }
+                // (Fire mode moved to action bar)
 
                 // Grenade charge bar above selected pleb
                 if self.grenade_charging
@@ -8958,6 +8908,705 @@ impl App {
             });
     }
 
+    // --- Bottom-center action bar for selected plebs ---
+    fn draw_action_bar(&mut self, ctx: &egui::Context) {
+        // Collect selected pleb indices
+        let indices: Vec<usize> = if !self.selected_group.is_empty() {
+            self.selected_group.clone()
+        } else if let Some(idx) = self.selected_pleb {
+            vec![idx]
+        } else {
+            return;
+        };
+
+        // Filter to living friendly plebs
+        let friendly: Vec<usize> = indices
+            .iter()
+            .copied()
+            .filter(|&i| self.plebs.get(i).is_some_and(|p| !p.is_dead && !p.is_enemy))
+            .collect();
+        if friendly.is_empty() {
+            return;
+        }
+
+        // Snapshot pleb state
+        let all_drafted = friendly.iter().all(|&i| self.plebs[i].drafted);
+        let any_drafted = friendly.iter().any(|&i| self.plebs[i].drafted);
+        let all_crouching = friendly.iter().all(|&i| self.plebs[i].crouching);
+        let all_prefer_ranged = friendly.iter().all(|&i| self.plebs[i].prefer_ranged);
+        let count = friendly.len();
+
+        let reg = crate::item_defs::ItemRegistry::cached();
+        let any_ranged_weapon = friendly.iter().any(|&i| {
+            let p = &self.plebs[i];
+            p.drafted
+                && p.equipped_weapon
+                    .and_then(|wid| reg.get(wid))
+                    .is_some_and(|d| d.is_ranged_weapon())
+        });
+        let is_burst = self.burst_mode;
+        let is_attack_mode = self.attack_mode;
+        let cur_spacing = self.flock_spacing;
+        let any_headlight = friendly.iter().any(|&i| self.plebs[i].headlight_mode > 0);
+        let headlight_mode = if count == 1 {
+            self.plebs[friendly[0]].headlight_mode
+        } else {
+            // Use first pleb's mode for display
+            friendly
+                .iter()
+                .find(|&&i| self.plebs[i].headlight_mode > 0)
+                .map(|&i| self.plebs[i].headlight_mode)
+                .unwrap_or(0)
+        };
+
+        // Weapon info for single pleb
+        let weapon_info: Option<(String, u8, u8)> = if count == 1 && any_drafted {
+            let p = &self.plebs[friendly[0]];
+            p.equipped_weapon.and_then(|wid| {
+                reg.get(wid)
+                    .map(|d| (d.name.clone(), p.ammo_loaded, d.magazine_size))
+            })
+        } else {
+            None
+        };
+        let has_weapon = weapon_info.is_some() || (count > 1 && any_drafted);
+        let any_moving = friendly
+            .iter()
+            .any(|&i| self.plebs[i].path_idx < self.plebs[i].path.len());
+
+        // First pleb's appearance
+        let first = &self.plebs[friendly[0]];
+        let portrait_name = if count == 1 {
+            first.name.clone()
+        } else {
+            format!("{} plebs", count)
+        };
+        let skin = [
+            first.appearance.skin_r,
+            first.appearance.skin_g,
+            first.appearance.skin_b,
+        ];
+        let hair = [
+            first.appearance.hair_r,
+            first.appearance.hair_g,
+            first.appearance.hair_b,
+        ];
+        let shirt = [
+            first.appearance.shirt_r,
+            first.appearance.shirt_g,
+            first.appearance.shirt_b,
+        ];
+        let hp = first.needs.health;
+        let activity_str = if count == 1 {
+            match first.activity.inner() {
+                PlebActivity::Idle => "Idle",
+                PlebActivity::Walking => "Walking",
+                PlebActivity::Sleeping => "Sleeping",
+                PlebActivity::Harvesting(_) => "Harvesting",
+                PlebActivity::Eating => "Eating",
+                PlebActivity::Hauling => "Hauling",
+                PlebActivity::Farming(_) => "Farming",
+                PlebActivity::Building(_) => "Building",
+                PlebActivity::Crafting(_, _) => "Crafting",
+                PlebActivity::Drinking(_) => "Drinking",
+                PlebActivity::MentalBreak(_, _) => "Mental break",
+                PlebActivity::Staggering(_) => "Staggering",
+                PlebActivity::Crisis(_, _) => "Crisis",
+            }
+        } else {
+            ""
+        };
+
+        let tile_size = 56.0f32;
+        let tile_pad = 4.0f32;
+        let corner = 6.0f32;
+        let hint_font = egui::FontId::proportional(8.0);
+        let hint_color = egui::Color32::from_rgba_premultiplied(180, 180, 180, 160);
+        let label_font = egui::FontId::proportional(9.0);
+        let label_color = egui::Color32::from_rgb(200, 200, 200);
+        let icon_font = egui::FontId::proportional(20.0);
+        let default_bg = egui::Color32::from_rgb(45, 48, 55);
+
+        let draw_hint = |painter: &egui::Painter, rect: egui::Rect, key: &str| {
+            painter.text(
+                rect.right_top() + egui::Vec2::new(-3.0, 3.0),
+                egui::Align2::RIGHT_TOP,
+                key,
+                hint_font.clone(),
+                hint_color,
+            );
+        };
+
+        // Lighten a background color on hover
+        let hover_bg = |bg: egui::Color32, hovered: bool| -> egui::Color32 {
+            if !hovered {
+                return bg;
+            }
+            egui::Color32::from_rgb(
+                bg.r().saturating_add(20),
+                bg.g().saturating_add(20),
+                bg.b().saturating_add(20),
+            )
+        };
+
+        // Count tiles
+        let mut n_tiles = 2; // portrait + draft
+        if has_weapon {
+            n_tiles += 1; // weapon/attack
+        }
+        if any_drafted {
+            n_tiles += 1; // melee/ranged
+        }
+        if any_ranged_weapon {
+            n_tiles += 1; // fire mode
+        }
+        if any_drafted || any_moving {
+            n_tiles += 1; // hold position
+        }
+        if any_drafted {
+            n_tiles += 1; // crouch
+        }
+        if any_headlight {
+            n_tiles += 1; // headlight beam
+        }
+        if count > 1 {
+            n_tiles += 1; // spacing
+        }
+        n_tiles += 1; // info
+
+        let bar_w = n_tiles as f32 * (tile_size + tile_pad) + tile_pad;
+
+        egui::Area::new(egui::Id::new("action_bar"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -10.0])
+            .interactable(true)
+            .show(ctx, |ui| {
+                egui::Frame::NONE
+                    .fill(egui::Color32::from_rgba_premultiplied(30, 32, 36, 230))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::same(tile_pad as i8))
+                    .show(ui, |ui| {
+                        ui.set_min_width(bar_w);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = egui::Vec2::new(tile_pad, 0.0);
+
+                            // --- Portrait ---
+                            {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                painter.rect_filled(
+                                    rect,
+                                    corner,
+                                    hover_bg(default_bg, response.hovered()),
+                                );
+
+                                if count == 1 {
+                                    // Mini pleb sprite
+                                    let center = rect.center() + egui::Vec2::new(0.0, -6.0);
+                                    // Body
+                                    let shirt_c = egui::Color32::from_rgb(
+                                        (shirt[0] * 255.0) as u8,
+                                        (shirt[1] * 255.0) as u8,
+                                        (shirt[2] * 255.0) as u8,
+                                    );
+                                    painter.circle_filled(
+                                        center + egui::Vec2::new(0.0, 7.0),
+                                        8.0,
+                                        shirt_c,
+                                    );
+                                    // Head
+                                    let skin_c = egui::Color32::from_rgb(
+                                        (skin[0] * 255.0) as u8,
+                                        (skin[1] * 255.0) as u8,
+                                        (skin[2] * 255.0) as u8,
+                                    );
+                                    painter.circle_filled(
+                                        center + egui::Vec2::new(0.0, -2.0),
+                                        5.0,
+                                        skin_c,
+                                    );
+                                    // Hair
+                                    let hair_c = egui::Color32::from_rgb(
+                                        (hair[0] * 255.0) as u8,
+                                        (hair[1] * 255.0) as u8,
+                                        (hair[2] * 255.0) as u8,
+                                    );
+                                    painter.circle_filled(
+                                        center + egui::Vec2::new(0.0, -5.0),
+                                        3.5,
+                                        hair_c,
+                                    );
+                                    // HP bar
+                                    let bar_y = rect.max.y - 16.0;
+                                    let bar_x = rect.min.x + 4.0;
+                                    let bar_w = rect.width() - 8.0;
+                                    let bar_rect = egui::Rect::from_min_size(
+                                        egui::Pos2::new(bar_x, bar_y),
+                                        egui::Vec2::new(bar_w, 3.0),
+                                    );
+                                    painter.rect_filled(
+                                        bar_rect,
+                                        1.0,
+                                        egui::Color32::from_rgb(30, 30, 30),
+                                    );
+                                    let hp_col = if hp > 0.5 {
+                                        egui::Color32::from_rgb(80, 200, 80)
+                                    } else if hp > 0.25 {
+                                        egui::Color32::from_rgb(200, 160, 40)
+                                    } else {
+                                        egui::Color32::from_rgb(200, 60, 60)
+                                    };
+                                    painter.rect_filled(
+                                        egui::Rect::from_min_size(
+                                            bar_rect.min,
+                                            egui::Vec2::new(bar_w * hp.clamp(0.0, 1.0), 3.0),
+                                        ),
+                                        1.0,
+                                        hp_col,
+                                    );
+                                } else {
+                                    // Multi-select: group icon
+                                    painter.text(
+                                        rect.center() + egui::Vec2::new(0.0, -4.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "\u{1f465}", // people silhouette
+                                        egui::FontId::proportional(20.0),
+                                        egui::Color32::from_rgb(180, 190, 200),
+                                    );
+                                }
+                                // Name / count label
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -2.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    &portrait_name,
+                                    egui::FontId::proportional(8.0),
+                                    egui::Color32::WHITE,
+                                );
+                                // Click: open character window
+                                if response.clicked() {
+                                    self.show_inventory = !self.show_inventory;
+                                    self.inv_selected_slot = None;
+                                }
+                                // Activity tooltip (single pleb only)
+                                if count == 1 && !activity_str.is_empty() {
+                                    response.on_hover_text(activity_str);
+                                }
+                            }
+
+                            // --- Draft/Undraft [D] ---
+                            {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if all_drafted {
+                                    egui::Color32::from_rgb(80, 40, 35)
+                                } else {
+                                    default_bg
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                let (icon, label) = if all_drafted {
+                                    ("\u{2694}", "Drafted")
+                                } else {
+                                    ("\u{1f6e1}", "Draft")
+                                };
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    icon,
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    label,
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "D");
+                                if response.clicked() {
+                                    let new_state = !all_drafted;
+                                    for &i in &friendly {
+                                        if let Some(p) = self.plebs.get_mut(i) {
+                                            p.drafted = new_state;
+                                            p.update_equipped_weapon();
+                                            if !new_state {
+                                                p.work_target = None;
+                                                p.haul_target = None;
+                                                p.harvest_target = None;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // --- Weapon / Attack [A] ---
+                            if has_weapon {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if is_attack_mode {
+                                    egui::Color32::from_rgb(90, 35, 35)
+                                } else {
+                                    default_bg
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                if let Some((ref wpn_name, ammo, mag)) = weapon_info {
+                                    let is_ranged = any_ranged_weapon;
+                                    let icon = if is_ranged { "\u{1f52b}" } else { "\u{1fa93}" };
+                                    painter.text(
+                                        rect.center() + egui::Vec2::new(0.0, -8.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        icon,
+                                        icon_font.clone(),
+                                        egui::Color32::WHITE,
+                                    );
+                                    if is_ranged {
+                                        let ammo_str = format!("{}/{}", ammo, mag);
+                                        let ammo_col = if ammo == 0 {
+                                            egui::Color32::from_rgb(220, 80, 60)
+                                        } else {
+                                            egui::Color32::from_rgb(180, 200, 180)
+                                        };
+                                        painter.text(
+                                            rect.center() + egui::Vec2::new(0.0, 6.0),
+                                            egui::Align2::CENTER_CENTER,
+                                            &ammo_str,
+                                            egui::FontId::proportional(10.0),
+                                            ammo_col,
+                                        );
+                                    }
+                                    painter.text(
+                                        rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                        egui::Align2::CENTER_BOTTOM,
+                                        wpn_name,
+                                        egui::FontId::proportional(7.0),
+                                        label_color,
+                                    );
+                                } else {
+                                    painter.text(
+                                        rect.center() + egui::Vec2::new(0.0, -6.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "\u{1f3af}",
+                                        icon_font.clone(),
+                                        egui::Color32::WHITE,
+                                    );
+                                    painter.text(
+                                        rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                        egui::Align2::CENTER_BOTTOM,
+                                        "Attack",
+                                        label_font.clone(),
+                                        label_color,
+                                    );
+                                }
+                                draw_hint(&painter, rect, "A");
+                                if response.clicked() {
+                                    self.attack_mode = !self.attack_mode;
+                                }
+                            }
+
+                            // --- Melee/Ranged [R] ---
+                            if any_drafted {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if all_prefer_ranged {
+                                    egui::Color32::from_rgb(40, 50, 75)
+                                } else {
+                                    default_bg
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                let (icon, label) = if all_prefer_ranged {
+                                    ("\u{1f52b}", "Ranged")
+                                } else {
+                                    ("\u{1fa93}", "Melee")
+                                };
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    icon,
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    label,
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "R");
+                                if response.clicked() {
+                                    let new_state = !all_prefer_ranged;
+                                    for &i in &friendly {
+                                        if let Some(p) = self.plebs.get_mut(i) {
+                                            p.prefer_ranged = new_state;
+                                            p.update_equipped_weapon();
+                                        }
+                                    }
+                                }
+                            }
+
+                            // --- Fire mode [X] ---
+                            if any_ranged_weapon {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if is_burst {
+                                    egui::Color32::from_rgb(75, 55, 30)
+                                } else {
+                                    default_bg
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                let (icon, label) = if is_burst {
+                                    ("\u{1f4a5}", "Burst")
+                                } else {
+                                    ("\u{1f3af}", "Single")
+                                };
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    icon,
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    label,
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "X");
+                                if response.clicked() {
+                                    self.burst_mode = !self.burst_mode;
+                                }
+                            }
+
+                            // --- Hold Position [S] ---
+                            if any_drafted || any_moving {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                painter.rect_filled(
+                                    rect,
+                                    corner,
+                                    hover_bg(default_bg, response.hovered()),
+                                );
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    "\u{270b}",
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    "Stop",
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "S");
+                                if response.clicked() {
+                                    for &i in &friendly {
+                                        if let Some(p) = self.plebs.get_mut(i) {
+                                            p.path.clear();
+                                            p.path_idx = 0;
+                                            if p.activity == PlebActivity::Walking {
+                                                p.activity = PlebActivity::Idle;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // --- Crouch [C] ---
+                            if any_drafted {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if all_crouching {
+                                    egui::Color32::from_rgb(55, 65, 45)
+                                } else {
+                                    default_bg
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                let (icon, label) = if all_crouching {
+                                    ("\u{1f9ce}", "Crouch") // kneeling person
+                                } else {
+                                    ("\u{1f9cd}", "Stand") // standing person
+                                };
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    icon,
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    label,
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "C");
+                                if response.clicked() {
+                                    let new_state = !all_crouching;
+                                    for &i in &friendly {
+                                        if let Some(p) = self.plebs.get_mut(i) {
+                                            p.crouching = new_state;
+                                            p.peek_timer = 0.0;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // --- Headlight beam [G] ---
+                            if any_headlight {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = match headlight_mode {
+                                    1 => egui::Color32::from_rgb(55, 60, 45), // wide: greenish
+                                    3 => egui::Color32::from_rgb(50, 50, 70), // focused: bluish
+                                    _ => default_bg,                          // normal
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                let (icon, label) = match headlight_mode {
+                                    1 => ("\u{1f506}", "Wide"),   // dim sun = wide beam
+                                    3 => ("\u{1f526}", "Focus"),  // flashlight = focused
+                                    _ => ("\u{1f4a1}", "Normal"), // light bulb = normal
+                                };
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    icon,
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    label,
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "G");
+                                if response.clicked() {
+                                    // Cycle: wide → normal → focused → wide
+                                    let new_mode = match headlight_mode {
+                                        1 => 2u8,
+                                        2 => 3,
+                                        _ => 1,
+                                    };
+                                    for &i in &friendly {
+                                        if let Some(p) = self.plebs.get_mut(i) {
+                                            if p.headlight_mode > 0 {
+                                                p.headlight_mode = new_mode;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // --- Spacing (group only) ---
+                            if count > 1 {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = match cur_spacing {
+                                    comms::FlockSpacing::Tight => {
+                                        egui::Color32::from_rgb(75, 50, 40)
+                                    }
+                                    comms::FlockSpacing::Normal => default_bg,
+                                    comms::FlockSpacing::Spread => {
+                                        egui::Color32::from_rgb(40, 55, 70)
+                                    }
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                // Dots pattern to indicate spacing
+                                let icon = match cur_spacing {
+                                    comms::FlockSpacing::Tight => "\u{2022}\u{2022}", // ••
+                                    comms::FlockSpacing::Normal => "\u{2022} \u{2022}", // • •
+                                    comms::FlockSpacing::Spread => "\u{2022}  \u{2022}", // •  •
+                                };
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    icon,
+                                    egui::FontId::proportional(16.0),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    cur_spacing.label(),
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                if response.clicked() {
+                                    self.flock_spacing = cur_spacing.cycle();
+                                }
+                            }
+
+                            // --- Info [I] ---
+                            {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if self.show_inventory {
+                                    egui::Color32::from_rgb(40, 65, 50)
+                                } else {
+                                    default_bg
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    "\u{1f4cb}",
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    "Info",
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "I");
+                                if response.clicked() {
+                                    self.show_inventory = !self.show_inventory;
+                                    self.inv_selected_slot = None;
+                                }
+                            }
+                        });
+                    });
+            });
+    }
+
     // --- Selection info panel: details about selected block ---
     fn draw_selection_info(&mut self, ctx: &egui::Context) {
         if self.world_sel.is_empty() {
@@ -8969,65 +9618,8 @@ impl App {
         } // only single selection
         let item = &items[0];
 
-        // Pleb selection: compact summary card + open character window
-        if let Some(pi) = item.pleb_idx {
-            if let Some(pleb) = self.plebs.get(pi) {
-                let act = pleb.activity.inner();
-                let act_str = match act {
-                    PlebActivity::Idle => "Idle",
-                    PlebActivity::Walking => "Walking",
-                    PlebActivity::Sleeping => "Sleeping",
-                    PlebActivity::Harvesting(_) => "Harvesting",
-                    PlebActivity::Eating => "Eating",
-                    PlebActivity::Hauling => "Hauling",
-                    PlebActivity::Farming(_) => "Farming",
-                    PlebActivity::Building(_) => "Building",
-                    PlebActivity::Crafting(_, _) => "Crafting",
-                    PlebActivity::Drinking(_) => "Drinking",
-                    PlebActivity::MentalBreak(_, _) => "Mental break",
-                    PlebActivity::Staggering(_) => "Staggering",
-                    PlebActivity::Crisis(_, _) => "Crisis",
-                };
-                let hp = pleb.needs.health;
-                let pleb_name = pleb.name.clone();
-                egui::Area::new(egui::Id::new("selection_info"))
-                    .anchor(egui::Align2::RIGHT_TOP, [-10.0, 130.0])
-                    .show(ctx, |ui| {
-                        egui::Frame::window(ui.style()).show(ui, |ui| {
-                            ui.set_min_width(140.0);
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(&pleb_name).strong().size(12.0));
-                                ui.label(egui::RichText::new(act_str).size(9.0).weak());
-                            });
-                            // Compact HP bar
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::Vec2::new(140.0, 6.0),
-                                egui::Sense::hover(),
-                            );
-                            let painter = ui.painter_at(rect);
-                            painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
-                            let hp_col = if hp > 0.5 {
-                                egui::Color32::from_rgb(80, 200, 80)
-                            } else if hp > 0.25 {
-                                egui::Color32::from_rgb(200, 160, 40)
-                            } else {
-                                egui::Color32::from_rgb(200, 60, 60)
-                            };
-                            painter.rect_filled(
-                                egui::Rect::from_min_size(
-                                    rect.min,
-                                    egui::Vec2::new(140.0 * hp.clamp(0.0, 1.0), 6.0),
-                                ),
-                                2.0,
-                                hp_col,
-                            );
-                            if ui.small_button("Character (I)").clicked() {
-                                self.show_inventory = !self.show_inventory;
-                                self.inv_selected_slot = None;
-                            }
-                        });
-                    });
-            }
+        // Pleb selection: handled by bottom action bar
+        if item.pleb_idx.is_some() {
             return;
         }
 

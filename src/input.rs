@@ -197,7 +197,7 @@ impl App {
                 self.next_pleb_id += 1;
                 let name = random_name(id as u32);
                 let mut p = Pleb::new(id, name, wx, wy, id as u32 * 7919 + 42);
-                p.headlight_on = true;
+                p.headlight_mode = 2; // normal beam
                 self.plebs.push(p);
                 self.selected_pleb = Some(self.plebs.len() - 1);
                 self.placing_pleb = false;
@@ -267,16 +267,52 @@ impl App {
                 .position(|p| ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt() < PLEB_CLICK_RADIUS);
 
             if let Some(idx) = clicked_pleb {
+                // Double-click pleb: select all friendly plebs in viewport
+                let is_pleb_double = self.frame_count - self.last_click_frame < DOUBLE_CLICK_FRAMES
+                    && self.last_click_pos == (bx, by);
+                if is_pleb_double && !self.plebs[idx].is_enemy {
+                    // Select all non-enemy plebs visible in viewport
+                    let half_w = self.camera.screen_w * 0.5 / self.camera.zoom;
+                    let half_h = self.camera.screen_h * 0.5 / self.camera.zoom;
+                    let vp_min_x = self.camera.center_x - half_w;
+                    let vp_max_x = self.camera.center_x + half_w;
+                    let vp_min_y = self.camera.center_y - half_h;
+                    let vp_max_y = self.camera.center_y + half_h;
+                    self.selected_group.clear();
+                    for (pi, p) in self.plebs.iter().enumerate() {
+                        if !p.is_dead
+                            && !p.is_enemy
+                            && p.x >= vp_min_x
+                            && p.x <= vp_max_x
+                            && p.y >= vp_min_y
+                            && p.y <= vp_max_y
+                        {
+                            self.selected_group.push(pi);
+                        }
+                    }
+                    self.selected_pleb = Some(idx);
+                    self.last_click_frame = self.frame_count;
+                    self.last_click_pos = (bx, by);
+                    let p = &self.plebs[idx];
+                    self.world_sel =
+                        WorldSelection::single_pleb(idx, p.x.floor() as i32, p.y.floor() as i32);
+                    self.context_menu = None;
+                    return;
+                }
+                self.last_click_frame = self.frame_count;
+                self.last_click_pos = (bx, by);
+
+                let shift = self.pressed_keys.contains(&KeyCode::ShiftLeft)
+                    || self.pressed_keys.contains(&KeyCode::ShiftRight);
                 let ctrl = self.pressed_keys.contains(&KeyCode::ControlLeft)
                     || self.pressed_keys.contains(&KeyCode::ControlRight);
-                if ctrl && !self.plebs[idx].is_enemy {
-                    // Ctrl+click: add/remove from multi-selection
+                if (shift || ctrl) && !self.plebs[idx].is_enemy {
+                    // Shift/Ctrl+click: add/remove from multi-selection
                     if let Some(pos) = self.selected_group.iter().position(|&i| i == idx) {
                         self.selected_group.remove(pos);
                     } else {
                         self.selected_group.push(idx);
                     }
-                    // Keep single selection on the clicked pleb for the info panel
                     self.selected_pleb = Some(idx);
                 } else {
                     // Normal click: select single pleb, clear group
@@ -492,7 +528,9 @@ impl App {
                 PhysicalKey::Code(KeyCode::Escape) => {
                     // Close whatever is open, in priority order
                     // When nothing is open: toggle pause menu
-                    if self.show_pause_menu {
+                    if self.attack_mode {
+                        self.attack_mode = false;
+                    } else if self.show_pause_menu {
                         self.show_pause_menu = false;
                         self.time_paused = false;
                     } else if self.context_menu.is_some() {
@@ -536,16 +574,54 @@ impl App {
                         if let Some(w) = self.window.as_ref() {
                             w.request_redraw();
                         }
-                    } else if self.selected_pleb.is_none() && self.wall_thickness > 1 {
+                    } else if self.selected_pleb.is_some() {
+                        // R: toggle melee/ranged preference
+                        let indices: Vec<usize> = if !self.selected_group.is_empty() {
+                            self.selected_group.clone()
+                        } else if let Some(idx) = self.selected_pleb {
+                            vec![idx]
+                        } else {
+                            vec![]
+                        };
+                        let new_state = indices
+                            .first()
+                            .and_then(|&i| self.plebs.get(i))
+                            .map(|p| !p.prefer_ranged)
+                            .unwrap_or(false);
+                        for &i in &indices {
+                            if let Some(p) = self.plebs.get_mut(i) {
+                                if !p.is_enemy {
+                                    p.prefer_ranged = new_state;
+                                    p.update_equipped_weapon();
+                                }
+                            }
+                        }
+                    } else if self.wall_thickness > 1 {
                         // R: decrease wall thickness
                         self.wall_thickness -= 1;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyD) => {
-                    // D: toggle draft/rally mode for selected pleb
-                    if let Some(idx) = self.selected_pleb {
+                    // D: toggle draft for all selected plebs (group or single)
+                    let draft_indices: Vec<usize> = if !self.selected_group.is_empty() {
+                        self.selected_group.clone()
+                    } else if let Some(idx) = self.selected_pleb {
+                        vec![idx]
+                    } else {
+                        vec![]
+                    };
+                    // Determine toggle direction from first pleb
+                    let new_drafted = draft_indices
+                        .first()
+                        .and_then(|&i| self.plebs.get(i))
+                        .map(|p| !p.drafted)
+                        .unwrap_or(false);
+                    for &idx in &draft_indices {
                         if let Some(pleb) = self.plebs.get_mut(idx) {
-                            pleb.drafted = !pleb.drafted;
+                            if pleb.is_enemy {
+                                continue;
+                            }
+                            pleb.drafted = new_drafted;
                             pleb.update_equipped_weapon();
                             if !pleb.drafted {
                                 // Returning to autonomous: clear manual targets
@@ -695,14 +771,41 @@ impl App {
                             }
                         }
                     } else if let Some(idx) = self.selected_pleb {
-                        // G: toggle headlight (no ctrl)
+                        // G: toggle headlight on/off (no ctrl)
                         if let Some(pleb) = self.plebs.get_mut(idx) {
-                            pleb.headlight_on = !pleb.headlight_on;
+                            if pleb.headlight_mode > 0 {
+                                pleb.headlight_mode = 0;
+                            } else {
+                                pleb.headlight_mode = 2; // default to normal
+                            }
                         }
                     } else if shift {
                         self.show_subgrid = !self.show_subgrid;
                     } else {
                         self.show_grid = !self.show_grid;
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyC) => {
+                    // C: toggle crouch for selected plebs
+                    let indices: Vec<usize> = if !self.selected_group.is_empty() {
+                        self.selected_group.clone()
+                    } else if let Some(idx) = self.selected_pleb {
+                        vec![idx]
+                    } else {
+                        vec![]
+                    };
+                    let new_state = indices
+                        .first()
+                        .and_then(|&i| self.plebs.get(i))
+                        .map(|p| !p.crouching)
+                        .unwrap_or(false);
+                    for &i in &indices {
+                        if let Some(p) = self.plebs.get_mut(i) {
+                            if !p.is_enemy && !p.is_dead {
+                                p.crouching = new_state;
+                                p.peek_timer = 0.0;
+                            }
+                        }
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyF) => {
@@ -719,6 +822,117 @@ impl App {
                     } else if self.wall_thickness < 4 {
                         // F: increase wall thickness
                         self.wall_thickness += 1;
+                    }
+                }
+                PhysicalKey::Code(KeyCode::Tab) => {
+                    // Tab: cycle through friendly plebs
+                    let friendlies: Vec<usize> = self
+                        .plebs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| !p.is_enemy && !p.is_dead)
+                        .map(|(i, _)| i)
+                        .collect();
+                    if !friendlies.is_empty() {
+                        let cur = self.selected_pleb.unwrap_or(usize::MAX);
+                        let next = friendlies
+                            .iter()
+                            .find(|&&i| i > cur)
+                            .or(friendlies.first())
+                            .copied()
+                            .unwrap_or(0);
+                        self.selected_pleb = Some(next);
+                        self.selected_group.clear();
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyS) => {
+                    // S: hold position (cancel path for selected plebs)
+                    let indices: Vec<usize> = if !self.selected_group.is_empty() {
+                        self.selected_group.clone()
+                    } else if let Some(idx) = self.selected_pleb {
+                        vec![idx]
+                    } else {
+                        vec![]
+                    };
+                    for &i in &indices {
+                        if let Some(pleb) = self.plebs.get_mut(i) {
+                            if !pleb.is_enemy && !pleb.is_dead {
+                                pleb.path.clear();
+                                pleb.path_idx = 0;
+                                if pleb.activity == PlebActivity::Walking {
+                                    pleb.activity = PlebActivity::Idle;
+                                }
+                            }
+                        }
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyA) => {
+                    // A: toggle attack mode (when pleb selected)
+                    if self.selected_pleb.is_some() {
+                        self.attack_mode = !self.attack_mode;
+                    }
+                }
+                PhysicalKey::Code(
+                    code @ (KeyCode::Digit1
+                    | KeyCode::Digit2
+                    | KeyCode::Digit3
+                    | KeyCode::Digit4
+                    | KeyCode::Digit5
+                    | KeyCode::Digit6
+                    | KeyCode::Digit7
+                    | KeyCode::Digit8
+                    | KeyCode::Digit9),
+                ) => {
+                    let ctrl = self.pressed_keys.contains(&KeyCode::ControlLeft)
+                        || self.pressed_keys.contains(&KeyCode::ControlRight);
+                    let group_num = match code {
+                        KeyCode::Digit1 => 1u8,
+                        KeyCode::Digit2 => 2,
+                        KeyCode::Digit3 => 3,
+                        KeyCode::Digit4 => 4,
+                        KeyCode::Digit5 => 5,
+                        KeyCode::Digit6 => 6,
+                        KeyCode::Digit7 => 7,
+                        KeyCode::Digit8 => 8,
+                        KeyCode::Digit9 => 9,
+                        _ => 0,
+                    };
+                    if ctrl {
+                        // Ctrl+N: assign selected plebs to numbered group N
+                        let indices: Vec<usize> = if !self.selected_group.is_empty() {
+                            self.selected_group.clone()
+                        } else if let Some(idx) = self.selected_pleb {
+                            vec![idx]
+                        } else {
+                            vec![]
+                        };
+                        if !indices.is_empty() {
+                            // Clear old members of this group
+                            for p in self.plebs.iter_mut() {
+                                if p.group_id == Some(group_num) {
+                                    p.group_id = None;
+                                }
+                            }
+                            // Assign new members
+                            for &i in &indices {
+                                if let Some(p) = self.plebs.get_mut(i) {
+                                    p.group_id = Some(group_num);
+                                }
+                            }
+                        }
+                    } else {
+                        // N: select all plebs in numbered group N
+                        let group: Vec<usize> = self
+                            .plebs
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| p.group_id == Some(group_num) && !p.is_dead)
+                            .map(|(i, _)| i)
+                            .collect();
+                        if !group.is_empty() {
+                            self.selected_pleb = Some(group[0]);
+                            self.selected_group = group;
+                        }
                     }
                 }
                 _ => {}

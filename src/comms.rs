@@ -9,10 +9,52 @@ use crate::pleb::{BubbleKind, Pleb};
 
 const SHOUT_COOLDOWN: f32 = 3.0; // seconds between shouts per pleb
 const GROUP_RADIUS: f32 = 8.0; // tiles — plebs within this form an implicit group
-const MIN_SPACING: f32 = 1.2; // tiles — separation force pushes apart below this
-const MAX_SPACING: f32 = 5.0; // tiles — cohesion force pulls together above this
 const COMBAT_PROXIMITY: f32 = 15.0; // tiles — enemies this close disable cohesion (disperse)
 const APPROACH_PROXIMITY: f32 = 25.0; // tiles — enemies this close reduce speed
+
+// --- Flock Spacing Presets ---
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum FlockSpacing {
+    Tight,
+    #[default]
+    Normal,
+    Spread,
+}
+
+impl FlockSpacing {
+    pub fn min_spacing(self) -> f32 {
+        match self {
+            FlockSpacing::Tight => 1.0,
+            FlockSpacing::Normal => 4.0,
+            FlockSpacing::Spread => 8.0,
+        }
+    }
+
+    pub fn max_spacing(self) -> f32 {
+        match self {
+            FlockSpacing::Tight => 4.0,
+            FlockSpacing::Normal => 8.0,
+            FlockSpacing::Spread => 16.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FlockSpacing::Tight => "Tight",
+            FlockSpacing::Normal => "Normal",
+            FlockSpacing::Spread => "Spread",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            FlockSpacing::Tight => FlockSpacing::Normal,
+            FlockSpacing::Normal => FlockSpacing::Spread,
+            FlockSpacing::Spread => FlockSpacing::Tight,
+        }
+    }
+}
 
 // --- Shout System ---
 
@@ -244,16 +286,36 @@ fn in_same_flock(a: &Pleb, b: &Pleb) -> bool {
 }
 
 /// Compute flocking adjustments for all grouped/drafted plebs (both factions).
-pub fn compute_flocking(plebs: &[Pleb], opponent_positions: &[(f32, f32)]) -> Vec<FlockAdjust> {
+pub fn compute_flocking(
+    plebs: &[Pleb],
+    opponent_positions: &[(f32, f32)],
+    spacing: FlockSpacing,
+) -> Vec<FlockAdjust> {
+    let min_spacing = spacing.min_spacing();
+    let max_spacing = spacing.max_spacing();
     let mut adjustments = Vec::new();
 
-    let nearest_opponent = |px: f32, py: f32, is_enemy: bool| -> f32 {
-        // For enemies, opponents are friendlies; for friendlies, opponents are enemies
+    let nearest_opponent = |px: f32, py: f32| -> f32 {
         opponent_positions
             .iter()
             .map(|&(ex, ey)| ((px - ex).powi(2) + (py - ey).powi(2)).sqrt())
             .fold(f32::MAX, f32::min)
     };
+
+    // Pre-compute distance-to-goal for speed matching
+    let dist_to_goal: Vec<f32> = plebs
+        .iter()
+        .map(|p| {
+            if p.path_idx < p.path.len() {
+                let last = p.path[p.path.len() - 1];
+                let dx = last.0 as f32 + 0.5 - p.x;
+                let dy = last.1 as f32 + 0.5 - p.y;
+                (dx * dx + dy * dy).sqrt()
+            } else {
+                0.0
+            }
+        })
+        .collect();
 
     for (i, pleb) in plebs.iter().enumerate() {
         if pleb.is_dead {
@@ -263,12 +325,8 @@ pub fn compute_flocking(plebs: &[Pleb], opponent_positions: &[(f32, f32)]) -> Ve
         if pleb.group_id.is_none() && !pleb.drafted {
             continue;
         }
-        // Only apply flocking to plebs that are moving
-        if pleb.path_idx >= pleb.path.len() {
-            continue;
-        }
 
-        let enemy_dist = nearest_opponent(pleb.x, pleb.y, pleb.is_enemy);
+        let enemy_dist = nearest_opponent(pleb.x, pleb.y);
         let in_combat = enemy_dist < COMBAT_PROXIMITY;
         let approaching = enemy_dist < APPROACH_PROXIMITY && !in_combat;
 
@@ -278,6 +336,31 @@ pub fn compute_flocking(plebs: &[Pleb], opponent_positions: &[(f32, f32)]) -> Ve
 
         if approaching {
             speed_mul *= 0.85;
+        }
+
+        // Speed matching: compute average dist-to-goal among flock-mates that are moving
+        let is_moving = pleb.path_idx < pleb.path.len();
+        if is_moving {
+            let mut flock_sum = dist_to_goal[i];
+            let mut flock_count = 1u32;
+            for (j, other) in plebs.iter().enumerate() {
+                if j == i || other.is_dead || !in_same_flock(pleb, other) {
+                    continue;
+                }
+                if other.path_idx < other.path.len() {
+                    flock_sum += dist_to_goal[j];
+                    flock_count += 1;
+                }
+            }
+            if flock_count > 1 {
+                let avg_dist = flock_sum / flock_count as f32;
+                let my_dist = dist_to_goal[i];
+                if avg_dist > 1.0 {
+                    // Closer than average → slow down; further → speed up slightly
+                    let ratio = (my_dist / avg_dist).clamp(0.7, 1.15);
+                    speed_mul *= ratio;
+                }
+            }
         }
 
         for (j, other) in plebs.iter().enumerate() {
@@ -293,13 +376,13 @@ pub fn compute_flocking(plebs: &[Pleb], opponent_positions: &[(f32, f32)]) -> Ve
             let nx = dx / dist;
             let ny = dy / dist;
 
-            if dist < MIN_SPACING {
-                let force = (MIN_SPACING - dist) / MIN_SPACING * 0.3;
-                adj_dx += nx * force;
-                adj_dy += ny * force;
+            if dist < min_spacing {
+                let force = (min_spacing - dist) / min_spacing;
+                adj_dx += nx * force * 2.0;
+                adj_dy += ny * force * 2.0;
             }
-            if !in_combat && dist > MAX_SPACING {
-                let force = ((dist - MAX_SPACING) / MAX_SPACING).min(0.2) * 0.15;
+            if !in_combat && dist > max_spacing {
+                let force = ((dist - max_spacing) / max_spacing).min(0.2) * 0.15;
                 adj_dx -= nx * force;
                 adj_dy -= ny * force;
             }
@@ -366,6 +449,34 @@ pub fn dissolve_group(plebs: &mut [Pleb], group_id: u8) {
     }
 }
 
+// --- Destination spreading for group moves ---
+
+/// Compute offset positions for N plebs moving to the same destination.
+/// Returns offsets from center; first pleb goes to center, rest spread in a ring.
+pub fn spread_offsets(count: usize, spacing: f32) -> Vec<(f32, f32)> {
+    if count <= 1 {
+        return vec![(0.0, 0.0)];
+    }
+    let mut offsets = Vec::with_capacity(count);
+    offsets.push((0.0, 0.0));
+    let remaining = count - 1;
+    // For 2-6 extra plebs: single ring. For 7+: fill inner ring first, then outer.
+    let mut placed = 0;
+    let mut ring = 1u32;
+    while placed < remaining {
+        let radius = spacing * ring as f32;
+        let slots = (6 * ring as usize).max(remaining - placed);
+        let n = (remaining - placed).min(slots);
+        for i in 0..n {
+            let angle = std::f32::consts::TAU * i as f32 / n as f32;
+            offsets.push((radius * angle.cos(), radius * angle.sin()));
+            placed += 1;
+        }
+        ring += 1;
+    }
+    offsets
+}
+
 // --- Debug: flock link data for visualization ---
 
 /// A link between two plebs for debug rendering.
@@ -390,7 +501,10 @@ pub fn compute_flock_links(
     plebs: &[Pleb],
     opponent_positions: &[(f32, f32)],
     show_enemies: bool,
+    spacing: FlockSpacing,
 ) -> Vec<FlockLink> {
+    let min_spacing = spacing.min_spacing();
+    let max_spacing = spacing.max_spacing();
     let mut links = Vec::new();
 
     let nearest_opponent = |px: f32, py: f32| -> f32 {
@@ -423,12 +537,12 @@ pub fn compute_flock_links(
                 continue;
             }
 
-            let (force, strength) = if dist < MIN_SPACING {
-                (FlockForce::Separation, (MIN_SPACING - dist) / MIN_SPACING)
-            } else if !in_combat && dist > MAX_SPACING {
+            let (force, strength) = if dist < min_spacing {
+                (FlockForce::Separation, (min_spacing - dist) / min_spacing)
+            } else if !in_combat && dist > max_spacing {
                 (
                     FlockForce::Cohesion,
-                    ((dist - MAX_SPACING) / (GROUP_RADIUS - MAX_SPACING)).min(1.0),
+                    ((dist - max_spacing) / (GROUP_RADIUS - max_spacing)).min(1.0),
                 )
             } else {
                 (FlockForce::Group, 1.0 - (dist / GROUP_RADIUS))

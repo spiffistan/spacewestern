@@ -232,6 +232,10 @@ pub struct GpuPleb {
     pub pants_g: f32,
     pub pants_b: f32,
     pub swing_progress: f32, // 0.0=idle, 0.01-0.99=windup, 1.0=strike
+    pub crouch: f32,         // 0.0=standing, 0.5=peeking, 1.0=crouching
+    pub _pad1: f32,
+    pub _pad2: f32,
+    pub _pad3: f32,
 }
 
 pub struct Pleb {
@@ -243,7 +247,7 @@ pub struct Pleb {
     pub path: Vec<(i32, i32)>,
     pub path_idx: usize,
     pub torch_on: bool,
-    pub headlight_on: bool,
+    pub headlight_mode: u8, // 0=off, 1=wide, 2=normal, 3=focused
     pub appearance: PlebAppearance,
     pub needs: PlebNeeds,
     pub prev_x: f32, // previous frame position (for detecting movement)
@@ -264,6 +268,7 @@ pub struct Pleb {
     pub is_dead: bool,                     // corpse: stays in world but doesn't act
     pub drafted: bool,                     // true = player controls only, no autonomous behavior
     pub aim_target: Option<usize>,         // index of enemy pleb being targeted
+    pub aim_pos: Option<(f32, f32)>,       // manual fire-at-position (overrides aim_target)
     pub aim_progress: f32,                 // 0.0 = just started aiming, 1.0 = ready to fire
     pub equipped_weapon: Option<u16>,      // item_id of held weapon (melee or ranged)
     pub prefer_ranged: bool,               // true = use pistol, false = use melee
@@ -276,11 +281,14 @@ pub struct Pleb {
     pub bubble: Option<(BubbleKind, f32)>, // (kind, seconds_remaining)
     pub weapon_swap_timer: f32,            // >0 = switching weapons (can't attack)
     pub suppression: f32,                  // 0.0–1.0: accuracy penalty from near-miss bullets
-    pub last_shout_timer: f32,             // cooldown between shouts (decays each frame)
-    pub prev_health_band: u8,              // health threshold tracking (0=full, 1=<50%, 2=<35%)
-    pub group_id: Option<u8>,              // explicit group membership (None = ungrouped)
-    pub work_priorities: [u8; 4],          // [haul, farm, build, craft] — 0=off, 1-3=priority
-    pub command_queue: Vec<PlebCommand>,   // shift-click queued commands
+    pub crouching: bool,                   // true = crouch target state
+    pub crouch_progress: f32,              // 0.0=standing, 1.0=fully crouched (smooth transition)
+    pub peek_timer: f32, // >0 = peeking up from crouch to fire (seconds remaining)
+    pub last_shout_timer: f32, // cooldown between shouts (decays each frame)
+    pub prev_health_band: u8, // health threshold tracking (0=full, 1=<50%, 2=<35%)
+    pub group_id: Option<u8>, // explicit group membership (None = ungrouped)
+    pub work_priorities: [u8; 4], // [haul, farm, build, craft] — 0=off, 1-3=priority
+    pub command_queue: Vec<PlebCommand>, // shift-click queued commands
 }
 
 /// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
@@ -368,7 +376,7 @@ impl Pleb {
             path: Vec::new(),
             path_idx: 0,
             torch_on: false,
-            headlight_on: false,
+            headlight_mode: 0,
             appearance: PlebAppearance::random(seed),
             needs: PlebNeeds::default(),
             prev_x: x,
@@ -394,6 +402,7 @@ impl Pleb {
             is_dead: false,
             drafted: false,
             aim_target: None,
+            aim_pos: None,
             aim_progress: 0.0,
             equipped_weapon: None,
             prefer_ranged: true,
@@ -406,6 +415,9 @@ impl Pleb {
             bubble: None,
             weapon_swap_timer: 0.0,
             suppression: 0.0,
+            crouching: false,
+            crouch_progress: 0.0,
+            peek_timer: 0.0,
             last_shout_timer: 0.0,
             prev_health_band: 0,
             group_id: None,
@@ -422,7 +434,7 @@ impl Pleb {
             angle: self.angle,
             selected: if selected { 1.0 } else { 0.0 },
             torch: if self.torch_on { 1.0 } else { 0.0 },
-            headlight: if self.headlight_on { 1.0 } else { 0.0 },
+            headlight: self.headlight_mode as f32, // 0=off, 1=wide, 2=normal, 3=focused
             carrying: if self.inventory.is_carrying() {
                 1.0
             } else {
@@ -449,6 +461,14 @@ impl Pleb {
             pants_g: a.pants_g,
             pants_b: a.pants_b,
             swing_progress: self.swing_progress,
+            crouch: if self.peek_timer > 0.0 {
+                self.crouch_progress * 0.5 // peeking = half-crouch visually
+            } else {
+                self.crouch_progress
+            },
+            _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0,
         }
     }
 
@@ -487,6 +507,16 @@ impl Pleb {
     }
 
     /// Clear all work/harvest/haul targets (common pattern after re-tasking).
+    /// Current Z-height for bullet collision. Smooth: 1.0 standing, 0.7 peeking, 0.4 crouched.
+    pub fn z_height(&self) -> f32 {
+        let base = 1.0 - self.crouch_progress * 0.6; // 1.0 → 0.4
+        if self.peek_timer > 0.0 {
+            base.max(0.7) // peeking raises to at least 0.7
+        } else {
+            base
+        }
+    }
+
     pub fn clear_targets(&mut self) {
         self.work_target = None;
         self.haul_target = None;

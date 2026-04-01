@@ -340,6 +340,7 @@ struct GpuPleb {
     hair_r: f32, hair_g: f32, hair_b: f32, aim_progress: f32,
     shirt_r: f32, shirt_g: f32, shirt_b: f32, weapon_type: f32,
     pants_r: f32, pants_g: f32, pants_b: f32, swing_progress: f32,
+    crouch: f32, _pad1: f32, _pad2: f32, _pad3: f32,
 };
 
 const MAX_PLEBS: u32 = 16u;
@@ -4550,6 +4551,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // Save pre-lighting base color for pleb torch/headlight illumination
+    let base_color_prelit = color;
+
     // Shadow / interior lighting
     var shadow_tint = vec3<f32>(1.0);
     var light_factor = 1.0;
@@ -4735,10 +4739,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let p = plebs[pi];
         if p.x < 0.5 && p.y < 0.5 { continue; } // empty slot
 
-        // Early distance cull: skip plebs beyond light/body range (~12 tiles)
+        // Early distance cull: skip plebs beyond max light/body range
+        // Headlight focus can reach ~40 tiles, so use generous cull distance
         let qdx = world_x - p.x;
         let qdy = world_y - p.y;
-        if qdx * qdx + qdy * qdy > 144.0 { continue; }
+        let qdist_sq = qdx * qdx + qdy * qdy;
+        // Use tight cull only when pleb has no headlight; otherwise allow up to 50 tiles
+        let cull_sq = select(144.0, 2500.0, p.headlight > 0.5);
+        if qdist_sq > cull_sq { continue; }
 
         let pdx = world_x - p.x;
         let pdy = world_y - p.y;
@@ -4752,25 +4760,62 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let jx = (fract(sin(jitter_seed) * 43758.5) - 0.5) * 0.12;
         let jy = (fract(sin(jitter_seed * 1.37 + 2.1) * 27183.6) - 0.5) * 0.12;
 
-        // Torch: warm point light with wall occlusion
-        if p.torch > 0.5 && pdist < 6.0 && !is_elevated {
+        // Torch: warm point light — illuminates terrain base color, not additive overlay
+        if p.torch > 0.5 && pdist < 12.0 && !is_elevated {
             let vis = trace_glow_visibility(world_x + jx, world_y + jy, p.x, p.y, 1.0);
             if vis > 0.01 {
-                let torch_atten = 1.0 / (1.0 + pdist * 0.4 + pdist * pdist * 0.08);
+                // Gentle inverse-distance falloff with soft outer fade
+                let torch_atten = 1.0 / (1.0 + pdist * 0.25 + pdist * pdist * 0.03);
+                let edge_fade = smoothstep(12.0, 5.0, pdist); // gradual fade from 5-12 tiles
                 let flicker = sin(camera.time * 8.3 + f32(pi) * 2.0) * 0.15 + sin(camera.time * 13.1) * 0.1 + 0.85;
-                color += vec3(1.0, 0.55, 0.15) * torch_atten * 0.5 * flicker * vis;
+                let torch_tint = vec3(1.0, 0.55, 0.15);
+                let torch_strength = torch_atten * edge_fade * 0.7 * flicker * vis;
+                color += base_color_prelit * torch_tint * torch_strength;
             }
         }
 
-        // Headlight: directional cone with wall occlusion
-        if p.headlight > 0.5 && pdist > 0.5 && pdist < 10.0 && !is_elevated {
+        // Headlight: directional cone — mode 1=wide, 2=normal, 3=focused
+        // No hard distance cutoff — attenuation alone handles falloff
+        if p.headlight > 0.5 && pdist > 0.5 && pdist < 50.0 && !is_elevated {
+            let mode = i32(p.headlight);
+            // Beam parameters per mode
+            var cone_inner = 0.0f;
+            var cone_outer = 0.5f;
+            var hl_intensity = 0.8f;
+            var dist_linear = 0.08f;   // 1/(1 + linear*d + quad*d²)
+            var dist_quad = 0.008f;
+            if mode == 1 {
+                // Wide: broad flood, shorter range, dimmer
+                cone_inner = -0.3;
+                cone_outer = 0.3;
+                hl_intensity = 0.6;
+                dist_linear = 0.12;
+                dist_quad = 0.015;
+            } else if mode == 3 {
+                // Focused: tight pencil beam, very long range, bright
+                cone_inner = 0.7;
+                cone_outer = 0.92;
+                hl_intensity = 1.6;
+                dist_linear = 0.03;
+                dist_quad = 0.002;
+            } else {
+                // Normal (mode 2): balanced
+                cone_inner = 0.05;
+                cone_outer = 0.55;
+                hl_intensity = 0.8;
+                dist_linear = 0.06;
+                dist_quad = 0.006;
+            }
             let vis = trace_glow_visibility(world_x + jx, world_y + jy, p.x, p.y, 1.5);
             if vis > 0.01 {
                 let to_pixel = normalize(vec2(pdx, pdy));
                 let light_dir = vec2(cos(p.angle), sin(p.angle));
-                let cone = smoothstep(0.4, 0.85, dot(to_pixel, light_dir));
-                let dist_atten = 1.0 / (1.0 + pdist * 0.2 + pdist * pdist * 0.04);
-                color += vec3(0.85, 0.9, 1.0) * cone * dist_atten * 0.6 * vis;
+                let cone_dot = dot(to_pixel, light_dir);
+                let cone = smoothstep(cone_inner, cone_outer, cone_dot);
+                let dist_atten = 1.0 / (1.0 + pdist * dist_linear + pdist * pdist * dist_quad);
+                let headlight_tint = vec3(0.9, 0.92, 1.0);
+                let headlight_strength = cone * dist_atten * hl_intensity * vis;
+                color += base_color_prelit * headlight_tint * headlight_strength;
             }
         }
 
@@ -4781,9 +4826,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         var ly = -pdy; // flip Y
 
         let is_corpse = p.health <= 0.0;
+        // Smooth crouch amount (0=standing, 1=fully crouched, 0-0.5 during peek)
+        let crouch_t = p.crouch;
+
         let dir_x = cos(p.angle);
         let walk_phase = fract((p.x + p.y) * 2.0 + camera.time * 4.0);
-        let bob = select(sin(walk_phase * 6.28) * 0.008, 0.0, is_corpse);
+        let bob = select(sin(walk_phase * 6.28) * 0.008, 0.0, is_corpse || crouch_t > 0.3);
         let head_dx = select(dir_x * 0.02 * s, 0.0, is_corpse);
 
         // Corpse: rotate body to lay flat in facing direction
@@ -4873,9 +4921,19 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
+        // Per-part crouch offsets: feet/pants compress up, shirt squashes, head drops
+        // crouch_t: 0=standing, 1=fully crouched
+        let ct = crouch_t;
+        let feet_shift = ct * s * 0.05;      // feet shift up slightly
+        let pants_shift = ct * s * 0.14;      // pants shift up
+        let pants_squash = 1.0 - ct * 0.4;    // pants compress vertically
+        let shirt_shift = ct * s * 0.22;      // shirt shifts up (body bends)
+        let shirt_squash = 1.0 - ct * 0.35;   // shirt compresses
+        let head_drop = ct * s * 0.35;        // head drops down toward body
+
         // Feet (dark pants)
         {
-            let fy = ly - s * 0.07 + bob;
+            let fy = ly - s * 0.07 + bob + feet_shift;
             let fd = (lx / (s * 0.12)) * (lx / (s * 0.12)) + (fy / (s * 0.06)) * (fy / (s * 0.06));
             if fd < 1.0 {
                 color = vec3(p.pants_r, p.pants_g, p.pants_b) * 0.55;
@@ -4883,10 +4941,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Pants
+        // Pants (compressed when crouching)
         {
-            let py = ly - s * 0.21 + bob;
-            let pd = (lx / (s * 0.22)) * (lx / (s * 0.22)) + (py / (s * 0.15)) * (py / (s * 0.15));
+            let py_off = ly - s * 0.21 + bob + pants_shift;
+            let py_h = s * 0.15 * pants_squash;
+            let pd = (lx / (s * 0.22)) * (lx / (s * 0.22)) + (py_off / py_h) * (py_off / py_h);
             if pd < 1.0 {
                 let shade = 0.80 + 0.20 * (1.0 - pd);
                 color = vec3(p.pants_r, p.pants_g, p.pants_b) * shade;
@@ -4894,11 +4953,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Shirt (widest part — shoulders)
+        // Shirt (compressed when crouching)
         {
             let sx_l = lx - head_dx * 0.3;
-            let sy = ly - s * 0.43 + bob;
-            let sd = (sx_l / (s * 0.26)) * (sx_l / (s * 0.26)) + (sy / (s * 0.20)) * (sy / (s * 0.20));
+            let sy = ly - s * 0.43 + bob + shirt_shift;
+            let sy_h = s * 0.20 * shirt_squash;
+            let sd = (sx_l / (s * 0.26)) * (sx_l / (s * 0.26)) + (sy / sy_h) * (sy / sy_h);
             if sd < 1.0 {
                 let shade = 0.80 + 0.20 * (1.0 - sd);
                 color = vec3(p.shirt_r, p.shirt_g, p.shirt_b) * shade;
@@ -4906,10 +4966,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Head (circle, offset by facing)
+        // Head (same size, drops down when crouching)
         {
             let hx = lx - head_dx;
-            let hy = ly - s * 0.67 + bob;
+            let hy = ly - s * 0.67 + bob + head_drop;
             let hd = length(vec2(hx, hy));
             let hr = s * 0.16;
             if hd < hr {
@@ -4919,10 +4979,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Hair (above head, offset by facing)
+        // Hair (drops with head)
         {
             let hx = lx - head_dx * 1.5;
-            let hy = ly - s * 0.77 + bob;
+            let hy = ly - s * 0.77 + bob + head_drop;
             let hr = select(select(select(s * 0.04, s * 0.08, p.hair_style > 0.5), s * 0.10, p.hair_style > 1.5), s * 0.14, p.hair_style > 2.5);
             let hd = length(vec2(hx, hy * 1.4));
             if hd < hr {
@@ -4931,10 +4991,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Carried item (above hair)
+        // Carried item (above hair, drops with head when crouching)
         if drew_pleb && p.carrying > 0.5 {
             let cx_c = lx - head_dx * 0.5;
-            let cy_c = ly - s * 0.88 + bob;
+            let cy_c = ly - s * 0.88 + bob + head_drop;
             let cd = length(vec2(cx_c * 1.3, cy_c));
             if cd < s * 0.10 {
                 let rv = fract(sin(world_x * 53.1 + world_y * 97.3) * 43758.5) * 0.04;
@@ -4946,7 +5006,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Weapon rendering: anchored to right side at torso height
         if p.weapon_type > 0.5 && !is_corpse && !drew_pleb {
             let wpn_ox = s * 0.20 + head_dx * 0.3;
-            let wpn_oy = -s * 0.48 + bob; // higher — mid-torso, not waist
+            let wpn_oy = -s * 0.48 + bob + shirt_shift; // shifts with torso when crouching
 
             let is_pistol = p.weapon_type > 3.5; // type 4 = pistol
 
@@ -5018,13 +5078,17 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let outline_w = 0.025; // outline thickness in tile units
             // Check expanded versions of main body zones
             let o_feet = (lx / (s * 0.12 + outline_w)) * (lx / (s * 0.12 + outline_w))
-                + ((ly - s * 0.07 + bob) / (s * 0.06 + outline_w)) * ((ly - s * 0.07 + bob) / (s * 0.06 + outline_w));
+                + ((ly - s * 0.07 + bob + feet_shift) / (s * 0.06 + outline_w)) * ((ly - s * 0.07 + bob + feet_shift) / (s * 0.06 + outline_w));
+            let o_py = ly - s * 0.21 + bob + pants_shift;
+            let o_ph = s * 0.15 * pants_squash + outline_w;
             let o_pants = (lx / (s * 0.22 + outline_w)) * (lx / (s * 0.22 + outline_w))
-                + ((ly - s * 0.21 + bob) / (s * 0.15 + outline_w)) * ((ly - s * 0.21 + bob) / (s * 0.15 + outline_w));
+                + (o_py / o_ph) * (o_py / o_ph);
+            let o_sy = ly - s * 0.43 + bob + shirt_shift;
+            let o_sh = s * 0.20 * shirt_squash + outline_w;
             let o_shirt = ((lx - head_dx * 0.3) / (s * 0.26 + outline_w)) * ((lx - head_dx * 0.3) / (s * 0.26 + outline_w))
-                + ((ly - s * 0.43 + bob) / (s * 0.20 + outline_w)) * ((ly - s * 0.43 + bob) / (s * 0.20 + outline_w));
+                + (o_sy / o_sh) * (o_sy / o_sh);
             let hx_o = lx - head_dx;
-            let hy_o = ly - s * 0.67 + bob;
+            let hy_o = ly - s * 0.67 + bob + head_drop;
             let o_head = length(vec2(hx_o, hy_o)) / (s * 0.16 + outline_w);
             if o_feet < 1.0 || o_pants < 1.0 || o_shirt < 1.0 || o_head < 1.0 {
                 color = vec3(0.02, 0.02, 0.02);
@@ -5048,9 +5112,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Health bar (below feet)
         if p.health > 0.0 && p.health < 0.95 {
             let bar_cx = lx;
-            let bar_cy = ly + s * 0.12;
-            if abs(bar_cy) < 0.025 && abs(bar_cx) < s * 0.25 {
-                let bar_t = (bar_cx + s * 0.25) / (s * 0.50);
+            let bar_cy = ly + s * 0.10;
+            let bar_hw = s * 0.28;  // half-width
+            let bar_hh = 0.045;     // half-height (nearly 2x previous)
+            let outline = 0.015;
+            // Dark outline
+            if abs(bar_cy) < bar_hh + outline && abs(bar_cx) < bar_hw + outline {
+                color = vec3(0.05, 0.05, 0.05);
+                drew_pleb = true;
+            }
+            // Bar fill
+            if abs(bar_cy) < bar_hh && abs(bar_cx) < bar_hw {
+                let bar_t = (bar_cx + bar_hw) / (bar_hw * 2.0);
                 if bar_t < p.health {
                     var bar_col = vec3(0.2, 0.8, 0.2);
                     if p.health < 0.5 { bar_col = mix(vec3(0.9, 0.2, 0.1), vec3(0.9, 0.8, 0.1), p.health * 2.0); }
@@ -5173,10 +5246,20 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let cold = clamp(-air_t / 20.0, 0.0, 0.4);
             color = mix(color, vec3(0.5, 0.6, 0.9), cold * 0.2);
         }
-        // Subtle sound ripple (always-on when sound is active)
+        // Subtle sound ripple (always-on when sound is active) — bilinear interpolated
         {
-            let sc = vec2<i32>(bx * 2, by * 2); // sound tex is 2x grid resolution
-            let sp = textureLoad(sound_tex, clamp(sc, vec2(0), vec2(i32(camera.grid_w) * 2 - 1, i32(camera.grid_h) * 2 - 1)), 0).r;
+            let sfx = world_x * 2.0;
+            let sfy = world_y * 2.0;
+            let sx0 = i32(floor(sfx));
+            let sy0 = i32(floor(sfy));
+            let sfrac_x = sfx - floor(sfx);
+            let sfrac_y = sfy - floor(sfy);
+            let smax = vec2<i32>(i32(camera.grid_w) * 2 - 1, i32(camera.grid_h) * 2 - 1);
+            let s00 = textureLoad(sound_tex, clamp(vec2(sx0, sy0), vec2(0), smax), 0).r;
+            let s10 = textureLoad(sound_tex, clamp(vec2(sx0 + 1, sy0), vec2(0), smax), 0).r;
+            let s01 = textureLoad(sound_tex, clamp(vec2(sx0, sy0 + 1), vec2(0), smax), 0).r;
+            let s11 = textureLoad(sound_tex, clamp(vec2(sx0 + 1, sy0 + 1), vec2(0), smax), 0).r;
+            let sp = mix(mix(s00, s10, sfrac_x), mix(s01, s11, sfrac_x), sfrac_y);
             let ripple = clamp(sp * 0.06, -0.04, 0.04);
             color += vec3(ripple * 0.5, ripple * 0.3, ripple * 0.8);
         }
@@ -5482,10 +5565,22 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         color = mix(color * 0.3, wt_color, 0.7);
     } else if camera.fluid_overlay < 14.5 {
-        // Sound overlay (14): dB-scaled pressure visualization
+        // Sound overlay (14): dB-scaled pressure visualization — bilinear interpolated
         // Colors match the decibel scale legend (green → yellow → orange → red → magenta → purple)
-        let sound_cell = vec2<i32>(bx * 2, by * 2); // sound tex is 2x grid resolution
-        let sp = textureLoad(sound_tex, clamp(sound_cell, vec2(0), vec2(i32(camera.grid_w) * 2 - 1, i32(camera.grid_h) * 2 - 1)), 0);
+        let snd_fx = world_x * 2.0;
+        let snd_fy = world_y * 2.0;
+        let snd_x0 = i32(floor(snd_fx));
+        let snd_y0 = i32(floor(snd_fy));
+        let snd_fx_frac = snd_fx - floor(snd_fx);
+        let snd_fy_frac = snd_fy - floor(snd_fy);
+        let snd_max = vec2<i32>(i32(camera.grid_w) * 2 - 1, i32(camera.grid_h) * 2 - 1);
+        let snd00 = textureLoad(sound_tex, clamp(vec2(snd_x0, snd_y0), vec2(0), snd_max), 0);
+        let snd10 = textureLoad(sound_tex, clamp(vec2(snd_x0 + 1, snd_y0), vec2(0), snd_max), 0);
+        let snd01 = textureLoad(sound_tex, clamp(vec2(snd_x0, snd_y0 + 1), vec2(0), snd_max), 0);
+        let snd11 = textureLoad(sound_tex, clamp(vec2(snd_x0 + 1, snd_y0 + 1), vec2(0), snd_max), 0);
+        let snd_top = mix(snd00, snd10, snd_fx_frac);
+        let snd_bot = mix(snd01, snd11, snd_fx_frac);
+        let sp = mix(snd_top, snd_bot, snd_fy_frac);
         let pressure = sp.r;
         let velocity = sp.g;
         let amp = abs(pressure);

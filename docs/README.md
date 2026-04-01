@@ -58,8 +58,9 @@ Early-stage exploration. Not commitments — creative brainstorming.
 | `deeper-systems.md` | Food/cooking, medicine, knowledge, psychology, aesthetics, comms |
 | `philosophy.md` | Design philosophy: permanence, silence, loneliness, scarcity |
 | `combat.md` | Real-time tactical combat: RTwP, breaching, cover, suppression |
-| `alien-fauna.md` | Nocturnal alien creatures: duskweavers, thermogasts, hollowcalls |
-| `emergent-physics.md` | Emergent physics systems and interactions |
+| `alien-fauna.md` | Nocturnal alien creatures: duskweavers, thermogasts, glintcrawlers, hollowcalls, mistmaws, borers. Sound sourcing, system hooks. |
+| `emergent-physics.md` | 20+ ideas exploiting the physics stack: acoustic ecology, pressure traps, echo location, fire whirls, condensation, erosion, pipe organ. |
+| `the-human-layer.md` | Narrative/psychology/culture: planet lore, radio, dreams, moral drift, naming, superstition, scrap economy, saloon, silence, letters. |
 | `lore-and-research.md` | World lore, history, research mechanics |
 | `asides.md` | Misc design asides (thumper, drones, sunskirter) |
 | `tall-grass.md` | Tall grass terrain type design |

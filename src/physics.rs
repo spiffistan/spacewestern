@@ -840,7 +840,7 @@ pub fn tick_bodies(
     wind_x: f32,
     wind_y: f32,
     pleb: Option<(f32, f32, f32, f32, f32)>, // (pleb_x, pleb_y, pleb_vx, pleb_vy, pleb_angle)
-    all_plebs: &[(f32, f32, usize)],         // (x, y, pleb_index) for bullet collision
+    all_plebs: &[(f32, f32, usize, f32)],    // (x, y, pleb_index, z_height) for bullet collision
     all_creatures: &[(f32, f32, usize, f32)], // (x, y, creature_index, radius) for bullet collision
     selected_pleb: Option<usize>,
     ricochets_enabled: bool,
@@ -1225,7 +1225,7 @@ pub fn tick_bodies(
         let ke = 0.5 * body.mass * speed_sq;
 
         // Check plebs
-        for &(px, py, pi) in all_plebs {
+        for &(px, py, pi, pz_height) in all_plebs {
             // Skip the pleb who fired this bullet (no self-hit)
             if body.shooter_pleb == Some(pi) || Some(pi) == selected_pleb {
                 continue;
@@ -1239,7 +1239,9 @@ pub fn tick_bodies(
             let cx = bx0 + t * seg_dx;
             let cy = by0 + t * seg_dy;
             let dist = ((cx - px) * (cx - px) + (cy - py) * (cy - py)).sqrt();
-            if dist < pleb_hit_radius {
+            // Z-height check: bullet must be at or below pleb's height
+            let bullet_z_at_t = body.z; // approximate (current frame z)
+            if dist < pleb_hit_radius && bullet_z_at_t <= pz_height {
                 bullet_hits.push(BulletHit {
                     target: HitTarget::Pleb(pi),
                     x: cx,

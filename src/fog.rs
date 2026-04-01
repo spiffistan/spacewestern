@@ -278,7 +278,7 @@ pub fn update_fog(
         let py = pleb.y.floor() as i32;
 
         // Full vision radius with shadowcasting
-        let radius = if is_night && !pleb.torch_on && !pleb.headlight_on {
+        let radius = if is_night && !pleb.torch_on && pleb.headlight_mode == 0 {
             // Nighttime without light: very limited vision
             3
         } else if is_night {

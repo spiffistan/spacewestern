@@ -100,7 +100,7 @@ const DAY_DURATION: f32 = 60.0; // must match shader
 
 // --- Gameplay tuning constants ---
 const DOUBLE_CLICK_FRAMES: u32 = 30; // ~0.5s at 60fps
-const PLEB_CLICK_RADIUS: f32 = 0.5; // world units to detect pleb click
+const PLEB_CLICK_RADIUS: f32 = 0.8; // world units — matches pleb sprite size
 const ZOOM_FACTOR: f32 = 1.1; // per scroll tick
 const ZOOM_MIN_MULT: f32 = 0.2; // relative to base zoom
 const ZOOM_MAX_MULT: f32 = 8.0; // relative to base zoom
@@ -269,8 +269,10 @@ struct App {
     grenade_charge: f32,
     grenade_impacts: Vec<(f32, f32)>,
     burst_mode: bool,
-    burst_queue: u8,  // remaining burst shots to fire (0 = none)
-    burst_delay: f32, // seconds until next burst shot
+    burst_queue: u8,   // remaining burst shots to fire (0 = none)
+    burst_delay: f32,  // seconds until next burst shot
+    attack_mode: bool, // click-to-attack targeting mode
+    flock_spacing: crate::comms::FlockSpacing, // group spacing preset
     // Weather system
     weather: WeatherState,
     weather_timer: f32,
@@ -602,8 +604,8 @@ impl App {
             sound_phase: 0,
             sound_sources: Vec::new(),
             sound_speed: 0.3,
-            sound_damping: 0.005,
-            sound_coupling: 0.15,
+            sound_damping: 0.01, // faster dissipation — prevents lingering pressure
+            sound_coupling: 0.03, // reduced — prevents sound waves from heating gas
             sound_iters_per_frame: if cfg!(target_arch = "wasm32") { 0 } else { 4 },
             camera_pan_speed: 400.0,
             dye_w: FLUID_DYE_W,
@@ -640,7 +642,7 @@ impl App {
                 let cx = (GRID_W / 2) as f32 + 0.5;
                 let cy = (GRID_H / 2) as f32 + 0.5;
                 let mut jeff = Pleb::new(0, "Jeff".to_string(), cx, cy, 42);
-                jeff.headlight_on = true;
+                jeff.headlight_mode = 2; // normal beam
                 vec![jeff]
             },
             selected_pleb: Some(0),
@@ -696,6 +698,8 @@ impl App {
             burst_mode: false,
             burst_queue: 0,
             burst_delay: 0.0,
+            attack_mode: false,
+            flock_spacing: crate::comms::FlockSpacing::Normal,
             weather: WeatherState::Clear,
             weather_timer: 45.0,
             lightning_timer: 10.0,
@@ -3768,31 +3772,77 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == winit::event::MouseButton::Left {
                     if state.is_pressed() {
-                        self.mouse_pressed = true;
-                        self.mouse_dragged = false;
-                        // Start drag for shape-building tools
-                        let is_shape_tool = match self.build_tool {
-                            BuildTool::Destroy
-                            | BuildTool::Roof
-                            | BuildTool::RemoveFloor
-                            | BuildTool::RemoveRoof
-                            | BuildTool::GrowingZone
-                            | BuildTool::StorageZone => true,
-                            BuildTool::Place(id) => {
-                                let reg = block_defs::BlockRegistry::cached();
-                                reg.get(id)
-                                    .and_then(|d| d.placement.as_ref())
-                                    .and_then(|p| p.drag.as_ref())
-                                    .map(|s| *s != block_defs::DragShape::None)
-                                    .unwrap_or(false)
-                            }
-                            _ => false,
-                        };
-                        if is_shape_tool {
+                        // Attack mode: click to target enemy
+                        if self.attack_mode {
+                            self.attack_mode = false;
                             let (wx, wy) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
-                            self.drag_start = Some((wx.floor() as i32, wy.floor() as i32));
-                        }
+                            // Find nearest enemy to click position
+                            let mut best_idx = None;
+                            let mut best_dist = 1.5f32; // click radius in tiles
+                            for (ei, e) in self.plebs.iter().enumerate() {
+                                if !e.is_dead && e.is_enemy {
+                                    let d = ((e.x - wx).powi(2) + (e.y - wy).powi(2)).sqrt();
+                                    if d < best_dist {
+                                        best_dist = d;
+                                        best_idx = Some(ei);
+                                    }
+                                }
+                            }
+                            let fire_indices: Vec<usize> = if !self.selected_group.is_empty() {
+                                self.selected_group.clone()
+                            } else if let Some(idx) = self.selected_pleb {
+                                vec![idx]
+                            } else {
+                                vec![]
+                            };
+                            for &pi in &fire_indices {
+                                if let Some(pleb) = self.plebs.get_mut(pi) {
+                                    if !pleb.is_enemy && !pleb.is_dead {
+                                        if !pleb.drafted {
+                                            pleb.drafted = true;
+                                        }
+                                        pleb.prefer_ranged = true;
+                                        pleb.update_equipped_weapon();
+                                        if let Some(target_idx) = best_idx {
+                                            pleb.aim_target = Some(target_idx);
+                                            pleb.aim_pos = None;
+                                        } else {
+                                            pleb.aim_target = None;
+                                            pleb.aim_pos = Some((wx, wy));
+                                        }
+                                        pleb.aim_progress = 0.0;
+                                    }
+                                }
+                            }
+                            // Consume click — don't pass through to normal click handling
+                        } else {
+                            self.mouse_pressed = true;
+                            self.mouse_dragged = false;
+                            // Start drag for shape-building tools
+                            let is_shape_tool = match self.build_tool {
+                                BuildTool::Destroy
+                                | BuildTool::Roof
+                                | BuildTool::RemoveFloor
+                                | BuildTool::RemoveRoof
+                                | BuildTool::GrowingZone
+                                | BuildTool::StorageZone => true,
+                                BuildTool::Place(id) => {
+                                    let reg = block_defs::BlockRegistry::cached();
+                                    reg.get(id)
+                                        .and_then(|d| d.placement.as_ref())
+                                        .and_then(|p| p.drag.as_ref())
+                                        .map(|s| *s != block_defs::DragShape::None)
+                                        .unwrap_or(false)
+                                }
+                                _ => false,
+                            };
+                            if is_shape_tool {
+                                let (wx, wy) =
+                                    self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                                self.drag_start = Some((wx.floor() as i32, wy.floor() as i32));
+                            }
+                        } // end attack_mode else
                     } else {
                         // Mouse released
                         if let Some((sx, sy)) = self.drag_start.filter(|_| self.mouse_dragged) {
@@ -3803,86 +3853,42 @@ impl ApplicationHandler for App {
                         } else if let Some((sx, sy)) = self.select_drag_start {
                             let (ex, ey) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
-                            let min_x = sx.min(ex).floor() as i32;
-                            let min_y = sy.min(ey).floor() as i32;
-                            let max_x = sx.max(ex).ceil() as i32;
-                            let max_y = sy.max(ey).ceil() as i32;
+                            let min_x = sx.min(ex);
+                            let min_y = sy.min(ey);
+                            let max_x = sx.max(ex);
+                            let max_y = sy.max(ey);
+                            // Drag selects only plebs (not blocks)
                             let mut items = Vec::new();
-                            let mut seen = std::collections::HashSet::new();
-                            for gy in min_y..max_y {
-                                for gx in min_x..max_x {
-                                    if gx < 0
-                                        || gy < 0
-                                        || gx >= GRID_W as i32
-                                        || gy >= GRID_H as i32
-                                    {
-                                        continue;
-                                    }
-                                    let bidx = (gy as u32 * GRID_W + gx as u32) as usize;
-                                    let b = self.grid_data[bidx];
-                                    let bbt = block_type_rs(b);
-                                    let bflags = block_flags_rs(b);
-                                    let is_gnd = is_ground_block(bbt);
-                                    // Include blueprints even on ground tiles
-                                    let bp = self.blueprints.get(&(gx, gy));
-                                    if is_gnd && bp.is_none() {
-                                        continue;
-                                    }
-                                    let bt_for_sel = if let Some(bp) = bp {
-                                        bp.block_data & 0xFF
-                                    } else {
-                                        bbt
-                                    };
-                                    let (ox, oy, ow, oh) = if bp.is_some() {
-                                        (gx, gy, 1, 1)
-                                    } else {
-                                        self.get_block_bounds(gx, gy, bbt, bflags)
-                                    };
-                                    if seen.insert((ox, oy)) {
-                                        items.push(SelectedItem {
-                                            x: ox,
-                                            y: oy,
-                                            w: ow,
-                                            h: oh,
-                                            block_type: bt_for_sel,
-                                            pleb_idx: None,
-                                        });
-                                    }
-                                }
-                            }
-                            // Also check plebs in the selection area
+                            let mut group = Vec::new();
                             let mut first_pleb = None;
                             for (pi, pleb) in self.plebs.iter().enumerate() {
-                                let px = pleb.x.floor() as i32;
-                                let py = pleb.y.floor() as i32;
-                                if px >= min_x && px < max_x && py >= min_y && py < max_y {
+                                if pleb.is_dead {
+                                    continue;
+                                }
+                                if pleb.x >= min_x
+                                    && pleb.x <= max_x
+                                    && pleb.y >= min_y
+                                    && pleb.y <= max_y
+                                {
                                     items.push(SelectedItem {
-                                        x: px,
-                                        y: py,
+                                        x: pleb.x.floor() as i32,
+                                        y: pleb.y.floor() as i32,
                                         w: 1,
                                         h: 1,
                                         block_type: SEL_PLEB,
                                         pleb_idx: Some(pi),
                                     });
+                                    if !pleb.is_enemy {
+                                        group.push(pi);
+                                    }
                                     if first_pleb.is_none() {
                                         first_pleb = Some(pi);
                                     }
                                 }
                             }
                             self.world_sel = WorldSelection { items };
-                            // If exactly one pleb selected, make it the active pleb
-                            self.selected_pleb = if self
-                                .world_sel
-                                .items
-                                .iter()
-                                .filter(|i| i.pleb_idx.is_some())
-                                .count()
-                                == 1
-                            {
-                                first_pleb
-                            } else {
-                                None
-                            };
+                            self.selected_group = group;
+                            self.selected_pleb = first_pleb;
                         } else if !self.mouse_dragged {
                             let (wx, wy) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
