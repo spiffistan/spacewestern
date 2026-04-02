@@ -16,6 +16,7 @@ pub enum BuildTool {
     StorageZone, // paint storage zone overlay — each tile stores one item stack
     DigZone,     // paint dig zone — plebs will dig terrain to target depth
     BermZone,    // paint berm zone — plebs dump dirt to raise terrain
+    WaterFill,   // sandbox: continuously inject water while mouse held
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

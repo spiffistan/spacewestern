@@ -1329,21 +1329,7 @@ impl App {
                 ContextAction::MoveTo(wx, wy),
                 true,
             ));
-            // Throw grenade (check range — max ~12 tiles)
-            if let Some(pi) = sel_pleb {
-                if let Some(p) = self.plebs.get(pi) {
-                    let throw_dist = ((wx - p.x).powi(2) + (wy - p.y).powi(2)).sqrt();
-                    let in_range = throw_dist < 18.0;
-                    menu.actions.push((
-                        format!(
-                            "\u{1f4a3} Throw grenade{}",
-                            if in_range { "" } else { " [too far]" }
-                        ),
-                        ContextAction::ThrowGrenade(wx, wy),
-                        in_range,
-                    ));
-                }
-            }
+            // (Grenade throwing moved to action bar targeting mode)
             has_actions = true;
         }
 
@@ -1370,10 +1356,11 @@ impl App {
                             let gx = (mx + ox).floor() as i32;
                             let gy = (my + oy).floor() as i32;
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 (gx, gy),
                             );
@@ -1951,16 +1938,25 @@ impl App {
                     // Add to dig zone (any diggable terrain)
                     let bt_dig = block_type_rs(block);
                     if bt_dig == BT_GROUND || bt_dig == BT_DUG_GROUND {
+                        let base_elev = crate::terrain::sample_elevation(
+                            &self.sub_elevation,
+                            bx as f32 + 0.5,
+                            by as f32 + 0.5,
+                        );
                         if let Some(dz) = self.dig_zones.first_mut() {
                             dz.tiles.insert((bx, by));
+                            dz.base_elevations.entry((bx, by)).or_insert(base_elev);
+                            dz.target_depth = self.dig_depth; // update depth from UI
                         } else {
                             let mut dz = zones::DigZone {
                                 tiles: std::collections::HashSet::new(),
-                                target_depth: 0.8, // default: trench depth
+                                target_depth: self.dig_depth,
                                 profile: crate::terrain::CrossProfile::VShape,
                                 width: 0.0,
+                                base_elevations: std::collections::HashMap::new(),
                             };
                             dz.tiles.insert((bx, by));
+                            dz.base_elevations.insert((bx, by), base_elev);
                             self.dig_zones.push(dz);
                         }
                         // Also register as a regular zone for overlay rendering
@@ -2003,7 +1999,7 @@ impl App {
                         }
                     }
                 }
-                BuildTool::None | BuildTool::Destroy | BuildTool::Roof => {}
+                BuildTool::None | BuildTool::Destroy | BuildTool::Roof | BuildTool::WaterFill => {}
             }
         }
     }

@@ -67,4 +67,6 @@ pub struct CameraUniform {
     pub contour_opacity: f32,       // 0.0 = off, 1.0 = full contour lines
     pub contour_interval: f32,      // minor contour line spacing in elevation units
     pub contour_major_mul: f32,     // major line every N minor intervals
+    pub water_table_offset: f32,    // global offset to water table height
+    pub aim_mode: f32,              // 0=snap, 1=normal, 2=precise
 }

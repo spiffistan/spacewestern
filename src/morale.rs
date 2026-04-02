@@ -49,7 +49,7 @@ pub const BREAK_THRESHOLD: f32 = 85.0; // stress above this → flee/panic
 /// Apply a stress event to a pleb, accounting for the vulnerability spiral and rank.
 /// Higher current stress → larger effective gain. Green plebs crack faster.
 pub fn apply_stress(pleb: &mut Pleb, base_amount: f32) {
-    let vulnerability = 1.0 + (pleb.needs.stress / 100.0).powi(2) * (10000.0 / SPIRAL_DIVISOR);
+    let vulnerability = 1.0 + (pleb.needs.stress * pleb.needs.stress) / SPIRAL_DIVISOR;
     let rank_mod = pleb.rank().stress_modifier();
     pleb.needs.stress =
         (pleb.needs.stress + base_amount * vulnerability * rank_mod).clamp(0.0, 100.0);

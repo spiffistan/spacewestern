@@ -502,7 +502,7 @@ pub fn spread_offsets(count: usize, spacing: f32) -> Vec<(f32, f32)> {
     let mut ring = 1u32;
     while placed < remaining {
         let radius = spacing * ring as f32;
-        let slots = (6 * ring as usize).max(remaining - placed);
+        let slots = 6 * ring as usize;
         let n = (remaining - placed).min(slots);
         for i in 0..n {
             let angle = std::f32::consts::TAU * i as f32 / n as f32;

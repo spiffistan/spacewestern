@@ -1963,6 +1963,55 @@ impl App {
             bytemuck::cast_slice(&self.water_table),
         );
 
+        // Remove trees/bushes that spawned in submerged areas
+        {
+            let grid_size = (GRID_W * GRID_H) as usize;
+            let dirt = make_block(BT_GROUND as u8, 0, 0);
+            for idx in 0..grid_size {
+                let bt = block_type_rs(self.grid_data[idx]);
+                if bt == BT_TREE || bt == BT_BERRY_BUSH {
+                    let wt = self.water_table[idx];
+                    let elev = self.elevation_data[idx];
+                    if wt > elev + 0.1 {
+                        let roof = self.grid_data[idx] & 0xFF000000;
+                        self.grid_data[idx] = dirt | roof;
+                    }
+                }
+            }
+        }
+
+        // Initialize CPU water depth mirror from water table + sub-tile elevation
+        {
+            let grid_size = (GRID_W * GRID_H) as usize;
+            self.water_depth_cpu.resize(grid_size, 0.0);
+            for idx in 0..grid_size
+                .min(self.water_table.len())
+                .min(self.grid_data.len())
+            {
+                let bt = block_type_rs(self.grid_data[idx]);
+                let depth = if bt == BT_WATER {
+                    2.0
+                } else {
+                    let tx = (idx % GRID_W as usize) as f32 + 0.5;
+                    let ty = (idx / GRID_W as usize) as f32 + 0.5;
+                    let sub_elev = crate::terrain::sample_elevation(&self.sub_elevation, tx, ty);
+                    (self.water_table[idx] - sub_elev).max(0.0)
+                };
+                self.water_depth_cpu[idx] = depth;
+            }
+            let deep_count = self.water_depth_cpu.iter().filter(|&&d| d > 0.3).count();
+            let shallow_count = self
+                .water_depth_cpu
+                .iter()
+                .filter(|&&d| d > 0.05 && d <= 0.3)
+                .count();
+            log::info!(
+                "Water depth CPU: {} deep tiles, {} shallow tiles",
+                deep_count,
+                shallow_count
+            );
+        }
+
         // Compute terrain ambient occlusion (structural shadows from low-angle rays)
         let terrain_ao = compute_terrain_ao(&self.elevation_data);
 
@@ -1994,6 +2043,12 @@ impl App {
         let water_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("water-readback"),
             size: 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let water_full_readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("water-full-readback"),
+            size: (GRID_W * GRID_H * 4) as u64, // 256x256 R32Float = 256KB
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -3394,6 +3449,7 @@ impl App {
             water_textures: [water_a, water_b],
             water_table_buffer,
             water_readback_buffer,
+            water_full_readback,
             water_pipeline: water_pipeline_val,
             water_bind_groups: [water_bg_ab, water_bg_ba],
             elevation_tex,

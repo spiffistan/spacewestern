@@ -68,7 +68,7 @@ struct Camera {
     pleb_scale: f32,
     contour_opacity: f32,
     contour_interval: f32,
-    contour_major_mul: f32,
+    contour_major_mul: f32, water_table_offset: f32, aim_mode: f32,
 };
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
@@ -4698,18 +4698,17 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = lit + light_color_out * light_intensity_out * pl_mul;
     }
 
-    // --- Per-pixel water rendering using sub-tile elevation ---
-    // Water surface level from the sim (per-tile) or block type
-    var water_surface = water_level;
+    // --- Per-pixel water rendering ---
+    // water_level from the sim is DEPTH (water above terrain), not absolute height.
+    var water_depth_here = water_level;
     if btype == BT_WATER {
-        water_surface = max(water_surface, 0.5); // natural water bodies have minimum depth
+        water_depth_here = max(water_depth_here, 0.5);
     }
     if btype == BT_DUG_GROUND && bheight >= 1u {
-        water_surface = max(water_surface, f32(bheight) * 0.2);
+        water_depth_here = max(water_depth_here, f32(bheight) * 0.2);
     }
 
-    // Per-pixel water depth: water surface minus terrain elevation at this exact pixel
-    let pixel_water_depth = water_surface - sub_elev;
+    let pixel_water_depth = water_depth_here;
 
     if pixel_water_depth > 0.005 {
         let t = camera.time;
@@ -4717,8 +4716,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let terrain_below = color; // save terrain color for transparency blending
 
         // --- Ripples: wind-aligned + depth-scaled ---
-        let wind_dir = vec2(camera.wind_angle, camera.wind_angle + 1.57);
-        let wind_along = dot(vec2(world_x, world_y), normalize(wind_dir));
+        let wind_dir = vec2(cos(camera.wind_angle), sin(camera.wind_angle));
+        let wind_along = dot(vec2(world_x, world_y), wind_dir);
         // Large swells (wind-driven)
         let swell = sin(wind_along * 4.0 - t * 1.5) * 0.015 * min(depth * 3.0, 1.0);
         // Small chop (multi-directional)
@@ -4732,12 +4731,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ny = cos(world_y * 13.0 + t * 1.3) * 0.3;
 
         // --- Depth-dependent water color ---
-        let shallow_col = vec3<f32>(0.18, 0.40, 0.55);
-        let mid_col = vec3<f32>(0.08, 0.25, 0.45);
-        let deep_col = vec3<f32>(0.04, 0.12, 0.30);
-        let depth_t = clamp(depth * 2.0, 0.0, 1.0);
-        var water_col = mix(shallow_col, mid_col, smoothstep(0.0, 0.5, depth_t));
-        water_col = mix(water_col, deep_col, smoothstep(0.5, 1.0, depth_t));
+        // Depth-dependent color: shallow = lighter cyan, deep = dark navy
+        let shallow_col = vec3<f32>(0.20, 0.42, 0.56);
+        let mid_col = vec3<f32>(0.10, 0.26, 0.44);
+        let deep_col = vec3<f32>(0.04, 0.12, 0.28);
+        let abyss_col = vec3<f32>(0.015, 0.04, 0.14);
+        var water_col = mix(shallow_col, mid_col, smoothstep(0.02, 0.15, depth));
+        water_col = mix(water_col, deep_col, smoothstep(0.15, 0.4, depth));
+        water_col = mix(water_col, abyss_col, smoothstep(0.4, 1.0, depth));
 
         // --- Caustics (only visible in shallow water, modulated by sunlight) ---
         if depth < 0.4 {
@@ -4771,11 +4772,11 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let water_pl_mul = select(camera.light_bleed_mul, camera.indoor_glow_mul, is_indoor);
         water_col += light_color_out * light_intensity_out * water_pl_mul * 0.5;
 
-        // --- Transparency: shallow water shows terrain through it ---
-        let alpha = smoothstep(0.0, 0.25, depth);
+        // --- Transparency gradient: thin film → see-through → opaque ---
+        let alpha = smoothstep(0.0, 0.35, depth); // wider gradient for gentler transition
         // Tint terrain below with blue (looking through water)
         let tinted_terrain = terrain_below * vec3(0.7, 0.8, 0.9);
-        color = mix(tinted_terrain, water_col, clamp(alpha, 0.15, 0.95));
+        color = mix(tinted_terrain, water_col, clamp(alpha, 0.08, 0.97));
     } else if pixel_water_depth > -0.08 {
         // Wet terrain near waterline (moisture darkening)
         let moisture = smoothstep(-0.08, 0.0, pixel_water_depth);
@@ -4971,8 +4972,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let across = pdx * side_a.x + pdy * side_a.y;
 
             let cone_len = 5.0;
-            let half_angle_start = 0.35;
-            let half_angle_end = 0.02;
+            // Aim mode affects cone: snap=narrow start, precise=wide start but tighter end
+            let aim_m = camera.aim_mode;
+            let half_angle_start = select(select(0.35, 0.50, aim_m > 1.5), 0.25, aim_m < 0.5);
+            let half_angle_end = select(select(0.04, 0.015, aim_m > 1.5), 0.08, aim_m < 0.5);
             let progress = clamp(p.aim_progress, 0.0, 1.0);
             let half_angle = mix(half_angle_start, half_angle_end, progress);
 

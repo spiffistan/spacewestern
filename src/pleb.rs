@@ -683,6 +683,41 @@ pub fn is_walkable_pos_wd(grid: &[u32], wall_data: &[u16], x: f32, y: f32) -> bo
     true
 }
 
+/// Water depth that fully blocks pathfinding (impassable — too deep to wade).
+pub const DEEP_WATER_THRESHOLD: f32 = 1.0;
+
+/// Check if a tile has deep water using the CPU water depth mirror.
+pub fn is_deep_water_cpu(water_depth_cpu: &[f32], bx: i32, by: i32) -> bool {
+    if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
+        return false;
+    }
+    let idx = (by as u32 * GRID_W + bx as u32) as usize;
+    if idx >= water_depth_cpu.len() {
+        return false;
+    }
+    water_depth_cpu[idx] > DEEP_WATER_THRESHOLD
+}
+
+/// Check if a tile has deep water (blocks movement). Requires water table + elevation data.
+pub fn is_deep_water(
+    water_table: &[f32],
+    elevation: &[f32],
+    water_table_offset: f32,
+    bx: i32,
+    by: i32,
+) -> bool {
+    if bx < 0 || by < 0 || bx >= GRID_W as i32 || by >= GRID_H as i32 {
+        return false;
+    }
+    let idx = (by as u32 * GRID_W + bx as u32) as usize;
+    if idx >= water_table.len() || idx >= elevation.len() {
+        return false;
+    }
+    let wt = water_table[idx] + water_table_offset;
+    let elev = elevation[idx];
+    wt - elev > DEEP_WATER_THRESHOLD
+}
+
 /// Find the nearest walkable tile adjacent to (gx, gy). Used when pathfinding to non-walkable targets (e.g. crates, walls).
 pub fn adjacent_walkable(grid: &[u32], gx: i32, gy: i32) -> Option<(i32, i32)> {
     for &(dx, dy) in &[
@@ -728,14 +763,61 @@ pub fn astar_path_terrain_wd(
     start: (i32, i32),
     goal: (i32, i32),
 ) -> Vec<(i32, i32)> {
-    astar_path_wd(grid, wall_data, &[], terrain, start, goal)
+    astar_path_wd(grid, wall_data, &[], &[], 0.0, terrain, start, goal)
+}
+
+/// Convenience: terrain_wd + water awareness via CPU depth mirror.
+/// `water_depth_cpu` is the pre-computed water depth per tile (updated each frame).
+pub fn astar_path_terrain_water_wd(
+    grid: &[u32],
+    wall_data: &[u16],
+    terrain: &[u32],
+    water_depth_cpu: &[f32],
+    start: (i32, i32),
+    goal: (i32, i32),
+) -> Vec<(i32, i32)> {
+    astar_path_wd(
+        grid,
+        wall_data,
+        water_depth_cpu,
+        &[],
+        0.0,
+        terrain,
+        start,
+        goal,
+    )
+}
+
+/// A* with water-aware pathfinding.
+pub fn astar_path_water_wd(
+    grid: &[u32],
+    wall_data: &[u16],
+    water_table: &[f32],
+    elevation: &[f32],
+    water_table_offset: f32,
+    terrain: &[u32],
+    start: (i32, i32),
+    goal: (i32, i32),
+) -> Vec<(i32, i32)> {
+    astar_path_wd(
+        grid,
+        wall_data,
+        water_table,
+        elevation,
+        water_table_offset,
+        terrain,
+        start,
+        goal,
+    )
 }
 
 /// A* pathfinding with wall_data layer support.
 pub fn astar_path_wd(
     grid: &[u32],
     wall_data: &[u16],
+    water_table: &[f32],
     elevation: &[f32],
+    water_table_offset: f32,
     terrain: &[u32],
     start: (i32, i32),
     goal: (i32, i32),
@@ -752,6 +834,19 @@ pub fn astar_path_wd(
             return false;
         }
         let idx = (y as u32 * GRID_W + x as u32) as usize;
+        // Deep water blocks movement
+        if !water_table.is_empty() && idx < water_table.len() {
+            let depth = if elevation.is_empty() {
+                water_table[idx] // precomputed depth
+            } else if idx < elevation.len() {
+                (water_table[idx] + water_table_offset) - elevation[idx]
+            } else {
+                0.0
+            };
+            if depth > DEEP_WATER_THRESHOLD {
+                return false;
+            }
+        }
         // Doors passable for pathfinding (pleb will push them open)
         if idx < wall_data.len() && wd_blocks_movement(wall_data[idx], true) {
             return false;
@@ -887,7 +982,36 @@ pub fn astar_path_wd(
             } else {
                 0
             };
-            let ng = g + cost + elev_cost + compact_bonus;
+            // Water cost: shallow water is expensive, deep water is impassable
+            // water_table param doubles as precomputed water depth when elevation is empty
+            let water_cost = if !water_table.is_empty() {
+                let nxt_idx = (next.1 as u32 * GRID_W + next.0 as u32) as usize;
+                if nxt_idx < water_table.len() {
+                    let depth = if elevation.is_empty() {
+                        // Precomputed depth (from water_depth_cpu)
+                        water_table[nxt_idx]
+                    } else if nxt_idx < elevation.len() {
+                        (water_table[nxt_idx] + water_table_offset) - elevation[nxt_idx]
+                    } else {
+                        0.0
+                    };
+                    if depth > DEEP_WATER_THRESHOLD {
+                        999 // impassable
+                    } else if depth > 0.05 {
+                        // Smooth quadratic cost: puddles cheap, deep water very expensive
+                        // depth 0.1 → cost 5, depth 0.3 → cost 50, depth 0.6 → cost 250, depth 0.9 → cost 500
+                        let t = ((depth - 0.05) / 0.95).min(1.0);
+                        (t * t * 600.0) as i32 + 3
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            let ng = g + cost + elev_cost + compact_bonus + water_cost;
             if ng < *g_score.get(&next).unwrap_or(&i32::MAX) {
                 g_score.insert(next, ng);
                 came_from.insert(next, current);

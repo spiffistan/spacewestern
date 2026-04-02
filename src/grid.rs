@@ -849,10 +849,15 @@ pub fn compute_roof_heights_wd(grid: &mut [u32], wall_data: &[u16]) {
                         let cidx = (cy * w + cx) as usize;
                         let nidx = (ny * w + nx) as usize;
                         // Check if crossing from (cx,cy) to (nx,ny) is blocked by wall_data edges
-                        let src_blocked =
-                            cidx < wall_data.len() && wd_has_edge(wall_data[cidx], src_edge);
-                        let dst_blocked =
-                            nidx < wall_data.len() && wd_has_edge(wall_data[nidx], dst_edge);
+                        // Only full-height walls count for roof detection (skip low walls)
+                        let src_blocked = cidx < wall_data.len()
+                            && wd_has_edge(wall_data[cidx], src_edge)
+                            && wd_height(wall_data[cidx]) != 1
+                            && wd_height(wall_data[cidx]) != 2;
+                        let dst_blocked = nidx < wall_data.len()
+                            && wd_has_edge(wall_data[nidx], dst_edge)
+                            && wd_height(wall_data[nidx]) != 1
+                            && wd_height(wall_data[nidx]) != 2;
                         if src_blocked || dst_blocked {
                             walls_found += 1;
                             break;

@@ -24,7 +24,7 @@ struct Camera {
     prev_center_x: f32, prev_center_y: f32, prev_zoom: f32, prev_time: f32,
     rain_intensity: f32, cloud_cover: f32, wind_magnitude: f32, wind_angle: f32,
     use_shadow_map: f32, shadow_map_scale: f32, sound_speed: f32, sound_damping: f32,
-    sound_coupling: f32, enable_terrain_detail: f32, terrain_ao_strength: f32, fog_enabled: f32, hover_x: f32, hover_y: f32, shadow_intensity: f32, pleb_scale: f32, contour_opacity: f32, contour_interval: f32, contour_major_mul: f32,
+    sound_coupling: f32, enable_terrain_detail: f32, terrain_ao_strength: f32, fog_enabled: f32, hover_x: f32, hover_y: f32, shadow_intensity: f32, pleb_scale: f32, contour_opacity: f32, contour_interval: f32, contour_major_mul: f32, water_table_offset: f32, aim_mode: f32,
 };
 
 @group(0) @binding(0) var water_in: texture_2d<f32>;
@@ -111,10 +111,19 @@ fn main_water(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Water table seep: water wells up where water table > elevation
-    let wt = water_table[idx];
+    // water_table_offset shifts the global water table up/down (slider-controlled)
+    let wt = water_table[idx] + camera.water_table_offset;
     let seep_head = wt - elev; // positive = water table above this tile's ground
     if seep_head > 0.0 {
         water += seep_head * SEEP_FACTOR;
+    }
+    // Percolation: water above the water table drains into the ground.
+    // Rate scales with how far below the table — slight dip = slow drain, big gap = fast.
+    // Lakes in bowls persist because flow refills what drains.
+    if seep_head < 0.0 && water > 0.0 {
+        let gap = abs(seep_head);
+        let drain = water * 0.008 + gap * 0.003; // ~50% in 1.5s at 60fps for typical gap
+        water = max(0.0, water - drain);
     }
 
     // --- Sinks ---
@@ -131,7 +140,9 @@ fn main_water(@builtin(global_invocation_id) gid: vec3<u32>) {
         let evap = EVAP_BASE * temp_factor * temp_factor * camera.sun_intensity;
         // Wind increases evaporation
         let wind_factor = 1.0 + camera.wind_magnitude * 0.05;
-        water -= evap * wind_factor;
+        // Shallow puddles evaporate much faster (high surface:volume ratio)
+        let shallow_boost = 1.0 + 5.0 / max(water, 0.02); // 0.02 depth → 250x, 1.0 depth → 6x
+        water -= evap * wind_factor * shallow_boost;
     }
 
     // --- Flow: symmetric uncapped scheme (volume-conserving) ---

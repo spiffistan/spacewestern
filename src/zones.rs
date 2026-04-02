@@ -20,6 +20,8 @@ pub struct DigZone {
     pub profile: crate::terrain::CrossProfile,
     /// Width of the zone in tiles (for profile depth calculation). 0 = auto-detect.
     pub width: f32,
+    /// Original elevation at each tile center when the zone was created.
+    pub base_elevations: std::collections::HashMap<(i32, i32), f32>,
 }
 
 /// A berm zone: terrain is raised by dumping dirt here.
@@ -303,8 +305,9 @@ pub fn generate_dig_tasks(
                     let idx = (sy * crate::terrain::ELEV_W + sx) as usize;
                     if idx < sub_elevation.len() {
                         let current = sub_elevation[idx];
-                        // Profile depth at this sub-cell position (simplified: use flat for now)
-                        let target = current - dz.target_depth;
+                        // Target = original elevation minus target depth
+                        let base = dz.base_elevations.get(&(x, y)).copied().unwrap_or(current);
+                        let target = base - dz.target_depth;
                         if current > target + 0.02 {
                             needs_dig = true;
                             break;

@@ -69,7 +69,7 @@ struct Camera {
     pleb_scale: f32,
     contour_opacity: f32,
     contour_interval: f32,
-    contour_major_mul: f32,
+    contour_major_mul: f32, water_table_offset: f32, aim_mode: f32,
 };
 
 @group(0) @binding(0) var shadow_out: texture_storage_2d<rgba8unorm, write>;

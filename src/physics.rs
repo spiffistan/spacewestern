@@ -382,6 +382,68 @@ impl PhysicsBody {
         }
     }
 
+    /// Create a grenade aimed at a specific world position.
+    /// `arc_height`: 0=flat, 1=medium, 2=lob. `strength`: 0-9 pleb stat.
+    pub fn new_grenade_targeted(
+        x: f32,
+        y: f32,
+        target_x: f32,
+        target_y: f32,
+        arc_height: u8,
+        strength: f32,
+    ) -> Self {
+        let dx = target_x - x;
+        let dy = target_y - y;
+        let dist = (dx * dx + dy * dy).sqrt().max(0.1);
+        let ndx = dx / dist;
+        let ndy = dy / dist;
+
+        // Elevation angle and max speed from arc setting + strength
+        let (elev_angle, speed_mul) = match arc_height {
+            0 => (0.3f32, 1.0f32), // flat: ~17°, full range
+            2 => (1.0, 0.6),       // lob: ~57°, 60% range
+            _ => (0.6, 0.85),      // medium: ~34°, 85% range
+        };
+        let max_speed = (15.0 + strength * 3.0) * speed_mul;
+        let gravity = 25.0; // must match GRAVITY used in physics tick
+
+        // Compute needed speed to reach target, compensating for air drag + launch height
+        // Base: range = v² sin(2θ) / g, then scale up ~20% for air resistance loss
+        let sin2a = (2.0 * elev_angle).sin().max(0.1);
+        let needed_v = (dist * gravity / sin2a).sqrt(); // physics-accurate drag handles the rest
+        let v = needed_v.min(max_speed);
+
+        let vz = v * elev_angle.sin();
+        let hvel = v * elev_angle.cos();
+
+        PhysicsBody {
+            x,
+            y,
+            z: 1.2,
+            vx: ndx * hvel,
+            vy: ndy * hvel,
+            vz,
+            rot_x: 0.0,
+            rot_y: 0.0,
+            rot_z: 0.0,
+            spin_x: 3.0,
+            spin_y: 2.0,
+            spin_z: 5.0,
+            mass: 0.8,
+            friction: 0.8,
+            bounce: 0.3,
+            size: 0.08,
+            render_height: 0.3,
+            body_type: BodyType::Grenade,
+            kind: PROJ_GRENADE,
+            fuse_timer: 4.0,
+            has_landed: false,
+            prev_x: x,
+            prev_y: y,
+            shooter_pleb: None,
+        }
+    }
+
     /// Create a flat bullet (no aimed arc). Used for cannons and non-aimed fire.
     pub fn new_bullet(x: f32, y: f32, dir_x: f32, dir_y: f32) -> Self {
         Self::new_bullet_aimed(x, y, dir_x, dir_y, 1.0, 1.0, 20.0)
@@ -958,9 +1020,16 @@ pub fn tick_bodies(
             body.vx *= 1.0 - body.friction * dt * 3.0;
             body.vy *= 1.0 - body.friction * dt * 3.0;
         } else {
-            // Air resistance (much less)
-            body.vx *= 1.0 - 0.1 * dt;
-            body.vy *= 1.0 - 0.1 * dt;
+            // Air drag: F = ½ ρ v² Cd A → deceleration ∝ v × Cd×A/m
+            // ρ = 1.225 kg/m³, Cd ≈ 0.47 (sphere), A = π r²
+            // Tiles ≈ 1m, so size is in meters. Simplified: drag_coeff = ρ×Cd×π / (2×m) × r²
+            let area = std::f32::consts::PI * body.size * body.size;
+            let drag_coeff = 1.225 * 0.47 * area / (2.0 * body.mass.max(0.01));
+            let speed = (body.vx * body.vx + body.vy * body.vy).sqrt();
+            let drag = drag_coeff * speed * dt;
+            let damp = (1.0 - drag).max(0.95); // never lose more than 5% per frame
+            body.vx *= damp;
+            body.vy *= damp;
         }
 
         // --- Velocity cap ---

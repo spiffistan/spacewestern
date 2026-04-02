@@ -164,6 +164,18 @@ fn has_low_wall_cover_any_direction(grid: &[u32], px: f32, py: f32) -> bool {
 }
 
 impl App {
+    /// Pathfind with water awareness (uses App's water table + elevation).
+    pub(crate) fn pathfind(&self, start: (i32, i32), goal: (i32, i32)) -> Vec<(i32, i32)> {
+        pleb::astar_path_terrain_water_wd(
+            &self.grid_data,
+            &self.wall_data,
+            &self.terrain_data,
+            &self.water_depth_cpu,
+            start,
+            goal,
+        )
+    }
+
     /// Update all simulation state. Returns frame delta time.
     pub(crate) fn update_simulation(&mut self) -> f32 {
         let mut events: Vec<GameEventKind> = Vec::new();
@@ -597,10 +609,11 @@ impl App {
                             .clamp(1.0, GRID_H as f32 - 2.0)
                             as i32;
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path_terrain_wd(
+                        let path = pleb::astar_path_terrain_water_wd(
                             &self.grid_data,
                             &self.wall_data,
                             &self.terrain_data,
+                            &self.water_depth_cpu,
                             start,
                             (flee_x, flee_y),
                         );
@@ -666,10 +679,11 @@ impl App {
 
                     if let Some((cx, cy)) = sought_cover {
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path_terrain_wd(
+                        let path = pleb::astar_path_terrain_water_wd(
                             &self.grid_data,
                             &self.wall_data,
                             &self.terrain_data,
+                            &self.water_depth_cpu,
                             start,
                             (cx, cy),
                         );
@@ -688,10 +702,11 @@ impl App {
                         let target_x = (pleb.x + dx).clamp(1.0, GRID_W as f32 - 2.0) as i32;
                         let target_y = (pleb.y + dy).clamp(1.0, GRID_H as f32 - 2.0) as i32;
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path_terrain_wd(
+                        let path = pleb::astar_path_terrain_water_wd(
                             &self.grid_data,
                             &self.wall_data,
                             &self.terrain_data,
+                            &self.water_depth_cpu,
                             start,
                             (target_x, target_y),
                         );
@@ -858,12 +873,35 @@ impl App {
                     let stagger_mul = if pleb.stagger_timer > 0.0 { 0.0 } else { 1.0 };
                     // Crouch: 40% speed when crouch-walking
                     let crouch_mul = if pleb.crouching { 0.4 } else { 1.0 };
+                    // Water: smooth speed gradient based on depth
+                    // Puddles (<0.05) = no penalty, ankle (0.1) = 85%, knee (0.3) = 40%, waist (0.6) = 10%
+                    let water_mul = {
+                        let wx = pleb.x.floor() as i32;
+                        let wy = pleb.y.floor() as i32;
+                        if wx >= 0 && wy >= 0 && wx < GRID_W as i32 && wy < GRID_H as i32 {
+                            let widx = (wy as u32 * GRID_W + wx as u32) as usize;
+                            if widx < self.water_depth_cpu.len() {
+                                let wd = self.water_depth_cpu[widx];
+                                if wd > 0.05 {
+                                    // Smooth curve: 1.0 at depth 0.05 → 0.08 at depth 1.0
+                                    (1.0 - ((wd - 0.05) / 0.95).min(1.0)).powi(2) * 0.92 + 0.08
+                                } else {
+                                    1.0
+                                }
+                            } else {
+                                1.0
+                            }
+                        } else {
+                            1.0
+                        }
+                    };
                     let effective_speed = move_speed
                         * speed_mul
                         * injury_mul
                         * bleed_mul
                         * stagger_mul
                         * crouch_mul
+                        * water_mul
                         * self.time_speed;
                     // Apply flocking adjustment (separation/cohesion forces)
                     let flock = flock_adjustments.iter().find(|a| a.pleb_idx == i);
@@ -880,6 +918,16 @@ impl App {
                     let can_move = |mx: f32, my: f32| -> bool {
                         if !is_walkable_pos_wd(&self.grid_data, &self.wall_data, mx, my) {
                             return false;
+                        }
+                        // Very deep water (>1.0) blocks movement entirely
+                        let wdx = mx.floor() as i32;
+                        let wdy = my.floor() as i32;
+                        if wdx >= 0 && wdy >= 0 && wdx < GRID_W as i32 && wdy < GRID_H as i32 {
+                            let widx = (wdy as u32 * GRID_W + wdx as u32) as usize;
+                            if widx < self.water_depth_cpu.len() && self.water_depth_cpu[widx] > 1.0
+                            {
+                                return false;
+                            }
                         }
                         // Check if movement crosses a tile boundary with a wall edge
                         let new_tx = mx.floor() as i32;
@@ -1003,10 +1051,11 @@ impl App {
                         }
                         if let Some((ix, iy, _)) = best_indoor {
                             let start = (bx, by);
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 (ix, iy),
                             );
@@ -1219,10 +1268,11 @@ impl App {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                                     let adj = adjacent_walkable(&self.grid_data, cx, cy)
                                         .unwrap_or((cx, cy));
-                                    let path = astar_path_terrain_wd(
+                                    let path = pleb::astar_path_terrain_water_wd(
                                         &self.grid_data,
                                         &self.wall_data,
                                         &self.terrain_data,
+                                        &self.water_depth_cpu,
                                         start,
                                         adj,
                                     );
@@ -1385,10 +1435,11 @@ impl App {
                                     }
                                     if let Some((gx, gy, _)) = nearest {
                                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                        let path = astar_path_terrain_wd(
+                                        let path = pleb::astar_path_terrain_water_wd(
                                             &self.grid_data,
                                             &self.wall_data,
                                             &self.terrain_data,
+                                            &self.water_depth_cpu,
                                             start,
                                             (gx, gy),
                                         );
@@ -1448,10 +1499,11 @@ impl App {
                                         let start = (px, py);
                                         let adj = adjacent_walkable(&self.grid_data, ax, ay)
                                             .unwrap_or((ax, ay));
-                                        let path = astar_path_terrain_wd(
+                                        let path = pleb::astar_path_terrain_water_wd(
                                             &self.grid_data,
                                             &self.wall_data,
                                             &self.terrain_data,
+                                            &self.water_depth_cpu,
                                             start,
                                             adj,
                                         );
@@ -1499,10 +1551,11 @@ impl App {
                         };
                         if let Some((tx2, ty2)) = target {
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 (tx2, ty2),
                             );
@@ -1529,10 +1582,11 @@ impl App {
                         pleb.needs.flee_target = Some(target);
                         pleb.activity = PlebActivity::Walking;
                         let start = (bx, by);
-                        let path = astar_path_terrain_wd(
+                        let path = pleb::astar_path_terrain_water_wd(
                             &self.grid_data,
                             &self.wall_data,
                             &self.terrain_data,
+                            &self.water_depth_cpu,
                             start,
                             target,
                         );
@@ -1574,10 +1628,11 @@ impl App {
                     match cmd {
                         PlebCommand::MoveTo(wx, wy) => {
                             let goal = (wx.floor() as i32, wy.floor() as i32);
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 goal,
                             );
@@ -1593,10 +1648,11 @@ impl App {
                         PlebCommand::Harvest(hx, hy) => {
                             let adj =
                                 adjacent_walkable(&self.grid_data, hx, hy).unwrap_or((hx, hy));
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 adj,
                             );
@@ -1611,10 +1667,11 @@ impl App {
                         }
                         PlebCommand::Haul(hx, hy) => {
                             if let Some((cx, cy)) = find_nearest_crate(&self.grid_data, hx, hy) {
-                                let path = astar_path_terrain_wd(
+                                let path = pleb::astar_path_terrain_water_wd(
                                     &self.grid_data,
                                     &self.wall_data,
                                     &self.terrain_data,
+                                    &self.water_depth_cpu,
                                     start,
                                     (hx, hy),
                                 );
@@ -1638,10 +1695,11 @@ impl App {
                                 pleb.haul_target = None;
                                 pleb.path.clear();
                             } else {
-                                let path = astar_path_terrain_wd(
+                                let path = pleb::astar_path_terrain_water_wd(
                                     &self.grid_data,
                                     &self.wall_data,
                                     &self.terrain_data,
+                                    &self.water_depth_cpu,
                                     start,
                                     (ix, iy),
                                 );
@@ -1656,10 +1714,11 @@ impl App {
                             }
                         }
                         PlebCommand::DigClay(dx, dy) => {
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 (dx, dy),
                             );
@@ -1691,10 +1750,11 @@ impl App {
                         PlebCommand::GatherBranches(gx, gy) => {
                             let adj =
                                 adjacent_walkable(&self.grid_data, gx, gy).unwrap_or((gx, gy));
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 adj,
                             );
@@ -3171,6 +3231,42 @@ impl App {
             }
         }
 
+        // --- Update CPU water depth mirror for pathfinding ---
+        // Combines: BT_WATER blocks, seep formula, fill tool injections, single-tile GPU readback
+        if self.frame_count.is_multiple_of(15)
+            && !self.water_table.is_empty()
+            && !self.sub_elevation.is_empty()
+        {
+            let wt_offset = self.camera.water_table_offset;
+            let grid_size = self
+                .water_depth_cpu
+                .len()
+                .min(self.water_table.len())
+                .min(self.grid_data.len());
+            for idx in 0..grid_size {
+                let bt = block_type_rs(self.grid_data[idx]);
+                if bt == BT_WATER {
+                    self.water_depth_cpu[idx] = 2.0;
+                    continue;
+                }
+                let tx = (idx % GRID_W as usize) as f32 + 0.5;
+                let ty = (idx / GRID_W as usize) as f32 + 0.5;
+                let sub_elev = terrain::sample_elevation(&self.sub_elevation, tx, ty);
+                let wt_depth = (self.water_table[idx] + wt_offset) - sub_elev;
+                if wt_depth > 0.0 {
+                    // Seep will fill this tile — mark as water
+                    self.water_depth_cpu[idx] = self.water_depth_cpu[idx].max(wt_depth);
+                } else {
+                    // Decay to match GPU drain rate (~50% in 1.5s)
+                    // At 15-frame intervals: ~4 updates/sec, need 0.87^(4*1.5)≈0.43
+                    self.water_depth_cpu[idx] *= 0.87;
+                    if self.water_depth_cpu[idx] < 0.01 {
+                        self.water_depth_cpu[idx] = 0.0;
+                    }
+                }
+            }
+        }
+
         // --- Terrain compaction decay (natural path fading) ---
         // Decay a batch of random tiles each frame so unused paths slowly fade
         if !self.time_paused && self.frame_count.is_multiple_of(30) {
@@ -3323,10 +3419,11 @@ impl App {
                                     self.active_work.insert((tx, ty));
                                     pleb.work_target = Some((tx, ty));
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                    let path = astar_path_terrain_wd(
+                                    let path = pleb::astar_path_terrain_water_wd(
                                         &self.grid_data,
                                         &self.wall_data,
                                         &self.terrain_data,
+                                        &self.water_depth_cpu,
                                         start,
                                         (tx, ty),
                                     );
@@ -3353,10 +3450,11 @@ impl App {
                                         find_nearest_crate(&self.grid_data, ix, iy)
                                 {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                    let path = astar_path_terrain_wd(
+                                    let path = pleb::astar_path_terrain_water_wd(
                                         &self.grid_data,
                                         &self.wall_data,
                                         &self.terrain_data,
+                                        &self.water_depth_cpu,
                                         start,
                                         (ix, iy),
                                     );
@@ -3415,10 +3513,11 @@ impl App {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                                     let adj = adjacent_walkable(&self.grid_data, sx, sy)
                                         .unwrap_or((sx, sy));
-                                    let path = astar_path_terrain_wd(
+                                    let path = pleb::astar_path_terrain_water_wd(
                                         &self.grid_data,
                                         &self.wall_data,
                                         &self.terrain_data,
+                                        &self.water_depth_cpu,
                                         start,
                                         adj,
                                     );
@@ -3461,10 +3560,11 @@ impl App {
                                     self.active_work.insert((tx, ty));
                                     pleb.work_target = Some((tx, ty));
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                    let path = astar_path_terrain_wd(
+                                    let path = pleb::astar_path_terrain_water_wd(
                                         &self.grid_data,
                                         &self.wall_data,
                                         &self.terrain_data,
+                                        &self.water_depth_cpu,
                                         start,
                                         (tx, ty),
                                     );
@@ -4174,10 +4274,11 @@ impl App {
                         let pleb = &mut self.plebs[pi];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                         let adj = adjacent_walkable(&self.grid_data, bx, by).unwrap_or((bx, by));
-                        let path = astar_path_terrain_wd(
+                        let path = pleb::astar_path_terrain_water_wd(
                             &self.grid_data,
                             &self.wall_data,
                             &self.terrain_data,
+                            &self.water_depth_cpu,
                             start,
                             adj,
                         );
@@ -4286,10 +4387,11 @@ impl App {
                             if let Some((pi, _)) = best_pleb {
                                 let pleb = &mut self.plebs[pi];
                                 let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                                let path = astar_path_terrain_wd(
+                                let path = pleb::astar_path_terrain_water_wd(
                                     &self.grid_data,
                                     &self.wall_data,
                                     &self.terrain_data,
+                                    &self.water_depth_cpu,
                                     start,
                                     pickup_pos,
                                 );
@@ -4336,10 +4438,11 @@ impl App {
                                     let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                                     let adj = adjacent_walkable(&self.grid_data, tree_x, tree_y)
                                         .unwrap_or((tree_x, tree_y));
-                                    let path = astar_path_terrain_wd(
+                                    let path = pleb::astar_path_terrain_water_wd(
                                         &self.grid_data,
                                         &self.wall_data,
                                         &self.terrain_data,
+                                        &self.water_depth_cpu,
                                         start,
                                         adj,
                                     );
@@ -4500,10 +4603,11 @@ impl App {
                     if let Some((pi, _)) = best_pleb {
                         let pleb = &mut self.plebs[pi];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path_terrain_wd(
+                        let path = pleb::astar_path_terrain_water_wd(
                             &self.grid_data,
                             &self.wall_data,
                             &self.terrain_data,
+                            &self.water_depth_cpu,
                             start,
                             (ix, iy),
                         );
@@ -4595,10 +4699,11 @@ impl App {
                             let tx = (pleb.x as i32 + dx).clamp(0, GRID_W as i32 - 1);
                             let ty = (pleb.y as i32 + dy).clamp(0, GRID_H as i32 - 1);
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 (tx, ty),
                             );

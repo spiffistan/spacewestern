@@ -12,6 +12,19 @@ impl App {
         self.sub_elevation = crate::terrain::generate_elevation(&self.elevation_data);
         self.water_table = grid::generate_water_table_seeded(&self.grid_data, seed);
         grid::adjust_water_table_for_elevation(&mut self.water_table, &self.elevation_data);
+        // Remove trees/bushes from submerged tiles
+        let dirt = grid::make_block(grid::BT_GROUND as u8, 0, 0);
+        for idx in 0..self.grid_data.len() {
+            let bt = grid::block_type_rs(self.grid_data[idx]);
+            if (bt == grid::BT_TREE || bt == grid::BT_BERRY_BUSH)
+                && idx < self.water_table.len()
+                && idx < self.elevation_data.len()
+                && self.water_table[idx] > self.elevation_data[idx] + 0.1
+            {
+                let roof = self.grid_data[idx] & 0xFF000000;
+                self.grid_data[idx] = dirt | roof;
+            }
+        }
         self.terrain_data = grid::generate_terrain_with_params(
             &self.elevation_data,
             &self.water_table,
@@ -1197,6 +1210,19 @@ impl App {
                                     self.show_velocity_arrows = !self.show_velocity_arrows;
                                 }
                             });
+                            ui.add(
+                                egui::Slider::new(&mut self.water_speed, 0.0..=8.0)
+                                    .text("Flow")
+                                    .step_by(0.5),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut self.camera.water_table_offset,
+                                    -10.0..=10.0,
+                                )
+                                .text("Table")
+                                .step_by(0.5),
+                            );
                         });
                         ui.separator();
                         // Sound group
@@ -2642,10 +2668,8 @@ impl App {
             ("Liquid", "\u{1f4a7}"),
             ("Zones", "\u{1f33e}"),
             ("Terrain", "\u{26f0}"),
+            ("Water", "\u{1f30a}"),
         ];
-        if self.sandbox_mode {
-            categories.push(("Sandbox", "\u{1f9ea}"));
-        }
 
         egui::Area::new(egui::Id::new("build_categories"))
             .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
@@ -2667,17 +2691,18 @@ impl App {
                             };
                             self.build_category = None;
                         }
+                        // Dig button: always zone-based (pleb work order)
                         if ui
                             .selectable_label(
-                                self.build_tool == BuildTool::Dig,
+                                self.build_tool == BuildTool::DigZone,
                                 egui::RichText::new("\u{26cf} Dig").size(cat_s),
                             )
                             .clicked()
                         {
-                            self.build_tool = if self.build_tool == BuildTool::Dig {
+                            self.build_tool = if self.build_tool == BuildTool::DigZone {
                                 BuildTool::None
                             } else {
-                                BuildTool::Dig
+                                BuildTool::DigZone
                             };
                             self.build_category = None;
                         }
@@ -2759,7 +2784,8 @@ impl App {
                                 "Gas" => 9,
                                 "Liquid" => 5,
                                 "Zones" => 2,
-                                "Terrain" => if self.sandbox_mode { 7 } else { 2 },
+                                "Terrain" => 2,
+                                "Water" => 2,
                                 _ => 5,
                             };
                             let items_per_row = if item_count > 10 {
@@ -2832,7 +2858,12 @@ impl App {
                                     match cat {
                                         "Walls" => {
                                             icon_btn(ui, BuildTool::Place(35), "\u{1f3da}", "Mud");
-                                            icon_btn(ui, BuildTool::Place(63), "\u{1f9f1}", "Low Mud");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(63),
+                                                "\u{1f9f1}",
+                                                "Low Mud",
+                                            );
                                             icon_btn(ui, BuildTool::Place(21), "\u{1fab5}", "Wood");
                                         }
                                         "Floor" => {
@@ -3053,47 +3084,124 @@ impl App {
                                             );
                                         }
                                         "Terrain" => {
-                                            // Sandbox terrain sculpting (direct, no plebs)
-                                            if self.sandbox_mode {
-                                                let mut terrain_btn = |ui: &mut egui::Ui, tool: TerrainTool, icon: &str, label: &str| {
-                                                    let sel = self.terrain_tool == Some(tool);
-                                                    let btn = ui.add(egui::Button::new(
-                                                        egui::RichText::new(format!("{} {}", icon, label))
-                                                            .size(icon_s * 0.6),
-                                                    ).selected(sel));
-                                                    if btn.clicked() {
-                                                        if sel {
-                                                            self.terrain_tool = None;
-                                                        } else {
-                                                            self.terrain_tool = Some(tool);
-                                                            self.build_tool = BuildTool::None;
-                                                        }
-                                                    }
-                                                };
-                                                terrain_btn(ui, TerrainTool::Raise, "\u{1f53a}", "Raise");
-                                                terrain_btn(ui, TerrainTool::Lower, "\u{1f53b}", "Lower");
-                                                terrain_btn(ui, TerrainTool::Flatten, "\u{2b1c}", "Flatten");
-                                                terrain_btn(ui, TerrainTool::Smooth, "\u{1f300}", "Smooth");
-                                                ui.separator();
-                                            }
                                             // Zone-based terrain tools (pleb work tasks)
                                             let dz_sel = self.build_tool == BuildTool::DigZone;
-                                            if ui.add(egui::Button::new(
-                                                egui::RichText::new("\u{26cf} Dig").size(8.0),
-                                            ).selected(dz_sel)).clicked() {
-                                                self.build_tool = if dz_sel { BuildTool::None } else { BuildTool::DigZone };
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("\u{26cf} Dig")
+                                                            .size(8.0),
+                                                    )
+                                                    .selected(dz_sel),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.build_tool = if dz_sel {
+                                                    BuildTool::None
+                                                } else {
+                                                    BuildTool::DigZone
+                                                };
                                                 self.terrain_tool = None;
                                             }
+                                            if dz_sel {
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = 2.0;
+                                                    for &(label, depth) in &[
+                                                        ("Shallow", 0.3f32),
+                                                        ("Trench", 0.8),
+                                                        ("Moat", 1.5),
+                                                    ] {
+                                                        let sel =
+                                                            (self.dig_depth - depth).abs() < 0.05;
+                                                        if ui
+                                                            .add(
+                                                                egui::Button::new(
+                                                                    egui::RichText::new(label)
+                                                                        .size(8.0),
+                                                                )
+                                                                .selected(sel),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            self.dig_depth = depth;
+                                                        }
+                                                    }
+                                                });
+                                                ui.add(
+                                                    egui::Slider::new(
+                                                        &mut self.dig_depth,
+                                                        0.1..=3.0,
+                                                    )
+                                                    .text("Depth")
+                                                    .step_by(0.1),
+                                                );
+                                            }
                                             let bz_sel = self.build_tool == BuildTool::BermZone;
-                                            if ui.add(egui::Button::new(
-                                                egui::RichText::new("\u{26f0} Berm").size(8.0),
-                                            ).selected(bz_sel)).clicked() {
-                                                self.build_tool = if bz_sel { BuildTool::None } else { BuildTool::BermZone };
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("\u{26f0} Berm")
+                                                            .size(8.0),
+                                                    )
+                                                    .selected(bz_sel),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.build_tool = if bz_sel {
+                                                    BuildTool::None
+                                                } else {
+                                                    BuildTool::BermZone
+                                                };
                                                 self.terrain_tool = None;
                                             }
                                         }
-                                        "Sandbox" if self.sandbox_mode => {
-                                            // handled below (outside icon_btn scope)
+                                        "Water" => {
+                                            let wf_sel = self.build_tool == BuildTool::WaterFill;
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("\u{1f4a7} Fill")
+                                                            .size(8.0),
+                                                    )
+                                                    .selected(wf_sel),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.build_tool = if wf_sel {
+                                                    BuildTool::None
+                                                } else {
+                                                    BuildTool::WaterFill
+                                                };
+                                                self.terrain_tool = None;
+                                            }
+                                            if wf_sel {
+                                                ui.add(
+                                                    egui::Slider::new(
+                                                        &mut self.water_speed,
+                                                        0.0..=8.0,
+                                                    )
+                                                    .text("Flow")
+                                                    .step_by(0.5),
+                                                );
+                                            }
+                                            let dig_sel = self.build_tool == BuildTool::Dig;
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("\u{26cf} Drain")
+                                                            .size(8.0),
+                                                    )
+                                                    .selected(dig_sel),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.build_tool = if dig_sel {
+                                                    BuildTool::None
+                                                } else {
+                                                    BuildTool::Dig
+                                                };
+                                                self.terrain_tool = None;
+                                            }
                                         }
                                         _ => {}
                                     }
@@ -3404,6 +3512,7 @@ impl App {
                                     BuildTool::Dig => "Sandbox: instant dig".to_string(),
                                     BuildTool::DigZone => "Drag to mark dig area".to_string(),
                                     BuildTool::BermZone => "Drag to mark berm area".to_string(),
+                                    BuildTool::WaterFill => "Hold to fill with water".to_string(),
                                     _ => "Click/drag".to_string(),
                                 };
                                 ui.label(egui::RichText::new(hint).weak().size(13.0));
@@ -4001,10 +4110,11 @@ impl App {
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                             let adj =
                                 adjacent_walkable(&self.grid_data, hx, hy).unwrap_or((hx, hy));
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 adj,
                             );
@@ -4046,10 +4156,11 @@ impl App {
                         if let Some((cx, cy)) = nearest_crate {
                             let pleb = &mut self.plebs[pi];
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 (hx, hy),
                             );
@@ -4086,10 +4197,11 @@ impl App {
                                 pleb.path.clear();
                             } else {
                                 // Walk there first, eat on arrival
-                                let path = astar_path_terrain_wd(
+                                let path = pleb::astar_path_terrain_water_wd(
                                     &self.grid_data,
                                     &self.wall_data,
                                     &self.terrain_data,
+                                    &self.water_depth_cpu,
                                     start,
                                     (ix, iy),
                                 );
@@ -4123,10 +4235,11 @@ impl App {
                             let (ox, oy) = offsets[k];
                             let goal = ((wx + ox).floor() as i32, (wy + oy).floor() as i32);
                             let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = astar_path_terrain_wd(
+                            let path = pleb::astar_path_terrain_water_wd(
                                 &self.grid_data,
                                 &self.wall_data,
                                 &self.terrain_data,
+                                &self.water_depth_cpu,
                                 start,
                                 goal,
                             );
@@ -4144,10 +4257,11 @@ impl App {
                     if let Some(sel_idx) = self.selected_pleb {
                         let pleb = &mut self.plebs[sel_idx];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                        let path = astar_path_terrain_wd(
+                        let path = pleb::astar_path_terrain_water_wd(
                             &self.grid_data,
                             &self.wall_data,
                             &self.terrain_data,
+                            &self.water_depth_cpu,
                             start,
                             (dx, dy),
                         );
@@ -4188,10 +4302,11 @@ impl App {
                         let pleb = &mut self.plebs[sel_idx];
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
                         let adj = adjacent_walkable(&self.grid_data, gx, gy).unwrap_or((gx, gy));
-                        let path = astar_path_terrain_wd(
+                        let path = pleb::astar_path_terrain_water_wd(
                             &self.grid_data,
                             &self.wall_data,
                             &self.terrain_data,
+                            &self.water_depth_cpu,
                             start,
                             adj,
                         );
@@ -8019,6 +8134,70 @@ impl App {
                         name_color,
                     );
 
+                    // Status label (situational — only shown for notable states)
+                    {
+                        let px = pleb.x.floor() as i32;
+                        let py = pleb.y.floor() as i32;
+                        let widx = if px >= 0 && py >= 0 && px < GRID_W as i32 && py < GRID_H as i32
+                        {
+                            (py as u32 * GRID_W + px as u32) as usize
+                        } else {
+                            usize::MAX
+                        };
+                        // Water depth: use CPU mirror, OR seep formula as fallback
+                        let water_d = if widx < self.water_depth_cpu.len()
+                            && self.water_depth_cpu[widx] > 0.01
+                        {
+                            self.water_depth_cpu[widx]
+                        } else if widx < self.water_table.len() {
+                            // Fallback: check seep formula
+                            let sub_e = crate::terrain::sample_elevation(
+                                &self.sub_elevation,
+                                pleb.x,
+                                pleb.y,
+                            );
+                            (self.water_table[widx] + self.camera.water_table_offset - sub_e)
+                                .max(0.0)
+                        } else {
+                            0.0
+                        };
+
+                        let (status_text, status_color): (Option<&str>, egui::Color32) =
+                            if pleb.needs.stress > 85.0 {
+                                (Some("Breaking!"), egui::Color32::from_rgb(240, 50, 50))
+                            } else if pleb.needs.health < 0.25 {
+                                (Some("Wounded"), egui::Color32::from_rgb(220, 60, 50))
+                            } else if pleb.needs.stress > 70.0 {
+                                (Some("Stressed"), egui::Color32::from_rgb(220, 160, 40))
+                            } else if water_d > 0.3 {
+                                (Some("Deep water"), egui::Color32::from_rgb(80, 140, 220))
+                            } else if water_d > 0.05 {
+                                (Some("In water"), egui::Color32::from_rgb(100, 160, 210))
+                            } else if pleb.crouching {
+                                (Some("Crouched"), egui::Color32::from_rgb(140, 180, 120))
+                            } else if pleb.suppression > 0.5 {
+                                (Some("Suppressed"), egui::Color32::from_rgb(200, 140, 60))
+                            } else if pleb.bleeding > 0.3 {
+                                (Some("Bleeding"), egui::Color32::from_rgb(200, 50, 50))
+                            } else if pleb.reload_timer > 0.0 {
+                                (Some("Reloading"), egui::Color32::from_rgb(160, 160, 160))
+                            } else {
+                                (None, egui::Color32::TRANSPARENT)
+                            };
+
+                        if let Some(text) = status_text {
+                            let status_pos = egui::pos2(pos.x, pos.y + 13.0);
+                            Self::shadow_text(
+                                &label_painter,
+                                status_pos,
+                                egui::Align2::CENTER_TOP,
+                                text,
+                                egui::FontId::proportional(9.0),
+                                status_color,
+                            );
+                        }
+                    }
+
                     // Activity label + intent (when not idle)
                     if tile_px > 10.0 {
                         let inner = pleb.activity.inner();
@@ -8178,6 +8357,151 @@ impl App {
                     }
                 }
 
+                // --- Ranged weapon targeting: LOS line + reticle ---
+                // Shows during: attack mode (cursor preview) OR active aiming
+                {
+                    let aiming_plebs: Vec<usize> = if !self.selected_group.is_empty() {
+                        self.selected_group.clone()
+                    } else if let Some(idx) = self.selected_pleb {
+                        vec![idx]
+                    } else {
+                        vec![]
+                    };
+
+                    // In attack mode: snap to enemy near cursor
+                    let (hover_wx, hover_wy) = self.hover_world;
+                    let hover_enemy = if self.attack_mode {
+                        self.plebs
+                            .iter()
+                            .filter(|e| !e.is_dead && e.is_enemy)
+                            .filter(|e| (e.x - hover_wx).powi(2) + (e.y - hover_wy).powi(2) < 2.25)
+                            .min_by(|a, b| {
+                                let da = (a.x - hover_wx).powi(2) + (a.y - hover_wy).powi(2);
+                                let db = (b.x - hover_wx).powi(2) + (b.y - hover_wy).powi(2);
+                                da.partial_cmp(&db).unwrap()
+                            })
+                            .map(|e| (e.x, e.y, true))
+                    } else {
+                        None
+                    };
+
+                    for &pi in &aiming_plebs {
+                        let pleb = match self.plebs.get(pi) {
+                            Some(p) if !p.is_dead && !p.is_enemy => p,
+                            _ => continue,
+                        };
+
+                        // Target: attack mode cursor > active aim > aim_pos
+                        let (tx, ty, is_enemy_target) = if self.attack_mode {
+                            hover_enemy.unwrap_or((hover_wx, hover_wy, false))
+                        } else if let Some(ti) = pleb.aim_target {
+                            if let Some(target) = self.plebs.get(ti) {
+                                (target.x, target.y, target.is_enemy)
+                            } else {
+                                continue;
+                            }
+                        } else if let Some((ax, ay)) = pleb.aim_pos {
+                            (ax, ay, false)
+                        } else {
+                            continue;
+                        };
+
+                        if !self.attack_mode && pleb.aim_progress <= 0.0 {
+                            continue;
+                        }
+
+                        let src = to_screen(pleb.x, pleb.y);
+                        let dst = to_screen(tx, ty);
+                        let sp = egui::Pos2::new(src.x, src.y);
+                        let dp = egui::Pos2::new(dst.x, dst.y);
+
+                        // Range check for color
+                        let dist = ((tx - pleb.x).powi(2) + (ty - pleb.y).powi(2)).sqrt();
+                        let combat_range = 25.0;
+                        let in_range = dist <= combat_range;
+
+                        // LOS line: green=clear, yellow=obstructed/water, red=out of range
+                        let line_col = if !in_range {
+                            egui::Color32::from_rgba_unmultiplied(200, 45, 35, 130)
+                        } else if is_enemy_target {
+                            egui::Color32::from_rgba_unmultiplied(50, 210, 50, 110)
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(80, 180, 200, 90)
+                        };
+                        label_painter.line_segment([sp, dp], egui::Stroke::new(1.5, line_col));
+
+                        // Pulse animation for enemies
+                        let pulse = if is_enemy_target {
+                            0.7 + 0.3 * (self.camera.time * 4.0).sin()
+                        } else {
+                            0.8
+                        };
+
+                        let r_col = if is_enemy_target {
+                            egui::Color32::from_rgba_unmultiplied(
+                                240,
+                                50,
+                                40,
+                                (180.0 * pulse) as u8,
+                            )
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(180, 200, 220, 120)
+                        };
+                        let stroke_w = if is_enemy_target { 1.5 } else { 1.0 };
+                        let stroke = egui::Stroke::new(stroke_w, r_col);
+
+                        // Target reticle: crosshair circle centered on target
+                        let r_outer = tile_px * 0.3;
+                        let r_inner = tile_px * 0.08;
+                        let cross_len = tile_px * 0.15;
+
+                        // Outer circle
+                        label_painter.circle_stroke(dp, r_outer, stroke);
+                        // Inner dot
+                        label_painter.circle_filled(dp, r_inner, r_col);
+                        // Crosshair lines (extending beyond outer circle)
+                        let cx_ext = r_outer + cross_len;
+                        let cx_gap = r_outer * 0.3;
+                        // Top
+                        label_painter.line_segment(
+                            [
+                                egui::Pos2::new(dp.x, dp.y - cx_gap),
+                                egui::Pos2::new(dp.x, dp.y - cx_ext),
+                            ],
+                            stroke,
+                        );
+                        // Bottom
+                        label_painter.line_segment(
+                            [
+                                egui::Pos2::new(dp.x, dp.y + cx_gap),
+                                egui::Pos2::new(dp.x, dp.y + cx_ext),
+                            ],
+                            stroke,
+                        );
+                        // Left
+                        label_painter.line_segment(
+                            [
+                                egui::Pos2::new(dp.x - cx_gap, dp.y),
+                                egui::Pos2::new(dp.x - cx_ext, dp.y),
+                            ],
+                            stroke,
+                        );
+                        // Right
+                        label_painter.line_segment(
+                            [
+                                egui::Pos2::new(dp.x + cx_gap, dp.y),
+                                egui::Pos2::new(dp.x + cx_ext, dp.y),
+                            ],
+                            stroke,
+                        );
+
+                        // Center dot for enemies
+                        if is_enemy_target {
+                            label_painter.circle_filled(dp, 2.0, r_col);
+                        }
+                    }
+                }
+
                 // Grenade charge bar above selected pleb
                 if self.grenade_charging
                     && let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i))
@@ -8200,6 +8524,131 @@ impl App {
                         1.0,
                         egui::Color32::from_rgb(r, g, 40),
                     );
+                }
+
+                // Grenade targeting overlay: line, arc preview, impact circle
+                if self.grenade_targeting
+                    && let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i))
+                {
+                    let (hx, hy) = self.hover_world;
+                    let dx = hx - pleb.x;
+                    let dy = hy - pleb.y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    let strength = pleb.skills[1] as f32;
+                    let max_range = crate::grenade_max_range(strength, self.grenade_arc);
+                    let in_range = dist <= max_range;
+
+                    let pleb_screen = to_screen(pleb.x, pleb.y);
+                    let target_screen = to_screen(hx, hy);
+                    let half = tile_px * 0.5;
+
+                    // Targeting line (green in range, red out)
+                    let line_col = if in_range {
+                        egui::Color32::from_rgba_premultiplied(60, 200, 60, 160)
+                    } else {
+                        egui::Color32::from_rgba_premultiplied(220, 60, 40, 160)
+                    };
+                    label_painter.line_segment(
+                        [
+                            egui::Pos2::new(pleb_screen.x + half, pleb_screen.y + half),
+                            egui::Pos2::new(target_screen.x + half, target_screen.y + half),
+                        ],
+                        egui::Stroke::new(2.0, line_col),
+                    );
+
+                    // Ballistic arc preview + ground shadow
+                    if in_range && dist > 0.5 {
+                        let elev = match self.grenade_arc {
+                            0 => 0.3f32,
+                            2 => 1.0,
+                            _ => 0.6,
+                        };
+                        let ndx = dx / dist;
+                        let ndy = dy / dist;
+                        let speed_mul = match self.grenade_arc {
+                            0 => 1.0f32,
+                            2 => 0.6,
+                            _ => 0.85,
+                        };
+                        let max_v = (15.0 + strength * 3.0) * speed_mul;
+                        let sin2a = (2.0 * elev).sin().max(0.1);
+                        let v = (dist * 25.0 / sin2a).sqrt().min(max_v);
+                        let flight_time = 2.0 * v * elev.sin() / 25.0;
+                        let hvel = v * elev.cos();
+
+                        let arc_steps = 20;
+                        let mut prev_shadow =
+                            egui::Pos2::new(pleb_screen.x + half, pleb_screen.y + half);
+                        let mut prev_arc = egui::Pos2::new(
+                            pleb_screen.x + half,
+                            pleb_screen.y + half - 1.2 * tile_px * 0.3,
+                        );
+
+                        for step in 1..=arc_steps {
+                            let t = step as f32 / arc_steps as f32;
+                            let wt = flight_time * t;
+                            let wx = pleb.x + ndx * hvel * wt;
+                            let wy = pleb.y + ndy * hvel * wt;
+                            let wz = (1.2 + v * elev.sin() * wt - 0.5 * 25.0 * wt * wt).max(0.0);
+
+                            let sp_raw = to_screen(wx, wy);
+                            let sp = egui::Pos2::new(sp_raw.x + half, sp_raw.y + half);
+
+                            // Ground shadow (dashed)
+                            if step % 2 == 0 {
+                                label_painter.line_segment(
+                                    [prev_shadow, sp],
+                                    egui::Stroke::new(
+                                        1.0,
+                                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 60),
+                                    ),
+                                );
+                            }
+                            prev_shadow = sp;
+
+                            // Arc line (offset upward by z)
+                            let z_px = wz * tile_px * 0.3;
+                            let arc_pt = egui::Pos2::new(sp.x, sp.y - z_px);
+                            label_painter.line_segment(
+                                [prev_arc, arc_pt],
+                                egui::Stroke::new(
+                                    2.0,
+                                    egui::Color32::from_rgba_premultiplied(255, 180, 60, 180),
+                                ),
+                            );
+                            prev_arc = arc_pt;
+                        }
+                    }
+
+                    // Impact probability circle
+                    {
+                        let base_spread = 0.5 + dist * 0.04;
+                        let arc_spread = match self.grenade_arc {
+                            0 => 0.0f32,
+                            2 => 0.4,
+                            _ => 0.15,
+                        };
+                        let skill_mod = 1.0 - strength * 0.03;
+                        let radius = (base_spread + arc_spread) * skill_mod.max(0.3);
+                        let radius_px = radius * tile_px;
+                        let center =
+                            egui::Pos2::new(target_screen.x + half, target_screen.y + half);
+                        let alpha = if in_range { 25u8 } else { 12 };
+                        let stroke_alpha = if in_range { 50u8 } else { 25 };
+                        label_painter.circle_filled(
+                            center,
+                            radius_px,
+                            egui::Color32::from_rgba_unmultiplied(0, 0, 0, alpha),
+                        );
+                        label_painter.circle_stroke(
+                            center,
+                            radius_px,
+                            egui::Stroke::new(
+                                1.0,
+                                egui::Color32::from_rgba_unmultiplied(200, 200, 200, stroke_alpha),
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -8750,6 +9199,38 @@ impl App {
         if self.debug.water_level > 0.01 {
             env_parts.push(format!("water {:.2}", self.debug.water_level));
         }
+        // Show CPU pathfinding water depth at hovered tile (always, for debugging)
+        {
+            let hx = self.hover_world.0.floor() as i32;
+            let hy = self.hover_world.1.floor() as i32;
+            if hx >= 0 && hy >= 0 && hx < grid::GRID_W as i32 && hy < grid::GRID_H as i32 {
+                let widx = (hy as u32 * grid::GRID_W + hx as u32) as usize;
+                let cpu_depth = if widx < self.water_depth_cpu.len() {
+                    self.water_depth_cpu[widx]
+                } else {
+                    0.0
+                };
+                env_parts.push(format!("pw {:.2}", cpu_depth));
+                // Debug: show array sizes and raw values
+                env_parts.push(format!(
+                    "wt:{} se:{} cpu:{}",
+                    self.water_table.len(),
+                    self.sub_elevation.len(),
+                    self.water_depth_cpu.len(),
+                ));
+                if widx < self.water_table.len() {
+                    let wt = self.water_table[widx];
+                    let se = crate::terrain::sample_elevation(
+                        &self.sub_elevation,
+                        hx as f32 + 0.5,
+                        hy as f32 + 0.5,
+                    );
+                    let off = self.camera.water_table_offset;
+                    let d = (wt + off) - se;
+                    env_parts.push(format!("wt={:.2}+{:.1} se={:.2} d={:.2}", wt, off, se, d,));
+                }
+            }
+        }
         if !env_parts.is_empty() {
             Self::shadow_text(
                 &painter,
@@ -8978,6 +9459,9 @@ impl App {
         });
         let is_burst = self.burst_mode;
         let is_attack_mode = self.attack_mode;
+        let is_grenade_targeting = self.grenade_targeting;
+        let grenade_arc = self.grenade_arc;
+        let cur_aim_mode = self.aim_mode;
         let cur_spacing = self.flock_spacing;
         let any_headlight = friendly.iter().any(|&i| self.plebs[i].headlight_mode > 0);
         let headlight_mode = if count == 1 {
@@ -9099,6 +9583,10 @@ impl App {
         }
         if any_ranged_weapon {
             n_tiles += 1; // fire mode
+            n_tiles += 1; // aim mode
+        }
+        if any_drafted {
+            n_tiles += 2; // grenade + arc
         }
         if any_drafted || any_moving {
             n_tiles += 1; // hold position
@@ -9398,6 +9886,43 @@ impl App {
                                 }
                             }
 
+                            // --- Aim mode ---
+                            if any_ranged_weapon {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = match cur_aim_mode {
+                                    0 => egui::Color32::from_rgb(70, 50, 35), // snap: warm
+                                    2 => egui::Color32::from_rgb(35, 50, 70), // precise: cool
+                                    _ => default_bg,
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                let (icon, label) = match cur_aim_mode {
+                                    0 => ("\u{26a1}", "Snap"),     // lightning = fast
+                                    2 => ("\u{1f3af}", "Precise"), // target = accurate
+                                    _ => ("\u{2696}", "Normal"),   // scales = balanced
+                                };
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    icon,
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    label,
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                if response.clicked() {
+                                    self.aim_mode = (self.aim_mode + 1) % 3;
+                                }
+                            }
+
                             // --- Fire mode [X] ---
                             if any_ranged_weapon {
                                 let (rect, response) = ui.allocate_exact_size(
@@ -9433,6 +9958,77 @@ impl App {
                                 draw_hint(&painter, rect, "X");
                                 if response.clicked() {
                                     self.burst_mode = !self.burst_mode;
+                                }
+                            }
+
+                            // --- Grenade [B] ---
+                            if any_drafted {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if is_grenade_targeting {
+                                    egui::Color32::from_rgb(90, 50, 25)
+                                } else {
+                                    default_bg
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    "\u{1f4a3}",
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    "Throw",
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "B");
+                                if response.clicked() {
+                                    self.grenade_targeting = !self.grenade_targeting;
+                                }
+                            }
+
+                            // --- Grenade Arc ---
+                            if any_drafted {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = match grenade_arc {
+                                    0 => egui::Color32::from_rgb(55, 55, 40),
+                                    2 => egui::Color32::from_rgb(40, 45, 60),
+                                    _ => default_bg,
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                // Visual arc indicator: small curved line
+                                let (icon, label) = match grenade_arc {
+                                    0 => ("\u{27a1}", "Flat"), // right arrow
+                                    2 => ("\u{2b06}", "Lob"),  // up arrow
+                                    _ => ("\u{2197}", "Arc"),  // diagonal arrow
+                                };
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    icon,
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    label,
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                if response.clicked() {
+                                    self.grenade_arc = (self.grenade_arc + 1) % 3;
                                 }
                             }
 

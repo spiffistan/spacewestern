@@ -527,7 +527,9 @@ impl App {
                 PhysicalKey::Code(KeyCode::Escape) => {
                     // Close whatever is open, in priority order
                     // When nothing is open: toggle pause menu
-                    if self.attack_mode {
+                    if self.grenade_targeting {
+                        self.grenade_targeting = false;
+                    } else if self.attack_mode {
                         self.attack_mode = false;
                     } else if self.show_pause_menu {
                         self.show_pause_menu = false;

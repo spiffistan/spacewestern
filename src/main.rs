@@ -93,6 +93,19 @@ mod placement;
 #[cfg(test)]
 pub(crate) use placement::compute_diagonal_wall_tiles;
 
+/// Max throw range for a grenade given strength (0-9) and arc height (0=flat,1=med,2=lob).
+fn grenade_max_range(strength: f32, arc: u8) -> f32 {
+    let base_speed = 15.0 + strength * 3.0;
+    let (elev, speed_mul) = match arc {
+        0 => (0.3f32, 1.0f32),
+        2 => (1.0, 0.6),
+        _ => (0.6, 0.85),
+    };
+    let v = base_speed * speed_mul;
+    let sin2a = (2.0 * elev).sin().max(0.1);
+    v * v * sin2a / 25.0 // must match GRAVITY in physics tick
+}
+
 mod fire;
 mod fog;
 mod input;
@@ -270,6 +283,9 @@ struct App {
     grenade_charging: bool,
     grenade_charge: f32,
     grenade_impacts: Vec<(f32, f32)>,
+    grenade_targeting: bool, // cursor-directed grenade targeting mode
+    grenade_arc: u8,         // throw height: 0=flat, 1=medium, 2=lob
+    aim_mode: u8,            // 0=snap, 1=normal, 2=precise
     burst_mode: bool,
     burst_queue: u8,   // remaining burst shots to fire (0 = none)
     burst_delay: f32,  // seconds until next burst shot
@@ -294,17 +310,22 @@ struct App {
     active_work: std::collections::HashSet<(i32, i32)>,
     manual_tasks: Vec<zones::WorkTask>,
     dig_zones: Vec<zones::DigZone>,
+    dig_depth: f32, // target depth for new dig zones (adjustable via UI)
     berm_zones: Vec<zones::BermZone>,
     work_priority: zones::WorkPriority,
     crop_timers: std::collections::HashMap<u32, f32>,
     water_phase: usize,
     water_frame: u32,
-    water_table: Vec<f32>, // static water table height map (CPU copy for info overlay)
-    elevation_data: Vec<f32>, // terrain elevation at grid res (256x256)
-    sub_elevation: Vec<f32>, // sub-tile elevation heightmap (1024x1024)
+    water_speed: f32, // dispatch multiplier: 1.0=normal, 2.0=fast, 0.5=slow
+    water_injections: Vec<(i32, i32, f32)>, // (tile_x, tile_y, level) pending writes
+    water_fill_sources: std::collections::HashMap<(i32, i32), f32>, // active fill: tile → accumulated level
+    water_depth_cpu: Vec<f32>, // CPU mirror of water depth per tile (for pathfinding/movement)
+    water_table: Vec<f32>,     // static water table height map (CPU copy for info overlay)
+    elevation_data: Vec<f32>,  // terrain elevation at grid res (256x256)
+    sub_elevation: Vec<f32>,   // sub-tile elevation heightmap (1024x1024)
     sub_elevation_dirty: bool, // true when sub_elevation needs re-upload
-    terrain_data: Vec<u32>, // per-tile terrain type, vegetation, richness etc.
-    terrain_dirty: bool,   // true when terrain_data needs re-upload to GPU
+    terrain_data: Vec<u32>,    // per-tile terrain type, vegetation, richness etc.
+    terrain_dirty: bool,       // true when terrain_data needs re-upload to GPU
     terrain_params: grid::TerrainParams,
     game_state: GameState,
     // Character generation
@@ -411,6 +432,7 @@ struct GfxState {
     water_textures: [wgpu::Texture; 2],
     water_table_buffer: wgpu::Buffer,
     water_readback_buffer: wgpu::Buffer, // single-texel readback for info overlay
+    water_full_readback: wgpu::Buffer,   // full 256x256 readback for CPU pathfinding
     water_pipeline: wgpu::ComputePipeline,
     water_bind_groups: [wgpu::BindGroup; 2],
     // Fluid simulation GPU resources
@@ -541,6 +563,8 @@ impl App {
                 contour_opacity: 1.0,
                 contour_interval: 1.0,
                 contour_major_mul: 3.0,
+                water_table_offset: 0.0,
+                aim_mode: 1.0,
             },
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
@@ -705,6 +729,9 @@ impl App {
             grenade_charging: false,
             grenade_charge: 0.0,
             grenade_impacts: Vec::new(),
+            grenade_targeting: false,
+            grenade_arc: 1,
+            aim_mode: 1, // normal
             burst_mode: false,
             burst_queue: 0,
             burst_delay: 0.0,
@@ -725,11 +752,16 @@ impl App {
             active_work: std::collections::HashSet::new(),
             manual_tasks: Vec::new(),
             dig_zones: Vec::new(),
+            dig_depth: 0.8,
             berm_zones: Vec::new(),
             work_priority: zones::WorkPriority::PlantFirst,
             crop_timers: std::collections::HashMap::new(),
             water_phase: 0,
             water_frame: 0,
+            water_speed: 1.0,
+            water_injections: Vec::new(),
+            water_fill_sources: std::collections::HashMap::new(),
+            water_depth_cpu: vec![0.0; (grid::GRID_W * grid::GRID_H) as usize],
             water_table: Vec::new(),
             elevation_data: Vec::new(),
             sub_elevation: Vec::new(),
@@ -1811,6 +1843,56 @@ impl App {
             }
         }
 
+        // --- Water fill tool: continuously inject water while mouse held ---
+        if self.mouse_pressed
+            && self.build_tool == BuildTool::WaterFill
+            && self.game_state == GameState::Playing
+        {
+            let (hx, hy) = self.hover_world;
+            let bx = hx.floor() as i32;
+            let by = hy.floor() as i32;
+            if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                // Rising water level at the fill point
+                let fill_rate = 0.04 * dt * 60.0;
+                let center_level = self.water_fill_sources.entry((bx, by)).or_insert(0.0);
+                *center_level = (*center_level + fill_rate).min(5.0);
+                let target_surface = *center_level
+                    + terrain::sample_elevation(
+                        &self.sub_elevation,
+                        bx as f32 + 0.5,
+                        by as f32 + 0.5,
+                    );
+
+                // Flood fill: set water level on all tiles in a radius where
+                // terrain elevation is below the target surface level
+                let radius = 12i32;
+                for dy in -radius..=radius {
+                    for dx in -radius..=radius {
+                        let nx = bx + dx;
+                        let ny = by + dy;
+                        if nx < 0 || ny < 0 || nx >= GRID_W as i32 || ny >= GRID_H as i32 {
+                            continue;
+                        }
+                        let dist_sq = dx * dx + dy * dy;
+                        if dist_sq > radius * radius {
+                            continue;
+                        }
+                        let elev = terrain::sample_elevation(
+                            &self.sub_elevation,
+                            nx as f32 + 0.5,
+                            ny as f32 + 0.5,
+                        );
+                        if elev < target_surface {
+                            let water_here = (target_surface - elev).min(5.0);
+                            self.water_injections.push((nx, ny, water_here));
+                        }
+                    }
+                }
+            }
+        } else if self.build_tool != BuildTool::WaterFill {
+            self.water_fill_sources.clear();
+        }
+
         // Generate hints every 30 frames
         if self.frame_count.is_multiple_of(30) {
             self.generate_hints();
@@ -2291,6 +2373,7 @@ impl App {
         };
         self.camera.contour_interval = self.contour_interval;
         self.camera.contour_major_mul = self.contour_major_mul;
+        self.camera.aim_mode = self.aim_mode as f32;
         self.camera.fog_enabled = if self.fog_enabled { 1.0 } else { 0.0 };
         self.camera.hover_x = self.hover_world.0;
         self.camera.hover_y = self.hover_world.1;
@@ -3088,25 +3171,138 @@ impl App {
                 }
             }
 
-            // 12. Ground water simulation (256x256, every frame for smooth flow)
+            // 12. Ground water simulation (256x256, speed-adjustable)
             self.water_frame += 1;
             if !self.time_paused {
                 let tw = GRID_W.div_ceil(8);
                 let th = GRID_H.div_ceil(8);
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("water"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.water_pipeline);
-                p.set_bind_group(0, &gfx.water_bind_groups[self.water_phase], &[]);
-                p.dispatch_workgroups(tw, th, 1);
-                drop(p);
-                self.water_phase = 1 - self.water_phase;
+                // Multiple dispatches per frame for faster flow (water_speed > 1)
+                // Fractional accumulation for slow flow (water_speed < 1)
+                let dispatches = self.water_speed.max(0.1) as u32;
+                let frac = self.water_speed - dispatches as f32;
+                let extra = if frac > 0.0
+                    && (self.water_frame as f32 * frac) as u32
+                        > ((self.water_frame - 1) as f32 * frac) as u32
+                {
+                    1u32
+                } else {
+                    0
+                };
+                for _ in 0..(dispatches + extra) {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("water"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.water_pipeline);
+                    p.set_bind_group(0, &gfx.water_bind_groups[self.water_phase], &[]);
+                    p.dispatch_workgroups(tw, th, 1);
+                    drop(p);
+                    self.water_phase = 1 - self.water_phase;
+                }
             }
 
-            // Debug: copy one dye texel at cursor position for readback
+            // Full water texture readback → CPU pathfinding mirror (every 30 frames)
+            if self.frame_count > 30 && self.frame_count.is_multiple_of(30) {
+                // Copy current water texture to readback buffer
+                let water_read_idx = 1 - self.water_phase;
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &gfx.water_textures[water_read_idx],
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &gfx.water_full_readback,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(GRID_W * 4),
+                            rows_per_image: Some(GRID_H),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: GRID_W,
+                        height: GRID_H,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+
+            // Process water injections (from sandbox dig, pipe outputs, etc.)
+            for (wx, wy, amount) in self.water_injections.drain(..) {
+                if wx < 0 || wy < 0 || wx >= GRID_W as i32 || wy >= GRID_H as i32 {
+                    continue;
+                }
+                // Update CPU mirror for pathfinding
+                let widx = (wy as u32 * GRID_W + wx as u32) as usize;
+                if widx < self.water_depth_cpu.len() {
+                    self.water_depth_cpu[widx] = self.water_depth_cpu[widx].max(amount);
+                }
+                // Write a single texel to both water textures
+                let data = amount.to_le_bytes();
+                for tex in &gfx.water_textures {
+                    gfx.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: wx as u32,
+                                y: wy as u32,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &data,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(4),
+                            rows_per_image: Some(1),
+                        },
+                        wgpu::Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+            }
+
+            // Readback at cursor position: dye (debug only) + water (always)
             let ctrl_for_debug = self.pressed_keys.contains(&KeyCode::ControlLeft)
                 || self.pressed_keys.contains(&KeyCode::ControlRight);
+            {
+                // Water readback always runs (needed for hover info + water_depth_cpu)
+                let (wx, wy) = self.hover_world;
+                let water_bx = wx.floor().clamp(0.0, (GRID_W - 1) as f32) as u32;
+                let water_by = wy.floor().clamp(0.0, (GRID_H - 1) as f32) as u32;
+                let water_read_idx = self.water_phase;
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &gfx.water_textures[water_read_idx],
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: water_bx,
+                            y: water_by,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &gfx.water_readback_buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(READBACK_ALIGNMENT as u32),
+                            rows_per_image: Some(1),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                self.debug.water_pending = true;
+            }
             if self.debug.mode || ctrl_for_debug {
                 let (wx, wy) = self.hover_world;
                 let dye_x =
@@ -3142,35 +3338,7 @@ impl App {
                 );
                 self.debug.fluid_pending = true;
 
-                // Also copy water level at cursor
-                let water_bx = wx.floor().clamp(0.0, (GRID_W - 1) as f32) as u32;
-                let water_by = wy.floor().clamp(0.0, (GRID_H - 1) as f32) as u32;
-                let water_read_idx = self.water_phase; // current readable water texture
-                encoder.copy_texture_to_buffer(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &gfx.water_textures[water_read_idx],
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: water_bx,
-                            y: water_by,
-                            z: 0,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &gfx.water_readback_buffer,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(READBACK_ALIGNMENT as u32),
-                            rows_per_image: Some(1),
-                        },
-                    },
-                    wgpu::Extent3d {
-                        width: 1,
-                        height: 1,
-                        depth_or_array_layers: 1,
-                    },
-                );
+                // (water readback moved outside debug block — always runs)
                 self.debug.water_pending = true;
 
                 // Also copy block temperature at cursor position from block_temp_buffer
@@ -3541,6 +3709,15 @@ impl App {
                     let data = buffer_slice.get_mapped_range();
                     let f32_data: &[f32] = bytemuck::cast_slice(&data);
                     self.debug.water_level = f32_data[0];
+                    // Update water_depth_cpu at the hovered tile (single-tile mirror)
+                    let hx = self.hover_world.0.floor() as i32;
+                    let hy = self.hover_world.1.floor() as i32;
+                    if hx >= 0 && hy >= 0 && hx < GRID_W as i32 && hy < GRID_H as i32 {
+                        let widx = (hy as u32 * GRID_W + hx as u32) as usize;
+                        if widx < self.water_depth_cpu.len() {
+                            self.water_depth_cpu[widx] = self.debug.water_level;
+                        }
+                    }
                     drop(data);
                     gfx.water_readback_buffer.unmap();
                 }
@@ -3832,8 +4009,44 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == winit::event::MouseButton::Left {
                     if state.is_pressed() {
+                        // Grenade targeting mode: click to throw at cursor
+                        if self.grenade_targeting {
+                            self.grenade_targeting = false;
+                            let (wx, wy) =
+                                self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                            if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                                let dist = ((wx - pleb.x).powi(2) + (wy - pleb.y).powi(2)).sqrt();
+                                let strength = pleb.skills[1] as f32; // melee skill as strength
+                                let max_range = grenade_max_range(strength, self.grenade_arc);
+                                if dist <= max_range {
+                                    // Scatter within impact spread circle
+                                    let base_spread = 0.5 + dist * 0.04;
+                                    let arc_spread = match self.grenade_arc {
+                                        0 => 0.0f32,
+                                        2 => 0.4,
+                                        _ => 0.15,
+                                    };
+                                    let skill_mod = (1.0 - strength * 0.03).max(0.3);
+                                    let radius = (base_spread + arc_spread) * skill_mod;
+                                    // Random offset within circle
+                                    let seed = (wx * 137.3 + wy * 311.7 + self.time_of_day * 7919.0)
+                                        as u32;
+                                    let r_angle = types::hash_f32(seed) * std::f32::consts::TAU;
+                                    let r_dist = types::hash_f32(seed.wrapping_add(1)) * radius;
+                                    let tx = wx + r_angle.cos() * r_dist;
+                                    let ty = wy + r_angle.sin() * r_dist;
+                                    self.physics_bodies.push(PhysicsBody::new_grenade_targeted(
+                                        pleb.x,
+                                        pleb.y,
+                                        tx,
+                                        ty,
+                                        self.grenade_arc,
+                                        strength,
+                                    ));
+                                }
+                            }
                         // Attack mode: click to target enemy
-                        if self.attack_mode {
+                        } else if self.attack_mode {
                             self.attack_mode = false;
                             let (wx, wy) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);

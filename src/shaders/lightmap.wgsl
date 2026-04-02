@@ -35,7 +35,7 @@ struct Camera {
     prev_center_x: f32, prev_center_y: f32, prev_zoom: f32, prev_time: f32,
     rain_intensity: f32, cloud_cover: f32, wind_magnitude: f32, wind_angle: f32,
     use_shadow_map: f32, shadow_map_scale: f32, sound_speed: f32, sound_damping: f32,
-    sound_coupling: f32, enable_terrain_detail: f32, terrain_ao_strength: f32, fog_enabled: f32, hover_x: f32, hover_y: f32, shadow_intensity: f32, pleb_scale: f32, contour_opacity: f32, contour_interval: f32, contour_major_mul: f32,
+    sound_coupling: f32, enable_terrain_detail: f32, terrain_ao_strength: f32, fog_enabled: f32, hover_x: f32, hover_y: f32, shadow_intensity: f32, pleb_scale: f32, contour_opacity: f32, contour_interval: f32, contour_major_mul: f32, water_table_offset: f32, aim_mode: f32,
 };
 
 // --- Seed pass bindings ---
