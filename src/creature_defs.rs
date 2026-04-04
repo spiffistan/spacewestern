@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 pub const CREATURE_DUSKWEAVER: u8 = 0;
 pub const CREATURE_HOLLOWCALL: u8 = 1;
+pub const CREATURE_DUSTHARE: u8 = 2;
 
 const MAX_CREATURE_TYPES: usize = 16;
 
@@ -46,6 +47,18 @@ pub struct CreatureDef {
     pub sound_pattern: u32,
     #[serde(default = "default_interval")]
     pub sound_interval: f32,
+    /// If false, creature flees instead of fighting when attacked
+    #[serde(default = "default_true")]
+    pub aggressive: bool,
+    /// Distance at which creature flees from plebs (0 = doesn't flee from proximity)
+    #[serde(default)]
+    pub flee_radius: f32,
+    /// Item ID to drop on death (0 = no drop)
+    #[serde(default)]
+    pub drops_item: u16,
+    /// If true, creature uses hopping movement animation
+    #[serde(default)]
+    pub hop_creature: bool,
 }
 
 fn default_health() -> f32 {
@@ -56,6 +69,9 @@ fn default_one() -> u8 {
 }
 fn default_interval() -> f32 {
     5.0
+}
+fn default_true() -> bool {
+    true
 }
 
 pub struct CreatureRegistry {
@@ -113,5 +129,13 @@ mod tests {
         assert_eq!(hc.name, "Hollowcall");
         assert_eq!(hc.speed, 0.0);
         assert_eq!(hc.body_radius, 0.0);
+
+        let dh = reg.get(CREATURE_DUSTHARE).unwrap();
+        assert_eq!(dh.name, "Dusthare");
+        assert!(dh.speed > 4.0);
+        assert!(!dh.aggressive);
+        assert!(dh.flee_radius > 0.0);
+        assert_eq!(dh.drops_item, 1); // ITEM_RAW_MEAT
+        assert!(dh.hop_creature);
     }
 }

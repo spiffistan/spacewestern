@@ -18,6 +18,29 @@ sound_pattern = 2
 sound_interval = 3.0
 
 [[creature]]
+id = 2
+name = "Dusthare"
+health = 8.0
+speed = 4.5
+damage = 0.0
+nocturnal = false
+pack_min = 1
+pack_max = 1
+flee_light_radius = 0.0
+flee_group_size = 0
+body_radius = 0.12
+color = [0.62, 0.52, 0.38]
+eye_color = [0.2, 0.15, 0.1]
+sound_amplitude_db = 40.0
+sound_frequency = 2000.0
+sound_pattern = 2
+sound_interval = 8.0
+aggressive = false
+flee_radius = 8.0
+drops_item = 1
+hop_creature = true
+
+[[creature]]
 id = 1
 name = "Hollowcall"
 health = 1.0
