@@ -658,6 +658,14 @@ pub enum ContextAction {
     FireAt(usize),
     /// Throw a grenade at world position
     ThrowGrenade(f32, f32),
+    /// Hunt a creature (creature index) — pleb stalks and shoots
+    Hunt(usize),
+    /// Pick up and equip a ground item (ground item index)
+    Equip(usize),
+    /// Butcher a dead creature at (grid_x, grid_y)
+    Butcher(i32, i32),
+    /// Fish at water's edge (grid_x, grid_y)
+    Fish(i32, i32),
 }
 
 /// A context menu action entry: (label, action, enabled).
@@ -811,8 +819,8 @@ impl Blueprint {
             BT_KILN => (8.0, 0, 10, 0, 0, 0),
             // --- Utilities ---
             BT_WELL => (8.0, 3, 0, 0, 2, 1), // rope to lower bucket
-            BT_FIREPLACE => (1.0, 0, 0, 0, 0, 0), // fireplace: 3 sticks (consumed on build)
-            BT_CAMPFIRE => (0.5, 0, 0, 0, 0, 0), // small campfire: 3 sticks (consumed on build)
+            BT_FIREPLACE => (1.0, 8, 0, 0, 0, 0), // fireplace: 8 sticks
+            BT_CAMPFIRE => (0.5, 5, 0, 0, 0, 0), // small campfire: 5 sticks
             BT_CANNON => (5.0, 0, 0, 0, 6, 0),
             BT_COMPOST => (1.0, 1, 0, 0, 0, 0),
             // --- Lighting ---

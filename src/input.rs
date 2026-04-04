@@ -198,6 +198,42 @@ impl App {
                 let name = random_name(id as u32);
                 let mut p = Pleb::new(id, name, wx, wy, id as u32 * 7919 + 42);
                 p.headlight_mode = 2; // normal beam
+                // Auto-equip belt + tools from crates
+                let item_reg = crate::item_defs::ItemRegistry::cached();
+                for cinv in self.crate_contents.values_mut() {
+                    // Find a belt first
+                    if p.equipment.belt_capacity == 0 {
+                        for s in &cinv.stacks {
+                            if let Some(def) = item_reg.get(s.item_id) {
+                                if def.is_belt && s.count > 0 {
+                                    p.equipment.equip_belt(s.item_id);
+                                    break;
+                                }
+                            }
+                        }
+                        if p.equipment.belt_capacity > 0 {
+                            cinv.remove(p.equipment.belt_item, 1);
+                        }
+                    }
+                    // Find tools/weapons for belt
+                    if p.equipment.belt_capacity > 0 {
+                        let belt_items: Vec<u16> = cinv
+                            .stacks
+                            .iter()
+                            .filter(|s| {
+                                s.count > 0
+                                    && item_reg.get(s.item_id).is_some_and(|d| d.is_belt_item())
+                            })
+                            .map(|s| s.item_id)
+                            .collect();
+                        for bid in belt_items {
+                            if p.equipment.add_to_belt(bid) {
+                                cinv.remove(bid, 1);
+                            }
+                        }
+                    }
+                }
+                p.update_equipped_weapon();
                 self.plebs.push(p);
                 self.selected_pleb = Some(self.plebs.len() - 1);
                 self.placing_pleb = false;
@@ -527,7 +563,9 @@ impl App {
                 PhysicalKey::Code(KeyCode::Escape) => {
                     // Close whatever is open, in priority order
                     // When nothing is open: toggle pause menu
-                    if self.grenade_targeting {
+                    if self.move_mode {
+                        self.move_mode = false;
+                    } else if self.grenade_targeting {
                         self.grenade_targeting = false;
                     } else if self.attack_mode {
                         self.attack_mode = false;
@@ -552,6 +590,32 @@ impl App {
                     } else if self.build_category.is_some() {
                         self.build_category = None;
                         self.sandbox_tool = SandboxTool::None;
+                    } else if self
+                        .plebs
+                        .iter()
+                        .any(|p| p.hunt_target.is_some() || p.aim_target.is_some())
+                    {
+                        // Cancel active hunting/aiming for all selected plebs
+                        let indices: Vec<usize> = if !self.selected_group.is_empty() {
+                            self.selected_group.clone()
+                        } else if let Some(idx) = self.selected_pleb {
+                            vec![idx]
+                        } else {
+                            vec![]
+                        };
+                        for &i in &indices {
+                            if let Some(p) = self.plebs.get_mut(i) {
+                                p.hunt_target = None;
+                                p.aim_target = None;
+                                p.aim_pos = None;
+                                p.aim_progress = 0.0;
+                                p.path.clear();
+                                if matches!(p.activity, PlebActivity::Walking | PlebActivity::Idle)
+                                {
+                                    p.activity = PlebActivity::Idle;
+                                }
+                            }
+                        }
                     } else if self.selected_pleb.is_some() || !self.selected_group.is_empty() {
                         self.selected_pleb = None;
                         self.selected_group.clear();
@@ -894,6 +958,12 @@ impl App {
                                 }
                             }
                         }
+                    }
+                }
+                PhysicalKey::Code(KeyCode::KeyM) => {
+                    // M: toggle move mode (when pleb selected)
+                    if self.selected_pleb.is_some() {
+                        self.move_mode = !self.move_mode;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyA) => {

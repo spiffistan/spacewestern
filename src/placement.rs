@@ -670,6 +670,85 @@ impl App {
             return;
         }
 
+        // Dig zone: paint dig area
+        if self.build_tool == BuildTool::DigZone {
+            let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
+            for (tx, ty) in tiles {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                let bt = block_type_rs(self.grid_data[idx]);
+                if bt == BT_GROUND || bt == BT_DUG_GROUND {
+                    let base_elev = crate::terrain::sample_elevation(
+                        &self.sub_elevation,
+                        tx as f32 + 0.5,
+                        ty as f32 + 0.5,
+                    );
+                    if let Some(dz) = self.dig_zones.first_mut() {
+                        dz.tiles.insert((tx, ty));
+                        dz.base_elevations.entry((tx, ty)).or_insert(base_elev);
+                        dz.target_depth = self.dig_depth;
+                    } else {
+                        let mut dz = zones::DigZone {
+                            tiles: std::collections::HashSet::new(),
+                            target_depth: self.dig_depth,
+                            profile: crate::terrain::CrossProfile::VShape,
+                            width: 0.0,
+                            base_elevations: std::collections::HashMap::new(),
+                        };
+                        dz.tiles.insert((tx, ty));
+                        dz.base_elevations.insert((tx, ty), base_elev);
+                        self.dig_zones.push(dz);
+                    }
+                    if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Dig) {
+                        zone.tiles.insert((tx, ty));
+                    } else {
+                        let mut zone = Zone::new(ZoneKind::Dig);
+                        zone.tiles.insert((tx, ty));
+                        self.zones.push(zone);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Berm zone: paint berm area
+        if self.build_tool == BuildTool::BermZone {
+            let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
+            for (tx, ty) in tiles {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                let bt = block_type_rs(self.grid_data[idx]);
+                if bt == BT_GROUND || bt == BT_DUG_GROUND {
+                    let base_elev = crate::terrain::sample_elevation(
+                        &self.sub_elevation,
+                        tx as f32 + 0.5,
+                        ty as f32 + 0.5,
+                    );
+                    if let Some(bz) = self.berm_zones.first_mut() {
+                        bz.tiles.insert((tx, ty));
+                    } else {
+                        let bz = zones::BermZone {
+                            tiles: std::collections::HashSet::from([(tx, ty)]),
+                            target_height: base_elev + 0.5,
+                        };
+                        self.berm_zones.push(bz);
+                    }
+                    if let Some(zone) = self.zones.iter_mut().find(|z| z.kind == ZoneKind::Berm) {
+                        zone.tiles.insert((tx, ty));
+                    } else {
+                        let mut zone = Zone::new(ZoneKind::Berm);
+                        zone.tiles.insert((tx, ty));
+                        self.zones.push(zone);
+                    }
+                }
+            }
+            return;
+        }
+
         // Roof tool: special handling — sets flag, doesn't change block type
         if self.build_tool == BuildTool::Roof {
             let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
@@ -1166,12 +1245,11 @@ impl App {
 
         // Harvestable: berry bush or mature crop
         if sel_pleb.is_some() && (bt == BT_BERRY_BUSH || bt == BT_CROP) {
+            let block_h = (self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF;
             let can_harvest = if bt == BT_CROP {
-                let crop_h =
-                    (self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF;
-                crop_h >= 3
+                block_h >= 3 // mature crop
             } else {
-                true
+                block_h > 0 // berry bush with berries remaining
             };
             if can_harvest {
                 menu.title = if bt == BT_BERRY_BUSH {
@@ -1188,7 +1266,7 @@ impl App {
             }
         }
 
-        // Tree: gather branches (no axe) or chop down (needs axe)
+        // Tree: gather branches (no axe) or chop down (needs axe on belt)
         if sel_pleb.is_some() && bt == BT_TREE {
             menu.actions.push((
                 format!("Gather branches ({})", pleb_name),
@@ -1197,44 +1275,31 @@ impl App {
             ));
             let has_axe = sel_pleb
                 .and_then(|pi| self.plebs.get(pi))
-                .map(|p| p.inventory.count_of(item_defs::ITEM_STONE_AXE) > 0)
-                .unwrap_or(false);
-            menu.actions.push((
-                format!(
-                    "Chop down ({}){}",
-                    pleb_name,
-                    if has_axe { "" } else { " [needs axe]" }
-                ),
-                ContextAction::Harvest(bx, by),
-                has_axe,
-            ));
+                .is_some_and(|p| p.has_tool("axe"));
+            let chop_label = if has_axe {
+                format!("\u{1fa93} Chop down ({})", pleb_name)
+            } else {
+                "\u{1fa93} Chop down (needs axe)".to_string()
+            };
+            menu.actions
+                .push((chop_label, ContextAction::Harvest(bx, by), has_axe));
             has_actions = true;
         }
 
-        // Rock: haul to storage
-        if bt == BT_ROCK {
+        // Rock: mine (needs pick) or pick up small rocks
+        if bt == BT_ROCK && sel_pleb.is_some() {
             menu.title = "Rock".into();
-            // Find nearest available pleb
-            let mut best_pleb: Option<(usize, f32)> = None;
-            for (i, p) in self.plebs.iter().enumerate() {
-                if p.activity.is_crisis() || p.inventory.is_carrying() || p.is_enemy {
-                    continue;
-                }
-                let dist =
-                    ((p.x - bx as f32 - 0.5).powi(2) + (p.y - by as f32 - 0.5).powi(2)).sqrt();
-                if best_pleb.is_none_or(|(_, bd)| dist < bd) {
-                    best_pleb = Some((i, dist));
-                }
-            }
-            if let Some((pi, _)) = best_pleb {
-                let pn = self.plebs[pi].name.clone();
-                menu.actions.push((
-                    format!("Haul to storage ({})", pn),
-                    ContextAction::Haul(bx, by),
-                    true,
-                ));
-                has_actions = true;
-            }
+            let has_pick = sel_pleb
+                .and_then(|pi| self.plebs.get(pi))
+                .is_some_and(|p| p.has_tool("pick"));
+            let mine_label = if has_pick {
+                format!("\u{26cf} Mine rock ({})", pleb_name)
+            } else {
+                "\u{26cf} Mine rock (needs pick)".to_string()
+            };
+            menu.actions
+                .push((mine_label, ContextAction::Haul(bx, by), has_pick));
+            has_actions = true;
         }
 
         // Enemy pleb at this position: fire at target
@@ -1267,6 +1332,51 @@ impl App {
             }
         }
 
+        // Creature at this position: hunt (alive) or butcher (dead)
+        if sel_pleb.is_some() {
+            for (ci, creature) in self.creatures.iter().enumerate() {
+                let cdist = ((wx - creature.x).abs()).max((wy - creature.y).abs());
+                if cdist < 0.8 {
+                    let cname = creature_defs::CreatureRegistry::cached()
+                        .name(creature.species_id)
+                        .to_string();
+                    menu.title = cname.clone();
+                    if creature.is_dead {
+                        // Dead creature: offer butcher
+                        let def =
+                            creature_defs::CreatureRegistry::cached().get(creature.species_id);
+                        if def.is_some_and(|d| d.drops_item > 0) {
+                            let has_knife = sel_pleb
+                                .and_then(|pi| self.plebs.get(pi))
+                                .is_some_and(|p| p.has_tool("knife"));
+                            let label = if has_knife {
+                                format!("\u{1f52a} Butcher {} ({})", cname, pleb_name)
+                            } else {
+                                format!("\u{1f52a} Butcher (needs knife)")
+                            };
+                            menu.actions.push((
+                                label,
+                                ContextAction::Butcher(
+                                    creature.x.floor() as i32,
+                                    creature.y.floor() as i32,
+                                ),
+                                has_knife,
+                            ));
+                            has_actions = true;
+                        }
+                    } else {
+                        menu.actions.push((
+                            format!("\u{1f3af} Hunt {} ({})", cname, pleb_name),
+                            ContextAction::Hunt(ci),
+                            true,
+                        ));
+                        has_actions = true;
+                    }
+                    break;
+                }
+            }
+        }
+
         // Ground items at this position: eat + haul actions
         if sel_pleb.is_some() {
             for (i, item) in self.ground_items.iter().enumerate() {
@@ -1283,6 +1393,29 @@ impl App {
                             true,
                         ));
                     }
+                    // Equip: weapons, tools, or belt
+                    {
+                        let item_reg = item_defs::ItemRegistry::cached();
+                        if let Some(def) = item_reg.get(item.stack.item_id) {
+                            if def.is_belt_item() {
+                                menu.actions.push((
+                                    format!("\u{1f9e4} Equip {} ({})", def.name, pleb_name),
+                                    ContextAction::Equip(i),
+                                    true,
+                                ));
+                            } else if def.is_belt {
+                                let already_has = sel_pleb
+                                    .and_then(|pi| self.plebs.get(pi))
+                                    .is_some_and(|p| p.equipment.belt_capacity > 0);
+                                let label = if already_has {
+                                    format!("\u{1f9e4} Replace belt ({})", pleb_name)
+                                } else {
+                                    format!("\u{1f9e4} Equip {} ({})", def.name, pleb_name)
+                                };
+                                menu.actions.push((label, ContextAction::Equip(i), true));
+                            }
+                        }
+                    }
                     // Haul any ground item to nearest crate
                     menu.actions.push((
                         format!("Haul {} ({})", item.stack.label(), pleb_name),
@@ -1291,6 +1424,26 @@ impl App {
                     ));
                     has_actions = true;
                 }
+            }
+        }
+
+        // Fish: right-click near water with a fishing line
+        if sel_pleb.is_some() {
+            let widx = (by as u32 * GRID_W + bx as u32) as usize;
+            let has_water = widx < self.water_depth_cpu.len() && self.water_depth_cpu[widx] > 0.3;
+            if has_water {
+                let has_line = sel_pleb.and_then(|pi| self.plebs.get(pi)).is_some_and(|p| {
+                    p.has_tool("fishing") || p.inventory.count_of(item_defs::ITEM_FISHING_LINE) > 0
+                });
+                let fish_label = if has_line {
+                    format!("\u{1f3a3} Fish here ({})", pleb_name)
+                } else {
+                    "\u{1f3a3} Fish here (needs line)".to_string()
+                };
+                menu.title = "Water".into();
+                menu.actions
+                    .push((fish_label, ContextAction::Fish(bx, by), has_line));
+                has_actions = true;
             }
         }
 
