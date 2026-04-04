@@ -80,6 +80,51 @@ fn find_cover_position(
     best.map(|(x, y, _)| (x, y))
 }
 
+/// Find the nearest walkable tile adjacent to any low wall (no threat direction needed).
+pub(crate) fn find_nearest_cover(
+    grid: &[u32],
+    px: f32,
+    py: f32,
+    search_radius: i32,
+) -> Option<(i32, i32)> {
+    let bx = px.floor() as i32;
+    let by = py.floor() as i32;
+    let mut best: Option<(i32, i32, f32)> = None;
+
+    for dy in -search_radius..=search_radius {
+        for dx in -search_radius..=search_radius {
+            let wx = bx + dx;
+            let wy = by + dy;
+            if wx < 0 || wy < 0 || wx >= GRID_W as i32 || wy >= GRID_H as i32 {
+                continue;
+            }
+            let idx = (wy as u32 * GRID_W + wx as u32) as usize;
+            if block_type_rs(grid[idx]) != BT_LOW_WALL {
+                continue;
+            }
+            // Check adjacent walkable tiles
+            for &(adx, ady) in &[(0i32, -1), (0, 1), (-1, 0), (1, 0)] {
+                let cx = wx + adx;
+                let cy = wy + ady;
+                if cx < 0 || cy < 0 || cx >= GRID_W as i32 || cy >= GRID_H as i32 {
+                    continue;
+                }
+                let cidx = (cy as u32 * GRID_W + cx as u32) as usize;
+                let cbh = block_height_rs(grid[cidx]);
+                let cbt = block_type_rs(grid[cidx]);
+                if cbh > 0 && !bt_is!(cbt, BT_TREE, BT_BERRY_BUSH, BT_CROP) {
+                    continue;
+                }
+                let dist_sq = (cx as f32 + 0.5 - px).powi(2) + (cy as f32 + 0.5 - py).powi(2);
+                if best.map_or(true, |(_, _, d)| dist_sq < d) {
+                    best = Some((cx, cy, dist_sq));
+                }
+            }
+        }
+    }
+    best.map(|(x, y, _)| (x, y))
+}
+
 /// Check if pleb at (px,py) is adjacent to a low wall that faces toward (tx,ty).
 /// Returns true if the pleb is "behind cover" relative to the target.
 fn is_behind_cover(grid: &[u32], wall_data: &[u16], px: f32, py: f32, tx: f32, ty: f32) -> bool {
@@ -249,6 +294,66 @@ impl App {
             while self.time_of_day < 0.0 {
                 self.time_of_day += DAY_DURATION;
             }
+        }
+
+        // Dusk warning + night tracking
+        {
+            let day_frac = (self.time_of_day / DAY_DURATION).rem_euclid(1.0);
+            // Dusk warning at 75% of day
+            if day_frac > 0.73 && day_frac < 0.77 && !self.dusk_warned {
+                self.dusk_warned = true;
+                if self.night_count == 0 {
+                    self.notify(
+                        types::NotifCategory::Warning,
+                        "\u{1f319}",
+                        "Night approaches",
+                        "Duskweavers hunt in darkness. Build walls and light fires.",
+                    );
+                } else {
+                    self.notify(
+                        types::NotifCategory::Warning,
+                        "\u{1f319}",
+                        "Night approaches",
+                        "Prepare your defenses.",
+                    );
+                }
+            }
+            // Reset dusk warning flag + count night at dawn
+            if day_frac > 0.16 && day_frac < 0.20 && self.dusk_warned {
+                self.dusk_warned = false;
+                self.night_count += 1;
+            }
+        }
+
+        // --- Contextual hints (one-shot, bit-flagged) ---
+        if !self.time_paused {
+            let mut hf = self.hint_flags;
+            // Hint 0: first hunger drop below 0.5
+            if (hf & 1) == 0
+                && self
+                    .plebs
+                    .iter()
+                    .any(|p| !p.is_dead && !p.is_enemy && p.needs.hunger < 0.5)
+            {
+                hf |= 1;
+                self.notify(
+                    types::NotifCategory::Info,
+                    "\u{1f356}",
+                    "Getting hungry",
+                    "Forage berries from bushes, or hunt dusthares for meat.",
+                );
+            }
+            // Hint 1: first pleb kill (creature dies)
+            if (hf & 2) == 0 && self.creatures.iter().any(|c| c.is_dead && !c.dropped_loot) {
+                hf |= 2;
+                self.notify(
+                    types::NotifCategory::Info,
+                    "\u{1f52a}",
+                    "Fresh kill",
+                    "Right-click the carcass to butcher it. Needs a knife. Cook the meat at a campfire.",
+                );
+            }
+            self.hint_flags = hf;
         }
 
         // Save previous camera state for temporal reprojection
@@ -449,6 +554,95 @@ impl App {
                 self.time_speed,
                 GRID_W,
             );
+            // Berry bush regrow: depleted bushes slowly regenerate berries
+            // Check every ~2 game-seconds (not every frame) for performance
+            if self.frame_count % 120 == 0 {
+                let grid_size = (GRID_W * GRID_H) as usize;
+                for idx in 0..grid_size {
+                    if (self.grid_data[idx] & 0xFF) == BT_BERRY_BUSH {
+                        let berries = (self.grid_data[idx] >> 8) & 0xFF;
+                        if berries < 4 {
+                            // ~0.5% chance per check to add a berry (avg ~4 min regrow per berry)
+                            let hash = (idx as u32)
+                                .wrapping_mul(2654435761)
+                                .wrapping_add(self.frame_count as u32);
+                            if hash % 200 == 0 {
+                                self.grid_data[idx] =
+                                    (self.grid_data[idx] & 0xFFFF00FF) | ((berries + 1) << 8);
+                                self.grid_dirty = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Food spoilage: decay freshness (throttled to every 15 frames) ---
+            if self.frame_count % 15 == 7 {
+                let item_reg = item_defs::ItemRegistry::cached();
+                let dt_game = dt * self.time_speed * 15.0; // compensate for throttle
+                // Ground items: full spoil rate
+                let mut spoiled_ground = Vec::new();
+                for (i, gi) in self.ground_items.iter_mut().enumerate() {
+                    if let Some(def) = item_reg.get(gi.stack.item_id) {
+                        if def.spoil_time > 0.0 {
+                            gi.stack.freshness -= dt_game / def.spoil_time;
+                            if gi.stack.freshness <= 0.0 {
+                                spoiled_ground.push(i);
+                            }
+                        }
+                    }
+                }
+                for &i in spoiled_ground.iter().rev() {
+                    let name = item_reg
+                        .name(self.ground_items[i].stack.item_id)
+                        .to_string();
+                    self.ground_items.remove(i);
+                    self.notify(
+                        types::NotifCategory::Warning,
+                        "\u{26a0}",
+                        "Spoiled",
+                        &format!("{} spoiled on the ground", name),
+                    );
+                }
+                // Pleb inventory: full spoil rate
+                for pleb in &mut self.plebs {
+                    if pleb.is_dead {
+                        continue;
+                    }
+                    let mut spoiled = false;
+                    for s in &mut pleb.inventory.stacks {
+                        if let Some(def) = item_reg.get(s.item_id) {
+                            if def.spoil_time > 0.0 {
+                                s.freshness -= dt_game / def.spoil_time;
+                                if s.freshness <= 0.0 {
+                                    spoiled = true;
+                                }
+                            }
+                        }
+                    }
+                    if spoiled {
+                        pleb.inventory.stacks.retain(|s| {
+                            let def = item_reg.get(s.item_id);
+                            let perishable = def.is_some_and(|d| d.spoil_time > 0.0);
+                            !perishable || s.freshness > 0.0
+                        });
+                        pleb.log_event(self.time_of_day, "Food spoiled".into());
+                        pleb.set_bubble(pleb::BubbleKind::Thought("Food went bad...".into()), 2.0);
+                    }
+                }
+                // Crate contents: half spoil rate (storage benefit)
+                for cinv in self.crate_contents.values_mut() {
+                    cinv.stacks.iter_mut().for_each(|s| {
+                        if let Some(def) = item_reg.get(s.item_id) {
+                            if def.spoil_time > 0.0 {
+                                s.freshness -= dt_game / def.spoil_time * 0.5;
+                            }
+                        }
+                    });
+                    cinv.stacks.retain(|s| s.freshness > 0.0 || s.count == 0);
+                }
+            } // end spoilage throttle
+
             // Rain boosts CPU-side water table temporarily (so crops see moisture)
             if rain > 0.0 {
                 let rain_boost = rain * 0.002 * dt * self.time_speed;
@@ -765,6 +959,10 @@ impl App {
             if pleb.suppression > 0.0 {
                 pleb.suppression = (pleb.suppression - dt * 0.5).max(0.0);
             }
+            // Nausea timer decay
+            if pleb.nauseous_timer > 0.0 {
+                pleb.nauseous_timer = (pleb.nauseous_timer - dt * self.time_speed).max(0.0);
+            }
             // Command cooldown
             if pleb.command_cooldown > 0.0 {
                 pleb.command_cooldown = (pleb.command_cooldown - dt * self.time_speed).max(0.0);
@@ -1016,6 +1214,96 @@ impl App {
                     air,
                 );
 
+                // --- Trait modifiers applied after needs tick ---
+                if !pleb.is_enemy {
+                    let t = dt * self.time_speed;
+                    // DesertBlood: thirst decays 30% slower (add back 30% of what was lost)
+                    if pleb.has_trait("Desert Blood") {
+                        pleb.needs.thirst = (pleb.needs.thirst + 0.004 * 0.3 * t).min(1.0);
+                    }
+                    // Weathered: health capped at 1.25x (absorb more damage)
+                    // (Applied as effective health — stored as >1.0 for display)
+                }
+
+                // --- Need emotes: thought bubbles when needs drop below thresholds ---
+                if !pleb.is_enemy && !pleb.is_dead {
+                    let mut f = pleb.need_emote_flags;
+                    let gt = self.time_of_day;
+                    let px = pleb.x;
+                    let py = pleb.y;
+                    // Hunger: low=0.35, critical=0.12
+                    if pleb.needs.hunger < 0.35 && (f & 1) == 0 {
+                        f |= 1;
+                        pleb.set_bubble(pleb::BubbleKind::Thought("Getting hungry...".into()), 3.0);
+                        pleb.log_event(gt, "Feeling hungry".into());
+                        if self.sound_enabled {
+                            self.sound_sources.push(types::SoundSource {
+                                x: px,
+                                y: py,
+                                amplitude: types::db_to_amplitude(45.0),
+                                frequency: 500.0,
+                                phase: 0.0,
+                                pattern: 2,
+                                duration: 0.08,
+                                fresh: true,
+                            });
+                        }
+                    }
+                    if pleb.needs.hunger < 0.12 && (f & 2) == 0 {
+                        f |= 2;
+                        pleb.set_bubble(pleb::BubbleKind::Thought("So hungry...".into()), 3.0);
+                        pleb.log_event(gt, "Starving!".into());
+                    }
+                    if pleb.needs.hunger > 0.5 {
+                        f &= !3;
+                    } // reset hunger flags on recovery
+                    // Thirst: low=0.35, critical=0.12
+                    if pleb.needs.thirst < 0.35 && (f & 4) == 0 {
+                        f |= 4;
+                        pleb.set_bubble(pleb::BubbleKind::Thought("Need water...".into()), 3.0);
+                        pleb.log_event(gt, "Feeling thirsty".into());
+                        if self.sound_enabled {
+                            self.sound_sources.push(types::SoundSource {
+                                x: px,
+                                y: py,
+                                amplitude: types::db_to_amplitude(45.0),
+                                frequency: 600.0,
+                                phase: 0.0,
+                                pattern: 2,
+                                duration: 0.08,
+                                fresh: true,
+                            });
+                        }
+                    }
+                    if pleb.needs.thirst < 0.12 && (f & 8) == 0 {
+                        f |= 8;
+                        pleb.set_bubble(pleb::BubbleKind::Thought("So thirsty...".into()), 3.0);
+                        pleb.log_event(gt, "Dehydrating!".into());
+                    }
+                    if pleb.needs.thirst > 0.5 {
+                        f &= !12;
+                    }
+                    // Rest: low=0.25, critical=0.10
+                    if pleb.needs.rest < 0.25 && (f & 16) == 0 {
+                        f |= 16;
+                        pleb.set_bubble(pleb::BubbleKind::Thought("Tired...".into()), 3.0);
+                        pleb.log_event(gt, "Exhausted".into());
+                    }
+                    if pleb.needs.rest > 0.4 {
+                        f &= !48;
+                    }
+                    // Warmth: low=0.25
+                    if pleb.needs.warmth < 0.25 && (f & 64) == 0 {
+                        f |= 64;
+                        pleb.set_bubble(pleb::BubbleKind::Thought("So cold...".into()), 3.0);
+                        pleb.log_event(gt, "Freezing".into());
+                    }
+                    if pleb.needs.warmth > 0.4 {
+                        f &= !192;
+                    }
+                    pleb.need_emote_flags = f;
+                }
+
                 // Undrafted flee: civilians run to safety when enemies are near
                 if !pleb.is_enemy
                     && !pleb.drafted
@@ -1077,7 +1365,7 @@ impl App {
                 tick_pleb_activity(
                     pleb,
                     &env,
-                    &self.grid_data,
+                    &mut self.grid_data,
                     &self.wall_data,
                     &self.terrain_data,
                     dt,
@@ -1176,14 +1464,17 @@ impl App {
                             let is_rock =
                                 ridx < self.grid_data.len() && (self.grid_data[ridx] & 0xFF) == 34;
                             if is_rock {
+                                pleb.draw_tool("pick");
                                 let roof_bits = self.grid_data[ridx] & 0xFF000000;
                                 let flag_bits = (self.grid_data[ridx] >> 16) & 2;
                                 self.grid_data[ridx] =
                                     make_block(2, 0, flag_bits as u8) | roof_bits;
                                 self.grid_dirty = true;
                                 // Stone Pick: quarry 4 rock, bare hands: 1 rock
-                                let has_pick = pleb.inventory.count_of(ITEM_STONE_PICK) > 0;
-                                let rock_yield: u16 = if has_pick { 4 } else { 1 };
+                                let has_pick = pleb.has_tool("pick");
+                                let base_yield: u16 = if has_pick { 4 } else { 1 };
+                                let rock_yield =
+                                    (base_yield as f32 * pleb.mining_yield_mult()).ceil() as u16;
                                 pleb.inventory.add(ITEM_ROCK, rock_yield);
                                 pleb.harvest_target = None;
                                 events.push(GameEventKind::PickedUp {
@@ -1191,6 +1482,18 @@ impl App {
                                     count: rock_yield,
                                     item: "rock".into(),
                                 });
+                                if let Some(new_level) =
+                                    pleb.gain_xp(pleb::SKILL_CONSTRUCTION, 10.0)
+                                {
+                                    pleb.log_event(
+                                        self.time_of_day,
+                                        format!(
+                                            "{} improved to {:.1}",
+                                            pleb::SKILL_NAMES[pleb::SKILL_CONSTRUCTION],
+                                            new_level
+                                        ),
+                                    );
+                                }
                             } else if let Some(wi) = {
                                 // Prefer the specific item type the blueprint needs
                                 let prefer_id: Option<u16> =
@@ -1255,6 +1558,10 @@ impl App {
                                     count: total,
                                     item: name.to_string(),
                                 });
+                                // Auto-equip if picked up a weapon/tool
+                                if pleb.equipped_weapon.is_none() {
+                                    pleb.update_equipped_weapon();
+                                }
                                 pleb.harvest_target = None;
                             } else {
                                 // Item gone
@@ -1308,24 +1615,34 @@ impl App {
                                 // Deliver materials to blueprint
                                 if let Some(bp) = self.blueprints.get_mut(&(cx, cy)) {
                                     if bp.wood_delivered < bp.wood_needed {
-                                        let have = pleb.inventory.wood();
+                                        let is_cf = bp.is_campfire();
+                                        let have = if is_cf {
+                                            pleb.inventory.count_of(ITEM_SCRAP_WOOD) as u32
+                                        } else {
+                                            pleb.inventory.wood()
+                                        };
                                         let deliver = have.min(bp.wood_needed - bp.wood_delivered);
                                         bp.wood_delivered += deliver;
-                                        // Consume logs first, then wood
-                                        let mut remaining = deliver as u16;
-                                        let log_take =
-                                            remaining.min(pleb.inventory.count_of(ITEM_LOG) as u16);
-                                        if log_take > 0 {
-                                            pleb.inventory.remove(ITEM_LOG, log_take);
-                                            remaining -= log_take;
-                                        }
-                                        if remaining > 0 {
-                                            pleb.inventory.remove(ITEM_WOOD, remaining);
+                                        if is_cf {
+                                            pleb.inventory.remove(ITEM_SCRAP_WOOD, deliver as u16);
+                                        } else {
+                                            // Consume logs first, then wood
+                                            let mut remaining = deliver as u16;
+                                            let log_take = remaining
+                                                .min(pleb.inventory.count_of(ITEM_LOG) as u16);
+                                            if log_take > 0 {
+                                                pleb.inventory.remove(ITEM_LOG, log_take);
+                                                remaining -= log_take;
+                                            }
+                                            if remaining > 0 {
+                                                pleb.inventory.remove(ITEM_WOOD, remaining);
+                                            }
                                         }
                                         if deliver > 0 {
+                                            let mat = if is_cf { "sticks" } else { "wood" };
                                             events.push(GameEventKind::Delivered {
                                                 pleb: pleb.name.clone(),
-                                                material: "wood",
+                                                material: mat,
                                                 amount: deliver,
                                             });
                                         }
@@ -1392,32 +1709,20 @@ impl App {
                                     self.blueprints.get(&(cx, cy)).is_some_and(|bp| {
                                         if bp.is_roof() {
                                             pleb.inventory.count_of(ITEM_FIBER) >= 1
-                                        } else if bp.is_campfire() {
-                                            pleb.inventory.count_of(ITEM_SCRAP_WOOD) >= 3
                                         } else {
                                             bp.resources_met()
                                         }
                                     });
-                                let bp_is_campfire = self
-                                    .blueprints
-                                    .get(&(cx, cy))
-                                    .is_some_and(|bp| bp.is_campfire());
                                 if start_building {
                                     if bp_is_roof {
                                         pleb.inventory.remove(ITEM_FIBER, 1);
-                                    } else if bp_is_campfire {
-                                        pleb.inventory.remove(ITEM_SCRAP_WOOD, 3);
                                     }
                                     pleb.activity = PlebActivity::Building(0.0);
                                     pleb.work_target = Some((cx, cy));
                                     self.active_work.insert((cx, cy));
-                                } else {
+                                } else if bp_is_roof {
                                     // Not enough special materials — fetch more immediately
-                                    let fetch_id = if bp_is_campfire {
-                                        ITEM_SCRAP_WOOD
-                                    } else {
-                                        ITEM_FIBER
-                                    };
+                                    let fetch_id = ITEM_FIBER;
                                     // Find nearest matching ground item
                                     let mut nearest: Option<(i32, i32, f32)> = None;
                                     for gi in self.ground_items.iter() {
@@ -1459,16 +1764,21 @@ impl App {
                                     }
                                 }
                             } else if is_crate {
-                                // Deposit all carried items in crate (preserves liquid on containers)
+                                // Deposit carried items in crate, but keep equipped items
                                 let cidx = cy as u32 * GRID_W + cx as u32;
                                 let inv = self.crate_contents.entry(cidx).or_default();
+                                let mut keep = Vec::new();
                                 let carried: Vec<ItemStack> =
                                     pleb.inventory.stacks.drain(..).collect();
                                 for stack in carried {
-                                    if !inv.add_stack(stack.clone()) {
-                                        // Crate full for this item — put back in pleb inventory
+                                    if pleb.is_equipped(stack.item_id) {
+                                        keep.push(stack);
+                                    } else if !inv.add_stack(stack.clone()) {
                                         pleb.inventory.add_stack(stack);
                                     }
+                                }
+                                for s in keep {
+                                    pleb.inventory.stacks.push(s);
                                 }
                                 // Sync crate visual
                                 if let Some(inv) = self.crate_contents.get(&cidx) {
@@ -1482,8 +1792,14 @@ impl App {
                                         self.grid_dirty = true;
                                     }
                                 }
-                                if !pleb.inventory.is_carrying() {
-                                    // All deposited successfully
+                                // Check if only equipped items remain
+                                let only_equipped = pleb
+                                    .inventory
+                                    .stacks
+                                    .iter()
+                                    .all(|s| pleb.is_equipped(s.item_id));
+                                if !pleb.inventory.is_carrying() || only_equipped {
+                                    // All non-equipped items deposited
                                     pleb.haul_target = None;
                                     pleb.activity = PlebActivity::Idle;
                                     events.push(GameEventKind::Deposited(pleb.name.clone()));
@@ -1515,28 +1831,44 @@ impl App {
                                             pleb.activity = PlebActivity::Idle;
                                         }
                                     } else {
-                                        // No other crate — drop remaining items on ground
-                                        for stack in pleb.inventory.stacks.drain(..) {
-                                            self.ground_items.push(resources::GroundItem {
-                                                x: cx as f32 + 0.5,
-                                                y: cy as f32 + 0.5,
-                                                stack,
-                                            });
+                                        // No other crate — drop remaining non-equipped items
+                                        let to_drop: Vec<ItemStack> =
+                                            pleb.inventory.stacks.drain(..).collect();
+                                        let mut keep = Vec::new();
+                                        for stack in to_drop {
+                                            if pleb.is_equipped(stack.item_id) {
+                                                keep.push(stack);
+                                            } else {
+                                                self.ground_items.push(resources::GroundItem {
+                                                    x: cx as f32 + 0.5,
+                                                    y: cy as f32 + 0.5,
+                                                    stack,
+                                                });
+                                            }
                                         }
+                                        pleb.inventory.stacks = keep;
                                         pleb.haul_target = None;
                                         pleb.activity = PlebActivity::Idle;
                                         events.push(GameEventKind::Dropped(pleb.name.clone()));
                                     }
                                 }
                             } else {
-                                // Drop at storage zone tile
-                                for stack in pleb.inventory.stacks.drain(..) {
-                                    self.ground_items.push(resources::GroundItem {
-                                        x: cx as f32 + 0.5,
-                                        y: cy as f32 + 0.5,
-                                        stack,
-                                    });
+                                // Drop at storage zone tile (keep equipped)
+                                let to_drop: Vec<ItemStack> =
+                                    pleb.inventory.stacks.drain(..).collect();
+                                let mut keep = Vec::new();
+                                for stack in to_drop {
+                                    if pleb.is_equipped(stack.item_id) {
+                                        keep.push(stack);
+                                    } else {
+                                        self.ground_items.push(resources::GroundItem {
+                                            x: cx as f32 + 0.5,
+                                            y: cy as f32 + 0.5,
+                                            stack,
+                                        });
+                                    }
                                 }
+                                pleb.inventory.stacks = keep;
                                 pleb.haul_target = None;
                                 pleb.activity = PlebActivity::Idle;
                                 events.push(GameEventKind::Stored(pleb.name.clone()));
@@ -1666,22 +1998,21 @@ impl App {
                             }
                         }
                         PlebCommand::Haul(hx, hy) => {
-                            if let Some((cx, cy)) = find_nearest_crate(&self.grid_data, hx, hy) {
-                                let path = pleb::astar_path_terrain_water_wd(
-                                    &self.grid_data,
-                                    &self.wall_data,
-                                    &self.terrain_data,
-                                    &self.water_depth_cpu,
-                                    start,
-                                    (hx, hy),
-                                );
-                                if !path.is_empty() {
-                                    pleb.path = path;
-                                    pleb.path_idx = 0;
-                                    pleb.activity = PlebActivity::Hauling;
-                                    pleb.haul_target = Some((cx, cy));
-                                    pleb.harvest_target = Some((hx, hy));
-                                }
+                            let crate_target = find_nearest_crate(&self.grid_data, hx, hy);
+                            let path = pleb::astar_path_terrain_water_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                &self.water_depth_cpu,
+                                start,
+                                (hx, hy),
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Hauling;
+                                pleb.haul_target = crate_target;
+                                pleb.harvest_target = Some((hx, hy));
                             }
                         }
                         PlebCommand::Eat(ix, iy) => {
@@ -1765,6 +2096,82 @@ impl App {
                                 pleb.work_target = Some((gx, gy));
                                 pleb.harvest_target = Some((gx, gy));
                                 pleb.haul_target = None;
+                            }
+                        }
+                        PlebCommand::Butcher(bx, by) => {
+                            let dist = ((pleb.x - bx as f32 - 0.5).powi(2)
+                                + (pleb.y - by as f32 - 0.5).powi(2))
+                            .sqrt();
+                            if dist < 1.8 && pleb.has_tool("knife") {
+                                pleb.draw_tool("knife");
+                                pleb.activity = PlebActivity::Butchering(0.0);
+                                pleb.work_target = Some((bx, by));
+                                pleb.path.clear();
+                            } else if dist < 1.8 {
+                                // No knife — can't butcher
+                                pleb.set_bubble(
+                                    pleb::BubbleKind::Thought("Need a knife...".into()),
+                                    2.5,
+                                );
+                                pleb.log_event(self.time_of_day, "Can't butcher — no knife".into());
+                                pleb.activity = PlebActivity::Idle;
+                                pleb.work_target = None;
+                            } else {
+                                let path = pleb::astar_path_terrain_water_wd(
+                                    &self.grid_data,
+                                    &self.wall_data,
+                                    &self.terrain_data,
+                                    &self.water_depth_cpu,
+                                    start,
+                                    (bx, by),
+                                );
+                                if !path.is_empty() {
+                                    pleb.path = path;
+                                    pleb.path_idx = 0;
+                                    pleb.activity = PlebActivity::Walking;
+                                    pleb.work_target = Some((bx, by));
+                                }
+                            }
+                        }
+                        PlebCommand::Fish(fx, fy) => {
+                            let dist = ((pleb.x - fx as f32 - 0.5).powi(2)
+                                + (pleb.y - fy as f32 - 0.5).powi(2))
+                            .sqrt();
+                            let has_line = pleb.has_tool("fishing")
+                                || pleb.inventory.count_of(ITEM_FISHING_LINE) > 0;
+                            if dist < 1.8 && has_line {
+                                pleb.draw_tool("fishing");
+                                pleb.activity = PlebActivity::Fishing(0.0);
+                                pleb.work_target = Some((fx, fy));
+                                pleb.path.clear();
+                            } else if dist < 1.8 {
+                                pleb.set_bubble(
+                                    pleb::BubbleKind::Thought("Need a fishing line...".into()),
+                                    2.5,
+                                );
+                                pleb.log_event(
+                                    self.time_of_day,
+                                    "Can't fish — no fishing line".into(),
+                                );
+                                pleb.activity = PlebActivity::Idle;
+                                pleb.work_target = None;
+                            } else {
+                                let adj =
+                                    adjacent_walkable(&self.grid_data, fx, fy).unwrap_or((fx, fy));
+                                let path = pleb::astar_path_terrain_water_wd(
+                                    &self.grid_data,
+                                    &self.wall_data,
+                                    &self.terrain_data,
+                                    &self.water_depth_cpu,
+                                    start,
+                                    adj,
+                                );
+                                if !path.is_empty() {
+                                    pleb.path = path;
+                                    pleb.path_idx = 0;
+                                    pleb.activity = PlebActivity::Walking;
+                                    pleb.work_target = Some((fx, fy));
+                                }
                             }
                         }
                     }
@@ -2039,7 +2446,7 @@ impl App {
                                 });
                             if has_melee && self.plebs[pi].weapon_swap_timer <= 0.0 {
                                 // Initiate swap: delay based on melee skill (faster for experienced fighters)
-                                let melee_skill = self.plebs[pi].skills[1] as f32;
+                                let melee_skill = self.plebs[pi].skills[1].value;
                                 let swap_time = (0.8 - melee_skill * 0.05).max(0.3); // 0.8s (skill 0) to 0.35s (skill 9)
                                 self.plebs[pi].weapon_swap_timer = swap_time;
                                 self.plebs[pi].prefer_ranged = false;
@@ -2110,22 +2517,67 @@ impl App {
                             self.plebs[pi].aim_progress = 0.0;
                             if self.plebs[pi].reload_timer <= 0.0 {
                                 self.plebs[pi].reload_timer = 0.0;
-                                self.plebs[pi].ammo_loaded = mag_size;
+                                // Transfer rounds from inventory to magazine
+                                let ammo_type = wpn_def.map(|w| w.ammo_type.as_str()).unwrap_or("");
+                                let ammo_item = {
+                                    let ireg = item_defs::ItemRegistry::cached();
+                                    let mut found = None;
+                                    for s in &self.plebs[pi].inventory.stacks {
+                                        if let Some(d) = ireg.get(s.item_id) {
+                                            if d.ammo_type == ammo_type
+                                                && d.category == "ammo"
+                                                && s.count > 0
+                                            {
+                                                found = Some(s.item_id);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    found
+                                };
+                                if let Some(ammo_id) = ammo_item {
+                                    let have = self.plebs[pi].inventory.count_of(ammo_id) as u8;
+                                    let load = have.min(mag_size);
+                                    self.plebs[pi].inventory.remove(ammo_id, load as u16);
+                                    self.plebs[pi].ammo_loaded = load;
+                                } else {
+                                    self.plebs[pi].ammo_loaded = 0; // no ammo found
+                                }
                             }
                         } else if self.plebs[pi].ammo_loaded == 0 && mag_size > 0 {
-                            let rld_seed =
-                                (px * 97.3 + py * 211.7 + self.time_of_day * 5003.0) as u32;
-                            let rld_rng =
-                                (rld_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
-                            let rld_time = reload_base * (0.75 + rld_rng * 0.5);
-                            self.plebs[pi].reload_timer = rld_time;
-                            self.plebs[pi].aim_progress = 0.0;
-                            self.plebs[pi].set_bubble(
-                                pleb::BubbleKind::Text("Reloading...".into()),
-                                rld_time,
-                            );
+                            // Check if pleb has matching ammo before starting reload
+                            let ammo_type = wpn_def.map(|w| w.ammo_type.as_str()).unwrap_or("");
+                            let has_ammo = {
+                                let ireg = item_defs::ItemRegistry::cached();
+                                self.plebs[pi].inventory.stacks.iter().any(|s| {
+                                    ireg.get(s.item_id).is_some_and(|d| {
+                                        d.ammo_type == ammo_type
+                                            && d.category == "ammo"
+                                            && s.count > 0
+                                    })
+                                })
+                            };
+                            if has_ammo {
+                                let rld_seed =
+                                    (px * 97.3 + py * 211.7 + self.time_of_day * 5003.0) as u32;
+                                let rld_rng =
+                                    (rld_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                                let rld_time = reload_base * (0.75 + rld_rng * 0.5);
+                                self.plebs[pi].reload_timer = rld_time;
+                                self.plebs[pi].aim_progress = 0.0;
+                                self.plebs[pi].set_bubble(
+                                    pleb::BubbleKind::Text("Reloading...".into()),
+                                    rld_time,
+                                );
+                            } else {
+                                self.plebs[pi].set_bubble(
+                                    pleb::BubbleKind::Thought("Out of ammo...".into()),
+                                    2.0,
+                                );
+                                self.plebs[pi].aim_progress = 0.0;
+                            }
                         } else {
-                            let shooting_skill = self.plebs[pi].skills[0] as f32;
+                            let shooting_skill = self.plebs[pi].skills[0].value;
                             let pleb_hash = (self.plebs[pi].id as u32).wrapping_mul(2654435761);
                             let pleb_rng = (pleb_hash & 0xFFFF) as f32 / 65535.0;
                             let base_aim = wpn_def.map(|w| w.ranged_aim_speed).unwrap_or(2.0);
@@ -2221,7 +2673,7 @@ impl App {
                             self.plebs[pi].swing_progress =
                                 (self.plebs[pi].swing_progress + dt / melee_speed).min(1.0);
                             if self.plebs[pi].swing_progress >= 1.0 {
-                                let melee_skill = self.plebs[pi].skills[1] as f32;
+                                let melee_skill = self.plebs[pi].skills[1].value;
                                 let hit_chance = (0.40 + melee_skill * 0.06).clamp(0.05, 0.95);
                                 let roll_seed =
                                     (px * 137.3 + py * 311.7 + self.time_of_day * 7919.0) as u32;
@@ -2312,7 +2764,7 @@ impl App {
                             // Strike!
                             if self.plebs[pi].swing_progress >= 1.0 {
                                 // Hit probability: 40% base + melee skill * 6% (0-9 → 0-54%)
-                                let melee_skill = self.plebs[pi].skills[1] as f32;
+                                let melee_skill = self.plebs[pi].skills[1].value;
                                 let cover_mod =
                                     if has_low_wall_cover(&self.grid_data, px, py, tx, ty) {
                                         -0.25
@@ -2409,7 +2861,7 @@ impl App {
                             );
                         } else {
                             // --- Aiming & firing ---
-                            let shooting_skill = self.plebs[pi].skills[0] as f32;
+                            let shooting_skill = self.plebs[pi].skills[0].value;
 
                             // Per-pleb stable random factor
                             let pleb_hash = (self.plebs[pi].id as u32).wrapping_mul(2654435761);
@@ -2820,6 +3272,7 @@ impl App {
 
             // Apply bullet hits to entities
             let mut kill_credits: Vec<usize> = Vec::new(); // shooter indices
+            let mut shooting_xp_credits: Vec<usize> = Vec::new(); // shooters who hit creatures
             for hit in &bullet_hits {
                 match hit.target {
                     physics::HitTarget::Pleb(pi) => {
@@ -2892,6 +3345,7 @@ impl App {
 
                             if creature.health <= 0.0 {
                                 creature.is_dead = true;
+                                creature.corpse_timer = 60.0;
                                 events.push(GameEventKind::Generic(
                                     types::EventCategory::Combat,
                                     format!(
@@ -2900,6 +3354,20 @@ impl App {
                                     ),
                                 ));
                             } else {
+                                // Non-aggressive creatures flee when hit
+                                let cdef = creature_defs::CreatureRegistry::cached()
+                                    .get(creature.species_id);
+                                if cdef.is_some_and(|d| !d.aggressive) {
+                                    let away_x = creature.x - hit.x;
+                                    let away_y = creature.y - hit.y;
+                                    let len = (away_x * away_x + away_y * away_y).sqrt().max(0.1);
+                                    creature.state = crate::creatures::CreatureState::Scatter(
+                                        away_x / len,
+                                        away_y / len,
+                                    );
+                                    creature.state_timer = 0.0;
+                                    creature.path.clear();
+                                }
                                 let bleed_desc = if creature.bleeding > 0.7 {
                                     "bleeding profusely"
                                 } else if creature.bleeding > 0.3 {
@@ -2921,7 +3389,27 @@ impl App {
                             self.fluid_params.splat_y = hit.y;
                             self.fluid_params.splat_radius = 0.2;
                             self.fluid_params.splat_active = 1.0;
+                            // Track shooter for XP
+                            if let Some(si) = hit.shooter {
+                                shooting_xp_credits.push(si);
+                            }
                         }
+                    }
+                }
+            }
+
+            // Award shooting XP to plebs who hit creatures
+            for si in shooting_xp_credits {
+                if let Some(shooter_pleb) = self.plebs.get_mut(si) {
+                    if let Some(new_level) = shooter_pleb.gain_xp(pleb::SKILL_SHOOTING, 5.0) {
+                        shooter_pleb.log_event(
+                            self.time_of_day,
+                            format!(
+                                "{} improved to {:.1}",
+                                pleb::SKILL_NAMES[pleb::SKILL_SHOOTING],
+                                new_level
+                            ),
+                        );
                     }
                 }
             }
@@ -3605,12 +4093,13 @@ impl App {
                         continue;
                     }
 
-                    let speed = if is_tree_target {
+                    let base_speed = if is_tree_target {
                         0.50 // ~2s with axe (required)
                     } else {
                         0.4 // ~2.5s for crops/bushes
                     };
-                    let new_progress = progress + dt * self.time_speed * speed;
+                    let new_progress =
+                        progress + dt * self.time_speed * base_speed * pleb.farming_speed();
                     if new_progress >= 1.0 {
                         // Complete the task
                         if let Some((tx, ty)) = pleb.work_target {
@@ -3627,6 +4116,17 @@ impl App {
                                     self.crop_timers.insert(tidx as u32, 0.0);
                                     self.grid_dirty = true;
                                     events.push(GameEventKind::Planted(pleb.name.clone()));
+                                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0)
+                                    {
+                                        pleb.log_event(
+                                            self.time_of_day,
+                                            format!(
+                                                "{} improved to {:.1}",
+                                                pleb::SKILL_NAMES[pleb::SKILL_FARMING],
+                                                new_level
+                                            ),
+                                        );
+                                    }
                                 } else if tbt == BT_CROP {
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = block_flags_rs(tblock) as u32;
@@ -3649,6 +4149,17 @@ impl App {
                                         pleb: pleb.name.clone(),
                                         what: "a crop (berries + fiber)",
                                     });
+                                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0)
+                                    {
+                                        pleb.log_event(
+                                            self.time_of_day,
+                                            format!(
+                                                "{} improved to {:.1}",
+                                                pleb::SKILL_NAMES[pleb::SKILL_FARMING],
+                                                new_level
+                                            ),
+                                        );
+                                    }
                                 } else if tbt == BT_BERRY_BUSH {
                                     self.ground_items.push(resources::GroundItem {
                                         x: pleb.x,
@@ -3659,6 +4170,17 @@ impl App {
                                         pleb: pleb.name.clone(),
                                         what: "berries",
                                     });
+                                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0)
+                                    {
+                                        pleb.log_event(
+                                            self.time_of_day,
+                                            format!(
+                                                "{} improved to {:.1}",
+                                                pleb::SKILL_NAMES[pleb::SKILL_FARMING],
+                                                new_level
+                                            ),
+                                        );
+                                    }
                                 } else if tbt == BT_TREE {
                                     // Chop down tree → remove all quadrants (2x2), drop 10 wood
                                     // Find the top-left corner from the quadrant flags
@@ -3718,6 +4240,17 @@ impl App {
                                         pleb: pleb.name.clone(),
                                         what: "a tree (log + sticks + fiber)",
                                     });
+                                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0)
+                                    {
+                                        pleb.log_event(
+                                            self.time_of_day,
+                                            format!(
+                                                "{} improved to {:.1}",
+                                                pleb::SKILL_NAMES[pleb::SKILL_FARMING],
+                                                new_level
+                                            ),
+                                        );
+                                    }
                                 }
                             }
                             self.active_work.remove(&(tx, ty));
@@ -3732,8 +4265,13 @@ impl App {
                 // Handle Digging activity: pleb digs terrain at work_target
                 if pleb.activity == PlebActivity::Digging {
                     if let Some((tx, ty)) = pleb.work_target {
-                        // Swing animation drives dig strokes
-                        pleb.swing_progress += dt * self.time_speed * terrain::DIG_SPEED_SHOVEL;
+                        // Swing animation drives dig strokes (shovel = full speed, bare hands = 50%)
+                        let dig_speed = if pleb.has_tool("shovel") {
+                            terrain::DIG_SPEED_SHOVEL
+                        } else {
+                            terrain::DIG_SPEED_SHOVEL * 0.5
+                        };
+                        pleb.swing_progress += dt * self.time_speed * dig_speed;
                         if pleb.swing_progress >= 1.0 {
                             pleb.swing_progress = 0.0;
                             // Apply dig stroke at the work target tile center
@@ -3852,162 +4390,231 @@ impl App {
                         + (pleb.y - ty as f32 - 0.5).powi(2))
                     .sqrt();
                     if dist < 1.5 {
-                        let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
-                        let tbt = if tidx < self.grid_data.len() {
-                            block_type_rs(self.grid_data[tidx])
-                        } else {
-                            0
-                        };
-
-                        // Branch gathering: arrived at tree with harvest_target but no axe
-                        if tbt == BT_TREE
-                            && pleb.harvest_target.is_some()
-                            && pleb.inventory.count_of(ITEM_STONE_AXE) == 0
-                        {
-                            pleb.activity = PlebActivity::Harvesting(0.0);
-                            pleb.work_target = None;
+                        // Butcher check first: creature corpse at target takes priority
+                        let has_corpse = self.creatures.iter().any(|c| {
+                            c.is_dead
+                                && !c.dropped_loot
+                                && c.x.floor() as i32 == tx
+                                && c.y.floor() as i32 == ty
+                        });
+                        if has_corpse && pleb.has_tool("knife") {
+                            pleb.draw_tool("knife");
+                            pleb.activity = PlebActivity::Butchering(0.0);
                             pleb.path.clear();
-                            pleb.path_idx = 0;
-                        } else if tbt == BT_WORKBENCH || tbt == BT_KILN || tbt == BT_SAW_HORSE {
-                            // Try to start crafting from queue
-                            let gidx = ty as u32 * GRID_W + tx as u32;
-                            let started = if let Some(queue) = self.craft_queues.get(&gidx) {
-                                if let Some(order) = queue.next_order() {
-                                    let recipe_reg = recipe_defs::RecipeRegistry::cached();
-                                    if let Some(recipe) = recipe_reg.get(order.recipe_id) {
-                                        // Check ingredients from inventory + crates + ground
-                                        let mut have_all = true;
-                                        for ing in &recipe.inputs {
-                                            let in_inv = pleb.inventory.count_of(ing.item) as u16;
-                                            let in_crates: u16 = self
-                                                .crate_contents
-                                                .values()
-                                                .map(|c| c.count_of(ing.item) as u16)
-                                                .sum();
-                                            let on_ground: u16 = self
-                                                .ground_items
-                                                .iter()
-                                                .filter(|gi| gi.stack.item_id == ing.item)
-                                                .map(|gi| gi.stack.count)
-                                                .sum();
-                                            if in_inv + in_crates + on_ground < ing.count {
-                                                have_all = false;
-                                                break;
+                        } else if has_corpse {
+                            // No knife — can't butcher
+                            pleb.set_bubble(
+                                pleb::BubbleKind::Thought("Need a knife...".into()),
+                                2.5,
+                            );
+                            pleb.log_event(self.time_of_day, "Can't butcher — no knife".into());
+                            pleb.activity = PlebActivity::Idle;
+                            pleb.work_target = None;
+                        } else {
+                            // Fishing: arrived near water with line
+                            let widx = (ty as u32 * GRID_W + tx as u32) as usize;
+                            let has_water = widx < self.water_depth_cpu.len()
+                                && self.water_depth_cpu[widx] > 0.3;
+                            let has_line = pleb.has_tool("fishing")
+                                || pleb.inventory.count_of(ITEM_FISHING_LINE) > 0;
+                            if has_water && has_line {
+                                pleb.draw_tool("fishing");
+                                pleb.activity = PlebActivity::Fishing(0.0);
+                                pleb.path.clear();
+                            } else if has_water {
+                                pleb.set_bubble(
+                                    pleb::BubbleKind::Thought("Need a fishing line...".into()),
+                                    2.5,
+                                );
+                                pleb.activity = PlebActivity::Idle;
+                                pleb.work_target = None;
+                            } else {
+                                let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                                let tbt = if tidx < self.grid_data.len() {
+                                    block_type_rs(self.grid_data[tidx])
+                                } else {
+                                    0
+                                };
+
+                                // Branch gathering: arrived at tree without axe on belt
+                                if tbt == BT_TREE
+                                    && pleb.harvest_target.is_some()
+                                    && !pleb.has_tool("axe")
+                                {
+                                    pleb.activity = PlebActivity::Harvesting(0.0);
+                                    pleb.work_target = None;
+                                    pleb.path.clear();
+                                    pleb.path_idx = 0;
+                                } else if (tbt == BT_FIREPLACE || tbt == BT_CAMPFIRE)
+                                    && (pleb.inventory.count_of(ITEM_RAW_MEAT) > 0
+                                        || pleb.inventory.count_of(ITEM_RAW_FISH) > 0)
+                                {
+                                    // Arrived at campfire with raw food: start cooking
+                                    pleb.activity = PlebActivity::Cooking(0.0);
+                                    pleb.path.clear();
+                                } else if tbt == BT_WORKBENCH
+                                    || tbt == BT_KILN
+                                    || tbt == BT_SAW_HORSE
+                                {
+                                    // Try to start crafting from queue
+                                    let gidx = ty as u32 * GRID_W + tx as u32;
+                                    let started = if let Some(queue) = self.craft_queues.get(&gidx)
+                                    {
+                                        if let Some(order) = queue.next_order() {
+                                            let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                                            if let Some(recipe) = recipe_reg.get(order.recipe_id) {
+                                                // Check ingredients from inventory + crates + ground
+                                                let mut have_all = true;
+                                                for ing in &recipe.inputs {
+                                                    let in_inv =
+                                                        pleb.inventory.count_of(ing.item) as u16;
+                                                    let in_crates: u16 = self
+                                                        .crate_contents
+                                                        .values()
+                                                        .map(|c| c.count_of(ing.item) as u16)
+                                                        .sum();
+                                                    let on_ground: u16 = self
+                                                        .ground_items
+                                                        .iter()
+                                                        .filter(|gi| gi.stack.item_id == ing.item)
+                                                        .map(|gi| gi.stack.count)
+                                                        .sum();
+                                                    if in_inv + in_crates + on_ground < ing.count {
+                                                        have_all = false;
+                                                        break;
+                                                    }
+                                                }
+                                                if have_all {
+                                                    Some(order.recipe_id)
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
                                             }
-                                        }
-                                        if have_all {
-                                            Some(order.recipe_id)
                                         } else {
                                             None
                                         }
                                     } else {
                                         None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            };
+                                    };
 
-                            if let Some(recipe_id) = started {
-                                let recipe_reg = recipe_defs::RecipeRegistry::cached();
-                                let Some(recipe) = recipe_reg.get(recipe_id) else {
-                                    self.active_work.remove(&(tx, ty));
-                                    pleb.work_target = None;
-                                    pleb.activity = PlebActivity::Idle;
-                                    continue;
-                                };
-                                // Consume ingredients from pleb inventory + crates + ground
-                                for ing in &recipe.inputs {
-                                    let mut need = ing.count;
-                                    let from_inv = pleb.inventory.remove(ing.item, need);
-                                    need -= from_inv;
-                                    if need > 0 {
-                                        for (_, cinv) in self.crate_contents.iter_mut() {
-                                            if need == 0 {
-                                                break;
-                                            }
-                                            let taken = cinv.remove(ing.item, need);
-                                            need -= taken;
-                                        }
-                                    }
-                                    // Take remaining from ground items
-                                    if need > 0 {
-                                        let mut i = 0;
-                                        while i < self.ground_items.len() && need > 0 {
-                                            if self.ground_items[i].stack.item_id == ing.item {
-                                                let take =
-                                                    self.ground_items[i].stack.count.min(need);
-                                                self.ground_items[i].stack.count -= take;
-                                                need -= take;
-                                                if self.ground_items[i].stack.count == 0 {
-                                                    self.ground_items.remove(i);
-                                                    continue;
+                                    if let Some(recipe_id) = started {
+                                        let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                                        let Some(recipe) = recipe_reg.get(recipe_id) else {
+                                            self.active_work.remove(&(tx, ty));
+                                            pleb.work_target = None;
+                                            pleb.activity = PlebActivity::Idle;
+                                            continue;
+                                        };
+                                        // Consume ingredients from pleb inventory + crates + ground
+                                        for ing in &recipe.inputs {
+                                            let mut need = ing.count;
+                                            let from_inv = pleb.inventory.remove(ing.item, need);
+                                            need -= from_inv;
+                                            if need > 0 {
+                                                for (_, cinv) in self.crate_contents.iter_mut() {
+                                                    if need == 0 {
+                                                        break;
+                                                    }
+                                                    let taken = cinv.remove(ing.item, need);
+                                                    need -= taken;
                                                 }
                                             }
-                                            i += 1;
+                                            // Take remaining from ground items
+                                            if need > 0 {
+                                                let mut i = 0;
+                                                while i < self.ground_items.len() && need > 0 {
+                                                    if self.ground_items[i].stack.item_id
+                                                        == ing.item
+                                                    {
+                                                        let take = self.ground_items[i]
+                                                            .stack
+                                                            .count
+                                                            .min(need);
+                                                        self.ground_items[i].stack.count -= take;
+                                                        need -= take;
+                                                        if self.ground_items[i].stack.count == 0 {
+                                                            self.ground_items.remove(i);
+                                                            continue;
+                                                        }
+                                                    }
+                                                    i += 1;
+                                                }
+                                            }
                                         }
+                                        pleb.activity = PlebActivity::Crafting(recipe_id, 0.0);
+                                        events.push(GameEventKind::Crafting {
+                                            pleb: pleb.name.clone(),
+                                            recipe: recipe.name.clone(),
+                                        });
+                                    } else {
+                                        // Can't craft — missing ingredients, release
+                                        self.active_work.remove(&(tx, ty));
+                                        pleb.work_target = None;
+                                        pleb.activity = PlebActivity::Idle;
                                     }
+                                } else if tbt == BT_WELL {
+                                    // Start drinking at well
+                                    pleb.activity = PlebActivity::Drinking(0.0);
+                                } else if self
+                                    .dig_zones
+                                    .iter()
+                                    .any(|dz| dz.tiles.contains(&(tx, ty)))
+                                {
+                                    // Dig zone target: start digging (shovel auto-draw for speed bonus)
+                                    pleb.draw_tool("shovel");
+                                    pleb.activity = PlebActivity::Digging;
+                                } else if self
+                                    .berm_zones
+                                    .iter()
+                                    .any(|bz| bz.tiles.contains(&(tx, ty)))
+                                {
+                                    // Berm zone target: start filling (requires dirt in inventory)
+                                    if pleb.inventory.count_of(item_defs::ITEM_CLAY) > 0 {
+                                        pleb.activity = PlebActivity::Filling;
+                                    } else {
+                                        // No dirt — release task, go find some
+                                        self.active_work.remove(&(tx, ty));
+                                        pleb.work_target = None;
+                                        pleb.activity = PlebActivity::Idle;
+                                    }
+                                } else if tbt == BT_GROUND
+                                    && tidx < self.terrain_data.len()
+                                    && terrain_dig_holes(self.terrain_data[tidx]) < 7
+                                {
+                                    // Dig earth: add a hole (no elevation change, tile stays BT_GROUND)
+                                    let is_clay_terrain =
+                                        terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY;
+                                    terrain_add_dig_hole(&mut self.terrain_data[tidx]);
+                                    self.terrain_dirty = true;
+                                    let has_shovel =
+                                        pleb.inventory.count_of(ITEM_WOODEN_SHOVEL) > 0;
+                                    let base_yield: u16 = if is_clay_terrain { 4 } else { 2 };
+                                    let yield_amt = base_yield + if has_shovel { 2 } else { 0 };
+                                    self.ground_items.push(resources::GroundItem::new(
+                                        tx as f32 + 0.5,
+                                        ty as f32 + 0.5,
+                                        ITEM_CLAY,
+                                        yield_amt,
+                                    ));
+                                    events.push(GameEventKind::DugClay {
+                                        pleb: pleb.name.clone(),
+                                        amount: yield_amt,
+                                    });
+                                    pleb.work_target = None;
+                                    pleb.activity = PlebActivity::Idle;
+                                } else {
+                                    // Auto-draw the appropriate tool for this task
+                                    if tbt == BT_TREE {
+                                        pleb.draw_tool("axe");
+                                    } else if tbt == BT_BERRY_BUSH || tbt == BT_CROP {
+                                        pleb.draw_tool("knife"); // soft bonus, not required
+                                    }
+                                    pleb.activity = PlebActivity::Farming(0.0);
                                 }
-                                pleb.activity = PlebActivity::Crafting(recipe_id, 0.0);
-                                events.push(GameEventKind::Crafting {
-                                    pleb: pleb.name.clone(),
-                                    recipe: recipe.name.clone(),
-                                });
-                            } else {
-                                // Can't craft — missing ingredients, release
-                                self.active_work.remove(&(tx, ty));
-                                pleb.work_target = None;
-                                pleb.activity = PlebActivity::Idle;
-                            }
-                        } else if tbt == BT_WELL {
-                            // Start drinking at well
-                            pleb.activity = PlebActivity::Drinking(0.0);
-                        } else if self.dig_zones.iter().any(|dz| dz.tiles.contains(&(tx, ty))) {
-                            // Dig zone target: start digging
-                            pleb.activity = PlebActivity::Digging;
-                        } else if self
-                            .berm_zones
-                            .iter()
-                            .any(|bz| bz.tiles.contains(&(tx, ty)))
-                        {
-                            // Berm zone target: start filling (requires dirt in inventory)
-                            if pleb.inventory.count_of(item_defs::ITEM_CLAY) > 0 {
-                                pleb.activity = PlebActivity::Filling;
-                            } else {
-                                // No dirt — release task, go find some
-                                self.active_work.remove(&(tx, ty));
-                                pleb.work_target = None;
-                                pleb.activity = PlebActivity::Idle;
-                            }
-                        } else if tbt == BT_GROUND
-                            && tidx < self.terrain_data.len()
-                            && terrain_dig_holes(self.terrain_data[tidx]) < 7
-                        {
-                            // Dig earth: add a hole (no elevation change, tile stays BT_GROUND)
-                            let is_clay_terrain =
-                                terrain_type(self.terrain_data[tidx]) == TERRAIN_CLAY;
-                            terrain_add_dig_hole(&mut self.terrain_data[tidx]);
-                            self.terrain_dirty = true;
-                            let has_shovel = pleb.inventory.count_of(ITEM_WOODEN_SHOVEL) > 0;
-                            let base_yield: u16 = if is_clay_terrain { 4 } else { 2 };
-                            let yield_amt = base_yield + if has_shovel { 2 } else { 0 };
-                            self.ground_items.push(resources::GroundItem::new(
-                                tx as f32 + 0.5,
-                                ty as f32 + 0.5,
-                                ITEM_CLAY,
-                                yield_amt,
-                            ));
-                            events.push(GameEventKind::DugClay {
-                                pleb: pleb.name.clone(),
-                                amount: yield_amt,
-                            });
-                            pleb.work_target = None;
-                            pleb.activity = PlebActivity::Idle;
-                        } else {
-                            pleb.activity = PlebActivity::Farming(0.0);
-                        }
+                            } // end else (not water)
+                        } // end else (no corpse)
                     } else {
                         // Too far — release task and retry
                         self.active_work.remove(&(tx, ty));
@@ -4029,7 +4636,7 @@ impl App {
             if let PlebActivity::Building(progress) = &pleb.activity {
                 if let Some((tx, ty)) = pleb.work_target {
                     let new_progress = if let Some(bp) = self.blueprints.get(&(tx, ty)) {
-                        progress + dt * self.time_speed / bp.build_time
+                        progress + dt * self.time_speed * pleb.construction_speed() / bp.build_time
                     } else {
                         1.0 // blueprint gone, finish immediately
                     };
@@ -4089,6 +4696,16 @@ impl App {
                             }
                         }
                         self.active_work.remove(&(tx, ty));
+                        if let Some(new_level) = pleb.gain_xp(pleb::SKILL_CONSTRUCTION, 20.0) {
+                            pleb.log_event(
+                                self.time_of_day,
+                                format!(
+                                    "{} improved to {:.1}",
+                                    pleb::SKILL_NAMES[pleb::SKILL_CONSTRUCTION],
+                                    new_level
+                                ),
+                            );
+                        }
                         // Chain to adjacent blueprint if one exists (build walls sequentially)
                         let mut chained = false;
                         for &(dx, dy) in &[(1i32, 0), (-1, 0), (0, 1), (0, -1)] {
@@ -4099,16 +4716,12 @@ impl App {
                             {
                                 let ready = if nbp.is_roof() {
                                     pleb.inventory.count_of(ITEM_FIBER) >= 1
-                                } else if nbp.is_campfire() {
-                                    pleb.inventory.count_of(ITEM_SCRAP_WOOD) >= 3
                                 } else {
                                     nbp.resources_met()
                                 };
                                 if ready {
                                     if nbp.is_roof() {
                                         pleb.inventory.remove(ITEM_FIBER, 1);
-                                    } else if nbp.is_campfire() {
-                                        pleb.inventory.remove(ITEM_SCRAP_WOOD, 3);
                                     }
                                     pleb.work_target = Some((nx, ny));
                                     pleb.activity = PlebActivity::Building(0.0);
@@ -4175,7 +4788,8 @@ impl App {
             if let PlebActivity::Crafting(recipe_id, progress) = pleb.activity {
                 let recipe_reg = recipe_defs::RecipeRegistry::cached();
                 if let Some(recipe) = recipe_reg.get(recipe_id) {
-                    let new_progress = progress + dt * self.time_speed / recipe.time;
+                    let new_progress =
+                        progress + dt * self.time_speed * pleb.crafting_speed() / recipe.time;
                     if new_progress >= 1.0 {
                         // Crafting complete — drop output on ground near pleb
                         self.ground_items.push(resources::GroundItem::new(
@@ -4209,6 +4823,16 @@ impl App {
                             }
                             self.active_work.remove(&(tx, ty));
                         }
+                        if let Some(new_level) = pleb.gain_xp(pleb::SKILL_CRAFTING, 15.0) {
+                            pleb.log_event(
+                                self.time_of_day,
+                                format!(
+                                    "{} improved to {:.1}",
+                                    pleb::SKILL_NAMES[pleb::SKILL_CRAFTING],
+                                    new_level
+                                ),
+                            );
+                        }
                         pleb.work_target = None;
                         pleb.activity = PlebActivity::Idle;
                     } else {
@@ -4220,6 +4844,223 @@ impl App {
             }
         }
 
+        // --- Butchering: tick progress, drop meat on completion ---
+        for pleb in self.plebs.iter_mut() {
+            if pleb.is_dead || pleb.is_enemy {
+                continue;
+            }
+            if let PlebActivity::Butchering(progress) = pleb.activity {
+                let new_progress = progress + dt * self.time_speed * 0.25;
+                if new_progress >= 1.0 {
+                    // Find the creature corpse at work_target and mark it butchered
+                    if let Some((wx, wy)) = pleb.work_target {
+                        for c in &mut self.creatures {
+                            if c.is_dead
+                                && !c.dropped_loot
+                                && c.x.floor() as i32 == wx
+                                && c.y.floor() as i32 == wy
+                            {
+                                c.dropped_loot = true;
+                                c.corpse_timer = 0.0; // remove corpse
+                                if let Some(def) =
+                                    creature_defs::CreatureRegistry::cached().get(c.species_id)
+                                {
+                                    if def.drops_item > 0 {
+                                        self.ground_items.push(resources::GroundItem::new(
+                                            pleb.x,
+                                            pleb.y,
+                                            def.drops_item,
+                                            1,
+                                        ));
+                                        events.push(GameEventKind::Generic(
+                                            types::EventCategory::General,
+                                            format!("{} butchered a {}", pleb.name, def.name),
+                                        ));
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_CRAFTING, 15.0) {
+                        pleb.log_event(
+                            self.time_of_day,
+                            format!(
+                                "{} improved to {:.1}",
+                                pleb::SKILL_NAMES[pleb::SKILL_CRAFTING],
+                                new_level
+                            ),
+                        );
+                    }
+                    pleb.activity = PlebActivity::Idle;
+                    pleb.work_target = None;
+                } else {
+                    pleb.activity = PlebActivity::Butchering(new_progress);
+                }
+            }
+        }
+
+        // --- Cooking: tick progress, consume raw → produce cooked ---
+        for pleb in self.plebs.iter_mut() {
+            if pleb.is_dead || pleb.is_enemy {
+                continue;
+            }
+            if let PlebActivity::Cooking(progress) = pleb.activity {
+                let new_progress = progress + dt * self.time_speed * 0.2; // ~5 seconds
+                if new_progress >= 1.0 {
+                    // Convert raw food → cooked food (meat first, then fish)
+                    if pleb.inventory.count_of(ITEM_RAW_MEAT) > 0 {
+                        pleb.inventory.remove(ITEM_RAW_MEAT, 1);
+                        pleb.inventory.add(ITEM_COOKED_MEAT, 1);
+                        pleb.log_event(self.time_of_day, "Cooked meat".into());
+                        events.push(GameEventKind::Generic(
+                            types::EventCategory::General,
+                            format!("{} cooked meat", pleb.name),
+                        ));
+                    } else if pleb.inventory.count_of(ITEM_RAW_FISH) > 0 {
+                        pleb.inventory.remove(ITEM_RAW_FISH, 1);
+                        pleb.inventory.add(ITEM_COOKED_FISH, 1);
+                        pleb.log_event(self.time_of_day, "Cooked fish".into());
+                        events.push(GameEventKind::Generic(
+                            types::EventCategory::General,
+                            format!("{} cooked fish", pleb.name),
+                        ));
+                    }
+                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_CRAFTING, 10.0) {
+                        pleb.log_event(
+                            self.time_of_day,
+                            format!(
+                                "{} improved to {:.1}",
+                                pleb::SKILL_NAMES[pleb::SKILL_CRAFTING],
+                                new_level
+                            ),
+                        );
+                    }
+                    pleb.activity = PlebActivity::Idle;
+                    pleb.work_target = None;
+                } else {
+                    pleb.activity = PlebActivity::Cooking(new_progress);
+                }
+            }
+        }
+
+        // --- Fishing: tick progress, roll for catch on completion ---
+        for pleb in self.plebs.iter_mut() {
+            if pleb.is_dead || pleb.is_enemy {
+                continue;
+            }
+            if let PlebActivity::Fishing(progress) = pleb.activity {
+                let new_progress = progress + dt * self.time_speed * 0.05; // ~20 seconds
+                if new_progress >= 1.0 {
+                    // Hash-based catch roll: 35% chance
+                    let seed = (pleb.x.to_bits())
+                        .wrapping_mul(2654435761)
+                        .wrapping_add(pleb.y.to_bits())
+                        .wrapping_add((self.time_of_day * 1000.0) as u32);
+                    let roll = types::hash_f32(seed);
+                    if roll < 0.35 {
+                        pleb.inventory.add(ITEM_RAW_FISH, 1);
+                        pleb.log_event(self.time_of_day, "Caught a fish!".into());
+                        events.push(GameEventKind::Generic(
+                            types::EventCategory::General,
+                            format!("{} caught a fish", pleb.name),
+                        ));
+                        if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0) {
+                            pleb.log_event(
+                                self.time_of_day,
+                                format!(
+                                    "{} improved to {:.1}",
+                                    pleb::SKILL_NAMES[pleb::SKILL_FARMING],
+                                    new_level
+                                ),
+                            );
+                        }
+                        pleb.activity = PlebActivity::Idle;
+                        pleb.work_target = None;
+                    } else {
+                        pleb.log_event(self.time_of_day, "No catch...".into());
+                        if let Some(new_level) = pleb.gain_xp_failure(pleb::SKILL_FARMING, 8.0) {
+                            pleb.log_event(
+                                self.time_of_day,
+                                format!(
+                                    "{} improved to {:.1}",
+                                    pleb::SKILL_NAMES[pleb::SKILL_FARMING],
+                                    new_level
+                                ),
+                            );
+                        }
+                        // Restart fishing (loop)
+                        pleb.activity = PlebActivity::Fishing(0.0);
+                    }
+                } else {
+                    pleb.activity = PlebActivity::Fishing(new_progress);
+                }
+            }
+        }
+
+        // --- Auto-assign cooking: idle pleb with raw food near a lit campfire ---
+        // Throttled: only scan for campfires every ~0.5s (not every frame)
+        if self.frame_count % 30 == 5 {
+            let campfire_positions: Vec<(i32, i32)> = (0..(GRID_W * GRID_H) as usize)
+                .filter(|&idx| {
+                    let bt = self.grid_data[idx] & 0xFF;
+                    let h = (self.grid_data[idx] >> 8) & 0xFF;
+                    (bt == BT_FIREPLACE || bt == BT_CAMPFIRE) && h > 0
+                })
+                .map(|idx| ((idx as u32 % GRID_W) as i32, (idx as u32 / GRID_W) as i32))
+                .collect();
+
+            if !campfire_positions.is_empty() {
+                for pleb in self.plebs.iter_mut() {
+                    if pleb.is_dead
+                        || pleb.is_enemy
+                        || pleb.drafted
+                        || !matches!(pleb.activity, PlebActivity::Idle)
+                        || (pleb.inventory.count_of(ITEM_RAW_MEAT) == 0
+                            && pleb.inventory.count_of(ITEM_RAW_FISH) == 0)
+                    {
+                        continue;
+                    }
+                    // Find nearest lit campfire
+                    let mut best: Option<((i32, i32), f32)> = None;
+                    for &(cx, cy) in &campfire_positions {
+                        let d = ((pleb.x - cx as f32 - 0.5).powi(2)
+                            + (pleb.y - cy as f32 - 0.5).powi(2))
+                        .sqrt();
+                        if d < 30.0 && best.map_or(true, |(_, bd)| d < bd) {
+                            best = Some(((cx, cy), d));
+                        }
+                    }
+                    if let Some(((cx, cy), dist)) = best {
+                        if dist < 1.8 {
+                            // Already near campfire: start cooking
+                            pleb.activity = PlebActivity::Cooking(0.0);
+                            pleb.work_target = Some((cx, cy));
+                        } else {
+                            // Path to campfire
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let adj =
+                                adjacent_walkable(&self.grid_data, cx, cy).unwrap_or((cx, cy));
+                            let path = pleb::astar_path_terrain_water_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                &self.water_depth_cpu,
+                                start,
+                                adj,
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.work_target = Some((cx, cy));
+                            }
+                        }
+                    }
+                }
+            }
+        } // end campfire throttle
+
         // 2. Auto-assign idle plebs to blueprint tasks (haul resources or build)
         if !self.blueprints.is_empty() {
             let bp_positions: Vec<(i32, i32)> = self.blueprints.keys().copied().collect();
@@ -4229,26 +5070,21 @@ impl App {
                 }
                 let bp = &self.blueprints[&(bx, by)];
 
-                // For roofs/campfires: check if any pleb has the special resource
+                // For roofs: check if any pleb has the special resource
                 let special_ready = if bp.is_roof() {
                     self.plebs
                         .iter()
                         .any(|p| !p.is_enemy && p.inventory.count_of(ITEM_FIBER) >= 1)
-                } else if bp.is_campfire() {
-                    self.plebs
-                        .iter()
-                        .any(|p| !p.is_enemy && p.inventory.count_of(ITEM_SCRAP_WOOD) >= 3)
                 } else {
                     true // standard blueprints don't need special check
                 };
-                let ready = if bp.is_roof() || bp.is_campfire() {
-                    special_ready // only ready if someone has the material
+                let ready = if bp.is_roof() {
+                    special_ready
                 } else {
                     bp.resources_met()
                 };
                 if ready {
                     let needs_fiber = bp.is_roof();
-                    let needs_sticks = bp.is_campfire();
                     let mut best: Option<(usize, f32)> = None;
                     for (i, pleb) in self.plebs.iter().enumerate() {
                         if pleb.is_enemy || pleb.drafted || pleb.work_target.is_some() {
@@ -4258,9 +5094,6 @@ impl App {
                             continue;
                         }
                         if needs_fiber && pleb.inventory.count_of(ITEM_FIBER) == 0 {
-                            continue;
-                        }
-                        if needs_sticks && pleb.inventory.count_of(ITEM_SCRAP_WOOD) < 3 {
                             continue;
                         }
                         let dist = ((pleb.x - bx as f32 - 0.5).powi(2)
@@ -4295,10 +5128,12 @@ impl App {
                     // Determine which material is needed
                     let need_item = if bp.is_roof() {
                         Some(ITEM_FIBER) // roof needs fiber (not tracked in standard fields)
-                    } else if bp.is_campfire() {
-                        Some(ITEM_SCRAP_WOOD) // campfire needs sticks
                     } else if bp.wood_delivered < bp.wood_needed {
-                        Some(ITEM_LOG)
+                        if bp.is_campfire() {
+                            Some(ITEM_SCRAP_WOOD)
+                        } else {
+                            Some(ITEM_LOG)
+                        }
                     } else if bp.clay_delivered < bp.clay_needed {
                         Some(ITEM_CLAY)
                     } else if bp.plank_delivered < bp.plank_needed {
@@ -4762,7 +5597,11 @@ impl App {
             if pleb.is_dead || pleb.bleeding <= 0.0 {
                 continue;
             }
-            pleb.needs.health -= pleb.bleeding * 0.02 * dt;
+            pleb.needs.health -= pleb.bleeding * 0.02 * dt * pleb.bleed_resist();
+            // Finish off plebs with negligible health (prevents lingering near-death)
+            if pleb.needs.health < 0.02 && pleb.needs.health > 0.0 {
+                pleb.needs.health = 0.0;
+            }
             pleb.bleeding = (pleb.bleeding - 0.05 * dt).max(0.0);
             pleb.blood_drop_timer -= dt;
             if pleb.blood_drop_timer <= 0.0 {
@@ -4840,7 +5679,9 @@ impl App {
 
     /// Tick alien fauna: spawning, FSM behavior, sound, cleanup.
     fn tick_creatures(&mut self, dt: f32, events: &mut Vec<GameEventKind>) {
-        use crate::creature_defs::{CREATURE_DUSKWEAVER, CREATURE_HOLLOWCALL, CreatureRegistry};
+        use crate::creature_defs::{
+            CREATURE_DUSKWEAVER, CREATURE_DUSTHARE, CREATURE_HOLLOWCALL, CreatureRegistry,
+        };
         use crate::creatures::{Creature, CreatureState, MAX_CREATURES};
 
         let dt_game = dt * self.time_speed;
@@ -4852,6 +5693,64 @@ impl App {
         let reg = CreatureRegistry::cached();
         let gw = GRID_W as i32;
         let gh = GRID_H as i32;
+
+        // --- Pleb hunting behavior: follow creature, aim, shoot ---
+        let hunt_range = 12.0f32; // max range to start aiming
+        let hunt_follow = 18.0f32; // re-path if creature moves beyond this
+        for pleb in &mut self.plebs {
+            if pleb.is_dead || pleb.is_enemy {
+                continue;
+            }
+            let ci = match pleb.hunt_target {
+                Some(ci) => ci,
+                None => continue,
+            };
+            let creature = match self.creatures.get(ci) {
+                Some(c) if !c.is_dead => c,
+                _ => {
+                    // Target dead or invalid — stop hunting
+                    pleb.hunt_target = None;
+                    pleb.aim_pos = None;
+                    continue;
+                }
+            };
+            let dx = creature.x - pleb.x;
+            let dy = creature.y - pleb.y;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            if dist < hunt_range {
+                // In range: aim at creature position (precision shot)
+                pleb.aim_pos = Some((creature.x, creature.y));
+                pleb.angle = dy.atan2(dx);
+                // Stop walking, focus on aiming
+                if matches!(pleb.activity, PlebActivity::Walking) {
+                    pleb.path.clear();
+                    pleb.activity = PlebActivity::Idle;
+                }
+            } else {
+                // Out of range: follow the creature
+                pleb.aim_pos = None;
+                pleb.aim_progress = 0.0;
+                // Re-path periodically toward creature
+                if pleb.path.is_empty() || pleb.path_idx >= pleb.path.len() || dist > hunt_follow {
+                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                    let goal = (creature.x.floor() as i32, creature.y.floor() as i32);
+                    let path = pleb::astar_path_terrain_water_wd(
+                        &self.grid_data,
+                        &self.wall_data,
+                        &self.terrain_data,
+                        &self.water_depth_cpu,
+                        start,
+                        goal,
+                    );
+                    if !path.is_empty() {
+                        pleb.path = path;
+                        pleb.path_idx = 0;
+                        pleb.activity = PlebActivity::Walking;
+                    }
+                }
+            }
+        }
 
         // --- Spawn at dusk ---
         self.creature_spawn_timer -= dt_game;
@@ -4870,10 +5769,17 @@ impl App {
                     let pack_id = self.next_pack_id;
                     self.next_pack_id = self.next_pack_id.wrapping_add(1);
                     let def = reg.get(CREATURE_DUSKWEAVER);
+                    // Escalation: night 1 = 1-2, night 2 = 2-3, night 3+ = full packs
                     let pack_size = def.map_or(4, |d| {
-                        let range = d.pack_max.saturating_sub(d.pack_min) as u32 + 1;
+                        let (lo, hi) = match self.night_count {
+                            0 => (1u8, 2u8),               // first night: timid
+                            1 => (2, 4),                   // second night: small pack
+                            2 => (3, 5),                   // third night: growing
+                            _ => (d.pack_min, d.pack_max), // full packs
+                        };
+                        let range = hi.saturating_sub(lo) as u32 + 1;
                         let rng = (self.time_of_day * 1000.0) as u32 % range;
-                        d.pack_min + rng as u8
+                        lo + rng as u8
                     }) as usize;
                     // Pick an edge
                     let edge = (self.next_pack_id % 4) as i32;
@@ -5202,6 +6108,114 @@ impl App {
                     let _ = (fx, fy); // used for pathfinding target already
                 }
 
+                CreatureState::Browse => {
+                    // Passive fauna: short hops, pause, scan for threats
+                    let c = &mut self.creatures[ci];
+                    c.state_timer += dt_game;
+
+                    // Follow path (hop movement)
+                    if c.path_idx < c.path.len() && speed > 0.0 {
+                        let (tx, ty) = c.path[c.path_idx];
+                        let dx = tx as f32 + 0.5 - c.x;
+                        let dy = ty as f32 + 0.5 - c.y;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist < 0.3 {
+                            c.path_idx += 1;
+                            c.hop_phase = 0.0; // land
+                        } else {
+                            let step = speed * dt;
+                            c.x += dx / dist * step;
+                            c.y += dy / dist * step;
+                            c.angle = dy.atan2(dx);
+                            // Advance hop cycle
+                            c.hop_phase = (c.hop_phase + dt * 4.0) % 1.0;
+                        }
+                    } else {
+                        c.hop_phase = 0.0; // grounded when idle
+                    }
+
+                    // Pick a new short hop destination every 2-4 seconds
+                    if c.path_idx >= c.path.len() && c.state_timer > 2.0 {
+                        c.state_timer = 0.0;
+                        let seed =
+                            ((c.x * 137.3 + c.y * 311.7 + c.sound_timer * 53.1) * 1000.0) as u32;
+                        let hash = seed.wrapping_mul(2654435761);
+                        // Short hops: 2-4 tiles
+                        let hop_dist = 2 + (hash % 3) as i32;
+                        let angle_idx = (hash >> 8) % 8;
+                        let angles: [(i32, i32); 8] = [
+                            (1, 0),
+                            (1, 1),
+                            (0, 1),
+                            (-1, 1),
+                            (-1, 0),
+                            (-1, -1),
+                            (0, -1),
+                            (1, -1),
+                        ];
+                        let (adx, ady) = angles[angle_idx as usize];
+                        let wx = (c.x as i32 + adx * hop_dist).clamp(3, gw - 4);
+                        let wy = (c.y as i32 + ady * hop_dist).clamp(3, gh - 4);
+                        c.path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            (c.x as i32, c.y as i32),
+                            (wx, wy),
+                        );
+                        c.path_idx = 0;
+                    }
+
+                    // Scan for nearby plebs → scatter
+                    let flee_r = def.flee_radius;
+                    if flee_r > 0.0 {
+                        let flee_r2 = flee_r * flee_r;
+                        let mut closest_threat: Option<(f32, f32, f32)> = None;
+                        for &(px, py, _) in &pleb_positions {
+                            let d2 = (px - c.x).powi(2) + (py - c.y).powi(2);
+                            if d2 < flee_r2 && closest_threat.map_or(true, |(_, _, bd)| d2 < bd) {
+                                closest_threat = Some((px, py, d2));
+                            }
+                        }
+                        if let Some((px, py, _)) = closest_threat {
+                            // Flee away from the threat
+                            let away_x = c.x - px;
+                            let away_y = c.y - py;
+                            let len = (away_x * away_x + away_y * away_y).sqrt().max(0.1);
+                            c.state = CreatureState::Scatter(away_x / len, away_y / len);
+                            c.state_timer = 0.0;
+                            c.path.clear();
+                            c.path_idx = 0;
+                        }
+                    }
+                }
+
+                CreatureState::Scatter(away_x, away_y) => {
+                    // Burst flee for a short distance, then resume browsing
+                    let c = &mut self.creatures[ci];
+                    c.state_timer += dt_game;
+
+                    // Sprint away at 1.5x speed
+                    let sprint = speed * 1.5 * dt;
+                    // Add some randomness to scatter direction
+                    let seed = ((c.x * 73.1 + c.y * 137.3) * 100.0) as u32;
+                    let jitter = (seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0 - 0.5;
+                    let jx = away_x + jitter * 0.3;
+                    let jy = away_y + jitter * 0.3;
+                    let len = (jx * jx + jy * jy).sqrt().max(0.1);
+                    c.x = (c.x + jx / len * sprint).clamp(2.0, (gw - 2) as f32);
+                    c.y = (c.y + jy / len * sprint).clamp(2.0, (gh - 2) as f32);
+                    c.angle = jy.atan2(jx);
+                    c.hop_phase = (c.hop_phase + dt * 6.0) % 1.0; // fast hopping
+
+                    // After ~1.5 seconds, return to browsing
+                    if c.state_timer > 1.5 {
+                        c.state = CreatureState::Browse;
+                        c.state_timer = 0.0;
+                        c.hop_phase = 0.0;
+                    }
+                }
+
                 CreatureState::Despawn => {
                     let c = &mut self.creatures[ci];
                     c.state_timer -= dt_game;
@@ -5248,7 +6262,7 @@ impl App {
             c.health -= blood_loss;
             if c.health <= 0.0 {
                 c.is_dead = true;
-                c.corpse_timer = 10.0;
+                c.corpse_timer = 60.0;
             }
 
             // Bleeding slowly clots (unless wound is severe)
@@ -5268,6 +6282,117 @@ impl App {
         }
         self.blood_stains.retain(|s| s.2 > 0.0);
 
+        // Dead creatures remain as corpses until butchered or timer expires
+        // (no auto-drop — butchering required for loot)
+
+        // --- Dusthare reproduction: slow population recovery ---
+        {
+            let dusthare_count = self
+                .creatures
+                .iter()
+                .filter(|c| c.species_id == CREATURE_DUSTHARE && !c.is_dead)
+                .count();
+            // If at least 2 alive and under cap, chance to spawn a new one
+            if dusthare_count >= 2 && dusthare_count < 20 && self.creatures.len() < MAX_CREATURES {
+                self.dusthare_repro_timer -= dt_game;
+                if self.dusthare_repro_timer <= 0.0 {
+                    // Pick a random living dusthare to spawn near
+                    let parents: Vec<(f32, f32)> = self
+                        .creatures
+                        .iter()
+                        .filter(|c| c.species_id == CREATURE_DUSTHARE && !c.is_dead)
+                        .map(|c| (c.x, c.y))
+                        .collect();
+                    if let Some(&(px, py)) = parents.first() {
+                        let seed = (px * 137.3 + py * 311.7) as u32;
+                        let hash = seed.wrapping_mul(2654435761);
+                        let ox = ((hash & 0xFF) as f32 / 255.0 - 0.5) * 6.0;
+                        let oy = (((hash >> 8) & 0xFF) as f32 / 255.0 - 0.5) * 6.0;
+                        let nx = (px + ox).clamp(5.0, (gw - 5) as f32);
+                        let ny = (py + oy).clamp(5.0, (gh - 5) as f32);
+                        let pid = self.next_pack_id;
+                        self.next_pack_id = self.next_pack_id.wrapping_add(1);
+                        self.creatures
+                            .push(Creature::new(CREATURE_DUSTHARE, nx, ny, pid));
+                    }
+                    // Next reproduction in 90-150 game seconds
+                    self.dusthare_repro_timer =
+                        90.0 + ((self.time_of_day * 1000.0) as u32 % 60) as f32;
+                }
+            }
+        }
+
+        // --- Snare catch mechanic: check every ~60 game-seconds ---
+        // Uses frame_count to amortize (check ~once per real second)
+        if self.frame_count % 60 == 30 {
+            let grid_size = (GRID_W * GRID_H) as usize;
+            // Collect snare positions with remaining durability
+            let snares: Vec<(i32, i32, usize)> = (0..grid_size)
+                .filter(|&idx| {
+                    let bt = self.grid_data[idx] & 0xFF;
+                    let h = (self.grid_data[idx] >> 8) & 0xFF;
+                    bt == BT_SNARE && h > 0
+                })
+                .map(|idx| {
+                    (
+                        (idx as u32 % GRID_W) as i32,
+                        (idx as u32 / GRID_W) as i32,
+                        idx,
+                    )
+                })
+                .collect();
+
+            for (sx, sy, sidx) in &snares {
+                // 25% catch chance per check (~1 check per real second, so ~15 game-seconds between attempts)
+                let hash = (*sidx as u32)
+                    .wrapping_mul(2654435761)
+                    .wrapping_add(self.frame_count as u32);
+                if hash % 4 != 0 {
+                    continue;
+                }
+                // Find nearest living dusthare within 15 tiles
+                let catch_range_sq = 15.0 * 15.0;
+                let mut caught_idx: Option<usize> = None;
+                let mut best_d = f32::MAX;
+                for (ci, c) in self.creatures.iter().enumerate() {
+                    if c.is_dead || c.species_id != CREATURE_DUSTHARE {
+                        continue;
+                    }
+                    let d = (c.x - *sx as f32 - 0.5).powi(2) + (c.y - *sy as f32 - 0.5).powi(2);
+                    if d < catch_range_sq && d < best_d {
+                        best_d = d;
+                        caught_idx = Some(ci);
+                    }
+                }
+                if let Some(ci) = caught_idx {
+                    // Caught! Kill creature, move corpse to snare (needs butchering)
+                    self.creatures[ci].is_dead = true;
+                    self.creatures[ci].corpse_timer = 60.0; // long enough to butcher
+                    self.creatures[ci].x = *sx as f32 + 0.5;
+                    self.creatures[ci].y = *sy as f32 + 0.5;
+
+                    // Decrement snare durability
+                    let h = (self.grid_data[*sidx] >> 8) & 0xFF;
+                    if h > 1 {
+                        self.grid_data[*sidx] =
+                            (self.grid_data[*sidx] & 0xFFFF00FF) | ((h - 1) << 8);
+                    } else {
+                        // Broken: set height to 0
+                        self.grid_data[*sidx] = self.grid_data[*sidx] & 0xFFFF00FF;
+                    }
+                    self.grid_dirty = true;
+
+                    events.push(GameEventKind::Generic(
+                        types::EventCategory::General,
+                        format!(
+                            "Snare caught a dusthare! ({} uses left)",
+                            h.saturating_sub(1)
+                        ),
+                    ));
+                }
+            }
+        }
+
         // --- Corpse timer + cleanup ---
         for c in &mut self.creatures {
             if c.is_dead && c.corpse_timer > 0.0 {
@@ -5285,7 +6410,7 @@ impl App {
 fn tick_pleb_activity(
     pleb: &mut Pleb,
     env: &needs::EnvSample,
-    grid: &[u32],
+    grid: &mut [u32],
     wall_data: &[u16],
     terrain: &[u32],
     dt: f32,
@@ -5315,7 +6440,13 @@ fn tick_pleb_activity(
                 let hidx = (hy as u32 * GRID_W + hx as u32) as usize;
                 hidx < grid.len() && (grid[hidx] & 0xFF) == BT_TREE
             });
-            let harvest_speed = if is_tree { 1.5 } else { 5.0 }; // trees: slower (bigger yield)
+            let knife_bonus = if !is_tree && pleb.has_tool("knife") {
+                1.3
+            } else {
+                1.0
+            };
+            let harvest_speed =
+                if is_tree { 1.5 } else { 5.0 } * knife_bonus * pleb.farming_speed();
             let new_progress = progress + dt * time_speed * harvest_speed;
             if new_progress >= 1.0 {
                 // Check what we're harvesting: tree → sticks, bush → berries
@@ -5348,9 +6479,41 @@ fn tick_pleb_activity(
                         fiber_count
                     );
                 } else {
-                    // Berry bush harvest
-                    ground_items.push(resources::GroundItem::new(pleb.x, pleb.y, ITEM_BERRIES, 3));
-                    log::info!("{} harvested 3 berries", pleb.name);
+                    // Berry bush harvest: pick 1 berry, decrement bush supply
+                    if let Some((hx, hy)) = pleb.harvest_target {
+                        let hidx = (hy as u32 * GRID_W + hx as u32) as usize;
+                        if hidx < grid.len() && (grid[hidx] & 0xFF) == BT_BERRY_BUSH {
+                            let berries_left = (grid[hidx] >> 8) & 0xFF;
+                            if berries_left > 0 {
+                                // Decrement berry count in height byte
+                                let new_count = berries_left - 1;
+                                grid[hidx] = (grid[hidx] & 0xFFFF00FF) | (new_count << 8);
+                                ground_items.push(resources::GroundItem::new(
+                                    pleb.x,
+                                    pleb.y,
+                                    ITEM_BERRIES,
+                                    1,
+                                ));
+                                log::info!(
+                                    "{} picked a berry ({} remaining on bush)",
+                                    pleb.name,
+                                    new_count
+                                );
+                            } else {
+                                log::info!("{}: bush is empty", pleb.name);
+                            }
+                        }
+                    }
+                }
+                if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0) {
+                    pleb.log_event(
+                        time_of_day,
+                        format!(
+                            "{} improved to {:.1}",
+                            pleb::SKILL_NAMES[pleb::SKILL_FARMING],
+                            new_level
+                        ),
+                    );
                 }
                 pleb.harvest_target = None;
                 if was_crisis {
@@ -5412,44 +6575,76 @@ fn tick_pleb_activity(
         }
         PlebActivity::Eating => {
             let mut ate = false;
-            // Try eating from inventory first
-            if pleb.inventory.count_of(ITEM_BERRIES) > 0 {
-                pleb.inventory.remove(ITEM_BERRIES, 1);
-                pleb.needs.hunger = (pleb.needs.hunger + BERRY_HUNGER_RESTORE).min(1.0);
-                log::info!(
-                    "{} ate a berry from inventory (hunger: {:.0}%)",
-                    pleb.name,
-                    pleb.needs.hunger * 100.0
-                );
+            let item_reg = ItemRegistry::cached();
+
+            // Sickness roll helper: returns true if nausea triggered
+            let sickness_roll = |pleb: &mut Pleb, food_id: u16, time: f32| -> bool {
+                // StoneEater trait: immune to food sickness
+                if pleb.immune_to_food_sickness() {
+                    return false;
+                }
+                let chance = item_reg
+                    .get(food_id)
+                    .map(|d| d.sickness_chance)
+                    .unwrap_or(0.0);
+                if chance > 0.0 {
+                    // Simple hash-based RNG from pleb position + time
+                    let seed = (pleb.x * 137.3 + pleb.y * 311.7 + time * 53.1) as u32;
+                    let roll = (seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                    if roll < chance {
+                        pleb.nauseous_timer = 30.0;
+                        pleb.needs.mood -= 10.0;
+                        pleb.set_bubble(pleb::BubbleKind::Thought("Ugh... feel sick".into()), 3.0);
+                        pleb.log_event(time, "Got nauseous from raw food".into());
+                        return true;
+                    }
+                }
+                false
+            };
+
+            // Try eating from inventory first (best food = highest nutrition)
+            if let Some((food_id, nutrition)) = pleb.inventory.best_food() {
+                pleb.inventory.remove(food_id, 1);
+                let gt = time_of_day;
+                if sickness_roll(pleb, food_id, gt) {
+                    // Nausea: nutrition wasted (vomited)
+                    log::info!("{} ate raw food and got sick", pleb.name);
+                } else {
+                    pleb.needs.hunger = (pleb.needs.hunger + nutrition).min(1.0);
+                }
                 ate = true;
             }
-            // Try eating from ground item at harvest_target
+            // Try eating from ground item at harvest_target (any food)
             if !ate
                 && let Some((tx, ty)) = pleb.harvest_target
                 && let Some(gi) = ground_items.iter_mut().position(|item| {
                     item.x.floor() as i32 == tx
                         && item.y.floor() as i32 == ty
-                        && item.stack.item_id == ITEM_BERRIES
+                        && item_reg
+                            .get(item.stack.item_id)
+                            .is_some_and(|d| d.nutrition > 0.0)
                 })
             {
-                pleb.needs.hunger = (pleb.needs.hunger + BERRY_HUNGER_RESTORE).min(1.0);
+                let ground_food_id = ground_items[gi].stack.item_id;
+                let food_nutr = item_reg
+                    .get(ground_food_id)
+                    .map(|d| d.nutrition)
+                    .unwrap_or(0.1);
                 if ground_items[gi].stack.count <= 1 {
                     ground_items.remove(gi);
                 } else {
                     ground_items[gi].stack.count -= 1;
                 }
-                log::info!(
-                    "{} ate a berry from ground (hunger: {:.0}%)",
-                    pleb.name,
-                    pleb.needs.hunger * 100.0
-                );
+                let gt = time_of_day;
+                if sickness_roll(pleb, ground_food_id, gt) {
+                    // Nausea: nutrition wasted
+                } else {
+                    pleb.needs.hunger = (pleb.needs.hunger + food_nutr).min(1.0);
+                }
                 ate = true;
             }
             pleb.harvest_target = None;
-            if was_crisis
-                && pleb.needs.hunger < 0.3
-                && (pleb.inventory.count_of(ITEM_BERRIES) > 0 || ate)
-            {
+            if was_crisis && pleb.needs.hunger < 0.3 && (pleb.inventory.has_food() || ate) {
                 pleb.activity = PlebActivity::Crisis(
                     Box::new(PlebActivity::Eating),
                     crisis_reason.unwrap_or("Starving"),
@@ -5482,6 +6677,12 @@ fn tick_pleb_activity(
                 pleb.activity = PlebActivity::Drinking(new_progress);
             }
         }
+        PlebActivity::Butchering(_) => {
+            // Handled in main tick (needs creature access)
+        }
+        PlebActivity::Fishing(_) => {
+            // Handled in main tick (needs ground_items access)
+        }
         _ => {}
     }
 
@@ -5492,8 +6693,8 @@ fn tick_pleb_activity(
     );
 
     if pleb.needs.hunger < 0.10 && is_idle_or_walk {
-        // CRISIS: Starving
-        if pleb.inventory.count_of(ITEM_BERRIES) > 0 {
+        // CRISIS: Starving — eat any food from inventory, or seek berry bush
+        if pleb.inventory.has_food() {
             pleb.activity = PlebActivity::Crisis(Box::new(PlebActivity::Eating), "Starving!");
         } else if let Some((bx, by)) = env.nearest_berry_bush {
             if env.near_berry_bush {
