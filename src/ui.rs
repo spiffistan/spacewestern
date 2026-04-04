@@ -19,7 +19,7 @@ impl App {
             if (bt == grid::BT_TREE || bt == grid::BT_BERRY_BUSH)
                 && idx < self.water_table.len()
                 && idx < self.elevation_data.len()
-                && self.water_table[idx] > self.elevation_data[idx] + 0.1
+                && self.water_table[idx] - self.elevation_data[idx] > -0.5
             {
                 let roof = self.grid_data[idx] & 0xFF000000;
                 self.grid_data[idx] = dirt | roof;
@@ -30,7 +30,117 @@ impl App {
             &self.water_table,
             &self.terrain_params,
         );
+        // (Landing pod removed — plebs start with just their gear)
         self.terrain_dirty = true;
+        self.grid_dirty = true;
+    }
+
+    /// Place the starting landing pod: 5x4 mud wall enclosure with door, campfire, supply crate.
+    fn build_landing_pod(&mut self) {
+        use grid::*;
+        let cx = (GRID_W / 2) as i32;
+        let cy = (GRID_H / 2) as i32;
+        // Clear the area first (remove trees etc)
+        let ground = make_block(BT_GROUND as u8, 0, 0);
+        for dy in -3..=3 {
+            for dx in -3..=3 {
+                let idx = ((cy + dy) as u32 * GRID_W + (cx + dx) as u32) as usize;
+                if idx < self.grid_data.len() {
+                    self.grid_data[idx] = ground;
+                }
+            }
+        }
+        // Walls: 5x4 rectangle (cx-2..cx+2, cy-1..cy+2)
+        let wall_mat = WMAT_MUD;
+        let wall_thick: u16 = 2;
+        for dx in -2..=2 {
+            // North wall (cy-1)
+            let n_edges = if dx == 0 { 0u16 } else { 0 }; // will fill below
+            let _ = n_edges;
+            // South wall (cy+2)
+        }
+        // Use wall_data edges for thin mud walls
+        let set_wall = |wd: &mut [u16], x: i32, y: i32, edges: u16| {
+            if x < 0 || y < 0 || x >= GRID_W as i32 || y >= GRID_H as i32 {
+                return;
+            }
+            let idx = (y as u32 * GRID_W + x as u32) as usize;
+            if idx < wd.len() {
+                wd[idx] = pack_wall_data(edges, wall_thick, wall_mat);
+                // Set wall height
+                let h: u16 = 3;
+                wd[idx] |= (h & 7) << 13;
+            }
+        };
+        // North wall: y = cy-1, x = cx-2..cx+2, south edge (4)
+        for dx in -2..=2 {
+            set_wall(&mut self.wall_data, cx + dx, cy - 1, 4); // S edge
+        }
+        // South wall: y = cy+2, x = cx-2..cx+2, north edge (1)
+        for dx in -2..=2 {
+            set_wall(&mut self.wall_data, cx + dx, cy + 2, 1); // N edge
+        }
+        // West wall: x = cx-2, y = cy..cy+1, east edge (2)
+        for dy in 0..=1 {
+            set_wall(&mut self.wall_data, cx - 2, cy + dy, 2); // E edge
+        }
+        // East wall: x = cx+2, y = cy..cy+1, west edge (8)
+        for dy in 0..=1 {
+            set_wall(&mut self.wall_data, cx + 2, cy + dy, 8); // W edge
+        }
+        // Corners: merge edges
+        // NW: cx-2, cy-1 → S+E (4+2=6)
+        set_wall(&mut self.wall_data, cx - 2, cy - 1, 6);
+        // NE: cx+2, cy-1 → S+W (4+8=12)
+        set_wall(&mut self.wall_data, cx + 2, cy - 1, 12);
+        // SW: cx-2, cy+2 → N+E (1+2=3)
+        set_wall(&mut self.wall_data, cx - 2, cy + 2, 3);
+        // SE: cx+2, cy+2 → N+W (1+8=9)
+        set_wall(&mut self.wall_data, cx + 2, cy + 2, 9);
+        // West wall connect to corners: cx-2, cy-1 needs S+E, but also south side
+        // Actually the wall at cx-2, cy should also have E edge to connect south
+        // Let's also add roof to interior
+        for dy in 0..=1 {
+            for dx in -1..=1 {
+                let idx = ((cy + dy) as u32 * GRID_W + (cx + dx) as u32) as usize;
+                if idx < self.grid_data.len() {
+                    // Set roof flag (bit 17 = has roof, bits 24-31 = roof height)
+                    self.grid_data[idx] |= (3u32 << 24) | (2 << 16); // roof height 3, has_roof
+                }
+            }
+        }
+        // Door: south wall center (cx, cy+2) — add door flag
+        {
+            let didx = (cy as u32 + 2) * GRID_W + cx as u32;
+            if (didx as usize) < self.wall_data.len() {
+                let wd = self.wall_data[didx as usize];
+                self.wall_data[didx as usize] = wd | (1 << 10); // has_door bit
+            }
+        }
+        // Campfire at (cx-1, cy)
+        {
+            let fidx = (cy as u32 * GRID_W + (cx as u32 - 1)) as usize;
+            if fidx < self.grid_data.len() {
+                // Campfire with fuel level 5
+                self.grid_data[fidx] =
+                    make_block(BT_CAMPFIRE as u8, 5, 0) | (self.grid_data[fidx] & 0xFF000000);
+            }
+        }
+        // Supply crate at (cx+1, cy)
+        {
+            let cidx = (cy as u32 * GRID_W + (cx as u32 + 1)) as usize;
+            if cidx < self.grid_data.len() {
+                self.grid_data[cidx] =
+                    make_block(BT_CRATE as u8, 0, 0) | (self.grid_data[cidx] & 0xFF000000);
+            }
+            // Stock the crate with starting supplies
+            let crate_key = cy as u32 * GRID_W + (cx as u32 + 1);
+            let inv = self.crate_contents.entry(crate_key).or_default();
+            inv.add(item_defs::ITEM_BERRIES, 10);
+            inv.add(item_defs::ITEM_SCRAP_WOOD, 8);
+            inv.add(item_defs::ITEM_FIBER, 5);
+            inv.add(item_defs::ITEM_PISTOL_ROUNDS, 12);
+        }
         self.grid_dirty = true;
     }
 
@@ -899,7 +1009,7 @@ impl App {
                         ui.separator();
                         ui.label(egui::RichText::new("Skills").strong().size(14.0));
                         ui.add_space(2.0);
-                        let skills = self.chargen_backstory.skills();
+                        let chargen_skills = self.chargen_backstory.skills();
                         let names = Backstory::skill_names();
                         for (i, &name) in names.iter().enumerate() {
                             ui.horizontal(|ui| {
@@ -908,16 +1018,16 @@ impl App {
                                         .monospace()
                                         .size(11.0),
                                 );
-                                let val = skills[i];
+                                let val = chargen_skills[i] as f32;
                                 let bar_w = 100.0;
                                 let (bar_rect, _) = ui.allocate_exact_size(
                                     egui::vec2(bar_w, 10.0),
                                     egui::Sense::hover(),
                                 );
-                                let fill_w = bar_w * val as f32 / 10.0;
-                                let bar_col = if val >= 7 {
+                                let fill_w = bar_w * val / 10.0;
+                                let bar_col = if val >= 7.0 {
                                     egui::Color32::from_rgb(80, 180, 80)
-                                } else if val >= 4 {
+                                } else if val >= 4.0 {
                                     egui::Color32::from_rgb(180, 160, 60)
                                 } else {
                                     egui::Color32::from_rgb(120, 80, 60)
@@ -936,7 +1046,7 @@ impl App {
                                     bar_col,
                                 );
                                 ui.label(
-                                    egui::RichText::new(format!("{}", val))
+                                    egui::RichText::new(format!("{:.0}", val))
                                         .monospace()
                                         .size(11.0),
                                 );
@@ -1020,7 +1130,25 @@ impl App {
             pleb.appearance.pants_b = self.chargen_pants[2];
             pleb.backstory_name = self.chargen_backstory.name().to_string();
             pleb.trait_name = self.chargen_trait.map(|t| t.name().to_string());
-            pleb.skills = self.chargen_backstory.skills();
+            pleb.set_skills_from_legacy(self.chargen_backstory.skills());
+
+            // Randomize other crew members with backstories and traits
+            let backstories = types::Backstory::ALL;
+            let traits = types::PlebTrait::ALL;
+            for ci in 1..self.plebs.len() {
+                let seed = (ci as u32 * 7919 + 42).wrapping_mul(2654435761);
+                let bs_idx = (seed as usize) % backstories.len();
+                let bs = backstories[bs_idx];
+                self.plebs[ci].backstory_name = bs.name().to_string();
+                self.plebs[ci].set_skills_from_legacy(bs.skills());
+                // 70% chance to have a trait
+                let trait_roll = ((seed >> 8) & 0xFF) as f32 / 255.0;
+                if trait_roll < 0.7 {
+                    let t_idx = ((seed >> 16) as usize) % traits.len();
+                    self.plebs[ci].trait_name = Some(traits[t_idx].name().to_string());
+                }
+            }
+
             self.game_state = GameState::Playing;
         }
     }
@@ -2133,7 +2261,7 @@ impl App {
     }
 
     fn draw_inventory_window(&mut self, ctx: &egui::Context) {
-        // --- Unified character window: portrait, stats, skills, inventory ---
+        // --- BG2-style character window: equipment | portrait | stats, backpack below ---
         if self.show_inventory {
             if let Some(sel_idx) = self.selected_pleb {
                 if let Some(pleb) = self.plebs.get(sel_idx) {
@@ -2151,10 +2279,45 @@ impl App {
                     let shirt = [a.shirt_r, a.shirt_g, a.shirt_b];
                     let skin = [a.skin_r, a.skin_g, a.skin_b];
                     let hair = [a.hair_r, a.hair_g, a.hair_b];
-                    let skills = pleb.skills;
+                    let pants = [a.pants_r, a.pants_g, a.pants_b];
+                    let hair_style = a.hair_style;
+                    let skills = pleb.skills.clone();
                     let backstory_name = pleb.backstory_name.clone();
                     let trait_name = pleb.trait_name.clone();
                     let is_enemy = pleb.is_enemy;
+                    let p_bleeding = pleb.bleeding;
+                    let p_suppression = pleb.suppression;
+                    let p_crouching = pleb.crouching;
+                    let p_drafted = pleb.drafted;
+                    let p_leader = pleb.is_leader;
+                    let p_rank = pleb.rank();
+                    let p_fights = pleb.firefights_survived;
+                    let p_kills = pleb.kills;
+                    let p_headlight = pleb.headlight_mode;
+                    let p_torch = pleb.torch_on;
+                    let equipped_weapon_id = pleb.equipped_weapon;
+                    let p_belt_capacity = pleb.equipment.belt_capacity;
+                    let p_belt_items: Vec<Option<u16>> =
+                        pleb.equipment.belt[..pleb.equipment.belt_capacity as usize].to_vec();
+                    let p_active_item = pleb.equipment.active_item;
+                    let p_nauseous = pleb.nauseous_timer > 0.0;
+                    let p_water = {
+                        let px = pleb.x.floor() as i32;
+                        let py = pleb.y.floor() as i32;
+                        if px >= 0 && py >= 0 && px < GRID_W as i32 && py < GRID_H as i32 {
+                            let wi = (py as u32 * GRID_W + px as u32) as usize;
+                            if wi < self.water_depth_cpu.len() {
+                                self.water_depth_cpu[wi]
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        }
+                    };
+
+                    let p_event_log = pleb.event_log.clone();
+                    let p_activity = format!("{:?}", pleb.activity.inner());
 
                     let mut open = self.show_inventory;
                     egui::Window::new(pleb_name)
@@ -2163,8 +2326,10 @@ impl App {
                         .resizable(false)
                         .default_pos(egui::pos2(400.0, 150.0))
                         .show(ctx, |ui| {
+                            let item_reg = item_defs::ItemRegistry::cached();
+
                             // --- Styled bar helper ---
-                            let bar_w = 110.0f32;
+                            let bar_w = 100.0f32;
                             let bar_h = 7.0f32;
                             let bar =
                                 |ui: &mut egui::Ui, label: &str, val: f32, color: egui::Color32| {
@@ -2195,7 +2360,6 @@ impl App {
                                                 3.0,
                                                 color,
                                             );
-                                            // Subtle highlight on top half
                                             let hi_rect = egui::Rect::from_min_size(
                                                 rect.min,
                                                 egui::Vec2::new(fill_w, bar_h * 0.4),
@@ -2211,23 +2375,287 @@ impl App {
                                     });
                                 };
 
-                            ui.horizontal(|ui| {
-                                // ═══ LEFT COLUMN: Portrait + Vitals ═══
-                                ui.vertical(|ui| {
-                                    ui.set_min_width(170.0);
+                            // Equipment slot helper
+                            let equip_slot = |ui: &mut egui::Ui,
+                                              label: &str,
+                                              icon: &str,
+                                              name: &str,
+                                              filled: bool| {
+                                let slot_w = 100.0;
+                                let slot_h = 36.0;
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    egui::Vec2::new(slot_w, slot_h),
+                                    egui::Sense::hover(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if filled {
+                                    egui::Color32::from_rgb(38, 42, 52)
+                                } else {
+                                    egui::Color32::from_rgb(28, 30, 36)
+                                };
+                                painter.rect_filled(rect, 4.0, bg);
+                                painter.rect_stroke(
+                                    rect,
+                                    4.0,
+                                    egui::Stroke::new(1.0, egui::Color32::from_gray(50)),
+                                    egui::StrokeKind::Outside,
+                                );
+                                // Slot label top-left
+                                painter.text(
+                                    rect.min + egui::Vec2::new(4.0, 3.0),
+                                    egui::Align2::LEFT_TOP,
+                                    label,
+                                    egui::FontId::proportional(8.0),
+                                    egui::Color32::from_gray(100),
+                                );
+                                if filled {
+                                    // Icon
+                                    painter.text(
+                                        egui::pos2(rect.min.x + 14.0, rect.center().y + 4.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        icon,
+                                        egui::FontId::proportional(16.0),
+                                        egui::Color32::WHITE,
+                                    );
+                                    // Item name
+                                    painter.text(
+                                        egui::pos2(rect.min.x + 28.0, rect.center().y + 4.0),
+                                        egui::Align2::LEFT_CENTER,
+                                        name,
+                                        egui::FontId::proportional(9.0),
+                                        egui::Color32::from_gray(200),
+                                    );
+                                } else {
+                                    painter.text(
+                                        egui::pos2(rect.center().x, rect.center().y + 4.0),
+                                        egui::Align2::CENTER_CENTER,
+                                        "—",
+                                        egui::FontId::proportional(11.0),
+                                        egui::Color32::from_gray(60),
+                                    );
+                                }
+                                resp
+                            };
 
-                                    // Portrait
+                            // ═══ TOP THREE PANES ═══
+                            ui.horizontal(|ui| {
+                                // ═══ LEFT PANE: Equipment Slots ═══
+                                ui.vertical(|ui| {
+                                    ui.set_min_width(108.0);
+                                    ui.label(
+                                        egui::RichText::new("Equipment")
+                                            .size(9.0)
+                                            .strong()
+                                            .color(egui::Color32::from_gray(180)),
+                                    );
+                                    ui.add_space(2.0);
+
+                                    // Belt slots
+                                    if p_belt_capacity > 0 {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "Belt ({}/{})",
+                                                p_belt_items.iter().filter(|s| s.is_some()).count(),
+                                                p_belt_capacity
+                                            ))
+                                            .size(8.0)
+                                            .color(egui::Color32::from_gray(130)),
+                                        );
+                                        for (i, slot) in p_belt_items.iter().enumerate() {
+                                            let (icon, name, filled) = if let Some(id) = slot {
+                                                if let Some(def) = item_reg.get(*id) {
+                                                    (
+                                                        def.icon.as_str().to_string(),
+                                                        def.name.clone(),
+                                                        true,
+                                                    )
+                                                } else {
+                                                    ("?".to_string(), "Unknown".to_string(), true)
+                                                }
+                                            } else {
+                                                (String::new(), String::new(), false)
+                                            };
+                                            let is_active = slot.is_some() && *slot == p_active_item;
+                                            let label = if is_active {
+                                                format!(">{}<", i + 1)
+                                            } else {
+                                                format!(" {} ", i + 1)
+                                            };
+                                            equip_slot(ui, &label, &icon, &name, filled);
+                                            ui.add_space(1.0);
+                                        }
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new("No belt")
+                                                .size(9.0)
+                                                .color(egui::Color32::from_gray(100)),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new("Pockets only")
+                                                .size(8.0)
+                                                .color(egui::Color32::from_gray(80)),
+                                        );
+                                    }
+                                    ui.add_space(2.0);
+                                    // Light slot
+                                    let (light_icon, light_name, has_light) =
+                                        if p_headlight > 0 {
+                                            let mode_name = match p_headlight {
+                                                1 => "Wide",
+                                                2 => "Normal",
+                                                _ => "Focused",
+                                            };
+                                            (
+                                                "\u{1f526}".to_string(),
+                                                format!("Headlight ({})", mode_name),
+                                                true,
+                                            )
+                                        } else if p_torch {
+                                            ("\u{1f525}".to_string(), "Torch".to_string(), true)
+                                        } else {
+                                            (String::new(), String::new(), false)
+                                        };
+                                    equip_slot(ui, "Light", &light_icon, &light_name, has_light);
+
+                                    // Status tags below equipment
+                                    ui.add_space(6.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 3.0;
+                                        let tag =
+                                            |ui: &mut egui::Ui, text: &str, col: egui::Color32| {
+                                                let tw =
+                                                    text.len() as f32 * 5.5 + 6.0;
+                                                let (rect, _) = ui.allocate_exact_size(
+                                                    egui::Vec2::new(tw, 14.0),
+                                                    egui::Sense::hover(),
+                                                );
+                                                let painter = ui.painter_at(rect);
+                                                painter.rect_filled(
+                                                    rect,
+                                                    3.0,
+                                                    col.linear_multiply(0.15),
+                                                );
+                                                painter.text(
+                                                    rect.center(),
+                                                    egui::Align2::CENTER_CENTER,
+                                                    text,
+                                                    egui::FontId::proportional(8.0),
+                                                    col,
+                                                );
+                                            };
+                                        tag(
+                                            ui,
+                                            p_rank.label(),
+                                            egui::Color32::from_rgb(160, 160, 180),
+                                        );
+                                        if p_drafted {
+                                            tag(ui, "Drafted", egui::Color32::from_rgb(220, 90, 60));
+                                        }
+                                        if p_leader {
+                                            tag(
+                                                ui,
+                                                "Leader",
+                                                egui::Color32::from_rgb(220, 200, 60),
+                                            );
+                                        }
+                                        if p_crouching {
+                                            tag(
+                                                ui,
+                                                "Crouched",
+                                                egui::Color32::from_rgb(140, 180, 120),
+                                            );
+                                        }
+                                        if p_bleeding > 0.1 {
+                                            tag(
+                                                ui,
+                                                "Bleeding",
+                                                egui::Color32::from_rgb(200, 50, 50),
+                                            );
+                                        }
+                                        if p_suppression > 0.3 {
+                                            tag(
+                                                ui,
+                                                "Suppressed",
+                                                egui::Color32::from_rgb(200, 140, 60),
+                                            );
+                                        }
+                                        if stress > 85.0 {
+                                            tag(
+                                                ui,
+                                                "Breaking!",
+                                                egui::Color32::from_rgb(240, 50, 50),
+                                            );
+                                        } else if stress > 70.0 {
+                                            tag(
+                                                ui,
+                                                "Stressed",
+                                                egui::Color32::from_rgb(220, 160, 40),
+                                            );
+                                        }
+                                        if p_water > 0.3 {
+                                            tag(
+                                                ui,
+                                                "Deep water",
+                                                egui::Color32::from_rgb(80, 140, 220),
+                                            );
+                                        } else if p_water > 0.05 {
+                                            tag(
+                                                ui,
+                                                "In water",
+                                                egui::Color32::from_rgb(100, 160, 210),
+                                            );
+                                        }
+                                        if health < 0.25 {
+                                            tag(
+                                                ui,
+                                                "Wounded",
+                                                egui::Color32::from_rgb(220, 60, 50),
+                                            );
+                                        }
+                                        if p_fights > 0 {
+                                            tag(
+                                                ui,
+                                                &format!("{} fights", p_fights),
+                                                egui::Color32::from_rgb(140, 140, 150),
+                                            );
+                                        }
+                                        if p_kills > 0 {
+                                            tag(
+                                                ui,
+                                                &format!("{} kills", p_kills),
+                                                egui::Color32::from_rgb(140, 140, 150),
+                                            );
+                                        }
+                                    });
+                                });
+
+                                ui.separator();
+
+                                // ═══ CENTER PANE: Large Pleb Portrait ═══
+                                ui.vertical(|ui| {
+                                    ui.set_min_width(130.0);
                                     let (rect, _) = ui.allocate_exact_size(
-                                        egui::Vec2::new(160.0, 70.0),
+                                        egui::Vec2::new(130.0, 180.0),
                                         egui::Sense::hover(),
                                     );
                                     let painter = ui.painter_at(rect);
+                                    // Dark background
                                     painter.rect_filled(
                                         rect,
                                         6.0,
-                                        egui::Color32::from_rgb(22, 24, 30),
+                                        egui::Color32::from_rgb(18, 20, 26),
                                     );
-                                    let c = rect.center();
+                                    // Subtle border
+                                    painter.rect_stroke(
+                                        rect,
+                                        6.0,
+                                        egui::Stroke::new(1.0, egui::Color32::from_gray(40)),
+                                        egui::StrokeKind::Outside,
+                                    );
+
+                                    let cx = rect.center().x;
+                                    let base_y = rect.center().y + 30.0;
+
                                     let shirt_c = egui::Color32::from_rgb(
                                         (shirt[0] * 255.0) as u8,
                                         (shirt[1] * 255.0) as u8,
@@ -2243,22 +2671,138 @@ impl App {
                                         (hair[1] * 255.0) as u8,
                                         (hair[2] * 255.0) as u8,
                                     );
-                                    painter.circle_filled(
-                                        c + egui::Vec2::new(0.0, 12.0),
-                                        16.0,
+                                    let pants_c = egui::Color32::from_rgb(
+                                        (pants[0] * 255.0) as u8,
+                                        (pants[1] * 255.0) as u8,
+                                        (pants[2] * 255.0) as u8,
+                                    );
+
+                                    // Legs (two rectangles)
+                                    let leg_w = 8.0;
+                                    let leg_h = 30.0;
+                                    painter.rect_filled(
+                                        egui::Rect::from_center_size(
+                                            egui::pos2(cx - 7.0, base_y + 2.0),
+                                            egui::Vec2::new(leg_w, leg_h),
+                                        ),
+                                        2.0,
+                                        pants_c,
+                                    );
+                                    painter.rect_filled(
+                                        egui::Rect::from_center_size(
+                                            egui::pos2(cx + 7.0, base_y + 2.0),
+                                            egui::Vec2::new(leg_w, leg_h),
+                                        ),
+                                        2.0,
+                                        pants_c,
+                                    );
+
+                                    // Torso (shirt)
+                                    painter.rect_filled(
+                                        egui::Rect::from_center_size(
+                                            egui::pos2(cx, base_y - 28.0),
+                                            egui::Vec2::new(28.0, 32.0),
+                                        ),
+                                        4.0,
                                         shirt_c,
                                     );
+
+                                    // Arms
+                                    painter.rect_filled(
+                                        egui::Rect::from_center_size(
+                                            egui::pos2(cx - 19.0, base_y - 24.0),
+                                            egui::Vec2::new(7.0, 26.0),
+                                        ),
+                                        2.0,
+                                        shirt_c,
+                                    );
+                                    painter.rect_filled(
+                                        egui::Rect::from_center_size(
+                                            egui::pos2(cx + 19.0, base_y - 24.0),
+                                            egui::Vec2::new(7.0, 26.0),
+                                        ),
+                                        2.0,
+                                        shirt_c,
+                                    );
+
+                                    // Hands (skin circles)
                                     painter.circle_filled(
-                                        c + egui::Vec2::new(0.0, -6.0),
-                                        10.0,
+                                        egui::pos2(cx - 19.0, base_y - 9.0),
+                                        4.0,
                                         skin_c,
                                     );
                                     painter.circle_filled(
-                                        c + egui::Vec2::new(0.0, -15.0),
-                                        6.0,
-                                        hair_c,
+                                        egui::pos2(cx + 19.0, base_y - 9.0),
+                                        4.0,
+                                        skin_c,
                                     );
-                                    // Mood
+
+                                    // Head (skin circle)
+                                    painter.circle_filled(
+                                        egui::pos2(cx, base_y - 54.0),
+                                        14.0,
+                                        skin_c,
+                                    );
+
+                                    // Hair
+                                    match hair_style {
+                                        0 => {} // bald
+                                        1 => {
+                                            // short
+                                            painter.circle_filled(
+                                                egui::pos2(cx, base_y - 60.0),
+                                                10.0,
+                                                hair_c,
+                                            );
+                                        }
+                                        2 => {
+                                            // medium
+                                            painter.circle_filled(
+                                                egui::pos2(cx, base_y - 60.0),
+                                                12.0,
+                                                hair_c,
+                                            );
+                                            painter.rect_filled(
+                                                egui::Rect::from_center_size(
+                                                    egui::pos2(cx, base_y - 48.0),
+                                                    egui::Vec2::new(20.0, 8.0),
+                                                ),
+                                                2.0,
+                                                hair_c,
+                                            );
+                                        }
+                                        _ => {
+                                            // long
+                                            painter.circle_filled(
+                                                egui::pos2(cx, base_y - 62.0),
+                                                13.0,
+                                                hair_c,
+                                            );
+                                            painter.rect_filled(
+                                                egui::Rect::from_center_size(
+                                                    egui::pos2(cx, base_y - 44.0),
+                                                    egui::Vec2::new(22.0, 18.0),
+                                                ),
+                                                3.0,
+                                                hair_c,
+                                            );
+                                        }
+                                    }
+
+                                    // Eyes (two small dots)
+                                    let eye_col = egui::Color32::from_rgb(30, 30, 30);
+                                    painter.circle_filled(
+                                        egui::pos2(cx - 5.0, base_y - 54.0),
+                                        2.0,
+                                        eye_col,
+                                    );
+                                    painter.circle_filled(
+                                        egui::pos2(cx + 5.0, base_y - 54.0),
+                                        2.0,
+                                        eye_col,
+                                    );
+
+                                    // Mood text below portrait
                                     let mood_col = if mood > 20.0 {
                                         egui::Color32::from_rgb(100, 200, 100)
                                     } else if mood > -20.0 {
@@ -2267,14 +2811,14 @@ impl App {
                                         egui::Color32::from_rgb(200, 80, 80)
                                     };
                                     painter.text(
-                                        egui::pos2(c.x, rect.max.y - 6.0),
+                                        egui::pos2(cx, rect.max.y - 8.0),
                                         egui::Align2::CENTER_BOTTOM,
                                         mood_l,
-                                        egui::FontId::proportional(9.0),
+                                        egui::FontId::proportional(10.0),
                                         mood_col,
                                     );
 
-                                    // Backstory + trait
+                                    // Backstory + trait below portrait area
                                     if !is_enemy && !backstory_name.is_empty() {
                                         let bs_label = if let Some(ref tn) = trait_name {
                                             format!("{} — {}", backstory_name, tn)
@@ -2287,359 +2831,671 @@ impl App {
                                                 .color(egui::Color32::from_rgb(160, 170, 190)),
                                         );
                                     }
-
-                                    ui.add_space(2.0);
-                                    ui.label(
-                                        egui::RichText::new("Vitals")
-                                            .size(9.0)
-                                            .strong()
-                                            .color(egui::Color32::from_gray(180)),
-                                    );
-                                    bar(ui, "HP ", health, egui::Color32::from_rgb(190, 60, 60));
-                                    bar(ui, "FOD", hunger, egui::Color32::from_rgb(190, 150, 40));
-                                    bar(ui, "H2O", thirst, egui::Color32::from_rgb(50, 130, 210));
-                                    bar(ui, "RST", rest, egui::Color32::from_rgb(70, 110, 190));
-                                    bar(ui, "WRM", warmth, egui::Color32::from_rgb(190, 95, 35));
-                                    bar(ui, "O2 ", oxygen, egui::Color32::from_rgb(90, 190, 210));
-                                    let stress_norm = (stress / 100.0).clamp(0.0, 1.0);
-                                    let stress_col = if stress_norm < 0.5 {
-                                        egui::Color32::from_rgb(70, 170, 70)
-                                    } else if stress_norm < 0.7 {
-                                        egui::Color32::from_rgb(190, 170, 50)
-                                    } else {
-                                        egui::Color32::from_rgb(190, 55, 55)
-                                    };
-                                    bar(ui, "STR", stress_norm, stress_col);
-
-                                    // Skills as bars
-                                    if !is_enemy {
-                                        ui.add_space(4.0);
-                                        ui.label(
-                                            egui::RichText::new("Skills")
-                                                .size(9.0)
-                                                .strong()
-                                                .color(egui::Color32::from_gray(180)),
-                                        );
-                                        let skill_labels =
-                                            ["SHT", "MEL", "CRF", "FRM", "MED", "BLD"];
-                                        let skill_names = [
-                                            "Shooting",
-                                            "Melee",
-                                            "Crafting",
-                                            "Farming",
-                                            "Medical",
-                                            "Construction",
-                                        ];
-                                        let skill_colors = [
-                                            egui::Color32::from_rgb(200, 120, 80),  // shooting: warm orange
-                                            egui::Color32::from_rgb(200, 80, 80),   // melee: red
-                                            egui::Color32::from_rgb(140, 180, 100), // crafting: olive
-                                            egui::Color32::from_rgb(100, 170, 60), // farming: green
-                                            egui::Color32::from_rgb(120, 160, 220), // medical: blue
-                                            egui::Color32::from_rgb(180, 150, 100), // construction: tan
-                                        ];
-                                        for (i, &val) in skills.iter().enumerate() {
-                                            let resp = ui.horizontal(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new(skill_labels[i])
-                                                        .size(9.0)
-                                                        .monospace()
-                                                        .color(egui::Color32::from_gray(160)),
-                                                );
-                                                let (rect, resp) = ui.allocate_exact_size(
-                                                    egui::Vec2::new(bar_w, bar_h),
-                                                    egui::Sense::hover(),
-                                                );
-                                                let painter = ui.painter_at(rect);
-                                                painter.rect_filled(
-                                                    rect,
-                                                    3.0,
-                                                    egui::Color32::from_rgb(22, 24, 28),
-                                                );
-                                                // Skill bar: val out of 10
-                                                let fill = (val as f32 / 10.0).clamp(0.0, 1.0);
-                                                let fill_w = bar_w * fill;
-                                                if fill_w > 0.5 {
-                                                    painter.rect_filled(
-                                                        egui::Rect::from_min_size(
-                                                            rect.min,
-                                                            egui::Vec2::new(fill_w, bar_h),
-                                                        ),
-                                                        3.0,
-                                                        skill_colors[i],
-                                                    );
-                                                    // Highlight
-                                                    painter.rect_filled(
-                                                        egui::Rect::from_min_size(
-                                                            rect.min,
-                                                            egui::Vec2::new(fill_w, bar_h * 0.4),
-                                                        ),
-                                                        3.0,
-                                                        egui::Color32::from_rgba_unmultiplied(
-                                                            255, 255, 255, 18,
-                                                        ),
-                                                    );
-                                                }
-                                                // Skill level number at end
-                                                painter.text(
-                                                    egui::pos2(
-                                                        rect.min.x + fill_w - 1.0,
-                                                        rect.center().y,
-                                                    ),
-                                                    egui::Align2::RIGHT_CENTER,
-                                                    format!("{}", val),
-                                                    egui::FontId::proportional(7.0),
-                                                    egui::Color32::from_rgba_unmultiplied(
-                                                        255, 255, 255, 180,
-                                                    ),
-                                                );
-                                                resp
-                                            });
-                                            resp.inner.on_hover_text(skill_names[i]);
-                                        }
-                                    }
                                 });
 
                                 ui.separator();
 
-                                // ═══ RIGHT COLUMN: Backpack Grid ═══
+                                // ═══ RIGHT PANE: Vitals + Skills ═══
                                 ui.vertical(|ui| {
-                                    ui.set_min_width(200.0);
-                                    ui.label(
-                                        egui::RichText::new("Backpack")
-                                            .size(9.0)
-                                            .strong()
-                                            .color(egui::Color32::from_gray(180)),
-                                    );
+                                    ui.set_min_width(140.0);
 
-                                    let slot_size = 44.0;
-                                    let cols = 4usize;
-                                    let rows = 3usize;
-                                    let total_slots = cols * rows;
-                                    let selected = self.inv_selected_slot;
-
-                                    let stacks: Vec<Option<item_defs::ItemStack>> = (0
-                                        ..total_slots)
-                                        .map(|i| {
-                                            if let Some(sel) = self.selected_pleb {
-                                                self.plebs.get(sel).and_then(|p| {
-                                                    p.inventory.stacks.get(i).cloned()
-                                                })
+                                    // --- Vitals frame ---
+                                    egui::Frame::new()
+                                        .inner_margin(egui::Margin::same(4))
+                                        .stroke(egui::Stroke::new(
+                                            1.0,
+                                            egui::Color32::from_gray(40),
+                                        ))
+                                        .corner_radius(4.0)
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new("Vitals")
+                                                    .size(9.0)
+                                                    .strong()
+                                                    .color(egui::Color32::from_gray(180)),
+                                            );
+                                            bar(
+                                                ui,
+                                                "HP ",
+                                                health,
+                                                egui::Color32::from_rgb(190, 60, 60),
+                                            );
+                                            bar(
+                                                ui,
+                                                "FOD",
+                                                hunger,
+                                                egui::Color32::from_rgb(190, 150, 40),
+                                            );
+                                            bar(
+                                                ui,
+                                                "H2O",
+                                                thirst,
+                                                egui::Color32::from_rgb(50, 130, 210),
+                                            );
+                                            bar(
+                                                ui,
+                                                "RST",
+                                                rest,
+                                                egui::Color32::from_rgb(70, 110, 190),
+                                            );
+                                            bar(
+                                                ui,
+                                                "WRM",
+                                                warmth,
+                                                egui::Color32::from_rgb(190, 95, 35),
+                                            );
+                                            bar(
+                                                ui,
+                                                "O2 ",
+                                                oxygen,
+                                                egui::Color32::from_rgb(90, 190, 210),
+                                            );
+                                            let stress_norm =
+                                                (stress / 100.0).clamp(0.0, 1.0);
+                                            let stress_col = if stress_norm < 0.5 {
+                                                egui::Color32::from_rgb(70, 170, 70)
+                                            } else if stress_norm < 0.7 {
+                                                egui::Color32::from_rgb(190, 170, 50)
                                             } else {
-                                                None
-                                            }
-                                        })
-                                        .collect();
+                                                egui::Color32::from_rgb(190, 55, 55)
+                                            };
+                                            bar(ui, "STR", stress_norm, stress_col);
+                                        });
 
-                                    let item_reg = item_defs::ItemRegistry::cached();
-                                    let mut clicked_slot: Option<usize> = None;
+                                    ui.add_space(4.0);
 
-                                    for row in 0..rows {
-                                        ui.horizontal(|ui| {
-                                            for col in 0..cols {
-                                                let slot_idx = row * cols + col;
-                                                let is_selected = selected == Some(slot_idx);
-                                                let (rect, response) = ui.allocate_exact_size(
-                                                    egui::Vec2::splat(slot_size),
-                                                    egui::Sense::click(),
+                                    // --- Skills frame ---
+                                    if !is_enemy {
+                                        egui::Frame::new()
+                                            .inner_margin(egui::Margin::same(4))
+                                            .stroke(egui::Stroke::new(
+                                                1.0,
+                                                egui::Color32::from_gray(40),
+                                            ))
+                                            .corner_radius(4.0)
+                                            .show(ui, |ui| {
+                                                ui.label(
+                                                    egui::RichText::new("Skills")
+                                                        .size(9.0)
+                                                        .strong()
+                                                        .color(egui::Color32::from_gray(180)),
                                                 );
-                                                let painter = ui.painter_at(rect);
-                                                let bg = if is_selected {
-                                                    egui::Color32::from_rgb(55, 75, 105)
-                                                } else if response.hovered() {
-                                                    egui::Color32::from_rgb(48, 52, 60)
+                                                let skill_labels =
+                                                    ["SHT", "MEL", "CRF", "FRM", "MED", "BLD"];
+                                                let skill_names = [
+                                                    "Shooting",
+                                                    "Melee",
+                                                    "Crafting",
+                                                    "Farming",
+                                                    "Medical",
+                                                    "Construction",
+                                                ];
+                                                let skill_colors = [
+                                                    egui::Color32::from_rgb(200, 120, 80),
+                                                    egui::Color32::from_rgb(200, 80, 80),
+                                                    egui::Color32::from_rgb(140, 180, 100),
+                                                    egui::Color32::from_rgb(100, 170, 60),
+                                                    egui::Color32::from_rgb(120, 160, 220),
+                                                    egui::Color32::from_rgb(180, 150, 100),
+                                                ];
+                                                for (i, s) in skills.iter().enumerate() {
+                                                    let resp = ui.horizontal(|ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(skill_labels[i])
+                                                                .size(9.0)
+                                                                .monospace()
+                                                                .color(
+                                                                    egui::Color32::from_gray(160),
+                                                                ),
+                                                        );
+                                                        let (rect, resp) =
+                                                            ui.allocate_exact_size(
+                                                                egui::Vec2::new(bar_w, bar_h),
+                                                                egui::Sense::hover(),
+                                                            );
+                                                        let painter = ui.painter_at(rect);
+                                                        painter.rect_filled(
+                                                            rect,
+                                                            3.0,
+                                                            egui::Color32::from_rgb(22, 24, 28),
+                                                        );
+                                                        let fill =
+                                                            (s.value / 10.0).clamp(0.0, 1.0);
+                                                        let fill_w = bar_w * fill;
+                                                        if fill_w > 0.5 {
+                                                            painter.rect_filled(
+                                                                egui::Rect::from_min_size(
+                                                                    rect.min,
+                                                                    egui::Vec2::new(
+                                                                        fill_w, bar_h,
+                                                                    ),
+                                                                ),
+                                                                3.0,
+                                                                skill_colors[i],
+                                                            );
+                                                            painter.rect_filled(
+                                                                egui::Rect::from_min_size(
+                                                                    rect.min,
+                                                                    egui::Vec2::new(
+                                                                        fill_w,
+                                                                        bar_h * 0.4,
+                                                                    ),
+                                                                ),
+                                                                3.0,
+                                                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+                                                            );
+                                                        }
+                                                        painter.text(
+                                                            egui::pos2(
+                                                                rect.min.x + fill_w - 1.0,
+                                                                rect.center().y,
+                                                            ),
+                                                            egui::Align2::RIGHT_CENTER,
+                                                            format!("{:.1}", s.value),
+                                                            egui::FontId::proportional(7.0),
+                                                            egui::Color32::from_rgba_unmultiplied(
+                                                                255, 255, 255, 180,
+                                                            ),
+                                                        );
+                                                        resp
+                                                    });
+                                                    let apt_text = if s.aptitude_known {
+                                                        match s.aptitude {
+                                                            -2 => " (Limited)",
+                                                            -1 => " (Below avg)",
+                                                            0 => "",
+                                                            1 => " (Talented)",
+                                                            2 => " (Gifted)",
+                                                            _ => " (Genius)",
+                                                        }
+                                                    } else {
+                                                        " (?)"
+                                                    };
+                                                    resp.inner.on_hover_text(format!(
+                                                        "{}: {:.1} — {}{}",
+                                                        skill_names[i],
+                                                        s.value,
+                                                        s.descriptor(),
+                                                        apt_text,
+                                                    ));
+                                                }
+                                            });
+                                    }
+                                });
+                            });
+
+                            // ═══ BOTTOM: Tabbed section ═══
+                            ui.separator();
+                            // Tab bar
+                            ui.horizontal(|ui| {
+                                let tab_btn = |ui: &mut egui::Ui, label: &str, idx: u8, current: u8| -> bool {
+                                    let selected = current == idx;
+                                    let color = if selected {
+                                        egui::Color32::from_gray(200)
+                                    } else {
+                                        egui::Color32::from_gray(120)
+                                    };
+                                    let resp = ui.selectable_label(selected,
+                                        egui::RichText::new(label).size(9.0).color(color));
+                                    resp.clicked()
+                                };
+                                if tab_btn(ui, "Gear", 0, self.charsheet_tab) { self.charsheet_tab = 0; }
+                                if tab_btn(ui, "Log", 1, self.charsheet_tab) { self.charsheet_tab = 1; }
+                                if tab_btn(ui, "Modifiers", 2, self.charsheet_tab) { self.charsheet_tab = 2; }
+                            });
+
+                            if self.charsheet_tab == 0 {
+                            // --- Gear tab: backpack grid ---
+
+                            let slot_size = 40.0;
+                            let cols = 8usize;
+                            let rows = 2usize;
+                            let total_slots = cols * rows;
+                            let selected = self.inv_selected_slot;
+
+                            let stacks: Vec<Option<item_defs::ItemStack>> = (0..total_slots)
+                                .map(|i| {
+                                    if let Some(sel) = self.selected_pleb {
+                                        self.plebs
+                                            .get(sel)
+                                            .and_then(|p| p.inventory.stacks.get(i).cloned())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+
+                            let mut clicked_slot: Option<usize> = None;
+
+                            for row in 0..rows {
+                                ui.horizontal(|ui| {
+                                    for col in 0..cols {
+                                        let slot_idx = row * cols + col;
+                                        let is_selected = selected == Some(slot_idx);
+                                        let (rect, response) = ui.allocate_exact_size(
+                                            egui::Vec2::splat(slot_size),
+                                            egui::Sense::click(),
+                                        );
+                                        let painter = ui.painter_at(rect);
+                                        let bg = if is_selected {
+                                            egui::Color32::from_rgb(55, 75, 105)
+                                        } else if response.hovered() {
+                                            egui::Color32::from_rgb(48, 52, 60)
+                                        } else {
+                                            egui::Color32::from_rgb(35, 38, 44)
+                                        };
+                                        painter.rect_filled(rect, 4.0, bg);
+                                        painter.rect_stroke(
+                                            rect,
+                                            4.0,
+                                            egui::Stroke::new(
+                                                if is_selected { 2.0 } else { 1.0 },
+                                                if is_selected {
+                                                    egui::Color32::from_rgb(120, 160, 220)
                                                 } else {
-                                                    egui::Color32::from_rgb(35, 38, 44)
-                                                };
-                                                painter.rect_filled(rect, 4.0, bg);
+                                                    egui::Color32::from_gray(55)
+                                                },
+                                            ),
+                                            egui::StrokeKind::Outside,
+                                        );
+
+                                        if let Some(stack) = &stacks[slot_idx] {
+                                            // Check if this item is equipped
+                                            let is_eq = equipped_weapon_id == Some(stack.item_id);
+                                            if is_eq {
                                                 painter.rect_stroke(
                                                     rect,
                                                     4.0,
                                                     egui::Stroke::new(
-                                                        if is_selected { 2.0 } else { 1.0 },
-                                                        if is_selected {
-                                                            egui::Color32::from_rgb(120, 160, 220)
-                                                        } else {
-                                                            egui::Color32::from_gray(55)
-                                                        },
+                                                        2.0,
+                                                        egui::Color32::from_rgb(200, 170, 60),
                                                     ),
-                                                    egui::StrokeKind::Outside,
+                                                    egui::StrokeKind::Inside,
                                                 );
-
-                                                if let Some(stack) = &stacks[slot_idx] {
-                                                    let def = item_reg.get(stack.item_id);
-                                                    let icon =
-                                                        def.map(|d| d.icon.as_str()).unwrap_or("?");
-                                                    let cat = def
-                                                        .map(|d| d.category.as_str())
-                                                        .unwrap_or("");
-                                                    // Category stripe
-                                                    let stripe_col = match cat {
-                                                        "tool" => Some(egui::Color32::from_rgb(
-                                                            70, 120, 70,
-                                                        )),
-                                                        "container" => Some(
-                                                            egui::Color32::from_rgb(50, 110, 170),
-                                                        ),
-                                                        "food" => Some(egui::Color32::from_rgb(
-                                                            170, 120, 40,
-                                                        )),
-                                                        _ => None,
-                                                    };
-                                                    if let Some(sc) = stripe_col {
-                                                        painter.rect_filled(
-                                                            egui::Rect::from_min_size(
-                                                                rect.min,
-                                                                egui::Vec2::new(rect.width(), 3.0),
-                                                            ),
-                                                            0.0,
-                                                            sc,
-                                                        );
-                                                    }
-                                                    // Icon
-                                                    painter.text(
-                                                        rect.center() + egui::Vec2::new(0.0, -2.0),
-                                                        egui::Align2::CENTER_CENTER,
-                                                        icon,
-                                                        egui::FontId::proportional(18.0),
-                                                        egui::Color32::WHITE,
-                                                    );
-                                                    // Count
-                                                    if stack.count > 1 {
-                                                        painter.text(
-                                                            rect.right_bottom()
-                                                                + egui::Vec2::new(-4.0, -2.0),
-                                                            egui::Align2::RIGHT_BOTTOM,
-                                                            format!("{}", stack.count),
-                                                            egui::FontId::proportional(10.0),
-                                                            egui::Color32::from_gray(200),
-                                                        );
-                                                    }
-                                                    // Liquid bar
-                                                    if let Some((_, amt)) = stack.liquid {
-                                                        let cap = stack.liquid_capacity();
-                                                        if cap > 0 {
-                                                            let fill = amt as f32 / cap as f32;
-                                                            let br = egui::Rect::from_min_size(
-                                                                egui::pos2(
-                                                                    rect.min.x + 2.0,
-                                                                    rect.max.y - 5.0,
-                                                                ),
-                                                                egui::vec2(
-                                                                    (rect.width() - 4.0) * fill,
-                                                                    3.0,
-                                                                ),
-                                                            );
-                                                            painter.rect_filled(
-                                                                br,
-                                                                1.0,
-                                                                egui::Color32::from_rgb(
-                                                                    60, 140, 220,
-                                                                ),
-                                                            );
-                                                        }
-                                                    }
-                                                    response.clone().on_hover_text(stack.label());
+                                            }
+                                            let def = item_reg.get(stack.item_id);
+                                            let icon =
+                                                def.map(|d| d.icon.as_str()).unwrap_or("?");
+                                            let cat = def
+                                                .map(|d| d.category.as_str())
+                                                .unwrap_or("");
+                                            let stripe_col = match cat {
+                                                "tool" => {
+                                                    Some(egui::Color32::from_rgb(70, 120, 70))
                                                 }
-                                                if response.clicked() {
-                                                    clicked_slot = Some(slot_idx);
+                                                "container" => {
+                                                    Some(egui::Color32::from_rgb(50, 110, 170))
+                                                }
+                                                "food" => {
+                                                    Some(egui::Color32::from_rgb(170, 120, 40))
+                                                }
+                                                _ => None,
+                                            };
+                                            if let Some(sc) = stripe_col {
+                                                painter.rect_filled(
+                                                    egui::Rect::from_min_size(
+                                                        rect.min,
+                                                        egui::Vec2::new(rect.width(), 3.0),
+                                                    ),
+                                                    0.0,
+                                                    sc,
+                                                );
+                                            }
+                                            painter.text(
+                                                rect.center() + egui::Vec2::new(0.0, -2.0),
+                                                egui::Align2::CENTER_CENTER,
+                                                icon,
+                                                egui::FontId::proportional(16.0),
+                                                egui::Color32::WHITE,
+                                            );
+                                            if is_eq {
+                                                painter.text(
+                                                    rect.left_top()
+                                                        + egui::Vec2::new(3.0, 3.0),
+                                                    egui::Align2::LEFT_TOP,
+                                                    "E",
+                                                    egui::FontId::proportional(8.0),
+                                                    egui::Color32::from_rgb(200, 170, 60),
+                                                );
+                                            }
+                                            if stack.count > 1 {
+                                                painter.text(
+                                                    rect.right_bottom()
+                                                        + egui::Vec2::new(-4.0, -2.0),
+                                                    egui::Align2::RIGHT_BOTTOM,
+                                                    format!("{}", stack.count),
+                                                    egui::FontId::proportional(10.0),
+                                                    egui::Color32::from_gray(200),
+                                                );
+                                            }
+                                            if let Some((_, amt)) = stack.liquid {
+                                                let cap = stack.liquid_capacity();
+                                                if cap > 0 {
+                                                    let fill = amt as f32 / cap as f32;
+                                                    let br = egui::Rect::from_min_size(
+                                                        egui::pos2(
+                                                            rect.min.x + 2.0,
+                                                            rect.max.y - 5.0,
+                                                        ),
+                                                        egui::vec2(
+                                                            (rect.width() - 4.0) * fill,
+                                                            3.0,
+                                                        ),
+                                                    );
+                                                    painter.rect_filled(
+                                                        br,
+                                                        1.0,
+                                                        egui::Color32::from_rgb(60, 140, 220),
+                                                    );
                                                 }
                                             }
+                                            response.clone().on_hover_text(stack.label());
+                                        }
+                                        if response.clicked() {
+                                            clicked_slot = Some(slot_idx);
+                                        }
+                                    }
+                                });
+                            }
+
+                            // Handle slot clicks (swap/select)
+                            if let Some(clicked) = clicked_slot {
+                                if let Some(prev) = self.inv_selected_slot {
+                                    if prev == clicked {
+                                        self.inv_selected_slot = None;
+                                    } else {
+                                        if let Some(sel_idx) = self.selected_pleb
+                                            && let Some(pleb) = self.plebs.get_mut(sel_idx)
+                                        {
+                                            while pleb.inventory.stacks.len()
+                                                <= prev.max(clicked)
+                                            {
+                                                pleb.inventory
+                                                    .stacks
+                                                    .push(item_defs::ItemStack::new(0, 0));
+                                            }
+                                            pleb.inventory.stacks.swap(prev, clicked);
+                                            pleb.inventory.stacks.retain(|s| s.count > 0);
+                                        }
+                                        self.inv_selected_slot = None;
+                                    }
+                                } else if stacks[clicked].is_some() {
+                                    self.inv_selected_slot = Some(clicked);
+                                }
+                            }
+
+                            // Action buttons
+                            ui.horizontal(|ui| {
+                                let has_sel = selected.is_some()
+                                    && selected
+                                        .map(|s| {
+                                            stacks.get(s).and_then(|x| x.as_ref()).is_some()
+                                        })
+                                        .unwrap_or(false);
+                                if ui
+                                    .add_enabled(
+                                        has_sel,
+                                        egui::Button::new(
+                                            egui::RichText::new("\u{2b07} Drop").size(10.0),
+                                        ),
+                                    )
+                                    .clicked()
+                                    && let Some(slot) = selected
+                                {
+                                    if let Some(sel_idx) = self.selected_pleb
+                                        && let Some(pleb) = self.plebs.get_mut(sel_idx)
+                                        && slot < pleb.inventory.stacks.len()
+                                    {
+                                        let stack = pleb.inventory.stacks.remove(slot);
+                                        self.ground_items.push(resources::GroundItem {
+                                            x: pleb.x,
+                                            y: pleb.y,
+                                            stack,
                                         });
                                     }
+                                    self.inv_selected_slot = None;
+                                }
+                                let is_food = selected
+                                    .and_then(|s| stacks.get(s))
+                                    .and_then(|s| s.as_ref())
+                                    .map(|s| item_reg.nutrition(s.item_id) > 0.0)
+                                    .unwrap_or(false);
+                                if ui
+                                    .add_enabled(
+                                        is_food,
+                                        egui::Button::new(
+                                            egui::RichText::new("\u{1f374} Eat").size(10.0),
+                                        ),
+                                    )
+                                    .clicked()
+                                {
+                                    if let Some(sel_idx) = self.selected_pleb
+                                        && let Some(pleb) = self.plebs.get_mut(sel_idx)
+                                        && let Some(slot) = selected
+                                        && slot < pleb.inventory.stacks.len()
+                                    {
+                                        let nutr = item_reg
+                                            .nutrition(pleb.inventory.stacks[slot].item_id);
+                                        pleb.needs.hunger =
+                                            (pleb.needs.hunger + nutr).min(1.0);
+                                        pleb.inventory.stacks[slot].count -= 1;
+                                        if pleb.inventory.stacks[slot].count == 0 {
+                                            pleb.inventory.stacks.remove(slot);
+                                        }
+                                    }
+                                    self.inv_selected_slot = None;
+                                }
+                            });
 
-                                    // Handle slot clicks
-                                    if let Some(clicked) = clicked_slot {
-                                        if let Some(prev) = self.inv_selected_slot {
-                                            if prev == clicked {
-                                                self.inv_selected_slot = None;
-                                            } else {
-                                                if let Some(sel_idx) = self.selected_pleb
-                                                    && let Some(pleb) = self.plebs.get_mut(sel_idx)
-                                                {
-                                                    while pleb.inventory.stacks.len()
-                                                        <= prev.max(clicked)
-                                                    {
-                                                        pleb.inventory
-                                                            .stacks
-                                                            .push(item_defs::ItemStack::new(0, 0));
-                                                    }
-                                                    pleb.inventory.stacks.swap(prev, clicked);
-                                                    pleb.inventory.stacks.retain(|s| s.count > 0);
-                                                }
-                                                self.inv_selected_slot = None;
+                            } else if self.charsheet_tab == 1 {
+                            // --- Log tab: per-pleb event history ---
+                            egui::ScrollArea::vertical()
+                                .max_height(160.0)
+                                .auto_shrink(false)
+                                .show(ui, |ui| {
+                                    if p_event_log.is_empty() {
+                                        ui.label(
+                                            egui::RichText::new("No events yet.")
+                                                .size(9.0)
+                                                .color(egui::Color32::from_gray(100)),
+                                        );
+                                    } else {
+                                        for (time, msg) in p_event_log.iter().rev() {
+                                            ui.horizontal(|ui| {
+                                                let h = (time / DAY_DURATION * 24.0) % 24.0;
+                                                let hh = h as u32;
+                                                let mm = ((h - hh as f32) * 60.0) as u32;
+                                                ui.label(
+                                                    egui::RichText::new(format!("{:02}:{:02}", hh, mm))
+                                                        .size(8.0)
+                                                        .monospace()
+                                                        .color(egui::Color32::from_gray(100)),
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(msg)
+                                                        .size(9.0)
+                                                        .color(egui::Color32::from_gray(190)),
+                                                );
+                                            });
+                                        }
+                                    }
+                                });
+
+                            } else if self.charsheet_tab == 2 {
+                            // --- Modifiers tab: derived buffs/debuffs ---
+                            egui::ScrollArea::vertical()
+                                .max_height(160.0)
+                                .auto_shrink(false)
+                                .show(ui, |ui| {
+                                    // Each modifier: (name, description, color)
+                                    let mut mods: Vec<(&str, String, egui::Color32)> = Vec::new();
+
+                                    // Needs-based
+                                    if hunger > 0.8 {
+                                        mods.push(("Well Fed", "Hunger satisfied".into(),
+                                            egui::Color32::from_rgb(80, 180, 80)));
+                                    } else if hunger < 0.20 {
+                                        mods.push(("Hungry", format!("Hunger: {:.0}%", hunger * 100.0),
+                                            egui::Color32::from_rgb(200, 140, 40)));
+                                    }
+                                    if hunger < 0.08 {
+                                        mods.push(("Starving", "Health damage from starvation".into(),
+                                            egui::Color32::from_rgb(220, 50, 50)));
+                                    }
+                                    if thirst > 0.8 {
+                                        mods.push(("Hydrated", "Thirst satisfied".into(),
+                                            egui::Color32::from_rgb(60, 150, 200)));
+                                    } else if thirst < 0.20 {
+                                        mods.push(("Thirsty", format!("Thirst: {:.0}%", thirst * 100.0),
+                                            egui::Color32::from_rgb(40, 120, 200)));
+                                    }
+                                    if rest > 0.8 {
+                                        mods.push(("Rested", "Well rested".into(),
+                                            egui::Color32::from_rgb(100, 140, 200)));
+                                    } else if rest < 0.20 {
+                                        mods.push(("Exhausted", format!("Rest: {:.0}%", rest * 100.0),
+                                            egui::Color32::from_rgb(140, 100, 180)));
+                                    }
+                                    if warmth < 0.25 {
+                                        mods.push(("Cold", format!("Warmth: {:.0}%", warmth * 100.0),
+                                            egui::Color32::from_rgb(80, 140, 200)));
+                                    }
+                                    if oxygen < 0.5 {
+                                        mods.push(("Low Oxygen", format!("O2: {:.0}%", oxygen * 100.0),
+                                            egui::Color32::from_rgb(200, 80, 80)));
+                                    }
+
+                                    // Health-based
+                                    if health < 0.25 {
+                                        mods.push(("Wounded", format!("Health: {:.0}%", health * 100.0),
+                                            egui::Color32::from_rgb(200, 60, 50)));
+                                    }
+                                    if p_bleeding > 0.1 {
+                                        mods.push(("Bleeding", format!("Rate: {:.0}%", p_bleeding * 100.0),
+                                            egui::Color32::from_rgb(200, 40, 40)));
+                                    }
+                                    if p_nauseous {
+                                        mods.push(("Nauseous", "Ate raw food — nutrition wasted".into(),
+                                            egui::Color32::from_rgb(140, 160, 50)));
+                                    }
+
+                                    // Mental
+                                    let stress_norm = stress / 100.0;
+                                    if stress_norm > 0.85 {
+                                        mods.push(("Breaking!", "Near mental collapse".into(),
+                                            egui::Color32::from_rgb(220, 40, 40)));
+                                    } else if stress_norm > 0.7 {
+                                        mods.push(("Stressed", format!("Stress: {:.0}%", stress),
+                                            egui::Color32::from_rgb(200, 160, 40)));
+                                    } else if stress_norm < 0.2 {
+                                        mods.push(("Calm", "Low stress".into(),
+                                            egui::Color32::from_rgb(80, 170, 80)));
+                                    }
+                                    if mood > 30.0 {
+                                        mods.push(("Happy", format!("Mood: {:.0}", mood),
+                                            egui::Color32::from_rgb(80, 180, 100)));
+                                    } else if mood < -30.0 {
+                                        mods.push(("Unhappy", format!("Mood: {:.0}", mood),
+                                            egui::Color32::from_rgb(180, 80, 60)));
+                                    }
+
+                                    // Combat/status
+                                    if p_drafted {
+                                        mods.push(("Drafted", "Under direct command".into(),
+                                            egui::Color32::from_rgb(200, 100, 60)));
+                                    }
+                                    if p_crouching {
+                                        mods.push(("Crouched", "Reduced profile, slower movement".into(),
+                                            egui::Color32::from_rgb(120, 160, 100)));
+                                    }
+                                    if p_suppression > 0.3 {
+                                        mods.push(("Suppressed", format!("{:.0}% accuracy penalty", p_suppression * 100.0),
+                                            egui::Color32::from_rgb(200, 140, 50)));
+                                    }
+                                    if p_leader {
+                                        mods.push(("Leader", "Morale aura for nearby allies".into(),
+                                            egui::Color32::from_rgb(220, 200, 60)));
+                                    }
+                                    if p_water > 0.3 {
+                                        mods.push(("Deep Water", "Movement severely slowed".into(),
+                                            egui::Color32::from_rgb(60, 120, 200)));
+                                    } else if p_water > 0.05 {
+                                        mods.push(("Wading", "Movement slowed".into(),
+                                            egui::Color32::from_rgb(80, 140, 190)));
+                                    }
+
+                                    // Trait (permanent buff)
+                                    if let Some(ref tn) = trait_name {
+                                        let desc = crate::types::PlebTrait::ALL
+                                            .iter()
+                                            .find(|t| t.name() == tn.as_str())
+                                            .map(|t| t.description())
+                                            .unwrap_or("");
+                                        mods.push((
+                                            tn.as_str(),
+                                            desc.to_string(),
+                                            egui::Color32::from_rgb(180, 160, 60),
+                                        ));
+                                    }
+
+                                    // Rank
+                                    let rank_label = p_rank.label();
+                                    if rank_label != "Green" {
+                                        mods.push((rank_label, format!("{} fights, {} kills", p_fights, p_kills),
+                                            egui::Color32::from_rgb(160, 160, 180)));
+                                    }
+
+                                    // Skill speed modifiers (show if notably high or low)
+                                    for &(idx, name) in &[(2usize, "Crafting"), (3, "Farming"), (5, "Construction")] {
+                                        if let Some(s) = skills.get(idx) {
+                                            let mult = s.speed_mult();
+                                            let desc = s.descriptor();
+                                            if s.value >= 6.5 {
+                                                mods.push((name, format!("{} ({:.1}) — {:.0}% speed", desc, s.value, mult * 100.0),
+                                                egui::Color32::from_rgb(80, 170, 80)));
+                                            } else if s.value <= 3.0 {
+                                                mods.push((name, format!("{} ({:.1}) — {:.0}% speed", desc, s.value, mult * 100.0),
+                                                    egui::Color32::from_rgb(180, 100, 60)));
                                             }
-                                        } else if stacks[clicked].is_some() {
-                                            self.inv_selected_slot = Some(clicked);
                                         }
                                     }
 
-                                    // Action buttons
-                                    ui.add_space(4.0);
-                                    ui.horizontal(|ui| {
-                                        let has_sel = selected.is_some()
-                                            && selected
-                                                .map(|s| {
-                                                    stacks.get(s).and_then(|x| x.as_ref()).is_some()
-                                                })
-                                                .unwrap_or(false);
-                                        if ui
-                                            .add_enabled(
-                                                has_sel,
-                                                egui::Button::new(
-                                                    egui::RichText::new("\u{2b07} Drop").size(10.0),
-                                                ),
-                                            )
-                                            .clicked()
-                                            && let Some(slot) = selected
-                                        {
-                                            if let Some(sel_idx) = self.selected_pleb
-                                                && let Some(pleb) = self.plebs.get_mut(sel_idx)
-                                                && slot < pleb.inventory.stacks.len()
-                                            {
-                                                let stack = pleb.inventory.stacks.remove(slot);
-                                                self.ground_items.push(resources::GroundItem {
-                                                    x: pleb.x,
-                                                    y: pleb.y,
-                                                    stack,
-                                                });
-                                            }
-                                            self.inv_selected_slot = None;
+                                    if mods.is_empty() {
+                                        ui.label(
+                                            egui::RichText::new("No active modifiers.")
+                                                .size(9.0)
+                                                .color(egui::Color32::from_gray(100)),
+                                        );
+                                    } else {
+                                        for (name, desc, color) in &mods {
+                                            ui.horizontal(|ui| {
+                                                // Colored dot
+                                                let (dot_rect, _) = ui.allocate_exact_size(
+                                                    egui::Vec2::new(6.0, 12.0),
+                                                    egui::Sense::hover(),
+                                                );
+                                                ui.painter_at(dot_rect).circle_filled(
+                                                    dot_rect.center(),
+                                                    3.0,
+                                                    *color,
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(*name)
+                                                        .size(9.0)
+                                                        .strong()
+                                                        .color(*color),
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(desc.as_str())
+                                                        .size(8.0)
+                                                        .color(egui::Color32::from_gray(140)),
+                                                );
+                                            });
                                         }
-                                        // Eat button (if selected item is food)
-                                        let is_food = selected
-                                            .and_then(|s| stacks.get(s))
-                                            .and_then(|s| s.as_ref())
-                                            .map(|s| item_reg.nutrition(s.item_id) > 0.0)
-                                            .unwrap_or(false);
-                                        if ui
-                                            .add_enabled(
-                                                is_food,
-                                                egui::Button::new(
-                                                    egui::RichText::new("\u{1f374} Eat").size(10.0),
-                                                ),
-                                            )
-                                            .clicked()
-                                        {
-                                            if let Some(sel_idx) = self.selected_pleb
-                                                && let Some(pleb) = self.plebs.get_mut(sel_idx)
-                                                && let Some(slot) = selected
-                                                && slot < pleb.inventory.stacks.len()
-                                            {
-                                                let nutr = item_reg
-                                                    .nutrition(pleb.inventory.stacks[slot].item_id);
-                                                pleb.needs.hunger =
-                                                    (pleb.needs.hunger + nutr).min(1.0);
-                                                pleb.inventory.stacks[slot].count -= 1;
-                                                if pleb.inventory.stacks[slot].count == 0 {
-                                                    pleb.inventory.stacks.remove(slot);
-                                                }
-                                            }
-                                            self.inv_selected_slot = None;
-                                        }
-                                    });
+                                    }
                                 });
-                            });
+                            }
+
                         });
                     if !open {
                         self.show_inventory = false;
@@ -2732,6 +3588,7 @@ impl App {
                                         self.build_category = Some(name);
                                         self.world_sel = WorldSelection::none();
                                         self.selected_pleb = None;
+                                        self.selected_group.clear();
                                         self.terrain_tool = None;
                                         if name == "Sandbox" {
                                             self.build_tool = BuildTool::None;
@@ -3645,8 +4502,67 @@ impl App {
                                     };
                                     format!("Mental break: {}", kind)
                                 }
-                                PlebActivity::Digging => "Digging".to_string(),
-                                PlebActivity::Filling => "Building berm".to_string(),
+                                PlebActivity::Digging => {
+                                    // Compute dig progress from elevation
+                                    if let Some((tx, ty)) = p.work_target {
+                                        let cur = crate::terrain::sample_elevation(
+                                            &self.sub_elevation,
+                                            tx as f32 + 0.5,
+                                            ty as f32 + 0.5,
+                                        );
+                                        let base = self
+                                            .dig_zones
+                                            .first()
+                                            .and_then(|dz| {
+                                                dz.base_elevations.get(&(tx, ty)).copied()
+                                            })
+                                            .unwrap_or(cur);
+                                        let target = self
+                                            .dig_zones
+                                            .first()
+                                            .map(|dz| dz.target_depth)
+                                            .unwrap_or(0.8);
+                                        let progress = if target > 0.01 {
+                                            ((base - cur) / target).clamp(0.0, 1.0)
+                                        } else {
+                                            0.0
+                                        };
+                                        format!("Digging {:.0}%", progress * 100.0)
+                                    } else {
+                                        "Digging".to_string()
+                                    }
+                                }
+                                PlebActivity::Filling => {
+                                    if let Some((tx, ty)) = p.work_target {
+                                        let cur = crate::terrain::sample_elevation(
+                                            &self.sub_elevation,
+                                            tx as f32 + 0.5,
+                                            ty as f32 + 0.5,
+                                        );
+                                        let target_h = self
+                                            .berm_zones
+                                            .first()
+                                            .map(|bz| bz.target_height)
+                                            .unwrap_or(cur + 0.5);
+                                        let progress = if target_h > cur {
+                                            0.0 // just starting
+                                        } else {
+                                            1.0
+                                        };
+                                        format!("Berm {:.0}%", progress * 100.0)
+                                    } else {
+                                        "Building berm".to_string()
+                                    }
+                                }
+                                PlebActivity::Butchering(pr) => {
+                                    format!("Butchering {:.0}%", pr * 100.0)
+                                }
+                                PlebActivity::Cooking(pr) => {
+                                    format!("Cooking {:.0}%", pr * 100.0)
+                                }
+                                PlebActivity::Fishing(pr) => {
+                                    format!("Fishing {:.0}%", pr * 100.0)
+                                }
                                 PlebActivity::Staggering(_) => "Staggering!".to_string(),
                                 PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                             };
@@ -4082,7 +4998,12 @@ impl App {
                         None
                     }
                 }
-                ContextAction::FireAt(_) | ContextAction::ThrowGrenade(_, _) => None,
+                ContextAction::Butcher(bx, by) => Some(PlebCommand::Butcher(*bx, *by)),
+                ContextAction::Fish(bx, by) => Some(PlebCommand::Fish(*bx, *by)),
+                ContextAction::FireAt(_)
+                | ContextAction::ThrowGrenade(_, _)
+                | ContextAction::Hunt(_)
+                | ContextAction::Equip(_) => None,
             };
 
             // If shift held and pleb is busy, queue the command instead of executing
@@ -4153,25 +5074,24 @@ impl App {
                     }
                     if let Some(pi) = best_pleb {
                         let nearest_crate = find_nearest_crate(&self.grid_data, hx, hy);
-                        if let Some((cx, cy)) = nearest_crate {
-                            let pleb = &mut self.plebs[pi];
-                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
-                            let path = pleb::astar_path_terrain_water_wd(
-                                &self.grid_data,
-                                &self.wall_data,
-                                &self.terrain_data,
-                                &self.water_depth_cpu,
-                                start,
-                                (hx, hy),
-                            );
-                            if !path.is_empty() {
-                                pleb.path = path;
-                                pleb.path_idx = 0;
-                                pleb.activity = PlebActivity::Hauling;
-                                pleb.haul_target = Some((cx, cy));
-                                pleb.harvest_target = Some((hx, hy));
-                                self.selected_pleb = Some(pi);
-                            }
+                        let pleb = &mut self.plebs[pi];
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let adj = adjacent_walkable(&self.grid_data, hx, hy).unwrap_or((hx, hy));
+                        let path = pleb::astar_path_terrain_water_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            &self.water_depth_cpu,
+                            start,
+                            adj,
+                        );
+                        if !path.is_empty() {
+                            pleb.path = path;
+                            pleb.path_idx = 0;
+                            pleb.activity = PlebActivity::Hauling;
+                            pleb.haul_target = nearest_crate; // None is OK — just picks up
+                            pleb.harvest_target = Some((hx, hy));
+                            self.selected_pleb = Some(pi);
                         }
                     }
                 }
@@ -4376,6 +5296,169 @@ impl App {
                                 });
                             }
                             self.move_marker = Some((tx, ty, 1.5));
+                        }
+                    }
+                }
+                ContextAction::Hunt(creature_idx) => {
+                    // Assign selected pleb(s) to hunt a creature
+                    let hunt_indices: Vec<usize> = if !self.selected_group.is_empty() {
+                        self.selected_group.clone()
+                    } else if let Some(idx) = self.selected_pleb {
+                        vec![idx]
+                    } else {
+                        vec![]
+                    };
+                    let creature_pos = self.creatures.get(creature_idx).map(|c| (c.x, c.y));
+                    for &pi in &hunt_indices {
+                        if let Some(pleb) = self.plebs.get_mut(pi) {
+                            if !pleb.is_enemy && !pleb.is_dead {
+                                pleb.hunt_target = Some(creature_idx);
+                                pleb.drafted = true;
+                                pleb.prefer_ranged = true;
+                                pleb.update_equipped_weapon();
+                                pleb.aim_target = None;
+                                pleb.aim_progress = 0.0;
+                                // Path toward the creature
+                                if let Some((cx, cy)) = creature_pos {
+                                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                    let goal = (cx.floor() as i32, cy.floor() as i32);
+                                    let path = pleb::astar_path_terrain_water_wd(
+                                        &self.grid_data,
+                                        &self.wall_data,
+                                        &self.terrain_data,
+                                        &self.water_depth_cpu,
+                                        start,
+                                        goal,
+                                    );
+                                    if !path.is_empty() {
+                                        pleb.path = path;
+                                        pleb.path_idx = 0;
+                                        pleb.activity = PlebActivity::Walking;
+                                    }
+                                }
+                                pleb.set_bubble(
+                                    pleb::BubbleKind::Icon('\u{1f3af}', [180, 140, 60]),
+                                    2.0,
+                                );
+                            }
+                        }
+                    }
+                }
+                ContextAction::Butcher(bx, by) => {
+                    if let Some(sel_idx) = self.selected_pleb {
+                        let pleb = &mut self.plebs[sel_idx];
+                        if !pleb.is_enemy && !pleb.activity.is_crisis() {
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let adj =
+                                adjacent_walkable(&self.grid_data, bx, by).unwrap_or((bx, by));
+                            let path = pleb::astar_path_terrain_water_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                &self.water_depth_cpu,
+                                start,
+                                adj,
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.work_target = Some((bx, by));
+                                pleb.harvest_target = None;
+                                pleb.haul_target = None;
+                            }
+                        }
+                    }
+                }
+                ContextAction::Fish(bx, by) => {
+                    if let Some(sel_idx) = self.selected_pleb {
+                        let pleb = &mut self.plebs[sel_idx];
+                        if !pleb.is_enemy && !pleb.activity.is_crisis() {
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let adj =
+                                adjacent_walkable(&self.grid_data, bx, by).unwrap_or((bx, by));
+                            let path = pleb::astar_path_terrain_water_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                &self.water_depth_cpu,
+                                start,
+                                adj,
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.work_target = Some((bx, by));
+                                pleb.harvest_target = None;
+                                pleb.haul_target = None;
+                            }
+                        }
+                    }
+                }
+                ContextAction::Equip(gi_idx) => {
+                    // Pick up ground item and equip it (weapon → belt slot, belt → equip layer)
+                    if let Some(sel_idx) = self.selected_pleb
+                        && let Some(pleb) = self.plebs.get_mut(sel_idx)
+                        && !pleb.is_dead
+                    {
+                        if gi_idx < self.ground_items.len() {
+                            let item = self.ground_items.remove(gi_idx);
+                            let item_id = item.stack.item_id;
+                            let item_reg = item_defs::ItemRegistry::cached();
+                            let def = item_reg.get(item_id);
+                            let is_belt = def.is_some_and(|d| d.is_belt);
+                            let is_belt_item = def.is_some_and(|d| d.is_belt_item());
+
+                            if is_belt {
+                                // Equipping a belt: drop old belt if any, equip new one
+                                if pleb.equipment.belt_capacity > 0 {
+                                    // Drop old belt + its contents
+                                    let old_belt_id = pleb.equipment.belt_item;
+                                    if old_belt_id > 0 {
+                                        self.ground_items.push(resources::GroundItem::new(
+                                            pleb.x,
+                                            pleb.y,
+                                            old_belt_id,
+                                            1,
+                                        ));
+                                    }
+                                    // Drop belt contents back to inventory
+                                    for i in 0..pleb.equipment.belt_capacity as usize {
+                                        if let Some(id) = pleb.equipment.belt[i].take() {
+                                            pleb.inventory.add(id, 1);
+                                        }
+                                    }
+                                    pleb.equipment.belt_capacity = 0;
+                                    pleb.equipment.belt_item = 0;
+                                    pleb.equipment.active_item = None;
+                                    pleb.equipped_weapon = None;
+                                }
+                                // Equip new belt + auto-migrate tools from inventory
+                                pleb.equipment.equip_belt(item_id);
+                                pleb.equipment
+                                    .auto_migrate_from_inventory(&mut pleb.inventory);
+                                pleb.update_equipped_weapon();
+                                pleb.log_event(
+                                    self.camera.time,
+                                    format!(
+                                        "Equipped {}",
+                                        def.map(|d| d.name.as_str()).unwrap_or("belt")
+                                    ),
+                                );
+                            } else if is_belt_item {
+                                // Weapon/tool: add to belt if possible, else inventory
+                                if pleb.equipment.belt_capacity > 0
+                                    && pleb.equipment.add_to_belt(item_id)
+                                {
+                                    pleb.update_equipped_weapon();
+                                } else {
+                                    pleb.inventory.add_stack(item.stack.clone());
+                                    pleb.equipped_weapon = Some(item_id);
+                                }
+                            } else {
+                                pleb.inventory.add_stack(item.stack.clone());
+                            }
                         }
                     }
                 }
@@ -5546,9 +6629,14 @@ impl App {
                     } else if bp.is_roof() {
                         Some(("1 fiber".to_string(), egui::Color32::from_rgb(255, 160, 60)))
                     } else if bp.is_campfire() {
+                        let color = if bp.wood_delivered >= bp.wood_needed {
+                            egui::Color32::from_rgb(100, 200, 100)
+                        } else {
+                            egui::Color32::from_rgb(255, 160, 60)
+                        };
                         Some((
-                            "3 sticks".to_string(),
-                            egui::Color32::from_rgb(255, 160, 60),
+                            format!("{}/{} sticks", bp.wood_delivered, bp.wood_needed),
+                            color,
                         ))
                     } else {
                         None
@@ -5834,7 +6922,9 @@ impl App {
                         | PlebCommand::Eat(x, y)
                         | PlebCommand::DigClay(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
                         PlebCommand::HandCraft(_) => (pleb.x, pleb.y),
-                        PlebCommand::GatherBranches(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
+                        PlebCommand::GatherBranches(x, y)
+                        | PlebCommand::Butcher(x, y)
+                        | PlebCommand::Fish(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
                     };
                     let qp = to_screen(tx, ty);
                     // Dashed line to next waypoint
@@ -8048,6 +9138,7 @@ impl App {
                         let border_col =
                             egui::Color32::from_rgba_unmultiplied(180, 180, 180, bg_alpha);
 
+                        let is_thought = matches!(bubble, pleb::BubbleKind::Thought(_));
                         let (text, font_size, text_col) = match bubble {
                             pleb::BubbleKind::Icon(ch, rgb) => (
                                 format!("{}", ch),
@@ -8069,6 +9160,16 @@ impl App {
                                     (fade * 255.0) as u8,
                                 ),
                             ),
+                            pleb::BubbleKind::Thought(t) => (
+                                t.clone(),
+                                8.5,
+                                egui::Color32::from_rgba_unmultiplied(
+                                    80,
+                                    75,
+                                    70,
+                                    (fade * 220.0) as u8,
+                                ),
+                            ),
                         };
 
                         let galley = label_painter.layout_no_wrap(
@@ -8080,26 +9181,54 @@ impl App {
                             egui::Align2::CENTER_BOTTOM.anchor_size(bubble_pos, galley.size());
                         let pad = egui::Vec2::new(5.0, 3.0);
                         let bg_rect = text_rect.expand2(pad);
-                        // White rounded rect
-                        label_painter.rect_filled(bg_rect, 6.0, bg_col);
-                        label_painter.rect_stroke(
-                            bg_rect,
-                            6.0,
-                            egui::Stroke::new(0.5, border_col),
-                            egui::StrokeKind::Outside,
-                        );
-                        // Triangle tail pointing down
-                        let tri_y = bg_rect.max.y;
-                        let tri_cx = bg_rect.center().x;
-                        label_painter.add(egui::Shape::convex_polygon(
-                            vec![
-                                egui::pos2(tri_cx - 4.0, tri_y),
-                                egui::pos2(tri_cx + 4.0, tri_y),
-                                egui::pos2(tri_cx, tri_y + 5.0),
-                            ],
-                            bg_col,
-                            egui::Stroke::NONE,
-                        ));
+
+                        if is_thought {
+                            // Thought bubble: rounded cloud with small circles below
+                            let thought_bg =
+                                egui::Color32::from_rgba_unmultiplied(240, 240, 235, bg_alpha);
+                            let thought_border =
+                                egui::Color32::from_rgba_unmultiplied(170, 170, 165, bg_alpha);
+                            label_painter.rect_filled(bg_rect, 10.0, thought_bg);
+                            label_painter.rect_stroke(
+                                bg_rect,
+                                10.0,
+                                egui::Stroke::new(0.5, thought_border),
+                                egui::StrokeKind::Outside,
+                            );
+                            // Small trailing circles (thought cloud tail)
+                            let cx = bg_rect.center().x;
+                            let by_pos = bg_rect.max.y;
+                            label_painter.circle_filled(
+                                egui::pos2(cx + 2.0, by_pos + 3.0),
+                                2.5,
+                                thought_bg,
+                            );
+                            label_painter.circle_filled(
+                                egui::pos2(cx + 5.0, by_pos + 7.0),
+                                1.5,
+                                thought_bg,
+                            );
+                        } else {
+                            // Speech bubble: white rounded rect with triangle tail
+                            label_painter.rect_filled(bg_rect, 6.0, bg_col);
+                            label_painter.rect_stroke(
+                                bg_rect,
+                                6.0,
+                                egui::Stroke::new(0.5, border_col),
+                                egui::StrokeKind::Outside,
+                            );
+                            let tri_y = bg_rect.max.y;
+                            let tri_cx = bg_rect.center().x;
+                            label_painter.add(egui::Shape::convex_polygon(
+                                vec![
+                                    egui::pos2(tri_cx - 4.0, tri_y),
+                                    egui::pos2(tri_cx + 4.0, tri_y),
+                                    egui::pos2(tri_cx, tri_y + 5.0),
+                                ],
+                                bg_col,
+                                egui::Stroke::NONE,
+                            ));
+                        }
                         // Text
                         label_painter.text(
                             bubble_pos,
@@ -8162,38 +9291,126 @@ impl App {
                             0.0
                         };
 
-                        let (status_text, status_color): (Option<&str>, egui::Color32) =
-                            if pleb.needs.stress > 85.0 {
-                                (Some("Breaking!"), egui::Color32::from_rgb(240, 50, 50))
-                            } else if pleb.needs.health < 0.25 {
-                                (Some("Wounded"), egui::Color32::from_rgb(220, 60, 50))
-                            } else if pleb.needs.stress > 70.0 {
-                                (Some("Stressed"), egui::Color32::from_rgb(220, 160, 40))
-                            } else if water_d > 0.3 {
-                                (Some("Deep water"), egui::Color32::from_rgb(80, 140, 220))
-                            } else if water_d > 0.05 {
-                                (Some("In water"), egui::Color32::from_rgb(100, 160, 210))
-                            } else if pleb.crouching {
-                                (Some("Crouched"), egui::Color32::from_rgb(140, 180, 120))
-                            } else if pleb.suppression > 0.5 {
-                                (Some("Suppressed"), egui::Color32::from_rgb(200, 140, 60))
-                            } else if pleb.bleeding > 0.3 {
-                                (Some("Bleeding"), egui::Color32::from_rgb(200, 50, 50))
-                            } else if pleb.reload_timer > 0.0 {
-                                (Some("Reloading"), egui::Color32::from_rgb(160, 160, 160))
-                            } else {
-                                (None, egui::Color32::TRANSPARENT)
-                            };
+                        // Status label: show only the MOST critical status
+                        // Priority: life-threatening > urgent needs > warning > info
+                        // Color: red bg = critical, orange bg = danger, amber = warning, teal = info
+                        let (status_text, text_col, bg_col): (
+                            Option<&str>,
+                            egui::Color32,
+                            egui::Color32,
+                        ) = if pleb.bleeding > 0.5 {
+                            (
+                                Some("Bleeding"),
+                                egui::Color32::WHITE,
+                                egui::Color32::from_rgb(170, 30, 30),
+                            )
+                        } else if pleb.needs.health < 0.10 {
+                            (
+                                Some("Dying"),
+                                egui::Color32::WHITE,
+                                egui::Color32::from_rgb(160, 20, 20),
+                            )
+                        } else if pleb.needs.hunger < 0.08 {
+                            (
+                                Some("Starving"),
+                                egui::Color32::WHITE,
+                                egui::Color32::from_rgb(170, 30, 30),
+                            )
+                        } else if pleb.needs.thirst < 0.08 {
+                            (
+                                Some("Dehydrated"),
+                                egui::Color32::WHITE,
+                                egui::Color32::from_rgb(170, 30, 30),
+                            )
+                        } else if pleb.needs.stress > 85.0 {
+                            (
+                                Some("Breaking!"),
+                                egui::Color32::WHITE,
+                                egui::Color32::from_rgb(170, 30, 30),
+                            )
+                        } else if pleb.needs.warmth < 0.15 {
+                            (
+                                Some("Freezing"),
+                                egui::Color32::WHITE,
+                                egui::Color32::from_rgb(40, 90, 160),
+                            )
+                        } else if pleb.needs.health < 0.25 {
+                            (
+                                Some("Wounded"),
+                                egui::Color32::from_rgb(255, 240, 220),
+                                egui::Color32::from_rgb(180, 80, 20),
+                            )
+                        } else if pleb.bleeding > 0.1 {
+                            (
+                                Some("Bleeding"),
+                                egui::Color32::from_rgb(255, 240, 220),
+                                egui::Color32::from_rgb(180, 60, 40),
+                            )
+                        } else if pleb.needs.hunger < 0.20 {
+                            (
+                                Some("Hungry"),
+                                egui::Color32::from_rgb(255, 240, 220),
+                                egui::Color32::from_rgb(170, 110, 20),
+                            )
+                        } else if pleb.needs.thirst < 0.20 {
+                            (
+                                Some("Thirsty"),
+                                egui::Color32::from_rgb(255, 240, 220),
+                                egui::Color32::from_rgb(30, 110, 170),
+                            )
+                        } else if pleb.needs.rest < 0.15 {
+                            (
+                                Some("Exhausted"),
+                                egui::Color32::from_rgb(255, 240, 220),
+                                egui::Color32::from_rgb(100, 80, 140),
+                            )
+                        } else if pleb.nauseous_timer > 0.0 {
+                            (
+                                Some("Nauseous"),
+                                egui::Color32::from_rgb(255, 240, 220),
+                                egui::Color32::from_rgb(120, 140, 50),
+                            )
+                        } else if pleb.needs.stress > 70.0 {
+                            (
+                                Some("Stressed"),
+                                egui::Color32::from_rgb(40, 30, 20),
+                                egui::Color32::from_rgb(200, 170, 50),
+                            )
+                        } else if water_d > 0.3 {
+                            (
+                                Some("Deep water"),
+                                egui::Color32::WHITE,
+                                egui::Color32::from_rgb(40, 90, 140),
+                            )
+                        } else if pleb.suppression > 0.5 {
+                            (
+                                Some("Suppressed"),
+                                egui::Color32::from_rgb(255, 240, 220),
+                                egui::Color32::from_rgb(150, 100, 30),
+                            )
+                        } else {
+                            (None, egui::Color32::TRANSPARENT, egui::Color32::TRANSPARENT)
+                        };
 
                         if let Some(text) = status_text {
                             let status_pos = egui::pos2(pos.x, pos.y + 13.0);
-                            Self::shadow_text(
-                                &label_painter,
+                            // Background pill
+                            let font = egui::FontId::proportional(8.0);
+                            let galley = label_painter.layout_no_wrap(
+                                text.to_string(),
+                                font.clone(),
+                                text_col,
+                            );
+                            let text_rect =
+                                egui::Align2::CENTER_TOP.anchor_size(status_pos, galley.size());
+                            let pill = text_rect.expand2(egui::Vec2::new(4.0, 1.5));
+                            label_painter.rect_filled(pill, 3.0, bg_col);
+                            label_painter.text(
                                 status_pos,
                                 egui::Align2::CENTER_TOP,
                                 text,
-                                egui::FontId::proportional(9.0),
-                                status_color,
+                                font,
+                                text_col,
                             );
                         }
                     }
@@ -8285,6 +9502,15 @@ impl App {
                             PlebActivity::Filling => {
                                 (Some("Building berm"), egui::Color32::from_rgb(180, 140, 60))
                             }
+                            PlebActivity::Butchering(_) => {
+                                (Some("Butchering"), egui::Color32::from_rgb(180, 80, 80))
+                            }
+                            PlebActivity::Cooking(_) => {
+                                (Some("Cooking"), egui::Color32::from_rgb(220, 140, 50))
+                            }
+                            PlebActivity::Fishing(_) => {
+                                (Some("Fishing"), egui::Color32::from_rgb(60, 140, 200))
+                            }
                             PlebActivity::Staggering(_) => {
                                 (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40))
                             }
@@ -8302,10 +9528,42 @@ impl App {
                             );
                         }
 
-                        // Progress bar for farming/harvesting
+                        // Progress bar for all work activities
                         let progress = match inner {
-                            PlebActivity::Farming(p) => Some(*p),
-                            PlebActivity::Harvesting(p) => Some(*p),
+                            PlebActivity::Farming(p)
+                            | PlebActivity::Harvesting(p)
+                            | PlebActivity::Butchering(p)
+                            | PlebActivity::Cooking(p)
+                            | PlebActivity::Fishing(p) => Some(*p),
+                            PlebActivity::Building(p) => Some(*p),
+                            PlebActivity::Crafting(_, p) => Some(*p),
+                            PlebActivity::Drinking(p) => Some(*p),
+                            PlebActivity::Digging => {
+                                // Compute from elevation change
+                                pleb.work_target.and_then(|(tx, ty)| {
+                                    let cur = crate::terrain::sample_elevation(
+                                        &self.sub_elevation,
+                                        tx as f32 + 0.5,
+                                        ty as f32 + 0.5,
+                                    );
+                                    let base = self
+                                        .dig_zones
+                                        .first()
+                                        .and_then(|dz| dz.base_elevations.get(&(tx, ty)).copied())
+                                        .unwrap_or(cur);
+                                    let target = self
+                                        .dig_zones
+                                        .first()
+                                        .map(|dz| dz.target_depth)
+                                        .unwrap_or(0.8);
+                                    if target > 0.01 {
+                                        Some(((base - cur) / target).clamp(0.0, 1.0))
+                                    } else {
+                                        Some(0.0)
+                                    }
+                                })
+                            }
+                            PlebActivity::Filling => Some(0.5), // approximate
                             _ => None,
                         };
                         if let Some(prog) = progress {
@@ -8317,13 +9575,22 @@ impl App {
                                 1.0,
                                 egui::Color32::from_rgb(30, 30, 30),
                             );
+                            let bar_col = match inner {
+                                PlebActivity::Building(_) => egui::Color32::from_rgb(100, 160, 220),
+                                PlebActivity::Digging => egui::Color32::from_rgb(140, 100, 50),
+                                PlebActivity::Filling => egui::Color32::from_rgb(180, 140, 60),
+                                PlebActivity::Crafting(_, _) => {
+                                    egui::Color32::from_rgb(200, 160, 60)
+                                }
+                                _ => egui::Color32::from_rgb(80, 200, 80),
+                            };
                             label_painter.rect_filled(
                                 egui::Rect::from_min_size(
                                     bar_pos,
                                     egui::Vec2::new(bar_w * prog, bar_h),
                                 ),
                                 1.0,
-                                egui::Color32::from_rgb(80, 200, 80),
+                                bar_col,
                             );
                         }
 
@@ -8502,6 +9769,57 @@ impl App {
                     }
                 }
 
+                // Move mode: path preview
+                if self.move_mode {
+                    if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
+                        let (hx, hy) = self.hover_world;
+                        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                        let goal = (hx.floor() as i32, hy.floor() as i32);
+                        let path = pleb::astar_path_terrain_water_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            &self.water_depth_cpu,
+                            start,
+                            goal,
+                        );
+                        if path.len() >= 2 {
+                            let pc = egui::Color32::from_rgba_unmultiplied(50, 200, 50, 100);
+                            for i in 0..path.len() - 1 {
+                                let sa = to_screen(path[i].0 as f32 + 0.5, path[i].1 as f32 + 0.5);
+                                let sb = to_screen(
+                                    path[i + 1].0 as f32 + 0.5,
+                                    path[i + 1].1 as f32 + 0.5,
+                                );
+                                label_painter.line_segment([sa, sb], egui::Stroke::new(2.0, pc));
+                            }
+                            let d = path.last().unwrap();
+                            label_painter.circle_filled(
+                                to_screen(d.0 as f32 + 0.5, d.1 as f32 + 0.5),
+                                4.0,
+                                egui::Color32::from_rgba_unmultiplied(50, 220, 50, 150),
+                            );
+                        } else if goal != start {
+                            let dp = to_screen(hx, hy);
+                            let rc = egui::Color32::from_rgba_unmultiplied(220, 50, 40, 150);
+                            label_painter.line_segment(
+                                [
+                                    egui::Pos2::new(dp.x - 5.0, dp.y - 5.0),
+                                    egui::Pos2::new(dp.x + 5.0, dp.y + 5.0),
+                                ],
+                                egui::Stroke::new(2.0, rc),
+                            );
+                            label_painter.line_segment(
+                                [
+                                    egui::Pos2::new(dp.x + 5.0, dp.y - 5.0),
+                                    egui::Pos2::new(dp.x - 5.0, dp.y + 5.0),
+                                ],
+                                egui::Stroke::new(2.0, rc),
+                            );
+                        }
+                    }
+                }
+
                 // Grenade charge bar above selected pleb
                 if self.grenade_charging
                     && let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i))
@@ -8534,7 +9852,7 @@ impl App {
                     let dx = hx - pleb.x;
                     let dy = hy - pleb.y;
                     let dist = (dx * dx + dy * dy).sqrt();
-                    let strength = pleb.skills[1] as f32;
+                    let strength = pleb.skills[1].value;
                     let max_range = crate::grenade_max_range(strength, self.grenade_arc);
                     let in_range = dist <= max_range;
 
@@ -9432,6 +10750,13 @@ impl App {
             return;
         };
 
+        // Pleb selected → close build menu (mutually exclusive)
+        if self.build_category.is_some() || self.build_tool != BuildTool::None {
+            self.build_category = None;
+            self.build_tool = BuildTool::None;
+            self.terrain_tool = None;
+        }
+
         // Filter to living friendly plebs
         let friendly: Vec<usize> = indices
             .iter()
@@ -9534,6 +10859,9 @@ impl App {
                 PlebActivity::Filling => "Building berm",
                 PlebActivity::Drinking(_) => "Drinking",
                 PlebActivity::MentalBreak(_, _) => "Mental break",
+                PlebActivity::Butchering(_) => "Butchering",
+                PlebActivity::Cooking(_) => "Cooking",
+                PlebActivity::Fishing(_) => "Fishing",
                 PlebActivity::Staggering(_) => "Staggering",
                 PlebActivity::Crisis(_, _) => "Crisis",
             }
@@ -9575,6 +10903,7 @@ impl App {
 
         // Count tiles
         let mut n_tiles = 2; // portrait + draft
+        n_tiles += 1; // move
         if has_weapon {
             n_tiles += 1; // weapon/attack
         }
@@ -9772,6 +11101,39 @@ impl App {
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            // --- Move [M] ---
+                            {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(tile_size),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                let bg = if self.move_mode {
+                                    egui::Color32::from_rgb(40, 65, 55)
+                                } else {
+                                    default_bg
+                                };
+                                painter.rect_filled(rect, corner, hover_bg(bg, response.hovered()));
+                                painter.text(
+                                    rect.center() + egui::Vec2::new(0.0, -6.0),
+                                    egui::Align2::CENTER_CENTER,
+                                    "\u{1f463}",
+                                    icon_font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    rect.center_bottom() + egui::Vec2::new(0.0, -4.0),
+                                    egui::Align2::CENTER_BOTTOM,
+                                    "Move",
+                                    label_font.clone(),
+                                    label_color,
+                                );
+                                draw_hint(&painter, rect, "M");
+                                if response.clicked() {
+                                    self.move_mode = !self.move_mode;
                                 }
                             }
 
@@ -10064,7 +11426,14 @@ impl App {
                                         if let Some(p) = self.plebs.get_mut(i) {
                                             p.path.clear();
                                             p.path_idx = 0;
-                                            if p.activity == PlebActivity::Walking {
+                                            p.hunt_target = None;
+                                            p.aim_target = None;
+                                            p.aim_pos = None;
+                                            p.aim_progress = 0.0;
+                                            if matches!(
+                                                p.activity,
+                                                PlebActivity::Walking | PlebActivity::Idle
+                                            ) {
                                                 p.activity = PlebActivity::Idle;
                                             }
                                         }
