@@ -220,7 +220,7 @@ impl App {
         match self.game_state {
             GameState::MainMenu => self.draw_main_menu(ctx),
             GameState::MapGen => self.draw_map_gen_screen(ctx),
-            GameState::CharGen => self.draw_chargen_screen(ctx),
+            GameState::CharGen => self.draw_manifest_screen(ctx),
             GameState::Playing => {
                 let bp_ppp = self.ppp();
                 self.draw_resource_bar(ctx);
@@ -1149,6 +1149,307 @@ impl App {
                 }
             }
 
+            self.game_state = GameState::Playing;
+        }
+    }
+
+    fn draw_manifest_screen(&mut self, ctx: &egui::Context) {
+        use crate::cards;
+        use crate::theme::{palette, spacing, text};
+
+        // Dark overlay
+        egui::Area::new(egui::Id::new("manifest_bg"))
+            .anchor(egui::Align2::LEFT_TOP, [0.0, 0.0])
+            .interactable(false)
+            .show(ctx, |ui| {
+                let screen = ctx.content_rect();
+                ui.allocate_exact_size(screen.size(), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_rgb(20, 18, 15));
+            });
+
+        let crew_full = self.manifest_recruited.len() >= 3;
+        let mut recruit_idx: Option<usize> = None;
+        let mut do_pass = false;
+        let mut do_land = false;
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(egui::Color32::TRANSPARENT))
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(20.0);
+                    ui.label(
+                        egui::RichText::new("THE MANIFEST")
+                            .size(22.0)
+                            .strong()
+                            .color(palette::AMBER),
+                    );
+                    ui.label(
+                        egui::RichText::new("Choose your crew for the frontier")
+                            .size(text::BODY)
+                            .color(palette::INK_FAINT),
+                    );
+                    ui.add_space(spacing::LG);
+                });
+
+                ui.horizontal(|ui| {
+                    ui.add_space(30.0);
+
+                    // --- Applicant cards ---
+                    if !crew_full {
+                        let item_reg = item_defs::ItemRegistry::cached();
+                        for (i, card) in self.manifest_applicants.iter().enumerate() {
+                            let resp = cards::draw_card(ui, cards::CardType::Person, 170.0, |ui| {
+                                // Portrait
+                                cards::card_portrait(ui, 154.0, 70.0, |painter, rect| {
+                                    let c = rect.center();
+                                    let shirt_c = egui::Color32::from_rgb(
+                                        (card.appearance.shirt_r * 255.0) as u8,
+                                        (card.appearance.shirt_g * 255.0) as u8,
+                                        (card.appearance.shirt_b * 255.0) as u8,
+                                    );
+                                    let skin_c = egui::Color32::from_rgb(
+                                        (card.appearance.skin_r * 255.0) as u8,
+                                        (card.appearance.skin_g * 255.0) as u8,
+                                        (card.appearance.skin_b * 255.0) as u8,
+                                    );
+                                    let hair_c = egui::Color32::from_rgb(
+                                        (card.appearance.hair_r * 255.0) as u8,
+                                        (card.appearance.hair_g * 255.0) as u8,
+                                        (card.appearance.hair_b * 255.0) as u8,
+                                    );
+                                    // Body
+                                    painter.circle_filled(
+                                        c + egui::Vec2::new(0.0, 10.0),
+                                        14.0,
+                                        shirt_c,
+                                    );
+                                    // Head
+                                    painter.circle_filled(
+                                        c + egui::Vec2::new(0.0, -8.0),
+                                        9.0,
+                                        skin_c,
+                                    );
+                                    // Hair
+                                    painter.circle_filled(
+                                        c + egui::Vec2::new(0.0, -15.0),
+                                        6.0,
+                                        hair_c,
+                                    );
+                                });
+
+                                // Name + backstory
+                                cards::card_title(ui, &card.name);
+                                cards::card_subtitle(ui, card.backstory.name());
+
+                                cards::card_divider(ui);
+
+                                // Top 4 skills
+                                cards::card_section(ui, "SKILLS");
+                                let skill_order = [0, 1, 2, 3, 4, 5]; // show all 6
+                                for &si in &skill_order {
+                                    cards::card_skill_bar(
+                                        ui,
+                                        pleb::SKILL_SHORT[si],
+                                        card.skills[si].value,
+                                        10.0,
+                                        palette::skill_color(si),
+                                    );
+                                }
+
+                                cards::card_divider(ui);
+
+                                // Traits
+                                cards::card_section(ui, "TRAITS");
+                                ui.horizontal_wrapped(|ui| {
+                                    if let Some(ref t) = card.trait_visible {
+                                        cards::card_trait_tag(ui, t.name(), true);
+                                    }
+                                    cards::card_hidden_trait(ui);
+                                });
+
+                                cards::card_divider(ui);
+
+                                // Gear
+                                cards::card_section(ui, "GEAR");
+                                ui.horizontal_wrapped(|ui| {
+                                    for &item_id in &card.gear_belt {
+                                        if let Some(def) = item_reg.get(item_id) {
+                                            ui.label(egui::RichText::new(&def.icon).size(14.0))
+                                                .on_hover_text(&def.name);
+                                        }
+                                    }
+                                    for &(item_id, count) in &card.gear_inv {
+                                        if let Some(def) = item_reg.get(item_id) {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{}×{}",
+                                                    def.icon, count
+                                                ))
+                                                .size(10.0)
+                                                .color(palette::INK_DIM),
+                                            );
+                                        }
+                                    }
+                                });
+
+                                // Quote
+                                cards::card_quote(ui, card.quote);
+
+                                ui.add_space(spacing::SM);
+
+                                // Recruit button
+                                if cards::card_button(ui, "RECRUIT") {
+                                    // handled below
+                                }
+                            });
+
+                            if resp.clicked() {
+                                recruit_idx = Some(i);
+                            }
+
+                            ui.add_space(spacing::MD);
+                        }
+                    } else {
+                        // All recruited — show "ready to land"
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(60.0);
+                            ui.label(
+                                egui::RichText::new("Crew assembled.")
+                                    .size(16.0)
+                                    .color(palette::AMBER),
+                            );
+                            ui.add_space(spacing::LG);
+                        });
+                    }
+
+                    ui.add_space(30.0);
+
+                    // --- Right panel: recruited crew + actions ---
+                    ui.vertical(|ui| {
+                        ui.set_min_width(160.0);
+                        ui.label(
+                            egui::RichText::new("CREW")
+                                .size(text::HEADING)
+                                .strong()
+                                .color(palette::AMBER),
+                        );
+                        ui.add_space(spacing::SM);
+
+                        for (i, card) in self.manifest_recruited.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{}.", i + 1))
+                                        .size(text::BODY)
+                                        .color(palette::INK_FAINT),
+                                );
+                                ui.label(
+                                    egui::RichText::new(&card.name)
+                                        .size(text::BODY)
+                                        .strong()
+                                        .color(palette::WHITE),
+                                );
+                                ui.label(
+                                    egui::RichText::new(card.backstory.name())
+                                        .size(text::SMALL)
+                                        .color(palette::INK_FAINT),
+                                );
+                            });
+                        }
+                        for i in self.manifest_recruited.len()..3 {
+                            ui.label(
+                                egui::RichText::new(format!("{}. ───", i + 1))
+                                    .size(text::BODY)
+                                    .color(egui::Color32::from_gray(50)),
+                            );
+                        }
+
+                        ui.add_space(spacing::XL);
+
+                        // Pass button
+                        if !crew_full {
+                            let pass_label = format!("PASS ({})", self.manifest_passes);
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(pass_label)
+                                            .size(text::BODY)
+                                            .color(palette::INK),
+                                    )
+                                    .fill(palette::PARCHMENT_DARK)
+                                    .corner_radius(2.0),
+                                )
+                                .clicked()
+                            {
+                                do_pass = true;
+                            }
+                        }
+
+                        ui.add_space(spacing::MD);
+
+                        // Land button (only when crew full)
+                        if crew_full {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("LAND")
+                                            .size(14.0)
+                                            .strong()
+                                            .color(palette::INK),
+                                    )
+                                    .fill(palette::AMBER)
+                                    .corner_radius(3.0)
+                                    .min_size(egui::Vec2::new(120.0, 32.0)),
+                                )
+                                .clicked()
+                            {
+                                do_land = true;
+                            }
+                        }
+                    });
+                });
+            });
+
+        // --- Handle actions ---
+        if let Some(idx) = recruit_idx {
+            if idx < self.manifest_applicants.len() && self.manifest_recruited.len() < 3 {
+                let card = self.manifest_applicants.remove(idx);
+                self.manifest_recruited.push(card);
+                // If not full yet, deal new cards
+                if self.manifest_recruited.len() < 3 {
+                    self.manifest_applicants.clear();
+                    self.manifest_seed += 100;
+                    for i in 0..3 {
+                        self.manifest_applicants
+                            .push(ManifestCard::generate(self.manifest_seed + i));
+                    }
+                }
+            }
+        }
+        if do_pass {
+            self.manifest_passes += 1;
+            self.manifest_applicants.clear();
+            self.manifest_seed += 100;
+            for i in 0..3 {
+                self.manifest_applicants
+                    .push(ManifestCard::generate(self.manifest_seed + i));
+            }
+        }
+        if do_land {
+            // Create plebs from recruited crew
+            let cx = (GRID_W / 2) as f32 + 0.5;
+            let cy = (GRID_H / 2) as f32 + 2.5;
+            self.plebs.clear();
+            for (i, card) in self.manifest_recruited.iter().enumerate() {
+                let px = cx + (i as f32 - 1.0);
+                let mut p = card.to_pleb(i, px, cy);
+                if i == 0 {
+                    p.is_leader = true;
+                }
+                self.plebs.push(p);
+            }
+            self.next_pleb_id = self.plebs.len();
+            self.selected_pleb = Some(0);
             self.game_state = GameState::Playing;
         }
     }
@@ -10302,20 +10603,31 @@ impl App {
         if self.notifications.is_empty() {
             return;
         }
-        // Auto-expire after 10 seconds, remove dismissed
         let now = self.time_of_day;
+        // Expiry: threats persist until clicked, warnings 12s, info/positive 7s
         self.notifications.retain(|n| {
-            !n.dismissed && {
-                let age = (now - n.time_created).abs();
-                age < 10.0 || (now < n.time_created) // handle day wrap
+            if n.dismissed {
+                return false;
+            }
+            let age = (now - n.time_created).abs();
+            if now < n.time_created {
+                return true; // day wrapped
+            }
+            match n.category {
+                types::NotifCategory::Threat => true, // sticky until dismissed
+                types::NotifCategory::Warning => age < 12.0,
+                _ => age < 7.0,
             }
         });
 
         let mut dismiss_id = None;
-        // Stack from top-right, below the layers bar
-        let start = self.notifications.len().saturating_sub(8);
-        let notifs: Vec<(u32, &'static str, String, String, egui::Color32)> = self.notifications
-            [start..]
+        // Left edge, show max 3 recent notes + overflow badge
+        let max_visible = 3;
+        let total = self.notifications.len();
+        let overflow = total.saturating_sub(max_visible);
+        let start = total.saturating_sub(max_visible);
+        let notifs: Vec<(u32, &'static str, String, String, types::NotifCategory, f32)> = self
+            .notifications[start..]
             .iter()
             .map(|n| {
                 (
@@ -10323,47 +10635,111 @@ impl App {
                     n.icon,
                     n.title.clone(),
                     n.description.clone(),
-                    n.category.color(),
+                    n.category,
+                    n.time_created,
                 )
             })
             .collect();
-        for (i, (id, icon, title, desc, color)) in notifs.iter().enumerate() {
-            let y_offset = 60.0 + i as f32 * 52.0;
+
+        for (i, (id, icon, title, desc, category, created)) in notifs.iter().enumerate() {
+            let y_offset = 60.0 + i as f32 * 48.0;
+            // Random jitter per note for slight visual disorder
+            let hash = id.wrapping_mul(2654435761);
+            let x_jitter = ((hash & 0xFF) as f32 / 255.0 - 0.5) * 4.0; // ±2px
+
+            // Fade: new notes are opaque, old ones dim
+            let age = (now - created).abs();
+            let alpha = if *category == types::NotifCategory::Threat {
+                // Threats pulse
+                let pulse = (age * 3.0).sin() * 0.05 + 0.95;
+                (pulse * 255.0) as u8
+            } else {
+                let fade_start = match category {
+                    types::NotifCategory::Warning => 8.0,
+                    _ => 4.0,
+                };
+                if age > fade_start {
+                    let t = ((age - fade_start) / 3.0).min(1.0);
+                    (255.0 * (1.0 - t * 0.6)) as u8
+                } else {
+                    255
+                }
+            };
+
+            // Seal color by category
+            let seal_color = match category {
+                types::NotifCategory::Threat => egui::Color32::from_rgb(180, 40, 40),
+                types::NotifCategory::Warning => egui::Color32::from_rgb(190, 160, 50),
+                types::NotifCategory::Positive => egui::Color32::from_rgb(50, 150, 70),
+                types::NotifCategory::Info => egui::Color32::from_rgb(120, 120, 130),
+            };
+
             egui::Area::new(egui::Id::new(("notif_card", *id)))
-                .anchor(egui::Align2::RIGHT_TOP, [-10.0, y_offset])
+                .anchor(egui::Align2::LEFT_TOP, [8.0 + x_jitter, y_offset])
                 .interactable(true)
                 .show(ctx, |ui| {
+                    // Parchment background
+                    let parchment = egui::Color32::from_rgba_unmultiplied(235, 225, 205, alpha);
+                    let border = egui::Color32::from_rgba_unmultiplied(170, 155, 130, alpha);
+
                     let resp = egui::Frame::NONE
-                        .fill(egui::Color32::from_rgba_unmultiplied(
-                            color.r(),
-                            color.g(),
-                            color.b(),
-                            210,
-                        ))
-                        .corner_radius(4.0)
-                        .inner_margin(6.0)
+                        .fill(parchment)
+                        .stroke(egui::Stroke::new(0.5, border))
+                        .corner_radius(2.0)
+                        .inner_margin(egui::Margin {
+                            left: 6,
+                            right: 8,
+                            top: 4,
+                            bottom: 4,
+                        })
                         .show(ui, |ui| {
-                            ui.set_max_width(220.0);
+                            ui.set_max_width(200.0);
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(*icon).size(14.0));
+                                // Seal/mark
+                                let (seal_rect, _) = ui.allocate_exact_size(
+                                    egui::Vec2::new(8.0, 8.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter_at(seal_rect).circle_filled(
+                                    seal_rect.center(),
+                                    4.0,
+                                    seal_color,
+                                );
+                                // Icon + text
+                                ui.label(egui::RichText::new(*icon).size(12.0).color(
+                                    egui::Color32::from_rgba_unmultiplied(60, 50, 40, alpha),
+                                ));
                                 ui.vertical(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(title)
-                                            .strong()
-                                            .size(10.0)
-                                            .color(egui::Color32::WHITE),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(desc)
-                                            .size(9.0)
-                                            .color(egui::Color32::from_gray(215)),
-                                    );
+                                    ui.label(egui::RichText::new(title).strong().size(9.5).color(
+                                        egui::Color32::from_rgba_unmultiplied(40, 35, 25, alpha),
+                                    ));
+                                    if !desc.is_empty() {
+                                        ui.label(egui::RichText::new(desc).size(8.5).color(
+                                            egui::Color32::from_rgba_unmultiplied(
+                                                90, 80, 65, alpha,
+                                            ),
+                                        ));
+                                    }
                                 });
                             });
                         });
-                    if resp.response.secondary_clicked() {
+                    if resp.response.clicked() || resp.response.secondary_clicked() {
                         dismiss_id = Some(*id);
                     }
+                });
+        }
+        // Overflow badge
+        if overflow > 0 {
+            let badge_y = 60.0 + notifs.len() as f32 * 48.0;
+            egui::Area::new(egui::Id::new("notif_overflow"))
+                .anchor(egui::Align2::LEFT_TOP, [10.0, badge_y])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("... +{} more", overflow))
+                            .size(8.0)
+                            .color(egui::Color32::from_rgba_unmultiplied(140, 130, 110, 180)),
+                    );
                 });
         }
         if let Some(id) = dismiss_id

@@ -14,9 +14,11 @@ macro_rules! bt_is {
 
 mod audio;
 mod block_defs;
+mod cards;
 mod creature_defs;
 mod creatures;
 mod grid;
+mod theme;
 pub mod item_defs;
 mod materials;
 pub mod recipe_defs;
@@ -132,6 +134,146 @@ const DRAG_THRESHOLD: f64 = 3.0; // pixels before drag is detected
 const CAMERA_START_HOUR: f32 = 8.0; // game starts at 08:00
 const DEFAULT_WINDOW_SIZE: (u32, u32) = (1440, 900);
 const WINDOW_SCALE: f32 = 0.75; // fraction of monitor size
+
+/// A single applicant card for the Manifest crew recruitment screen.
+#[derive(Clone)]
+struct ManifestCard {
+    name: String,
+    backstory: Backstory,
+    trait_visible: Option<PlebTrait>,
+    appearance: pleb::PlebAppearance,
+    skills: [pleb::SkillLevel; pleb::NUM_SKILLS],
+    gear_belt: Vec<u16>,       // item IDs for belt
+    gear_inv: Vec<(u16, u16)>, // (item_id, count) for inventory
+    quote: &'static str,
+}
+
+impl ManifestCard {
+    fn generate(seed: u32) -> Self {
+        let h = |s: u32, off: u32| -> u32 {
+            s.wrapping_mul(2654435761)
+                .wrapping_add(off.wrapping_mul(1013904223))
+                >> 16
+        };
+        let hash = h(seed, 0);
+
+        // Random backstory
+        let backstories = Backstory::ALL;
+        let bs = backstories[(hash as usize) % backstories.len()];
+
+        // Random appearance
+        let appearance = pleb::PlebAppearance::random(seed);
+
+        // Random name
+        let name = random_name(seed);
+
+        // Skills from backstory + random aptitudes
+        let old_skills = bs.skills();
+        let skills = std::array::from_fn(|i| {
+            let apt_raw = h(seed, (i + 10) as u32) % 4;
+            let aptitude = apt_raw as i8 - 1;
+            pleb::SkillLevel::from_legacy(old_skills[i], aptitude)
+        });
+
+        // 70% chance visible trait
+        let trait_visible = if (h(seed, 20) % 100) < 70 {
+            let traits = PlebTrait::ALL;
+            Some(traits[(h(seed, 21) as usize) % traits.len()])
+        } else {
+            None
+        };
+
+        // Starting gear by backstory
+        let (gear_belt, gear_inv, quote) = match bs {
+            Backstory::Sheriff => (
+                vec![item_defs::ITEM_PISTOL, item_defs::ITEM_KNIFE],
+                vec![(item_defs::ITEM_PISTOL_ROUNDS, 18)],
+                "Kept the peace in Dry Gulch. Until the peace kept itself.",
+            ),
+            Backstory::Prospector => (
+                vec![item_defs::ITEM_STONE_PICK, item_defs::ITEM_STONE_AXE],
+                vec![],
+                "Spent 20 years looking for gold. Found mostly dirt.",
+            ),
+            Backstory::RanchHand => (
+                vec![item_defs::ITEM_WOODEN_SHOVEL, item_defs::ITEM_KNIFE],
+                vec![(item_defs::ITEM_BERRIES, 5)],
+                "Could rope a steer at 50 paces. Cows, less so.",
+            ),
+            Backstory::Mechanic => (
+                vec![item_defs::ITEM_STONE_AXE, item_defs::ITEM_STONE_PICK],
+                vec![(item_defs::ITEM_SCRAP_WOOD, 5)],
+                "If it's broke, she'll fix it. If it ain't, she'll improve it.",
+            ),
+            Backstory::FrontierDoc => (
+                vec![item_defs::ITEM_KNIFE],
+                vec![(item_defs::ITEM_BERRIES, 5), (item_defs::ITEM_FIBER, 3)],
+                "Lost his license. Kept his scalpel.",
+            ),
+            Backstory::Outlaw => (
+                vec![item_defs::ITEM_PISTOL, item_defs::ITEM_KNIFE],
+                vec![(item_defs::ITEM_PISTOL_ROUNDS, 6)],
+                "Three counties want him. Fourth one got him.",
+            ),
+            Backstory::Preacher => (
+                vec![item_defs::ITEM_WOODEN_SHOVEL],
+                vec![(item_defs::ITEM_BERRIES, 10)],
+                "Came to save souls. Staying to save lives.",
+            ),
+            Backstory::Drifter => (
+                vec![item_defs::ITEM_KNIFE, item_defs::ITEM_FISHING_LINE],
+                vec![],
+                "No past worth mentioning. No future worth planning.",
+            ),
+            Backstory::Engineer => (
+                vec![item_defs::ITEM_STONE_AXE, item_defs::ITEM_STONE_PICK],
+                vec![(item_defs::ITEM_SCRAP_WOOD, 5)],
+                "Built bridges on three worlds. Burned one.",
+            ),
+            Backstory::Scout => (
+                vec![item_defs::ITEM_KNIFE, item_defs::ITEM_FISHING_LINE],
+                vec![(item_defs::ITEM_FIBER, 3)],
+                "Knows the land better than most know themselves.",
+            ),
+        };
+
+        ManifestCard {
+            name,
+            backstory: bs,
+            trait_visible,
+            appearance,
+            skills,
+            gear_belt,
+            gear_inv,
+            quote,
+        }
+    }
+
+    /// Convert this card into a Pleb at the given position.
+    fn to_pleb(&self, id: usize, x: f32, y: f32) -> Pleb {
+        let mut p = Pleb::new(id, self.name.clone(), x, y, id as u32 * 7919 + 42);
+        p.appearance = self.appearance.clone();
+        p.backstory_name = self.backstory.name().to_string();
+        p.trait_name = self.trait_visible.map(|t| t.name().to_string());
+        p.skills = self.skills.clone();
+        p.headlight_mode = 2;
+        p.needs.hunger = 0.6; // landing shock
+        // Equip belt + gear
+        p.equipment.equip_belt(item_defs::ITEM_FIBER_BELT);
+        for &item_id in &self.gear_belt {
+            p.equipment.add_to_belt(item_id);
+        }
+        for &(item_id, count) in &self.gear_inv {
+            p.inventory.add(item_id, count);
+        }
+        // Set ammo if has pistol
+        if self.gear_belt.contains(&item_defs::ITEM_PISTOL) {
+            p.ammo_loaded = 6;
+        }
+        p.update_equipped_weapon();
+        p
+    }
+}
 
 // --- Application state ---
 struct App {
@@ -348,6 +490,11 @@ struct App {
     chargen_age: u8,
     chargen_trait: Option<PlebTrait>,
     chargen_preview_angle: f32, // rotating preview angle
+    // Manifest (card-based crew recruitment)
+    manifest_applicants: Vec<ManifestCard>,
+    manifest_recruited: Vec<ManifestCard>,
+    manifest_passes: u32,
+    manifest_seed: u32,
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Entryway position for hollow rect drag (shown differently in preview)
@@ -857,6 +1004,14 @@ impl App {
             chargen_age: 32,
             chargen_trait: None,
             chargen_preview_angle: 0.0,
+            manifest_applicants: vec![
+                ManifestCard::generate(1001),
+                ManifestCard::generate(2002),
+                ManifestCard::generate(3003),
+            ],
+            manifest_recruited: Vec::new(),
+            manifest_passes: 0,
+            manifest_seed: 4004,
             diag_preview: Vec::new(),
             drag_entryway: None,
             entry_side: 0,
