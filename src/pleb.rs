@@ -3,6 +3,142 @@
 use crate::grid::*;
 use crate::materials::{NUM_MATERIALS, build_material_table};
 use crate::needs::PlebNeeds;
+
+/// Skill domain indices
+pub const SKILL_SHOOTING: usize = 0;
+pub const SKILL_MELEE: usize = 1;
+pub const SKILL_CRAFTING: usize = 2;
+pub const SKILL_FARMING: usize = 3;
+pub const SKILL_MEDICAL: usize = 4;
+pub const SKILL_CONSTRUCTION: usize = 5;
+pub const NUM_SKILLS: usize = 6;
+
+pub const SKILL_NAMES: [&str; NUM_SKILLS] = [
+    "Shooting",
+    "Melee",
+    "Crafting",
+    "Farming",
+    "Medical",
+    "Construction",
+];
+
+pub const SKILL_SHORT: [&str; NUM_SKILLS] = ["SHT", "MEL", "CRF", "FRM", "MED", "BLD"];
+
+/// A single skill with continuous 0.0-10.0 level, XP tracking, and hidden aptitude.
+#[derive(Clone, Debug)]
+pub struct SkillLevel {
+    /// Current level (0.0-10.0)
+    pub value: f32,
+    /// Accumulated XP toward next 0.1 increment
+    pub xp: f32,
+    /// Hidden aptitude (-2 to +3): determines learning speed and soft ceiling
+    pub aptitude: i8,
+    /// Whether the player has seen an aptitude reveal event for this skill
+    pub aptitude_known: bool,
+}
+
+impl Default for SkillLevel {
+    fn default() -> Self {
+        Self {
+            value: 0.0,
+            xp: 0.0,
+            aptitude: 0,
+            aptitude_known: false,
+        }
+    }
+}
+
+impl SkillLevel {
+    pub fn new(value: f32, aptitude: i8) -> Self {
+        Self {
+            value: value.clamp(0.0, 10.0),
+            xp: 0.0,
+            aptitude,
+            aptitude_known: false,
+        }
+    }
+
+    /// Create from old u8 skill value (1-10 → 1.0-7.0 range)
+    pub fn from_legacy(old: u8, aptitude: i8) -> Self {
+        // Old skill 1→1.0, 5→4.0, 10→7.0
+        let value = if old <= 1 {
+            1.0
+        } else {
+            1.0 + (old as f32 - 1.0) * 0.667
+        };
+        Self::new(value, aptitude)
+    }
+
+    /// Soft cap based on aptitude: 7.0 + aptitude * 1.0
+    pub fn soft_cap(&self) -> f32 {
+        (7.0 + self.aptitude as f32 * 1.0).clamp(4.0, 10.0)
+    }
+
+    /// XP multiplier based on proximity to soft cap (asymptotic slowdown)
+    pub fn aptitude_xp_factor(&self) -> f32 {
+        let cap = self.soft_cap();
+        let ratio = self.value / cap;
+        (1.0 - ratio.powi(4)).max(0.001)
+    }
+
+    /// Asymptotic cost multiplier near 10.0 (steep but finite)
+    pub fn asymptotic_cost(&self) -> f32 {
+        1.0 + (self.value / 10.0).powi(8) * 500.0
+    }
+
+    /// Total XP cost for the next 0.1 level increment
+    pub fn xp_for_next(&self) -> f32 {
+        let base = 10.0; // base XP per 0.1 level at level 0
+        let level_cost = base * 2.0f32.powf(self.value); // exponential
+        level_cost * self.asymptotic_cost() / self.aptitude_xp_factor().max(0.01)
+    }
+
+    /// Add XP, potentially leveling up. Returns the old value if a level-up occurred.
+    pub fn add_xp(&mut self, raw_xp: f32) -> Option<f32> {
+        let old_whole = self.value as u32;
+        let needed = self.xp_for_next();
+        self.xp += raw_xp;
+        let mut leveled = false;
+        while self.xp >= needed && self.value < 9.99 {
+            self.xp -= needed;
+            self.value = (self.value + 0.1).min(10.0);
+            leveled = true;
+            // Recompute for next increment (cost changes with level)
+            break; // one increment per call to avoid runaway
+        }
+        if leveled && (self.value as u32 > old_whole) {
+            Some(self.value)
+        } else {
+            None
+        }
+    }
+
+    /// Speed multiplier for this skill level
+    pub fn speed_mult(&self) -> f32 {
+        let v = self.value;
+        0.4 + v * 0.06 + (v - 5.0).max(0.0) * 0.04 + (v - 8.0).max(0.0) * 0.06
+    }
+
+    /// Failure chance for this skill level
+    pub fn failure_chance(&self) -> f32 {
+        (0.6 - self.value * 0.08 - (self.value - 4.0).max(0.0) * 0.04).max(0.0)
+    }
+
+    /// Descriptor string for this level
+    pub fn descriptor(&self) -> &'static str {
+        match self.value as u32 {
+            0 => "Novice",
+            1 => "Beginner",
+            2..=3 => "Apprentice",
+            4..=5 => "Journeyman",
+            6 => "Skilled",
+            7 => "Proficient",
+            8 => "Expert",
+            9 => "Master",
+            _ => "Legendary",
+        }
+    }
+}
 use std::sync::OnceLock;
 
 /// Combat rank — derived from firefight experience and kills.
@@ -87,6 +223,8 @@ pub enum PlebCommand {
     DigClay(i32, i32),
     HandCraft(u16),
     GatherBranches(i32, i32),
+    Butcher(i32, i32),
+    Fish(i32, i32),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,6 +241,9 @@ pub enum PlebActivity {
     Digging,                           // digging terrain at work_target
     Filling,                           // dumping dirt at berm zone work_target
     Drinking(f32),                     // progress 0-1, drinking at a well
+    Butchering(f32),                   // progress 0-1, butchering a dead creature
+    Cooking(f32),                      // progress 0-1, cooking food at a campfire
+    Fishing(f32),                      // progress 0-1, fishing at water's edge (~20s per attempt)
     Staggering(f32),                   // knockback recovery timer (seconds remaining)
     MentalBreak(MentalBreakKind, f32), // (kind, seconds remaining)
     /// Crisis override — pleb acts autonomously, ignoring player input.
@@ -135,6 +276,185 @@ impl PlebActivity {
 
 pub use crate::resources::PlebInventory;
 
+/// Maximum belt slots (reinforced belt)
+pub const MAX_BELT_SLOTS: usize = 6;
+
+/// Equipment worn on a pleb's body.
+#[derive(Clone, Debug)]
+pub struct PlebEquipment {
+    /// Belt item slots (None = empty). Length = belt_capacity (0 if no belt).
+    pub belt: [Option<u16>; MAX_BELT_SLOTS],
+    /// How many belt slots are available (0 = no belt, 3 = fiber belt, 4 = leather, 6 = reinforced)
+    pub belt_capacity: u8,
+    /// Item ID of the belt itself (0 = no belt)
+    pub belt_item: u16,
+    /// Currently active (in-hand) item drawn from belt. None = bare hands.
+    pub active_item: Option<u16>,
+}
+
+impl Default for PlebEquipment {
+    fn default() -> Self {
+        Self {
+            belt: [None; MAX_BELT_SLOTS],
+            belt_capacity: 0,
+            belt_item: 0,
+            active_item: None,
+        }
+    }
+}
+
+impl PlebEquipment {
+    /// Equip a belt, setting capacity from item def.
+    pub fn equip_belt(&mut self, belt_item_id: u16) {
+        let reg = crate::item_defs::ItemRegistry::cached();
+        if let Some(def) = reg.get(belt_item_id) {
+            if def.is_belt {
+                self.belt_item = belt_item_id;
+                self.belt_capacity = def.belt_slots.max(1);
+            }
+        }
+    }
+
+    /// Try to add an item to the first empty belt slot. Returns true on success.
+    pub fn add_to_belt(&mut self, item_id: u16) -> bool {
+        for i in 0..self.belt_capacity as usize {
+            if self.belt[i].is_none() {
+                self.belt[i] = Some(item_id);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Remove an item from the belt by item_id. Returns true if found and removed.
+    pub fn remove_from_belt(&mut self, item_id: u16) -> bool {
+        for i in 0..self.belt_capacity as usize {
+            if self.belt[i] == Some(item_id) {
+                self.belt[i] = None;
+                if self.active_item == Some(item_id) {
+                    self.active_item = None;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if a specific item is on the belt.
+    pub fn has_on_belt(&self, item_id: u16) -> bool {
+        self.belt[..self.belt_capacity as usize]
+            .iter()
+            .any(|s| *s == Some(item_id))
+    }
+
+    /// Check if any item with a given tool_type is on the belt.
+    pub fn has_tool(&self, tool_type: &str) -> bool {
+        let reg = crate::item_defs::ItemRegistry::cached();
+        self.belt[..self.belt_capacity as usize].iter().any(|s| {
+            s.and_then(|id| reg.get(id))
+                .is_some_and(|d| d.has_tool_type(tool_type))
+        })
+    }
+
+    /// Find and draw the best item for a tool_type. Returns item_id if found.
+    pub fn draw_tool(&mut self, tool_type: &str) -> Option<u16> {
+        let reg = crate::item_defs::ItemRegistry::cached();
+        for i in 0..self.belt_capacity as usize {
+            if let Some(id) = self.belt[i] {
+                if let Some(def) = reg.get(id) {
+                    if def.has_tool_type(tool_type) {
+                        self.active_item = Some(id);
+                        return Some(id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Draw the best ranged weapon from belt.
+    pub fn draw_ranged(&mut self) -> Option<u16> {
+        let reg = crate::item_defs::ItemRegistry::cached();
+        for i in 0..self.belt_capacity as usize {
+            if let Some(id) = self.belt[i] {
+                if let Some(def) = reg.get(id) {
+                    if def.is_ranged_weapon() {
+                        self.active_item = Some(id);
+                        return Some(id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Draw the best melee weapon from belt.
+    pub fn draw_melee(&mut self) -> Option<u16> {
+        let reg = crate::item_defs::ItemRegistry::cached();
+        let mut best: Option<(u16, f32)> = None;
+        for i in 0..self.belt_capacity as usize {
+            if let Some(id) = self.belt[i] {
+                if let Some(def) = reg.get(id) {
+                    if def.is_melee_weapon() && best.map_or(true, |(_, bd)| def.melee_damage > bd) {
+                        best = Some((id, def.melee_damage));
+                    }
+                }
+            }
+        }
+        if let Some((id, _)) = best {
+            self.active_item = Some(id);
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    /// Holster: put active item away.
+    pub fn holster(&mut self) {
+        self.active_item = None;
+    }
+
+    /// Check if any belt item matches an item_id (for haul protection).
+    pub fn is_equipped(&self, item_id: u16) -> bool {
+        self.belt_item == item_id
+            || self.belt[..self.belt_capacity as usize]
+                .iter()
+                .any(|s| *s == Some(item_id))
+    }
+
+    /// Get all occupied belt slots as (slot_index, item_id).
+    pub fn belt_items(&self) -> Vec<(usize, u16)> {
+        self.belt[..self.belt_capacity as usize]
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.map(|id| (i, id)))
+            .collect()
+    }
+
+    /// Auto-equip: move weapons/tools from inventory to belt.
+    pub fn auto_migrate_from_inventory(&mut self, inventory: &mut crate::resources::PlebInventory) {
+        if self.belt_capacity == 0 {
+            return;
+        }
+        let reg = crate::item_defs::ItemRegistry::cached();
+        // Collect item IDs to move (scan inventory for belt-worthy items)
+        let to_move: Vec<u16> = inventory
+            .stacks
+            .iter()
+            .filter(|s| {
+                reg.get(s.item_id)
+                    .is_some_and(|d| d.is_belt_item() && s.count == 1)
+            })
+            .map(|s| s.item_id)
+            .collect();
+        for id in to_move {
+            if self.add_to_belt(id) {
+                inventory.remove(id, 1);
+            }
+        }
+    }
+}
+
 /// Floating bubble above a pleb's head.
 #[derive(Clone, Debug)]
 pub enum BubbleKind {
@@ -142,6 +462,8 @@ pub enum BubbleKind {
     Icon(char, [u8; 3]),
     /// Short text string
     Text(String),
+    /// Thought bubble: internal feeling (rendered as cloud, not speech)
+    Thought(String),
 }
 
 /// Priority tiers for bubbles (higher = more important, replaces lower).
@@ -152,6 +474,7 @@ impl BubbleKind {
             BubbleKind::Icon('?', _) => 1, // curious
             BubbleKind::Text(_) => 2,      // action text
             BubbleKind::Icon(_, _) => 2,   // other icons
+            BubbleKind::Thought(_) => 1,   // internal thoughts (low priority)
         }
     }
 }
@@ -299,9 +622,9 @@ pub struct Pleb {
     pub harvest_target: Option<(i32, i32)>, // grid coords of bush being harvested
     pub haul_target: Option<(i32, i32)>,    // grid coords of storage crate to deliver to
     pub is_enemy: bool,
-    pub backstory_name: String,     // display name from Backstory
-    pub trait_name: Option<String>, // display name from PlebTrait
-    pub skills: [u8; 6],            // [shooting, melee, crafting, farming, medical, construction]
+    pub backstory_name: String,           // display name from Backstory
+    pub trait_name: Option<String>,       // display name from PlebTrait
+    pub skills: [SkillLevel; NUM_SKILLS], // [shooting, melee, crafting, farming, medical, construction]
     pub wander_timer: f32,
     pub work_target: Option<(i32, i32)>, // position of current work task
     pub schedule: PlebSchedule,
@@ -312,8 +635,9 @@ pub struct Pleb {
     pub aim_target: Option<usize>,         // index of enemy pleb being targeted
     pub aim_pos: Option<(f32, f32)>,       // manual fire-at-position (overrides aim_target)
     pub aim_progress: f32,                 // 0.0 = just started aiming, 1.0 = ready to fire
-    pub equipped_weapon: Option<u16>,      // item_id of held weapon (melee or ranged)
+    pub equipped_weapon: Option<u16>,      // DEPRECATED: delegates to equipment.active_item
     pub prefer_ranged: bool,               // true = use pistol, false = use melee
+    pub equipment: PlebEquipment,          // belt, active item, tool access
     pub swing_progress: f32,               // melee swing: 0.0 = idle, 1.0 = strike
     pub bleeding: f32,                     // blood loss rate (0.0–1.0)
     pub blood_drop_timer: f32,             // countdown to next blood drop on ground
@@ -337,6 +661,14 @@ pub struct Pleb {
     pub combat_participated: bool, // had aim_target during current engagement
     pub no_enemy_timer: f32, // seconds since last enemy in range (for firefight end detection)
     pub command_cooldown: f32, // seconds until next command shout allowed
+    pub hunt_target: Option<usize>, // creature index being hunted (stalk + shoot)
+    pub nauseous_timer: f32, // >0 = nauseous from raw food (seconds remaining)
+    /// Tracks which need-emote thresholds have fired (reset when need recovers).
+    /// Bits: 0=hunger_low, 1=hunger_crit, 2=thirst_low, 3=thirst_crit,
+    ///       4=rest_low, 5=rest_crit, 6=warmth_low, 7=warmth_crit
+    pub need_emote_flags: u8,
+    /// Per-pleb event log (most recent first, capped)
+    pub event_log: Vec<(f32, String)>, // (game_time, message)
 }
 
 /// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
@@ -405,15 +737,13 @@ impl Pleb {
                 .wrapping_add(off.wrapping_mul(1013904223))
                 >> 16
         };
-        // Random skill levels 1-7
-        let skills = [
-            (h(seed, 1) % 7 + 1) as u8,
-            (h(seed, 2) % 7 + 1) as u8,
-            (h(seed, 3) % 7 + 1) as u8,
-            (h(seed, 4) % 7 + 1) as u8,
-            (h(seed, 5) % 7 + 1) as u8,
-            (h(seed, 6) % 7 + 1) as u8,
-        ];
+        // Random skill levels (1-7 legacy → 1.0-5.0 new) + random aptitudes (-1 to +2)
+        let skills = std::array::from_fn(|i| {
+            let old_val = (h(seed, (i + 1) as u32) % 7 + 1) as u8;
+            let apt_raw = h(seed, (i + 10) as u32) % 4; // 0,1,2,3 → -1,0,+1,+2
+            let aptitude = apt_raw as i8 - 1;
+            SkillLevel::from_legacy(old_val, aptitude)
+        });
 
         Pleb {
             id,
@@ -454,6 +784,7 @@ impl Pleb {
             aim_progress: 0.0,
             equipped_weapon: None,
             prefer_ranged: true,
+            equipment: PlebEquipment::default(),
             swing_progress: 0.0,
             bleeding: 0.0,
             blood_drop_timer: 0.0,
@@ -477,6 +808,18 @@ impl Pleb {
             combat_participated: false,
             no_enemy_timer: 0.0,
             command_cooldown: 0.0,
+            hunt_target: None,
+            nauseous_timer: 0.0,
+            need_emote_flags: 0,
+            event_log: Vec::new(),
+        }
+    }
+
+    /// Log an event to this pleb's personal log (capped at 50 entries).
+    pub fn log_event(&mut self, time: f32, msg: String) {
+        self.event_log.push((time, msg));
+        if self.event_log.len() > 50 {
+            self.event_log.remove(0);
         }
     }
 
@@ -489,11 +832,11 @@ impl Pleb {
             selected: if selected { 1.0 } else { 0.0 },
             torch: if self.torch_on { 1.0 } else { 0.0 },
             headlight: self.headlight_mode as f32, // 0=off, 1=wide, 2=normal, 3=focused
-            carrying: if self.inventory.is_carrying() {
-                1.0
-            } else {
-                0.0
-            },
+            carrying: self
+                .inventory
+                .carrying_type()
+                .map(|id| id as f32 + 1.0) // +1 so 0 = not carrying
+                .unwrap_or(0.0),
             health: self.needs.health,
             skin_r: a.skin_r,
             skin_g: a.skin_g,
@@ -526,38 +869,182 @@ impl Pleb {
         }
     }
 
-    /// Auto-equip the best weapon from inventory based on prefer_ranged toggle.
+    /// Auto-equip the best weapon based on prefer_ranged toggle.
+    /// Draws from belt (equipment system). Syncs deprecated equipped_weapon field.
     pub fn update_equipped_weapon(&mut self) {
-        if !self.drafted {
-            self.equipped_weapon = None;
-            self.swing_progress = 0.0;
-            self.aim_progress = 0.0;
-            return;
-        }
-        let reg = crate::item_defs::ItemRegistry::cached();
-        if self.prefer_ranged {
-            // Look for ranged weapon first
-            for stack in &self.inventory.stacks {
-                if let Some(def) = reg.get(stack.item_id) {
-                    if def.is_ranged_weapon() {
-                        self.equipped_weapon = Some(stack.item_id);
-                        self.swing_progress = 0.0;
-                        return;
+        if self.equipment.belt_capacity > 0 {
+            // Use equipment system
+            let drawn = if self.prefer_ranged {
+                self.equipment
+                    .draw_ranged()
+                    .or_else(|| self.equipment.draw_melee())
+            } else {
+                self.equipment
+                    .draw_melee()
+                    .or_else(|| self.equipment.draw_ranged())
+            };
+            self.equipped_weapon = drawn;
+        } else {
+            // Fallback: scan inventory (for plebs without belts)
+            let reg = crate::item_defs::ItemRegistry::cached();
+            if self.prefer_ranged {
+                for stack in &self.inventory.stacks {
+                    if let Some(def) = reg.get(stack.item_id) {
+                        if def.is_ranged_weapon() {
+                            self.equipped_weapon = Some(stack.item_id);
+                            return;
+                        }
                     }
                 }
             }
-        }
-        // Fall back to best melee weapon
-        let mut best: Option<(u16, f32)> = None;
-        for stack in &self.inventory.stacks {
-            if let Some(def) = reg.get(stack.item_id) {
-                if def.is_melee_weapon() && best.map_or(true, |(_, bd)| def.melee_damage > bd) {
-                    best = Some((stack.item_id, def.melee_damage));
+            let mut best: Option<(u16, f32)> = None;
+            for stack in &self.inventory.stacks {
+                if let Some(def) = reg.get(stack.item_id) {
+                    if def.is_melee_weapon() && best.map_or(true, |(_, bd)| def.melee_damage > bd) {
+                        best = Some((stack.item_id, def.melee_damage));
+                    }
                 }
             }
+            self.equipped_weapon = best.map(|(id, _)| id);
         }
-        self.equipped_weapon = best.map(|(id, _)| id);
-        self.aim_progress = 0.0;
+        if !self.drafted {
+            self.swing_progress = 0.0;
+            self.aim_progress = 0.0;
+        }
+    }
+
+    /// Check if pleb has a specific trait (by name string).
+    pub fn has_trait(&self, name: &str) -> bool {
+        self.trait_name.as_deref() == Some(name)
+    }
+
+    /// Skill speed multiplier for a domain (uses DN-022 formula)
+    pub fn skill_mult(&self, idx: usize) -> f32 {
+        self.skills.get(idx).map(|s| s.speed_mult()).unwrap_or(0.7)
+    }
+
+    /// Raw skill value for a domain (0.0-10.0)
+    pub fn skill_value(&self, idx: usize) -> f32 {
+        self.skills.get(idx).map(|s| s.value).unwrap_or(0.0)
+    }
+
+    /// Grant XP to a skill domain, with mood modifier. Returns Some(new_level) on whole-number level-up.
+    pub fn gain_xp(&mut self, skill_idx: usize, base_xp: f32) -> Option<f32> {
+        if skill_idx >= NUM_SKILLS {
+            return None;
+        }
+        // Mood modifier: happy +20%, stressed -30%, breaking 0%
+        let mood_mult = if self.needs.stress > 85.0 {
+            0.0 // can't learn while breaking
+        } else if self.needs.mood > 30.0 {
+            1.2
+        } else if self.needs.mood < -20.0 {
+            0.7
+        } else {
+            1.0
+        };
+        let xp = base_xp * mood_mult;
+        self.skills[skill_idx].add_xp(xp)
+    }
+
+    /// Grant XP with failure bonus (50% more XP from failures)
+    pub fn gain_xp_failure(&mut self, skill_idx: usize, base_xp: f32) -> Option<f32> {
+        self.gain_xp(skill_idx, base_xp * 1.5)
+    }
+
+    /// Set skills from legacy [u8; 6] (backstory), preserving existing aptitudes
+    pub fn set_skills_from_legacy(&mut self, old: [u8; 6]) {
+        for i in 0..NUM_SKILLS {
+            let apt = self.skills[i].aptitude; // preserve aptitude
+            self.skills[i] = SkillLevel::from_legacy(old[i], apt);
+        }
+    }
+
+    /// Crafting speed multiplier (skill 2 + SteadyHands trait)
+    pub fn crafting_speed(&self) -> f32 {
+        let base = self.skill_mult(2);
+        if self.has_trait("Steady Hands") {
+            base * 1.2
+        } else {
+            base
+        }
+    }
+
+    /// Farming/harvest speed multiplier (skill 3 + Frontier trait for outdoor work)
+    pub fn farming_speed(&self) -> f32 {
+        let base = self.skill_mult(3);
+        if self.has_trait("Frontier Born") {
+            base * 1.15
+        } else {
+            base
+        }
+    }
+
+    /// Construction speed multiplier (skill 5 + Frontier trait)
+    pub fn construction_speed(&self) -> f32 {
+        let base = self.skill_mult(5);
+        if self.has_trait("Frontier Born") {
+            base * 1.15
+        } else {
+            base
+        }
+    }
+
+    /// Mining yield multiplier (Salvager trait)
+    pub fn mining_yield_mult(&self) -> f32 {
+        if self.has_trait("Salvager") { 1.3 } else { 1.0 }
+    }
+
+    /// Thirst decay multiplier (DesertBlood trait)
+    pub fn thirst_decay_mult(&self) -> f32 {
+        if self.has_trait("Desert Blood") {
+            0.7
+        } else {
+            1.0
+        }
+    }
+
+    /// Food sickness immunity (StoneEater trait)
+    pub fn immune_to_food_sickness(&self) -> bool {
+        self.has_trait("Stone Eater")
+    }
+
+    /// Bleed resistance (Weathered trait): lower = slower bleed damage
+    pub fn bleed_resist(&self) -> f32 {
+        if self.has_trait("Weathered") {
+            0.6
+        } else {
+            1.0
+        }
+    }
+
+    /// Max health multiplier (Weathered trait)
+    pub fn max_health_mult(&self) -> f32 {
+        if self.has_trait("Weathered") {
+            1.25
+        } else {
+            1.0
+        }
+    }
+
+    /// Check if an item is equipped (protected from hauling/storing).
+    /// Checks both belt items and the belt itself.
+    pub fn is_equipped(&self, item_id: u16) -> bool {
+        self.equipment.is_equipped(item_id) || self.equipped_weapon == Some(item_id)
+    }
+
+    /// Check if pleb has a specific tool type on their belt.
+    pub fn has_tool(&self, tool_type: &str) -> bool {
+        self.equipment.has_tool(tool_type)
+    }
+
+    /// Draw a specific tool from belt, setting it as active. Returns item_id.
+    pub fn draw_tool(&mut self, tool_type: &str) -> Option<u16> {
+        let id = self.equipment.draw_tool(tool_type);
+        if id.is_some() {
+            self.equipped_weapon = id;
+        }
+        id
     }
 
     /// Combat rank derived from experience.
