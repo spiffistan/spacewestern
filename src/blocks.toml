@@ -1040,3 +1040,17 @@ label = "Low"
 click = "simple"
 place_height = 1
 drag = "hollow_rect"
+
+[[block]]
+id = 64
+name = "Snare Trap"
+color = [0.50, 0.42, 0.30]
+walkable = true
+is_removable = true
+default_height = 5.0
+[block.placement]
+category = "Hunting"
+icon = "X"
+label = "Snare"
+click = "simple"
+place_height = 5

@@ -68,6 +68,7 @@ pub const BT_ROUGH_FLOOR: u32 = 60;
 pub const BT_SAW_HORSE: u32 = 61;
 pub const BT_CAMPFIRE: u32 = 62;
 pub const BT_LOW_WALL: u32 = 63;
+pub const BT_SNARE: u32 = 64;
 
 /// Generate WGSL `const BT_*: u32 = N;` lines for all block type constants.
 /// Prepend this to shader source so WGSL can use the same names as Rust.
@@ -138,6 +139,7 @@ pub fn wgsl_block_constants() -> String {
         ("BT_SAW_HORSE", BT_SAW_HORSE),
         ("BT_CAMPFIRE", BT_CAMPFIRE),
         ("BT_LOW_WALL", BT_LOW_WALL),
+        ("BT_SNARE", BT_SNARE),
     ];
     for &(name, val) in consts {
         s.push_str(&format!("const {}: u32 = {}u;\n", name, val));
@@ -1164,7 +1166,9 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
                 * terrain_suitability.min(1.0);
             let berry_threshold = (berry_score * 18.0 * spawn_factor) as u32;
             if r_berry < berry_threshold && grid[idx] == dirt_block {
-                grid[idx] = make_block(BT_BERRY_BUSH as u8, 1, 0);
+                // Height byte = berry count (3-5 initial, 0 = depleted)
+                let berry_count = 3 + (r_berry % 3) as u8; // 3, 4, or 5
+                grid[idx] = make_block(BT_BERRY_BUSH as u8, berry_count, 0);
                 continue;
             }
 

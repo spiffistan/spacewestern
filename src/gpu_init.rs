@@ -1963,7 +1963,10 @@ impl App {
             bytemuck::cast_slice(&self.water_table),
         );
 
-        // Remove trees/bushes that spawned in submerged areas
+        // Remove trees/bushes from tiles where water table is near/above surface.
+        // Water table is negative (depth below surface); elevation is >= 0.
+        // A tile floods when water_table + offset > sub_elevation. At offset 0,
+        // remove trees where wt - elev > -0.5 (shallow water table on low ground).
         {
             let grid_size = (GRID_W * GRID_H) as usize;
             let dirt = make_block(BT_GROUND as u8, 0, 0);
@@ -1972,7 +1975,8 @@ impl App {
                 if bt == BT_TREE || bt == BT_BERRY_BUSH {
                     let wt = self.water_table[idx];
                     let elev = self.elevation_data[idx];
-                    if wt > elev + 0.1 {
+                    // Remove if water table is close to surface on low ground
+                    if wt - elev > -0.5 {
                         let roof = self.grid_data[idx] & 0xFF000000;
                         self.grid_data[idx] = dirt | roof;
                     }
