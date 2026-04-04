@@ -10,7 +10,7 @@ pub const FLUID_SIM_H: u32 = 256;
 pub const FLUID_DYE_W: u32 = 512;
 pub const FLUID_DYE_H: u32 = 512;
 #[cfg(not(target_arch = "wasm32"))]
-pub const FLUID_PRESSURE_ITERS: u32 = 35;
+pub const FLUID_PRESSURE_ITERS: u32 = 25; // reduced from 35: -20 dispatches/frame, minimal quality loss
 #[cfg(target_arch = "wasm32")]
 pub const FLUID_PRESSURE_ITERS: u32 = 20;
 

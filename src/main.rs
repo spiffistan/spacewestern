@@ -381,7 +381,7 @@ const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
 const LIGHTMAP_W: u32 = GRID_W * LIGHTMAP_SCALE;
 const LIGHTMAP_H: u32 = GRID_H * LIGHTMAP_SCALE;
 #[cfg(not(target_arch = "wasm32"))]
-const LIGHTMAP_PROP_ITERATIONS: u32 = 26; // covers ~13 tile radius
+const LIGHTMAP_PROP_ITERATIONS: u32 = 20; // covers ~10 tile radius (reduced from 26)
 #[cfg(target_arch = "wasm32")]
 const LIGHTMAP_PROP_ITERATIONS: u32 = 12; // reduced for browser perf
 #[cfg(not(target_arch = "wasm32"))]
@@ -646,7 +646,7 @@ impl App {
             sound_speed: 0.3,
             sound_damping: 0.01, // faster dissipation — prevents lingering pressure
             sound_coupling: 0.03, // reduced — prevents sound waves from heating gas
-            sound_iters_per_frame: if cfg!(target_arch = "wasm32") { 0 } else { 4 },
+            sound_iters_per_frame: if cfg!(target_arch = "wasm32") { 0 } else { 2 },
             camera_pan_speed: 400.0,
             dye_w: FLUID_DYE_W,
             dye_h: FLUID_DYE_H,
@@ -3019,216 +3019,219 @@ impl App {
                 }
             }
 
-            // --- Fluid simulation (every frame) ---
+            // --- Fluid simulation (skip every other frame when paused) ---
+            let skip_fluid = self.time_paused && self.frame_count % 2 != 0;
             let fluid_wg = fluid_res.div_ceil(WORKGROUP_SIZE);
             let dye_wg_x = self.dye_w.div_ceil(WORKGROUP_SIZE);
             let dye_wg_y = self.dye_h.div_ceil(WORKGROUP_SIZE);
 
-            // 1. Curl
-            {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("fluid-curl"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.fluid_p_curl);
-                p.set_bind_group(0, &gfx.fluid_bg_curl, &[]);
-                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-            }
-            // 2. Vorticity
-            {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("fluid-vorticity"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.fluid_p_vorticity);
-                p.set_bind_group(0, &gfx.fluid_bg_vorticity, &[]);
-                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-            }
-            // 3. Splat
-            {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("fluid-splat"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.fluid_p_splat);
-                p.set_bind_group(0, &gfx.fluid_bg_splat, &[]);
-                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-            }
-            // 4. Divergence
-            {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("fluid-div"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.fluid_p_divergence);
-                p.set_bind_group(0, &gfx.fluid_bg_divergence, &[]);
-                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-            }
-            // 5. Pressure clear
-            {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("fluid-pres-clear"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.fluid_p_pressure_clear);
-                p.set_bind_group(0, &gfx.fluid_bg_pressure_clear, &[]);
-                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-            }
-            // 6. Pressure Jacobi (16 iterations, ping-pong)
-            for i in 0..self.fluid_pressure_iters {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("fluid-pressure"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.fluid_p_pressure);
-                p.set_bind_group(0, &gfx.fluid_bg_pressure[(i as usize) % 2], &[]);
-                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-            }
-            // 7. Gradient subtract
-            {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("fluid-gradient"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.fluid_p_gradient);
-                p.set_bind_group(0, &gfx.fluid_bg_gradient, &[]);
-                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-            }
-            // 8. Advect velocity
-            {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("fluid-advect-vel"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.fluid_p_advect_vel);
-                p.set_bind_group(0, &gfx.fluid_bg_advect_vel, &[]);
-                p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
-            }
-            // 9. Advect dye (512x512)
-            {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("fluid-advect-dye"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.fluid_p_advect_dye);
-                p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]);
-                p.dispatch_workgroups(dye_wg_x, dye_wg_y, 1);
-            }
-            // Flip dye phase for next frame
-            self.fluid_dye_phase = 1 - self.fluid_dye_phase;
-
-            // --- Dust simulation ---
-            // Update DustParams uniform
-            {
-                let dust_dt = self.fluid_params.dt;
-                let params = dust::DustParams {
-                    grid_w: dust::DUST_SIM_W as f32,
-                    grid_h: dust::DUST_SIM_H as f32,
-                    dt: dust_dt,
-                    decay_rate: dust::compute_decay_rate(60.0, dust_dt), // 60s half-life (very heavy)
-                    diffusion: 0.001, // almost no spread (heavy particles settle in place)
-                    wind_follow: 0.05, // 5% of air velocity — barely drifts
-                    wind_x: self.fluid_params.wind_x,
-                    wind_y: self.fluid_params.wind_y,
-                    storm_active: if self.dust_storm_active { 1.0 } else { 0.0 },
-                    storm_edge: dust::windward_edge(
-                        self.fluid_params.wind_x,
-                        self.fluid_params.wind_y,
-                    ),
-                    storm_density: 0.8,
-                    _pad: 0.0,
-                };
-                gfx.queue
-                    .write_buffer(&gfx.dust_params_buffer, 0, bytemuck::bytes_of(&params));
-            }
-            // CPU dust injections — write Gaussian blobs to BOTH dust textures
-            for inj in self.dust_injections.drain(..) {
-                let w = dust::DUST_SIM_W;
-                let h = dust::DUST_SIM_H;
-                let sx = inj.x / GRID_W as f32 * w as f32;
-                let sy = inj.y / GRID_H as f32 * h as f32;
-                let r = inj.radius / GRID_W as f32 * w as f32;
-                let ri = r.ceil() as i32;
-                let x0 = (sx as i32 - ri).max(0) as u32;
-                let y0 = (sy as i32 - ri).max(0) as u32;
-                let x1 = (sx as i32 + ri + 1).min(w as i32) as u32;
-                let y1 = (sy as i32 + ri + 1).min(h as i32) as u32;
-                let patch_w = x1 - x0;
-                let patch_h = y1 - y0;
-                if patch_w == 0 || patch_h == 0 {
-                    continue;
+            if !skip_fluid {
+                // 1. Curl
+                {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fluid-curl"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.fluid_p_curl);
+                    p.set_bind_group(0, &gfx.fluid_bg_curl, &[]);
+                    p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
                 }
-                let mut patch = vec![0.0f32; (patch_w * patch_h) as usize];
-                for py in 0..patch_h {
-                    for px in 0..patch_w {
-                        let dx = (x0 + px) as f32 - sx;
-                        let dy = (y0 + py) as f32 - sy;
-                        let dist2 = dx * dx + dy * dy;
-                        let sigma2 = r * r * 0.25;
-                        let val = inj.density * (-dist2 / (2.0 * sigma2)).exp();
-                        patch[(py * patch_w + px) as usize] = val;
+                // 2. Vorticity
+                {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fluid-vorticity"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.fluid_p_vorticity);
+                    p.set_bind_group(0, &gfx.fluid_bg_vorticity, &[]);
+                    p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+                }
+                // 3. Splat
+                {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fluid-splat"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.fluid_p_splat);
+                    p.set_bind_group(0, &gfx.fluid_bg_splat, &[]);
+                    p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+                }
+                // 4. Divergence
+                {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fluid-div"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.fluid_p_divergence);
+                    p.set_bind_group(0, &gfx.fluid_bg_divergence, &[]);
+                    p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+                }
+                // 5. Pressure clear
+                {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fluid-pres-clear"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.fluid_p_pressure_clear);
+                    p.set_bind_group(0, &gfx.fluid_bg_pressure_clear, &[]);
+                    p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+                }
+                // 6. Pressure Jacobi (16 iterations, ping-pong)
+                for i in 0..self.fluid_pressure_iters {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fluid-pressure"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.fluid_p_pressure);
+                    p.set_bind_group(0, &gfx.fluid_bg_pressure[(i as usize) % 2], &[]);
+                    p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+                }
+                // 7. Gradient subtract
+                {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fluid-gradient"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.fluid_p_gradient);
+                    p.set_bind_group(0, &gfx.fluid_bg_gradient, &[]);
+                    p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+                }
+                // 8. Advect velocity
+                {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fluid-advect-vel"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.fluid_p_advect_vel);
+                    p.set_bind_group(0, &gfx.fluid_bg_advect_vel, &[]);
+                    p.dispatch_workgroups(fluid_wg, fluid_wg, 1);
+                }
+                // 9. Advect dye (512x512)
+                {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("fluid-advect-dye"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.fluid_p_advect_dye);
+                    p.set_bind_group(0, &gfx.fluid_bg_advect_dye[self.fluid_dye_phase], &[]);
+                    p.dispatch_workgroups(dye_wg_x, dye_wg_y, 1);
+                }
+                // Flip dye phase for next frame
+                self.fluid_dye_phase = 1 - self.fluid_dye_phase;
+
+                // --- Dust simulation ---
+                // Update DustParams uniform
+                {
+                    let dust_dt = self.fluid_params.dt;
+                    let params = dust::DustParams {
+                        grid_w: dust::DUST_SIM_W as f32,
+                        grid_h: dust::DUST_SIM_H as f32,
+                        dt: dust_dt,
+                        decay_rate: dust::compute_decay_rate(60.0, dust_dt), // 60s half-life (very heavy)
+                        diffusion: 0.001, // almost no spread (heavy particles settle in place)
+                        wind_follow: 0.05, // 5% of air velocity — barely drifts
+                        wind_x: self.fluid_params.wind_x,
+                        wind_y: self.fluid_params.wind_y,
+                        storm_active: if self.dust_storm_active { 1.0 } else { 0.0 },
+                        storm_edge: dust::windward_edge(
+                            self.fluid_params.wind_x,
+                            self.fluid_params.wind_y,
+                        ),
+                        storm_density: 0.8,
+                        _pad: 0.0,
+                    };
+                    gfx.queue
+                        .write_buffer(&gfx.dust_params_buffer, 0, bytemuck::bytes_of(&params));
+                }
+                // CPU dust injections — write Gaussian blobs to BOTH dust textures
+                for inj in self.dust_injections.drain(..) {
+                    let w = dust::DUST_SIM_W;
+                    let h = dust::DUST_SIM_H;
+                    let sx = inj.x / GRID_W as f32 * w as f32;
+                    let sy = inj.y / GRID_H as f32 * h as f32;
+                    let r = inj.radius / GRID_W as f32 * w as f32;
+                    let ri = r.ceil() as i32;
+                    let x0 = (sx as i32 - ri).max(0) as u32;
+                    let y0 = (sy as i32 - ri).max(0) as u32;
+                    let x1 = (sx as i32 + ri + 1).min(w as i32) as u32;
+                    let y1 = (sy as i32 + ri + 1).min(h as i32) as u32;
+                    let patch_w = x1 - x0;
+                    let patch_h = y1 - y0;
+                    if patch_w == 0 || patch_h == 0 {
+                        continue;
+                    }
+                    let mut patch = vec![0.0f32; (patch_w * patch_h) as usize];
+                    for py in 0..patch_h {
+                        for px in 0..patch_w {
+                            let dx = (x0 + px) as f32 - sx;
+                            let dy = (y0 + py) as f32 - sy;
+                            let dist2 = dx * dx + dy * dy;
+                            let sigma2 = r * r * 0.25;
+                            let val = inj.density * (-dist2 / (2.0 * sigma2)).exp();
+                            patch[(py * patch_w + px) as usize] = val;
+                        }
+                    }
+                    let patch_bytes = bytemuck::cast_slice(&patch);
+                    for tex in &gfx.dust_textures {
+                        gfx.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: tex,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d { x: x0, y: y0, z: 0 },
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            patch_bytes,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(patch_w * 4), // 4 bytes per R32Float
+                                rows_per_image: Some(patch_h),
+                            },
+                            wgpu::Extent3d {
+                                width: patch_w,
+                                height: patch_h,
+                                depth_or_array_layers: 1,
+                            },
+                        );
                     }
                 }
-                let patch_bytes = bytemuck::cast_slice(&patch);
-                for tex in &gfx.dust_textures {
-                    gfx.queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: tex,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d { x: x0, y: y0, z: 0 },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        patch_bytes,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(patch_w * 4), // 4 bytes per R32Float
-                            rows_per_image: Some(patch_h),
-                        },
-                        wgpu::Extent3d {
-                            width: patch_w,
-                            height: patch_h,
-                            depth_or_array_layers: 1,
-                        },
+                // Dust advection compute pass (reads A, writes B)
+                {
+                    let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("dust"),
+                        timestamp_writes: None,
+                    });
+                    p.set_pipeline(&gfx.dust_pipeline);
+                    p.set_bind_group(0, &gfx.dust_bind_group, &[]);
+                    p.dispatch_workgroups(
+                        dust::DUST_SIM_W.div_ceil(8),
+                        dust::DUST_SIM_H.div_ceil(8),
+                        1,
                     );
                 }
-            }
-            // Dust advection compute pass (reads A, writes B)
-            {
-                let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("dust"),
-                    timestamp_writes: None,
-                });
-                p.set_pipeline(&gfx.dust_pipeline);
-                p.set_bind_group(0, &gfx.dust_bind_group, &[]);
-                p.dispatch_workgroups(
-                    dust::DUST_SIM_W.div_ceil(8),
-                    dust::DUST_SIM_H.div_ceil(8),
-                    1,
+                // Copy B → A so next frame reads the advected result
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &gfx.dust_textures[1],
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &gfx.dust_textures[0],
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: dust::DUST_SIM_W,
+                        height: dust::DUST_SIM_H,
+                        depth_or_array_layers: 1,
+                    },
                 );
-            }
-            // Copy B → A so next frame reads the advected result
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &gfx.dust_textures[1],
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &gfx.dust_textures[0],
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: dust::DUST_SIM_W,
-                    height: dust::DUST_SIM_H,
-                    depth_or_array_layers: 1,
-                },
-            );
+            } // end skip_fluid gate
 
-            // 10. Thermal exchange (256x256)
-            {
+            // 10. Thermal exchange (256x256) — every 2 frames
+            if self.frame_count % 2 == 0 {
                 let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("thermal"),
                     timestamp_writes: None,
