@@ -181,6 +181,21 @@ impl AudioOutput {
         log::info!("Audio test beep sent");
     }
 
+    /// Play ambient rain sound (non-spatialized, stereo with slight variation).
+    pub fn play_rain(&self, intensity: f32, seed: u32) {
+        if intensity < 0.05 {
+            return;
+        }
+        // Long seamless buffer — no fade, re-triggered back-to-back
+        let duration = 8.0;
+        let left = render_rain(intensity, duration, seed);
+        let right = render_rain(intensity, duration, seed.wrapping_add(12345));
+        let vol = 0.12 * intensity;
+        let left: Vec<f32> = left.iter().map(|&s| s * vol).collect();
+        let right: Vec<f32> = right.iter().map(|&s| s * vol).collect();
+        self.play_stereo_buffer(&left, &right);
+    }
+
     /// Play a spatialized procedural sound.
     pub fn play(
         &self,
@@ -481,6 +496,66 @@ fn render_explosion(duration: f32) -> Vec<f32> {
 
         let sample = crack * 0.9 + boom + blast + rattle;
         buffer.push(sample.clamp(-1.0, 1.0));
+    }
+    buffer
+}
+
+/// Rain ambience: layered filtered noise — soft patter of individual drops
+/// on various surfaces, with a broadband wash underneath.
+fn render_rain(intensity: f32, duration: f32, seed: u32) -> Vec<f32> {
+    let num_samples = (duration * SAMPLE_RATE as f32) as usize;
+    let mut buffer = Vec::with_capacity(num_samples);
+    let mut rng = Xorshift32::new(seed.max(1));
+
+    // State for filters
+    let mut lp1 = 0.0f32; // broadband wash (low-pass)
+    let mut lp2 = 0.0f32; // mid patter
+    let mut hp_prev_in = 0.0f32;
+    let mut hp_prev_out = 0.0f32;
+
+    // Drop patter state: random individual drop impacts
+    let mut drop_env = 0.0f32;
+    let mut drop_timer = 0.0f32;
+    let mut drop_pitch = 3000.0f32;
+
+    let volume = intensity.clamp(0.0, 1.0);
+    // Heavier rain = more drops per second
+    let drop_rate = 20.0 + intensity * 80.0;
+
+    for i in 0..num_samples {
+        let t = i as f32 / SAMPLE_RATE as f32;
+        let noise = rng.next_f32() * 2.0 - 1.0;
+
+        // No fade — buffer is re-triggered back-to-back for seamless rain
+        let fade = 1.0;
+
+        // Layer 1: broadband rain wash (low-pass ~2kHz, gentle)
+        let alpha_wash = 2000.0 * TAU / (SAMPLE_RATE as f32 + 2000.0 * TAU);
+        lp1 = alpha_wash * noise + (1.0 - alpha_wash) * lp1;
+        let wash = lp1 * 0.25;
+
+        // Layer 2: mid-frequency patter (band-pass 800-4000Hz)
+        let noise2 = rng.next_f32() * 2.0 - 1.0;
+        let alpha_lp2 = 4000.0 * TAU / (SAMPLE_RATE as f32 + 4000.0 * TAU);
+        lp2 = alpha_lp2 * noise2 + (1.0 - alpha_lp2) * lp2;
+        let alpha_hp = SAMPLE_RATE as f32 / (SAMPLE_RATE as f32 + 800.0 * TAU);
+        let hp = alpha_hp * (hp_prev_out + lp2 - hp_prev_in);
+        hp_prev_in = lp2;
+        hp_prev_out = hp;
+        let patter = hp * 0.15;
+
+        // Layer 3: individual drop impacts (random timing, variable pitch)
+        drop_timer -= 1.0 / SAMPLE_RATE as f32;
+        if drop_timer <= 0.0 {
+            drop_env = 0.6 + rng.next_f32() * 0.4;
+            drop_pitch = 2000.0 + rng.next_f32() * 4000.0;
+            drop_timer = 1.0 / drop_rate + (rng.next_f32() - 0.5) * 0.02;
+        }
+        drop_env *= 1.0 - 300.0 / SAMPLE_RATE as f32; // fast decay
+        let drop = (t * drop_pitch * TAU).sin() * drop_env * 0.08;
+
+        let sample = (wash + patter + drop) * volume * fade;
+        buffer.push(sample.clamp(-0.5, 0.5));
     }
     buffer
 }

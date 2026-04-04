@@ -211,12 +211,16 @@ struct App {
     dye_w: u32,                   // current dye texture width (tracks render resolution)
     dye_h: u32,                   // current dye texture height
     sandbox_mode: bool,           // enables sandbox build category + debug tools
+    night_count: u32,             // how many nights have passed (for escalation)
+    dusk_warned: bool,            // already sent dusk warning this day cycle
+    hint_flags: u32,              // one-shot contextual hint flags
     debug_creatures_always: bool, // spawn creatures regardless of time of day
     debug_bullet_slowmo: bool,    // enable bullet slow-mo
     debug_bullet_speed: f32,      // bullet time scale (0.01 = 100x slow, 1.0 = normal)
     debug_show_cover: bool,       // show cover positions as circles
     debug_show_flock: bool,       // show flock cohesion lines
     audio_output: Option<audio::AudioOutput>,
+    rain_sound_timer: f32,                // countdown to next rain audio buffer
     sandbox_tool: SandboxTool,            // current sandbox action
     show_pipe_overlay: bool,              // draw gas pipe contents as egui overlay (ventilation)
     show_grid: bool,                      // tile grid lines overlay
@@ -240,13 +244,15 @@ struct App {
     next_pleb_id: usize,
     // Alien fauna
     creatures: Vec<creatures::Creature>,
-    creature_spawn_timer: f32,
+    creature_spawn_timer: f32, // duskweaver spawn cooldown
+    dusthare_repro_timer: f32, // dusthare reproduction cooldown
     next_pack_id: u16,
     blood_stains: Vec<(f32, f32, f32)>, // (x, y, fade_timer) — blood drops on ground
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
     show_pleb_help: bool,               // show controls modal
     show_inventory: bool,               // show pleb inventory window
     inv_selected_slot: Option<usize>,   // selected inventory slot for swap/drop
+    charsheet_tab: u8,                  // 0=gear, 1=log, 2=modifiers
     show_schedule: bool,                // show shift schedule window
     show_priorities: bool,              // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
@@ -283,6 +289,7 @@ struct App {
     grenade_charging: bool,
     grenade_charge: f32,
     grenade_impacts: Vec<(f32, f32)>,
+    move_mode: bool,         // click-to-move targeting mode (shows path preview)
     grenade_targeting: bool, // cursor-directed grenade targeting mode
     grenade_arc: u8,         // throw height: 0=flat, 1=medium, 2=lob
     aim_mode: u8,            // 0=snap, 1=normal, 2=precise
@@ -588,7 +595,7 @@ impl App {
             lightmap_frame: 0,
             build_tool: BuildTool::None,
             build_rotation: 0,
-            wall_thickness: 1, // thin walls by default
+            wall_thickness: 2, // half-thickness walls by default
             hover_world: (0.0, 0.0),
             move_marker: None,
             terrain_tool: None,
@@ -644,12 +651,16 @@ impl App {
             dye_w: FLUID_DYE_W,
             dye_h: FLUID_DYE_H,
             sandbox_mode: false,
+            night_count: 0,
+            dusk_warned: false,
+            hint_flags: 0,
             debug_creatures_always: false,
             debug_bullet_slowmo: false,
             debug_bullet_speed: 0.02,
             debug_show_cover: false,
             debug_show_flock: false,
             audio_output: None, // lazy init on first sound (browser requires user gesture)
+            rain_sound_timer: 0.0,
             sandbox_tool: SandboxTool::None,
             drag_start: None,
             show_pipe_overlay: false,
@@ -671,27 +682,90 @@ impl App {
             prev_cam_time: 0.0,
             middle_mouse_pressed: false,
             plebs: {
-                // Start with one colonist at map center
+                // Start with 3 colonists near the landing pod
                 let cx = (GRID_W / 2) as f32 + 0.5;
-                let cy = (GRID_H / 2) as f32 + 0.5;
+                let cy = (GRID_H / 2) as f32 + 2.5; // south of pod (outside door)
+                let mut crew = Vec::new();
+
+                // Jeff: leader, hunter (pistol + knife + axe)
                 let mut jeff = Pleb::new(0, "Jeff".to_string(), cx, cy, 42);
-                jeff.headlight_mode = 2; // normal beam
+                jeff.headlight_mode = 2;
                 jeff.is_leader = true;
-                vec![jeff]
+                jeff.equipment.equip_belt(item_defs::ITEM_FIBER_BELT);
+                jeff.equipment.add_to_belt(item_defs::ITEM_KNIFE);
+                jeff.equipment.add_to_belt(item_defs::ITEM_PISTOL);
+                jeff.equipment.add_to_belt(item_defs::ITEM_STONE_AXE);
+                jeff.inventory.add(item_defs::ITEM_PISTOL_ROUNDS, 18);
+                jeff.inventory.add(item_defs::ITEM_BERRIES, 5);
+                jeff.ammo_loaded = 6;
+                jeff.needs.hunger = 0.6;
+                jeff.update_equipped_weapon();
+                crew.push(jeff);
+
+                // Mara: builder/crafter (axe + shovel)
+                let mut mara = Pleb::new(1, "Mara".to_string(), cx - 1.0, cy, 137);
+                mara.headlight_mode = 1;
+                mara.equipment.equip_belt(item_defs::ITEM_FIBER_BELT);
+                mara.equipment.add_to_belt(item_defs::ITEM_STONE_AXE);
+                mara.equipment.add_to_belt(item_defs::ITEM_WOODEN_SHOVEL);
+                mara.inventory.add(item_defs::ITEM_BERRIES, 5);
+                mara.inventory.add(item_defs::ITEM_SCRAP_WOOD, 5);
+                mara.needs.hunger = 0.6;
+                mara.update_equipped_weapon();
+                crew.push(mara);
+
+                // Cole: gatherer/scout (knife + pick)
+                let mut cole = Pleb::new(2, "Cole".to_string(), cx + 1.0, cy, 293);
+                cole.headlight_mode = 2;
+                cole.equipment.equip_belt(item_defs::ITEM_FIBER_BELT);
+                cole.equipment.add_to_belt(item_defs::ITEM_KNIFE);
+                cole.equipment.add_to_belt(item_defs::ITEM_STONE_PICK);
+                cole.inventory.add(item_defs::ITEM_FIBER, 5);
+                cole.inventory.add(item_defs::ITEM_SCRAP_WOOD, 3);
+                cole.needs.hunger = 0.6;
+                cole.update_equipped_weapon();
+                crew.push(cole);
+
+                crew
             },
             selected_pleb: Some(0),
             selected_group: Vec::new(),
-            next_pleb_id: 1,
+            next_pleb_id: 3,
             placing_pleb: false,
             placing_enemy: false,
-            creatures: Vec::new(),
+            creatures: {
+                // Spawn dusthares scattered across open terrain at worldgen
+                use creature_defs::CREATURE_DUSTHARE;
+                use creatures::Creature;
+                let mut fauna = Vec::new();
+                let mut rng_seed = 0xDEAD_BEEFu32;
+                let hash = |s: &mut u32| -> u32 {
+                    *s ^= *s << 13;
+                    *s ^= *s >> 17;
+                    *s ^= *s << 5;
+                    *s
+                };
+                let count = 10 + (hash(&mut rng_seed) % 6) as usize; // 10-15
+                for i in 0..count {
+                    // Scatter across the map, avoiding edges
+                    let margin = 20;
+                    let hx =
+                        (hash(&mut rng_seed) % (GRID_W - margin * 2)) as f32 + margin as f32 + 0.5;
+                    let hy =
+                        (hash(&mut rng_seed) % (GRID_H - margin * 2)) as f32 + margin as f32 + 0.5;
+                    fauna.push(Creature::new(CREATURE_DUSTHARE, hx, hy, i as u16));
+                }
+                fauna
+            },
             creature_spawn_timer: 0.0,
-            next_pack_id: 0,
+            dusthare_repro_timer: 90.0,
+            next_pack_id: 100, // offset past worldgen pack IDs
             blood_stains: Vec::new(),
             cannon_angles: std::collections::HashMap::new(),
             show_pleb_help: false,
             show_inventory: false,
             inv_selected_slot: None,
+            charsheet_tab: 0,
             show_schedule: false,
             show_priorities: false,
             pressed_keys: std::collections::HashSet::new(),
@@ -729,6 +803,7 @@ impl App {
             grenade_charging: false,
             grenade_charge: 0.0,
             grenade_impacts: Vec::new(),
+            move_mode: false,
             grenade_targeting: false,
             grenade_arc: 1,
             aim_mode: 1, // normal
@@ -1695,6 +1770,19 @@ impl App {
                         src.fresh = false;
                     }
                 }
+            }
+            // Ambient rain sound: seamless 8s buffers back-to-back
+            if self.camera.rain_intensity > 0.05 {
+                self.rain_sound_timer -= dt;
+                if self.rain_sound_timer <= 0.0 {
+                    if let Some(ref audio) = self.audio_output {
+                        let seed = (self.camera.time * 1000.0) as u32;
+                        audio.play_rain(self.camera.rain_intensity, seed);
+                    }
+                    self.rain_sound_timer = 8.0;
+                }
+            } else {
+                self.rain_sound_timer = 0.0;
             }
         }
 
@@ -3303,7 +3391,8 @@ impl App {
                 );
                 self.debug.water_pending = true;
             }
-            if self.debug.mode || ctrl_for_debug {
+            // Readback dye at hover position every 4 frames (single texel — feeds info card)
+            if self.frame_count % 4 == 2 {
                 let (wx, wy) = self.hover_world;
                 let dye_x =
                     ((wx / GRID_W as f32) * dye_w as f32).clamp(0.0, (dye_w - 1) as f32) as u32;
@@ -3381,8 +3470,8 @@ impl App {
                 self.voltage_readback_pending = true;
             }
 
-            // Copy dye texels at each pleb position for air readback
-            if !self.plebs.is_empty() {
+            // Copy dye texels at each pleb position for air readback (every 4 frames)
+            if !self.plebs.is_empty() && self.frame_count % 4 == 0 {
                 let dye_idx = self.fluid_dye_phase;
                 for (i, pleb) in self.plebs.iter().enumerate() {
                     let dye_x = ((pleb.x / GRID_W as f32) * dye_w as f32)
@@ -3668,124 +3757,113 @@ impl App {
             }
             self.grenade_impacts.clear();
 
-            // Debug: read back the dye texel
-            // Debug readback processing
-            if self.debug.fluid_pending {
-                self.debug.fluid_pending = false;
-                // Synchronous readback — native only (WASM can't block-wait on GPU)
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let buffer_slice = gfx.debug_readback_buffer.slice(..);
-                    buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                    gfx.device
-                        .poll(wgpu::PollType::Wait {
-                            submission_index: None,
-                            timeout: None,
-                        })
-                        .ok();
-                    let data = buffer_slice.get_mapped_range();
-                    let f16_data: &[u16] = bytemuck::cast_slice(&data);
-                    for (i, &val) in f16_data.iter().enumerate().take(4) {
-                        self.debug.fluid_density[i] = half_to_f32(val);
+            // --- Batched GPU readbacks: map all pending buffers, ONE poll, then process ---
+            // This avoids multiple synchronous GPU stalls per frame.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let rd_fluid = self.debug.fluid_pending;
+                let rd_water = self.debug.water_pending;
+                let rd_temp = self.debug.block_temp_pending;
+                let rd_voltage = self.voltage_readback_pending;
+                let rd_air = self.pleb_air_readback_pending;
+                let any_pending = rd_fluid || rd_water || rd_temp || rd_voltage || rd_air;
+
+                if any_pending {
+                    // Phase 1: issue all map_async calls
+                    if rd_fluid {
+                        gfx.debug_readback_buffer
+                            .slice(..)
+                            .map_async(wgpu::MapMode::Read, |_| {});
                     }
-                    drop(data);
-                    gfx.debug_readback_buffer.unmap();
-                }
-            }
-
-            // Water level readback
-            if self.debug.water_pending {
-                self.debug.water_pending = false;
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let buffer_slice = gfx.water_readback_buffer.slice(..);
-                    buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                    gfx.device
-                        .poll(wgpu::PollType::Wait {
-                            submission_index: None,
-                            timeout: None,
-                        })
-                        .ok();
-                    let data = buffer_slice.get_mapped_range();
-                    let f32_data: &[f32] = bytemuck::cast_slice(&data);
-                    self.debug.water_level = f32_data[0];
-                    // Update water_depth_cpu at the hovered tile (single-tile mirror)
-                    let hx = self.hover_world.0.floor() as i32;
-                    let hy = self.hover_world.1.floor() as i32;
-                    if hx >= 0 && hy >= 0 && hx < GRID_W as i32 && hy < GRID_H as i32 {
-                        let widx = (hy as u32 * GRID_W + hx as u32) as usize;
-                        if widx < self.water_depth_cpu.len() {
-                            self.water_depth_cpu[widx] = self.debug.water_level;
-                        }
+                    if rd_water {
+                        gfx.water_readback_buffer
+                            .slice(..)
+                            .map_async(wgpu::MapMode::Read, |_| {});
                     }
-                    drop(data);
-                    gfx.water_readback_buffer.unmap();
-                }
-            }
-
-            // Block temperature + voltage readback processing
-            if self.debug.block_temp_pending {
-                self.debug.block_temp_pending = false;
-                self.debug.voltage_pending = false;
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let buffer_slice = gfx.block_temp_readback_buffer.slice(..8); // 2 f32s
-                    buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                    gfx.device
-                        .poll(wgpu::PollType::Wait {
-                            submission_index: None,
-                            timeout: None,
-                        })
-                        .ok();
-                    let data = buffer_slice.get_mapped_range();
-                    let values: &[f32] = bytemuck::cast_slice(&data);
-                    self.debug.block_temp = values[0];
-                    self.debug.voltage = values[1];
-                    drop(data);
-                    gfx.block_temp_readback_buffer.unmap();
-                }
-            }
-
-            // Voltage grid readback for per-tile labels
-            if self.voltage_readback_pending {
-                self.voltage_readback_pending = false;
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let buf_size = (GRID_W * GRID_H * 4) as u64;
-                    let buffer_slice = gfx.voltage_readback_buffer.slice(..buf_size);
-                    buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                    gfx.device
-                        .poll(wgpu::PollType::Wait {
-                            submission_index: None,
-                            timeout: None,
-                        })
-                        .ok();
-                    let data = buffer_slice.get_mapped_range();
-                    let values: &[f32] = bytemuck::cast_slice(&data);
-                    self.voltage_data.clear();
-                    self.voltage_data.extend_from_slice(values);
-                    drop(data);
-                    gfx.voltage_readback_buffer.unmap();
-                }
-            }
-
-            // Pleb air readback processing
-            if self.pleb_air_readback_pending {
-                self.pleb_air_readback_pending = false;
-                #[cfg(not(target_arch = "wasm32"))]
-                {
+                    if rd_temp {
+                        gfx.block_temp_readback_buffer
+                            .slice(..8)
+                            .map_async(wgpu::MapMode::Read, |_| {});
+                    }
+                    if rd_voltage {
+                        let buf_size = (GRID_W * GRID_H * 4) as u64;
+                        gfx.voltage_readback_buffer
+                            .slice(..buf_size)
+                            .map_async(wgpu::MapMode::Read, |_| {});
+                    }
                     let num_plebs = self.plebs.len();
-                    if num_plebs > 0 {
+                    if rd_air && num_plebs > 0 {
                         let read_size = num_plebs as u64 * READBACK_ALIGNMENT;
-                        let buffer_slice = gfx.pleb_air_readback_buffer.slice(..read_size);
-                        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-                        gfx.device
-                            .poll(wgpu::PollType::Wait {
-                                submission_index: None,
-                                timeout: None,
-                            })
-                            .ok();
-                        let data = buffer_slice.get_mapped_range();
+                        gfx.pleb_air_readback_buffer
+                            .slice(..read_size)
+                            .map_async(wgpu::MapMode::Read, |_| {});
+                    }
+
+                    // Phase 2: single GPU sync (was 5 separate stalls before!)
+                    gfx.device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: None,
+                            timeout: None,
+                        })
+                        .ok();
+
+                    // Phase 3: process all mapped buffers
+                    if rd_fluid {
+                        self.debug.fluid_pending = false;
+                        let data = gfx.debug_readback_buffer.slice(..).get_mapped_range();
+                        let f16_data: &[u16] = bytemuck::cast_slice(&data);
+                        for (i, &val) in f16_data.iter().enumerate().take(4) {
+                            self.debug.fluid_density[i] = half_to_f32(val);
+                        }
+                        drop(data);
+                        gfx.debug_readback_buffer.unmap();
+                    }
+                    if rd_water {
+                        self.debug.water_pending = false;
+                        let data = gfx.water_readback_buffer.slice(..).get_mapped_range();
+                        let f32_data: &[f32] = bytemuck::cast_slice(&data);
+                        self.debug.water_level = f32_data[0];
+                        let hx = self.hover_world.0.floor() as i32;
+                        let hy = self.hover_world.1.floor() as i32;
+                        if hx >= 0 && hy >= 0 && hx < GRID_W as i32 && hy < GRID_H as i32 {
+                            let widx = (hy as u32 * GRID_W + hx as u32) as usize;
+                            if widx < self.water_depth_cpu.len() {
+                                self.water_depth_cpu[widx] = self.debug.water_level;
+                            }
+                        }
+                        drop(data);
+                        gfx.water_readback_buffer.unmap();
+                    }
+                    if rd_temp {
+                        self.debug.block_temp_pending = false;
+                        self.debug.voltage_pending = false;
+                        let data = gfx.block_temp_readback_buffer.slice(..8).get_mapped_range();
+                        let values: &[f32] = bytemuck::cast_slice(&data);
+                        self.debug.block_temp = values[0];
+                        self.debug.voltage = values[1];
+                        drop(data);
+                        gfx.block_temp_readback_buffer.unmap();
+                    }
+                    if rd_voltage {
+                        self.voltage_readback_pending = false;
+                        let buf_size = (GRID_W * GRID_H * 4) as u64;
+                        let data = gfx
+                            .voltage_readback_buffer
+                            .slice(..buf_size)
+                            .get_mapped_range();
+                        let values: &[f32] = bytemuck::cast_slice(&data);
+                        self.voltage_data.clear();
+                        self.voltage_data.extend_from_slice(values);
+                        drop(data);
+                        gfx.voltage_readback_buffer.unmap();
+                    }
+                    if rd_air && num_plebs > 0 {
+                        self.pleb_air_readback_pending = false;
+                        let read_size = num_plebs as u64 * READBACK_ALIGNMENT;
+                        let data = gfx
+                            .pleb_air_readback_buffer
+                            .slice(..read_size)
+                            .get_mapped_range();
                         self.pleb_air_data.resize(num_plebs, AirReadback::default());
                         for i in 0..num_plebs {
                             let offset = i * READBACK_ALIGNMENT as usize;
@@ -4009,14 +4087,53 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == winit::event::MouseButton::Left {
                     if state.is_pressed() {
+                        // Move mode: click to move selected plebs to cursor
+                        if self.move_mode {
+                            self.move_mode = false;
+                            let (wx, wy) =
+                                self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
+                            let move_indices: Vec<usize> = if !self.selected_group.is_empty() {
+                                self.selected_group.clone()
+                            } else if let Some(idx) = self.selected_pleb {
+                                vec![idx]
+                            } else {
+                                vec![]
+                            };
+                            let offsets = crate::comms::spread_offsets(
+                                move_indices.len(),
+                                self.flock_spacing.min_spacing(),
+                            );
+                            for (k, &pi) in move_indices.iter().enumerate() {
+                                if let Some(pleb) = self.plebs.get_mut(pi) {
+                                    let (ox, oy) = offsets[k];
+                                    let gx = (wx + ox).floor() as i32;
+                                    let gy = (wy + oy).floor() as i32;
+                                    let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                                    let path = pleb::astar_path_terrain_water_wd(
+                                        &self.grid_data,
+                                        &self.wall_data,
+                                        &self.terrain_data,
+                                        &self.water_depth_cpu,
+                                        start,
+                                        (gx, gy),
+                                    );
+                                    if !path.is_empty() {
+                                        pleb.path = path;
+                                        pleb.path_idx = 1;
+                                        pleb.activity = PlebActivity::Walking;
+                                        pleb.clear_targets();
+                                    }
+                                }
+                            }
+                            self.move_marker = Some((wx.floor() + 0.5, wy.floor() + 0.5, 2.0));
                         // Grenade targeting mode: click to throw at cursor
-                        if self.grenade_targeting {
+                        } else if self.grenade_targeting {
                             self.grenade_targeting = false;
                             let (wx, wy) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
                                 let dist = ((wx - pleb.x).powi(2) + (wy - pleb.y).powi(2)).sqrt();
-                                let strength = pleb.skills[1] as f32; // melee skill as strength
+                                let strength = pleb.skills[1].value; // melee skill as strength
                                 let max_range = grenade_max_range(strength, self.grenade_arc);
                                 if dist <= max_range {
                                     // Scatter within impact spread circle
