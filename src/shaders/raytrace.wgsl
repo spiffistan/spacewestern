@@ -102,6 +102,7 @@ struct Camera {
 struct GpuCreature {
     x: f32, y: f32, angle: f32, health: f32,
     color_r: f32, color_g: f32, color_b: f32, body_radius: f32,
+    hop_offset: f32, eye_r: f32, eye_g: f32, eye_b: f32,
 };
 const MAX_CREATURES: u32 = 32u;
 @group(0) @binding(26) var<storage, read> creature_buf: array<GpuCreature>;
@@ -193,11 +194,12 @@ fn wd_pixel_is_wall(fx: f32, fy: f32, wd: u32) -> bool {
     let wall_frac = f32(thick) * 0.25;
     let edges = wd_edges_s(wd);
     if edges == 0u && wd_thickness_raw_s(wd) == 0u { return true; }
-    if (edges & 1u) != 0u && edge_covers_pixel(fx, fy, 0u, wall_frac) { return true; }
-    if (edges & 2u) != 0u && edge_covers_pixel(fx, fy, 1u, wall_frac) { return true; }
-    if (edges & 4u) != 0u && edge_covers_pixel(fx, fy, 2u, wall_frac) { return true; }
-    if (edges & 8u) != 0u && edge_covers_pixel(fx, fy, 3u, wall_frac) { return true; }
-    return false;
+    var hit = false;
+    if (edges & 1u) != 0u && edge_covers_pixel(fx, fy, 0u, wall_frac) { hit = true; }
+    if (edges & 2u) != 0u && edge_covers_pixel(fx, fy, 1u, wall_frac) { hit = true; }
+    if (edges & 4u) != 0u && edge_covers_pixel(fx, fy, 2u, wall_frac) { hit = true; }
+    if (edges & 8u) != 0u && edge_covers_pixel(fx, fy, 3u, wall_frac) { hit = true; }
+    return hit;
 }
 
 // --- Physical door rendering (DN-009) ---
@@ -371,7 +373,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 63u)];
+    return materials[min(bt, 64u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -393,7 +395,7 @@ fn diag_dist_to_edge(fx: f32, fy: f32, variant: u32) -> f32 {
 
 // --- Sprite constants ---
 const SPRITE_SIZE: u32 = 256u;
-const SPRITE_VARIANTS: u32 = 24u; // 8 conifer + 16 oak
+const SPRITE_VARIANTS: u32 = 8u; // 8 conifer
 
 // Sample a tree sprite. Returns vec4(r, g, b, height_normalized).
 // height_normalized: 0 = transparent (show ground), >0 = canopy/trunk.
@@ -1379,9 +1381,25 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
             continue;
         }
 
-        // Trees: partial transmission through foliage
+        // Trees: check if ray passes through the circular canopy, not just the tile
         if sbt == BT_TREE {
-            vis *= 0.4;
+            let th = block_height(sb);
+            let canopy_r = select(select(select(0.35, 0.5, th >= 3u), 0.65, th >= 4u), 0.75, th >= 5u);
+            // Tree center with per-tree offset (matches render_tree)
+            let tid = f32(sbx) * 137.0 + f32(sby) * 311.0;
+            let tox = (fract(sin(tid * 1.3 + 7.1) * 31415.9) - 0.5) * 0.3;
+            let toy = (fract(sin(tid * 2.7 + 3.9) * 27183.6) - 0.5) * 0.3;
+            let tcx = f32(sbx) + 0.5 + tox;
+            let tcy = f32(sby) + 0.5 + toy;
+            let d = length(vec2(sx - tcx, sy - tcy));
+            if d < canopy_r {
+                vis *= 0.35; // inside canopy: strong attenuation
+            } else {
+                // outside canopy circle but in tile: no blocking
+                prev_bx = sbx;
+                prev_by = sby;
+                continue;
+            }
             if vis < 0.02 { return 0.0; }
             continue;
         }
@@ -2247,14 +2265,8 @@ fn render_table_lamp(fx: f32, fy: f32) -> vec4<f32> {
 fn render_tree(wx: f32, wy: f32, tree_tx: f32, tree_ty: f32, height: u32, flags: u32) -> vec4<f32> {
     let tree_id = tree_tx * 137.0 + tree_ty * 311.0;
     let id_hash = fract(sin(tree_id) * 43758.5453);
-    // Pick species: ~50% conifer (0-7), ~50% oak (8-23)
-    let species_hash = fract(sin(tree_id * 2.3 + 1.7) * 31415.9);
-    var variant: u32;
-    if species_hash < 0.5 {
-        variant = u32(id_hash * 8.0) % 8u; // conifer: variants 0-7
-    } else {
-        variant = 8u + u32(id_hash * 16.0) % 16u; // oak: variants 8-23
-    }
+    // Pick conifer variant (0-7)
+    let variant = u32(id_hash * 8.0) % 8u;
 
     // Size: tiles the sprite covers
     let size_factor = select(
@@ -2281,16 +2293,8 @@ fn render_tree(wx: f32, wy: f32, tree_tx: f32, tree_ty: f32, height: u32, flags:
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    let is_oak = variant >= 8u;
     let is_trunk = sprite.w < 0.4;
     var color = sprite.xyz;
-
-    if is_oak && !is_trunk {
-        // Oak canopy: boost saturation + darken to match conifers
-        let gray = dot(color, vec3(0.299, 0.587, 0.114));
-        color = mix(vec3(gray), color, 1.6);
-        color *= 0.65;
-    }
 
     color *= (0.88 + id_hash * 0.24);
 
@@ -3681,9 +3685,41 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let bush_sp = sample_bush_sprite(bush_var, bush_su, bush_sv);
         is_tree_pixel = bush_sp.w > 0.05;
         if is_tree_pixel {
-            color = bush_sp.xyz * (0.90 + bush_hash * 0.2);
+            var bush_col = bush_sp.xyz * (0.90 + bush_hash * 0.2);
+            // Depleted bush (height=0): desaturated, browner — bare branches look
+            if bheight == 0u {
+                let gray = dot(bush_col, vec3(0.299, 0.587, 0.114));
+                bush_col = mix(bush_col, vec3(gray * 0.9, gray * 0.75, gray * 0.5), 0.6);
+                bush_col *= 0.75;
+            }
+            color = bush_col;
         } else {
             color = block_base_color(BT_GROUND, 0u);
+        }
+    } else if btype == BT_SNARE {
+        // Snare trap: small loop on the ground
+        color = block_base_color(BT_GROUND, 0u); // ground underneath
+        let cx = fx - 0.5;
+        let cy = fy - 0.5;
+        let d = length(vec2(cx, cy));
+        // Rope ring
+        let ring_outer = 0.28;
+        let ring_inner = 0.20;
+        if d < ring_outer && d > ring_inner {
+            color = vec3(0.45, 0.38, 0.25); // rope color
+        }
+        // Trigger stick crossing the ring
+        if abs(cx - cy) < 0.03 && d < ring_outer {
+            color = vec3(0.35, 0.28, 0.15); // dark stick
+        }
+        // Broken snare (height 0): faded, no ring
+        if bheight == 0u {
+            color = block_base_color(BT_GROUND, 0u);
+            // Just a few scattered sticks
+            let stick = abs(fract(fx * 3.0 + fy * 2.0) - 0.5) < 0.04;
+            if stick && d < 0.3 {
+                color = vec3(0.38, 0.30, 0.18);
+            }
         }
     } else if btype == BT_DUG_GROUND {
         // Dug ground: excavated pit, 20% per depth level (max 5 = one full block)
@@ -4595,14 +4631,18 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let efy = fract(elev_uv_y);
     let sub_elev = mix(mix(e00, e10, efx), mix(e01, e11, efx), efy);
     // Slope shading: darken steep terrain (ditch walls, hillsides)
-    let slope_dx = e10 - e00;
-    let slope_dy = e01 - e00;
+    // Use wider sample distance (2 sub-cells) for smoother, less noisy slopes
+    let e_right = textureLoad(elevation_tex, clamp(vec2(elev_x0 + 2, elev_y0), vec2(0), elev_max), 0).r;
+    let e_down = textureLoad(elevation_tex, clamp(vec2(elev_x0, elev_y0 + 2), vec2(0), elev_max), 0).r;
+    let slope_dx = (e_right - e00) * 0.5;
+    let slope_dy = (e_down - e00) * 0.5;
     let slope_mag = length(vec2(slope_dx, slope_dy));
-    let slope_shade = 1.0 - clamp(slope_mag * 3.0, 0.0, 0.35);
+    // Only darken significant slopes (not micro-noise), max 25% darkening
+    let slope_shade = 1.0 - clamp((slope_mag - 0.01) * 2.0, 0.0, 0.25);
     color *= slope_shade;
 
     // Save pre-lighting base color for pleb torch/headlight illumination
-    let base_color_prelit = color;
+    var base_color_prelit = color;
 
     // Shadow / interior lighting
     var shadow_tint = vec3<f32>(1.0);
@@ -4783,6 +4823,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         color *= 1.0 - moisture * 0.25;
     }
 
+    // Update prelit color to include water (so torch/headlight illuminates water too)
+    base_color_prelit = color;
+
     // Door detail: open doors show floor, closed doors show planks + handle
     if is_door(block) {
         if !is_open(block) {
@@ -4829,8 +4872,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pdy = world_y - p.y;
         let pdist = length(vec2(pdx, pdy));
 
-        // Skip pleb lights on elevated block tops (not walls — walls should receive light)
-        let is_elevated = effective_height > 0u && !is_wall_face && !is_wd_wall;
+        // Skip pleb lights on elevated block tops (not walls or sprite-rendered blocks)
+        let is_sprite_block = btype == BT_TREE || btype == BT_BERRY_BUSH || btype == BT_CROP
+            || btype == BT_ROCK || btype == BT_CRATE;
+        let is_elevated = effective_height > 0u && !is_wall_face && !is_wd_wall && !is_sprite_block;
 
         // Per-pixel jitter for soft light edges (noise-based, varies by pixel + pleb)
         let jitter_seed = world_x * 127.1 + world_y * 311.7 + f32(pi) * 53.3 + camera.time * 7.1;
@@ -5070,15 +5115,39 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Carried item (above hair, drops with head when crouching)
+        // Carried item: rendered at torso height, offset to the side
         if drew_pleb && p.carrying > 0.5 {
-            let cx_c = lx - head_dx * 0.5;
-            let cy_c = ly - s * 0.88 + bob + head_drop;
-            let cd = length(vec2(cx_c * 1.3, cy_c));
-            if cd < s * 0.10 {
-                let rv = fract(sin(world_x * 53.1 + world_y * 97.3) * 43758.5) * 0.04;
-                color = vec3(0.30 + rv, 0.28 + rv, 0.26 + rv);
-                if cd > s * 0.07 { color = vec3(0.16, 0.15, 0.13); }
+            let carry_id = u32(p.carrying - 0.5); // item_id (carrying encodes id+1)
+            // Offset to the left side of the body (opposite weapon hand)
+            let carry_ox = -s * 0.22 - head_dx * 0.2;
+            let carry_oy = -s * 0.40 + bob + shirt_shift;
+            let cx_c = lx + carry_ox;
+            let cy_c = ly + carry_oy;
+            let carry_r = s * 0.12;
+            let cd = length(vec2(cx_c, cy_c));
+            if cd < carry_r {
+                // Item-appropriate color
+                var item_col = vec3(0.30, 0.28, 0.26); // default: brown bundle
+                if carry_id == 201u { // ITEM_ROCK
+                    item_col = vec3(0.50, 0.48, 0.45); // gray rock
+                } else if carry_id == 200u { // ITEM_WOOD
+                    item_col = vec3(0.45, 0.32, 0.18); // brown wood
+                } else if carry_id == 0u { // ITEM_BERRIES
+                    item_col = vec3(0.30, 0.15, 0.35); // purple berries
+                } else if carry_id == 202u { // ITEM_FIBER
+                    item_col = vec3(0.30, 0.42, 0.20); // green fiber
+                } else if carry_id == 1u { // ITEM_RAW_MEAT
+                    item_col = vec3(0.55, 0.22, 0.18); // red meat
+                } else if carry_id == 2u { // ITEM_RAW_FISH
+                    item_col = vec3(0.40, 0.50, 0.55); // silvery fish
+                }
+                // Shading: darker at edges
+                let shade = 1.0 - cd / carry_r * 0.3;
+                color = item_col * shade;
+                // Dark outline ring
+                if cd > carry_r * 0.8 {
+                    color *= 0.6;
+                }
             }
         }
 
@@ -5154,7 +5223,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // Black outline: check if pixel is just outside any body zone
         if !drew_pleb {
-            let outline_w = 0.025; // outline thickness in tile units
+            // Scale outline with zoom: thicker when zoomed out so plebs stay visible
+            let pixels_per_tile = camera.zoom / camera.screen_w * camera.grid_w;
+            let outline_w = 0.025 + 0.04 / max(pixels_per_tile, 1.0);
             // Check expanded versions of main body zones
             let o_feet = (lx / (s * 0.12 + outline_w)) * (lx / (s * 0.12 + outline_w))
                 + ((ly - s * 0.07 + bob + feet_shift) / (s * 0.06 + outline_w)) * ((ly - s * 0.07 + bob + feet_shift) / (s * 0.06 + outline_w));
@@ -5253,27 +5324,63 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var ci: u32 = 0u; ci < MAX_CREATURES; ci++) {
         let cr = creature_buf[ci];
         if cr.body_radius < 0.01 { continue; }
+        // Hop offset shifts body "upward" on screen (negative Y in world = up on screen)
+        let cr_y = cr.y - cr.hop_offset;
         // Early distance cull
         let cdx = world_x - cr.x;
-        let cdy = world_y - cr.y;
+        let cdy = world_y - cr_y;
         if cdx * cdx + cdy * cdy > 4.0 { continue; } // >2 tiles away
         let cdist = length(vec2(cdx, cdy));
+
+        // Hover outline: soft ring when cursor is near this creature
+        let hover_dx = camera.hover_x - cr.x;
+        let hover_dy = camera.hover_y - cr_y;
+        let hover_near = camera.hover_x >= 0.0
+            && hover_dx * hover_dx + hover_dy * hover_dy < cr.body_radius * cr.body_radius * 4.0;
+        if hover_near && cr.health > 0.0 {
+            let outline_inner = cr.body_radius;
+            let outline_outer = cr.body_radius + 0.04;
+            if cdist > outline_inner && cdist < outline_outer {
+                let t = 1.0 - (cdist - outline_inner) / (outline_outer - outline_inner);
+                let outline_col = vec3(
+                    min(cr.color_r + 0.4, 1.0),
+                    min(cr.color_g + 0.4, 1.0),
+                    min(cr.color_b + 0.4, 1.0),
+                );
+                color = mix(color, outline_col, t * 0.7);
+            }
+        }
+
         if cdist < cr.body_radius {
-            // Body: shaded circle
+            // Body: shaded circle with subtle rim lighting
             let shade = 1.0 - cdist / cr.body_radius * 0.4;
-            color = vec3(cr.color_r, cr.color_g, cr.color_b) * shade;
+            var cr_color = vec3(cr.color_r, cr.color_g, cr.color_b) * shade;
+            // Hover brighten
+            if hover_near && cr.health > 0.0 {
+                cr_color = cr_color * 1.15;
+            }
+            color = cr_color;
+            // Shadow blob on ground when hopping (darker spot below)
+            if cr.hop_offset > 0.01 {
+                let shadow_dy = world_y - cr.y; // distance from ground position
+                let shadow_dx = world_x - cr.x;
+                let shadow_d = length(vec2(shadow_dx, shadow_dy));
+                if shadow_d < cr.body_radius * 0.6 {
+                    color *= 0.7; // darken for shadow
+                }
+            }
             // Eye dots: two small bright spots toward facing direction
-            let eye_spread = cr.body_radius * 0.4;
+            let eye_spread = cr.body_radius * 0.35;
             let eye_fwd = cr.body_radius * 0.3;
-            let eye_r = cr.body_radius * 0.12;
+            let eye_sz = cr.body_radius * 0.12;
             let fwd = vec2(cos(cr.angle), sin(cr.angle));
             let side = vec2(-fwd.y, fwd.x);
-            let eye1 = vec2(cr.x, cr.y) + fwd * eye_fwd + side * eye_spread;
-            let eye2 = vec2(cr.x, cr.y) + fwd * eye_fwd - side * eye_spread;
+            let eye1 = vec2(cr.x, cr_y) + fwd * eye_fwd + side * eye_spread;
+            let eye2 = vec2(cr.x, cr_y) + fwd * eye_fwd - side * eye_spread;
             let ed1 = length(vec2(world_x, world_y) - eye1);
             let ed2 = length(vec2(world_x, world_y) - eye2);
-            if ed1 < eye_r || ed2 < eye_r {
-                color = vec3(0.8, 0.4, 0.1); // orange eyes
+            if ed1 < eye_sz || ed2 < eye_sz {
+                color = vec3(cr.eye_r, cr.eye_g, cr.eye_b);
             }
             // Corpse: red X overlay
             if cr.health <= 0.0 {
@@ -5826,20 +5933,96 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Rain overlay: animated streaks
+    // Rain overlay: wind-angled streaks with parallax layers + ground splashes
     if camera.rain_intensity > 0.01 {
-        let rain_speed = 25.0;
-        let streak_seed = world_x * 3.7 + world_y * 0.3;
-        let streak_x = fract(streak_seed + camera.time * 0.02);
-        let streak_y = fract(world_y * 2.0 + camera.time * rain_speed * 0.08);
-        let streak = smoothstep(0.92, 1.0, streak_y) * smoothstep(0.03, 0.0, abs(streak_x - 0.5));
-        // Add a second layer of smaller streaks
-        let streak2_x = fract(world_x * 7.1 + world_y * 0.7 + camera.time * 0.03 + 0.5);
-        let streak2_y = fract(world_y * 3.0 + camera.time * rain_speed * 0.12 + 0.3);
-        let streak2 = smoothstep(0.94, 1.0, streak2_y) * smoothstep(0.02, 0.0, abs(streak2_x - 0.5));
-        let rain_alpha = (streak + streak2 * 0.6) * camera.rain_intensity * 0.35;
-        let rain_color = vec3(0.65, 0.70, 0.80);
-        color = mix(color, rain_color, clamp(rain_alpha, 0.0, 0.4));
+        let ri = camera.rain_intensity;
+        // Wind-driven rain: horizontal drift (never upward on screen = never negative Y drift)
+        let raw_dx = cos(camera.wind_angle) * camera.wind_magnitude;
+        let raw_dy = sin(camera.wind_angle) * camera.wind_magnitude;
+        // Horizontal drift speed for streaks (wind X component)
+        let drift_x = raw_dx * 0.4;
+        // Slant factor: how much X position skews the Y phase (wind-angled streaks)
+        let slant = raw_dx * 0.3;
+
+        // --- Falling streaks: 3 parallax layers (near/mid/far) ---
+        var rain_accum = 0.0;
+
+        // Layer 0: near (large, slow, thick)
+        {
+            let sc = 4.0; let sp = 18.0; let w = 0.018; let wt = 0.45; let off = 0.0;
+            let rx = (world_x - camera.time * drift_x * 1.0) * sc + off;
+            let ry = (world_y + world_x * slant) * sc;
+            let col = floor(rx);
+            let col_rand = fract(sin(col * 127.1 + off * 311.7) * 43758.5453);
+            let col_fx = fract(rx);
+            let fall = fract(ry * 0.5 - camera.time * sp * 0.1 + col_rand * 10.0);
+            let dash_len = 0.08 + col_rand * 0.06;
+            let streak_v = smoothstep(dash_len, 0.0, fall) * smoothstep(0.0, dash_len * 0.3, fall);
+            let streak_h = smoothstep(w, 0.0, abs(col_fx - 0.5 - (col_rand - 0.5) * 0.3));
+            rain_accum += streak_v * streak_h * wt;
+        }
+        // Layer 1: mid
+        {
+            let sc = 7.0; let sp = 22.0; let w = 0.012; let wt = 0.35; let off = 37.7;
+            let rx = (world_x - camera.time * drift_x * 1.3) * sc + off;
+            let ry = (world_y + world_x * slant) * sc;
+            let col = floor(rx);
+            let col_rand = fract(sin(col * 127.1 + off * 311.7) * 43758.5453);
+            let col_fx = fract(rx);
+            let fall = fract(ry * 0.5 - camera.time * sp * 0.1 + col_rand * 10.0);
+            let dash_len = 0.08 + col_rand * 0.06;
+            let streak_v = smoothstep(dash_len, 0.0, fall) * smoothstep(0.0, dash_len * 0.3, fall);
+            let streak_h = smoothstep(w, 0.0, abs(col_fx - 0.5 - (col_rand - 0.5) * 0.3));
+            rain_accum += streak_v * streak_h * wt;
+        }
+        // Layer 2: far (fine, fast, thin)
+        {
+            let sc = 12.0; let sp = 28.0; let w = 0.008; let wt = 0.20; let off = 91.3;
+            let rx = (world_x - camera.time * drift_x * 1.6) * sc + off;
+            let ry = (world_y + world_x * slant) * sc;
+            let col = floor(rx);
+            let col_rand = fract(sin(col * 127.1 + off * 311.7) * 43758.5453);
+            let col_fx = fract(rx);
+            let fall = fract(ry * 0.5 - camera.time * sp * 0.1 + col_rand * 10.0);
+            let dash_len = 0.08 + col_rand * 0.06;
+            let streak_v = smoothstep(dash_len, 0.0, fall) * smoothstep(0.0, dash_len * 0.3, fall);
+            let streak_h = smoothstep(w, 0.0, abs(col_fx - 0.5 - (col_rand - 0.5) * 0.3));
+            rain_accum += streak_v * streak_h * wt;
+        }
+
+        // --- Ground splashes: tiny bright circles that pulse ---
+        var splash = 0.0;
+        if ri > 0.15 {
+            let splash_sc = 6.0;
+            let ssx = world_x * splash_sc;
+            let ssy = world_y * splash_sc;
+            let cell_x = floor(ssx);
+            let cell_y = floor(ssy);
+            let cell_fx = fract(ssx) - 0.5;
+            let cell_fy = fract(ssy) - 0.5;
+            let cell_r = fract(sin(cell_x * 127.1 + (cell_y + 100.0) * 311.7) * 43758.5453);
+            let cell_r2 = fract(sin((cell_x + 50.0) * 127.1 + cell_y * 311.7) * 43758.5453);
+            let scx = (cell_r - 0.5) * 0.6;
+            let scy = (cell_r2 - 0.5) * 0.6;
+            let d = length(vec2(cell_fx - scx, cell_fy - scy));
+            let period = 0.4 + cell_r * 0.6;
+            let phase = fract(camera.time / period + cell_r * 7.0);
+            let ring_r = phase * 0.15;
+            let ring = smoothstep(0.02, 0.0, abs(d - ring_r)) * smoothstep(1.0, 0.0, phase);
+            let dot = smoothstep(0.03, 0.0, d) * smoothstep(0.3, 0.0, phase);
+            splash = (ring + dot * 0.5) * ri;
+        }
+
+        // Combine streaks + splashes
+        let rain_alpha = clamp(rain_accum * ri * 1.2 + splash * 0.3, 0.0, 0.55);
+        let rain_color = vec3(0.82, 0.85, 0.92);
+        color = mix(color, rain_color, rain_alpha);
+
+        // Atmospheric haze: heavier rain → more fog/mist
+        let haze = ri * ri * 0.12;
+        let haze_color = vec3(0.55, 0.58, 0.65);
+        color = mix(color, haze_color, haze);
+
         // Cloud dimming tint
         let cloud_tint = mix(vec3(1.0), vec3(0.75, 0.78, 0.85), camera.cloud_cover * 0.3);
         color *= cloud_tint;
@@ -5873,33 +6056,61 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Tree hover outline: silhouette detection on the hovered tree
+    // Sprite hover outline: silhouette detection on hovered tree, bush, or rock
     if camera.hover_x >= 0.0 && is_tree_pixel {
-        // Find which tree the hover cursor is on
         let hbx = i32(floor(camera.hover_x));
         let hby = i32(floor(camera.hover_y));
         var hover_tree_tx = -1.0;
         var hover_tree_ty = -1.0;
         var hover_best_w = 0.0;
+        var hover_sprite_kind = 0u; // 0=tree, 1=bush, 2=rock
         for (var hdy: i32 = -2; hdy <= 2; hdy++) {
             for (var hdx: i32 = -2; hdx <= 2; hdx++) {
                 let htx = hbx + hdx;
                 let hty = hby + hdy;
                 if htx < 0 || hty < 0 || htx >= i32(camera.grid_w) || hty >= i32(camera.grid_h) { continue; }
                 let htb = get_block(htx, hty);
-                if block_type(htb) != BT_TREE { continue; }
-                let hr = render_tree(camera.hover_x, camera.hover_y,
-                    f32(htx), f32(hty), block_height(htb), block_flags(htb));
-                if hr.w > hover_best_w {
-                    hover_best_w = hr.w;
-                    hover_tree_tx = f32(htx);
-                    hover_tree_ty = f32(hty);
+                let hbt = block_type(htb);
+                if hbt == BT_TREE {
+                    let hr = render_tree(camera.hover_x, camera.hover_y,
+                        f32(htx), f32(hty), block_height(htb), block_flags(htb));
+                    if hr.w > hover_best_w {
+                        hover_best_w = hr.w;
+                        hover_tree_tx = f32(htx);
+                        hover_tree_ty = f32(hty);
+                        hover_sprite_kind = 0u;
+                    }
+                } else if (hbt == BT_BERRY_BUSH || hbt == BT_ROCK) && htx == hbx && hty == hby {
+                    // Tile-aligned sprite: check if hover is on sprite pixel
+                    let sfx = camera.hover_x - f32(htx);
+                    let sfy = camera.hover_y - f32(hty);
+                    var sp_alpha = 0.0;
+                    var kind = 1u;
+                    if hbt == BT_BERRY_BUSH {
+                        let bid = f32(htx) * 73.0 + f32(hty) * 197.0;
+                        let bh2 = fract(sin(bid) * 43758.5453);
+                        let bv2 = u32(bh2 * f32(BUSH_SPRITE_VARIANTS)) % BUSH_SPRITE_VARIANTS;
+                        sp_alpha = sample_bush_sprite(bv2, sfx, 1.0 - sfy).w;
+                        kind = 1u;
+                    } else {
+                        let rid = f32(htx) * 59.0 + f32(hty) * 173.0;
+                        let rh2 = fract(sin(rid) * 43758.5453);
+                        let rv2 = u32(rh2 * f32(ROCK_SPRITE_VARIANTS)) % ROCK_SPRITE_VARIANTS;
+                        sp_alpha = sample_rock_sprite(rv2, sfx, 1.0 - sfy).w;
+                        kind = 2u;
+                    }
+                    if sp_alpha > 0.05 {
+                        hover_tree_tx = f32(htx);
+                        hover_tree_ty = f32(hty);
+                        hover_sprite_kind = kind;
+                        hover_best_w = 1.0;
+                    }
                 }
             }
         }
-        // Only outline if THIS pixel belongs to the hovered tree
-        if hover_tree_tx >= 0.0 && tree_win_tx == hover_tree_tx && tree_win_ty == hover_tree_ty {
-            // Re-derive this tree's params for sprite-space edge detection
+
+        if hover_tree_tx >= 0.0 && hover_sprite_kind == 0u && tree_win_tx == hover_tree_tx && tree_win_ty == hover_tree_ty {
+            // Tree sprite edge detection
             let ht_id = hover_tree_tx * 137.0 + hover_tree_ty * 311.0;
             let ht_hash = fract(sin(ht_id) * 43758.5453);
             let ht_var = u32(ht_hash * f32(SPRITE_VARIANTS)) % SPRITE_VARIANTS;
@@ -5912,12 +6123,10 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let ht_cy = hover_tree_ty + 0.5 + ht_oy;
             let ht_cu = 0.5 + (world_x - ht_cx) / ht_size;
             let ht_cv = 0.5 - (world_y - ht_cy) / ht_size;
-
-            // Edge detection at 3 distances in sprite space
             let ps1 = 2.0 / f32(SPRITE_SIZE);
             let ps2 = 4.0 / f32(SPRITE_SIZE);
             let ps3 = 6.0 / f32(SPRITE_SIZE);
-            let oc = vec3(0.0, 0.0, 0.0);
+            let oc = vec3(0.9, 0.9, 0.85);
             let e1 = sample_sprite(ht_var, ht_cu + ps1, ht_cv).w < 0.05
                   || sample_sprite(ht_var, ht_cu - ps1, ht_cv).w < 0.05
                   || sample_sprite(ht_var, ht_cu, ht_cv + ps1).w < 0.05
@@ -5931,9 +6140,51 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                   || sample_sprite(ht_var, ht_cu - ps3, ht_cv).w < 0.05
                   || sample_sprite(ht_var, ht_cu, ht_cv + ps3).w < 0.05
                   || sample_sprite(ht_var, ht_cu, ht_cv - ps3).w < 0.05;
-            if e1 { color = oc; }
-            else if e2 { color = mix(color, oc, 0.8); }
-            else if e3 { color = mix(color, oc, 0.4); }
+            if e1 { color = mix(color, oc, 0.6); }
+            else if e2 { color = mix(color, oc, 0.35); }
+            else if e3 { color = mix(color, oc, 0.15); }
+        }
+
+        // Bush or Rock sprite edge detection (tile-aligned sprites)
+        if hover_sprite_kind >= 1u && hover_tree_tx >= 0.0 && bx == i32(hover_tree_tx) && by == i32(hover_tree_ty) {
+            let su = fx;
+            let sv = 1.0 - fy;
+            let oc = vec3(0.9, 0.9, 0.85);
+            if hover_sprite_kind == 1u {
+                // Bush
+                let bid3 = hover_tree_tx * 73.0 + hover_tree_ty * 197.0;
+                let bh3 = fract(sin(bid3) * 43758.5453);
+                let bv3 = u32(bh3 * f32(BUSH_SPRITE_VARIANTS)) % BUSH_SPRITE_VARIANTS;
+                let ps1 = 2.0 / f32(BUSH_SPRITE_SIZE);
+                let ps2 = 4.0 / f32(BUSH_SPRITE_SIZE);
+                let e1 = sample_bush_sprite(bv3, su + ps1, sv).w < 0.05
+                      || sample_bush_sprite(bv3, su - ps1, sv).w < 0.05
+                      || sample_bush_sprite(bv3, su, sv + ps1).w < 0.05
+                      || sample_bush_sprite(bv3, su, sv - ps1).w < 0.05;
+                let e2 = sample_bush_sprite(bv3, su + ps2, sv).w < 0.05
+                      || sample_bush_sprite(bv3, su - ps2, sv).w < 0.05
+                      || sample_bush_sprite(bv3, su, sv + ps2).w < 0.05
+                      || sample_bush_sprite(bv3, su, sv - ps2).w < 0.05;
+                if e1 { color = mix(color, oc, 0.6); }
+                else if e2 { color = mix(color, oc, 0.3); }
+            } else {
+                // Rock
+                let rid3 = hover_tree_tx * 59.0 + hover_tree_ty * 173.0;
+                let rh3 = fract(sin(rid3) * 43758.5453);
+                let rv3 = u32(rh3 * f32(ROCK_SPRITE_VARIANTS)) % ROCK_SPRITE_VARIANTS;
+                let ps1 = 2.0 / f32(ROCK_SPRITE_SIZE);
+                let ps2 = 4.0 / f32(ROCK_SPRITE_SIZE);
+                let e1 = sample_rock_sprite(rv3, su + ps1, sv).w < 0.05
+                      || sample_rock_sprite(rv3, su - ps1, sv).w < 0.05
+                      || sample_rock_sprite(rv3, su, sv + ps1).w < 0.05
+                      || sample_rock_sprite(rv3, su, sv - ps1).w < 0.05;
+                let e2 = sample_rock_sprite(rv3, su + ps2, sv).w < 0.05
+                      || sample_rock_sprite(rv3, su - ps2, sv).w < 0.05
+                      || sample_rock_sprite(rv3, su, sv + ps2).w < 0.05
+                      || sample_rock_sprite(rv3, su, sv - ps2).w < 0.05;
+                if e1 { color = mix(color, oc, 0.6); }
+                else if e2 { color = mix(color, oc, 0.3); }
+            }
         }
     }
 
@@ -5964,6 +6215,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Workbench, kiln, well: utility gold
             if btype == BT_WORKBENCH || btype == BT_KILN || btype == BT_WELL || btype == BT_SAW_HORSE {
                 hover_tint = vec3(0.9, 0.7, 0.2); is_hover = true;
+            }
+            // Storage: crate
+            if btype == BT_CRATE {
+                hover_tint = vec3(0.7, 0.55, 0.3); is_hover = true;
+            }
+            if btype == BT_BED {
+                hover_tint = vec3(0.5, 0.5, 0.8); is_hover = true;
             }
             if is_hover {
                 // Subtle pulsing highlight
