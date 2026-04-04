@@ -1,4 +1,6 @@
 # Crafting recipes — defines what can be made, where, and from what.
+# Item IDs: raw food 0+, cooked 100+, materials 200+, crafted 300+,
+#           containers 400+, tools 500+, weapons 600+, equipment 700+
 
 # ── Hand-crafting (no station needed) ──
 
@@ -7,16 +9,48 @@ id = 8
 name = "Stone Axe"
 station = "hand"
 time = 4.0
-inputs = [{item = 2, count = 2}, {item = 5, count = 1}]
-output = {item = 20, count = 1}
+inputs = [{item = 201, count = 2}, {item = 204, count = 1}]
+output = {item = 500, count = 1}
 
 [[recipe]]
 id = 9
 name = "Stone Pick"
 station = "hand"
 time = 4.0
-inputs = [{item = 2, count = 2}, {item = 5, count = 1}]
-output = {item = 22, count = 1}
+inputs = [{item = 201, count = 2}, {item = 204, count = 1}]
+output = {item = 501, count = 1}
+
+[[recipe]]
+id = 10
+name = "Hunting Knife"
+station = "hand"
+time = 5.0
+inputs = [{item = 201, count = 1}, {item = 204, count = 2}]
+output = {item = 503, count = 1}
+
+[[recipe]]
+id = 13
+name = "Fishing Line"
+station = "hand"
+time = 3.0
+inputs = [{item = 202, count = 2}, {item = 204, count = 1}]
+output = {item = 701, count = 1}
+
+[[recipe]]
+id = 12
+name = "Snare"
+station = "hand"
+time = 4.0
+inputs = [{item = 204, count = 3}, {item = 202, count = 1}]
+output = {item = 702, count = 1}
+
+[[recipe]]
+id = 11
+name = "Fiber Belt"
+station = "hand"
+time = 3.0
+inputs = [{item = 202, count = 3}]
+output = {item = 700, count = 1}
 
 # ── Workbench recipes ──
 
@@ -25,32 +59,32 @@ id = 0
 name = "Rope"
 station = "workbench"
 time = 5.0
-inputs = [{item = 3, count = 4}]
-output = {item = 10, count = 1}
+inputs = [{item = 202, count = 4}]
+output = {item = 300, count = 1}
 
 [[recipe]]
 id = 1
 name = "Wooden Bucket"
 station = "workbench"
 time = 8.0
-inputs = [{item = 5, count = 3}]
-output = {item = 11, count = 1}
+inputs = [{item = 204, count = 3}]
+output = {item = 400, count = 1}
 
 [[recipe]]
 id = 2
 name = "Unfired Jug"
 station = "workbench"
 time = 6.0
-inputs = [{item = 4, count = 2}]
-output = {item = 13, count = 1}
+inputs = [{item = 203, count = 2}]
+output = {item = 302, count = 1}
 
 [[recipe]]
 id = 5
 name = "Wooden Shovel"
 station = "workbench"
 time = 5.0
-inputs = [{item = 5, count = 2}, {item = 1, count = 1}]
-output = {item = 21, count = 1}
+inputs = [{item = 204, count = 2}, {item = 200, count = 1}]
+output = {item = 502, count = 1}
 
 # ── Kiln recipes ──
 
@@ -59,8 +93,8 @@ id = 3
 name = "Clay Jug"
 station = "kiln"
 time = 30.0
-inputs = [{item = 13, count = 1}]
-output = {item = 12, count = 1}
+inputs = [{item = 302, count = 1}]
+output = {item = 401, count = 1}
 
 # ── Saw Horse recipes ──
 
@@ -69,5 +103,5 @@ id = 7
 name = "Planks"
 station = "saw_horse"
 time = 4.0
-inputs = [{item = 1, count = 1}]
-output = {item = 23, count = 2}
+inputs = [{item = 200, count = 1}]
+output = {item = 301, count = 2}

@@ -3,22 +3,39 @@
 use serde::Deserialize;
 
 // Item ID constants (must match items.toml)
+// Food — raw 0–99, cooked 100–199
 pub const ITEM_BERRIES: u16 = 0;
-pub const ITEM_WOOD: u16 = 1;
-pub const ITEM_ROCK: u16 = 2;
-pub const ITEM_FIBER: u16 = 3;
-pub const ITEM_CLAY: u16 = 4;
-pub const ITEM_SCRAP_WOOD: u16 = 5; // sticks/branches
-pub const ITEM_LOG: u16 = 6;
-pub const ITEM_ROPE: u16 = 10;
-pub const ITEM_WOODEN_BUCKET: u16 = 11;
-pub const ITEM_CLAY_JUG: u16 = 12;
-pub const ITEM_UNFIRED_JUG: u16 = 13;
-pub const ITEM_STONE_AXE: u16 = 20;
-pub const ITEM_WOODEN_SHOVEL: u16 = 21;
-pub const ITEM_STONE_PICK: u16 = 22;
-pub const ITEM_PLANK: u16 = 23;
-pub const ITEM_PISTOL: u16 = 30;
+pub const ITEM_RAW_MEAT: u16 = 1;
+pub const ITEM_RAW_FISH: u16 = 2;
+pub const ITEM_COOKED_MEAT: u16 = 100;
+pub const ITEM_COOKED_FISH: u16 = 101;
+// Raw materials 200–299
+pub const ITEM_WOOD: u16 = 200;
+pub const ITEM_ROCK: u16 = 201;
+pub const ITEM_FIBER: u16 = 202;
+pub const ITEM_CLAY: u16 = 203;
+pub const ITEM_SCRAP_WOOD: u16 = 204; // sticks/branches
+pub const ITEM_LOG: u16 = 205;
+// Intermediate / crafted materials 300–399
+pub const ITEM_ROPE: u16 = 300;
+pub const ITEM_PLANK: u16 = 301;
+pub const ITEM_UNFIRED_JUG: u16 = 302;
+// Containers 400–499
+pub const ITEM_WOODEN_BUCKET: u16 = 400;
+pub const ITEM_CLAY_JUG: u16 = 401;
+// Tools 500–599
+pub const ITEM_STONE_AXE: u16 = 500;
+pub const ITEM_STONE_PICK: u16 = 501;
+pub const ITEM_WOODEN_SHOVEL: u16 = 502;
+pub const ITEM_KNIFE: u16 = 503;
+// Weapons 600–699
+pub const ITEM_PISTOL: u16 = 600;
+// Ammo 800–899
+pub const ITEM_PISTOL_ROUNDS: u16 = 800;
+// Equipment / utility 700–799
+pub const ITEM_FIBER_BELT: u16 = 700;
+pub const ITEM_FISHING_LINE: u16 = 701;
+pub const ITEM_SNARE: u16 = 702;
 
 // Weapon type constants (matches shader)
 pub const WEAPON_NONE: u8 = 0;
@@ -26,6 +43,7 @@ pub const WEAPON_AXE: u8 = 1;
 pub const WEAPON_PICK: u8 = 2;
 pub const WEAPON_SHOVEL: u8 = 3;
 pub const WEAPON_PISTOL: u8 = 4;
+pub const WEAPON_KNIFE: u8 = 5;
 
 #[derive(Deserialize)]
 struct ItemFile {
@@ -67,6 +85,24 @@ pub struct ItemDef {
     pub magazine_size: u8,
     #[serde(default)]
     pub reload_time: f32,
+    /// Tool type for activity gating: "knife", "axe", "pick", "shovel"
+    #[serde(default)]
+    pub tool_type: String,
+    /// If true, this item is a belt (wearable equipment layer)
+    #[serde(default)]
+    pub is_belt: bool,
+    /// Number of belt slots (only meaningful when is_belt = true)
+    #[serde(default)]
+    pub belt_slots: u8,
+    /// Time in game-seconds before this item spoils (0 = never spoils)
+    #[serde(default)]
+    pub spoil_time: f32,
+    /// Chance of nausea when eating (0.0–1.0, e.g. 0.15 = 15%)
+    #[serde(default)]
+    pub sickness_chance: f32,
+    /// Ammo type this weapon uses or this ammo provides (e.g. "9mm")
+    #[serde(default)]
+    pub ammo_type: String,
 }
 
 impl ItemDef {
@@ -77,6 +113,16 @@ impl ItemDef {
     pub fn is_ranged_weapon(&self) -> bool {
         self.is_ranged
     }
+
+    /// True if this item is a tool or weapon that belongs on a belt
+    pub fn is_belt_item(&self) -> bool {
+        self.is_melee_weapon() || self.is_ranged_weapon() || !self.tool_type.is_empty()
+    }
+
+    /// Check if this item has a specific tool type
+    pub fn has_tool_type(&self, t: &str) -> bool {
+        self.tool_type == t
+    }
 }
 
 fn default_stack_max() -> u16 {
@@ -85,16 +131,24 @@ fn default_stack_max() -> u16 {
 
 /// An item stack: one slot holding some quantity of an item type,
 /// optionally containing liquid (for containers).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ItemStack {
     pub item_id: u16,
     pub count: u16,
     pub liquid: Option<(LiquidType, u16)>,
+    /// Freshness: 1.0 = fresh, 0.0 = spoiled. Only meaningful for items with spoil_time > 0.
+    pub freshness: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LiquidType {
     Water,
+}
+
+impl PartialEq for ItemStack {
+    fn eq(&self, other: &Self) -> bool {
+        self.item_id == other.item_id && self.count == other.count && self.liquid == other.liquid
+    }
 }
 
 impl ItemStack {
@@ -103,13 +157,14 @@ impl ItemStack {
             item_id,
             count,
             liquid: None,
+            freshness: 1.0,
         }
     }
 
     pub fn label(&self) -> String {
         let reg = ItemRegistry::cached();
         let name = reg.name(self.item_id);
-        if self.count == 1 {
+        let mut s = if self.count == 1 {
             let mut s = name.to_string();
             if let Some((liq, amt)) = self.liquid {
                 let liq_name = match liq {
@@ -127,7 +182,19 @@ impl ItemStack {
             s
         } else {
             format!("{}x {}", self.count, name)
+        };
+        // Freshness indicator for perishable items
+        let spoilable = reg.get(self.item_id).is_some_and(|d| d.spoil_time > 0.0);
+        if spoilable && self.freshness < 0.99 {
+            if self.freshness < 0.25 {
+                s += " (rotting)";
+            } else if self.freshness < 0.5 {
+                s += " (stale)";
+            } else if self.freshness < 0.75 {
+                s += " (aging)";
+            }
         }
+        s
     }
 
     pub fn icon(&self) -> &str {
@@ -152,7 +219,7 @@ impl ItemStack {
     }
 }
 
-const MAX_ITEMS: usize = 64;
+const MAX_ITEMS: usize = 900;
 
 pub struct ItemRegistry {
     defs: Vec<Option<ItemDef>>,

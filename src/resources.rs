@@ -144,6 +144,38 @@ impl PlebInventory {
         }
     }
 
+    /// Find the best food item in inventory (highest effective nutrition).
+    /// Returns (item_id, effective_nutrition) accounting for freshness.
+    pub fn best_food(&self) -> Option<(u16, f32)> {
+        let reg = ItemRegistry::cached();
+        let mut best: Option<(u16, f32)> = None;
+        for s in &self.stacks {
+            if s.count == 0 {
+                continue;
+            }
+            if let Some(def) = reg.get(s.item_id) {
+                if def.nutrition > 0.0 {
+                    // Stale food (< 50% fresh): reduced nutrition
+                    let freshness_mult = if def.spoil_time > 0.0 && s.freshness < 0.5 {
+                        0.5 + s.freshness // 50%-100% of base nutrition
+                    } else {
+                        1.0
+                    };
+                    let effective = def.nutrition * freshness_mult;
+                    if best.map_or(true, |(_, bn)| effective > bn) {
+                        best = Some((s.item_id, effective));
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// True if pleb has any food (nutrition > 0) in inventory.
+    pub fn has_food(&self) -> bool {
+        self.best_food().is_some()
+    }
+
     /// Is the pleb carrying anything?
     pub fn is_carrying(&self) -> bool {
         !self.stacks.is_empty()

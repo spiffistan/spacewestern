@@ -1,5 +1,10 @@
 # Item definitions — centralized data for all item types.
 # Loaded at compile time via include_str!. Generates item registry.
+# ID ranges: raw food 0–99, cooked food 100–199, raw materials 200–299,
+#            crafted 300–399, containers 400–499, tools 500–599,
+#            weapons 600–699, equipment 700–799
+
+# ── Raw Food (0–99) ──
 
 [[item]]
 id = 0
@@ -7,59 +12,120 @@ name = "Berries"
 icon = "🫐"
 category = "food"
 stack_max = 20
-nutrition = 0.20
+nutrition = 0.15
+spoil_time = 240.0
 
 [[item]]
 id = 1
+name = "Raw Meat"
+icon = "🥩"
+category = "food"
+stack_max = 5
+nutrition = 0.12
+spoil_time = 90.0
+sickness_chance = 0.15
+
+[[item]]
+id = 2
+name = "Raw Fish"
+icon = "🐟"
+category = "food"
+stack_max = 5
+nutrition = 0.10
+spoil_time = 60.0
+sickness_chance = 0.10
+
+# ── Cooked Food (100–199) ──
+
+[[item]]
+id = 100
+name = "Cooked Meat"
+icon = "🍖"
+category = "food"
+stack_max = 5
+nutrition = 0.35
+spoil_time = 450.0
+
+[[item]]
+id = 101
+name = "Cooked Fish"
+icon = "🍣"
+category = "food"
+stack_max = 5
+nutrition = 0.30
+spoil_time = 400.0
+
+# ── Raw Materials (200–299) ──
+
+[[item]]
+id = 200
 name = "Wood"
 icon = "🪵"
 category = "raw"
 stack_max = 10
 
 [[item]]
-id = 2
+id = 201
 name = "Rock"
 icon = "🪨"
 category = "raw"
 stack_max = 10
 
 [[item]]
-id = 3
+id = 202
 name = "Fiber"
 icon = "🌿"
 category = "raw"
 stack_max = 20
 
 [[item]]
-id = 4
+id = 203
 name = "Clay"
 icon = "🟤"
 category = "raw"
 stack_max = 10
 
 [[item]]
-id = 5
+id = 204
 name = "Sticks"
 icon = "🪵"
 category = "raw"
 stack_max = 10
 
 [[item]]
-id = 6
+id = 205
 name = "Log"
 icon = "🪵"
 category = "raw"
 stack_max = 1
 
+# ── Intermediate / Crafted (300–399) ──
+
 [[item]]
-id = 10
+id = 300
 name = "Rope"
 icon = "🪢"
 category = "crafted"
 stack_max = 5
 
 [[item]]
-id = 11
+id = 301
+name = "Plank"
+icon = "📏"
+category = "intermediate"
+stack_max = 20
+
+[[item]]
+id = 302
+name = "Unfired Jug"
+icon = "🏺"
+category = "intermediate"
+stack_max = 3
+
+# ── Containers (400–499) ──
+
+[[item]]
+id = 400
 name = "Wooden Bucket"
 icon = "🪣"
 category = "container"
@@ -67,22 +133,17 @@ stack_max = 1
 liquid_capacity = 5
 
 [[item]]
-id = 12
+id = 401
 name = "Clay Jug"
 icon = "🏺"
 category = "container"
 stack_max = 1
 liquid_capacity = 3
 
-[[item]]
-id = 13
-name = "Unfired Jug"
-icon = "🏺"
-category = "intermediate"
-stack_max = 3
+# ── Tools (500–599) ──
 
 [[item]]
-id = 20
+id = 500
 name = "Stone Axe"
 icon = "🪓"
 category = "tool"
@@ -93,22 +154,10 @@ melee_range = 1.2
 melee_knockback = 1.0
 melee_bleed = 0.3
 weapon_type = 1
+tool_type = "axe"
 
 [[item]]
-id = 21
-name = "Wooden Shovel"
-icon = "⛏"
-category = "tool"
-stack_max = 1
-melee_damage = 0.08
-melee_speed = 1.2
-melee_range = 1.4
-melee_knockback = 3.0
-melee_bleed = 0.0
-weapon_type = 3
-
-[[item]]
-id = 22
+id = 501
 name = "Stone Pick"
 icon = "⛏"
 category = "tool"
@@ -119,16 +168,40 @@ melee_range = 1.0
 melee_knockback = 0.5
 melee_bleed = 0.2
 weapon_type = 2
+tool_type = "pick"
 
 [[item]]
-id = 23
-name = "Plank"
-icon = "📏"
-category = "intermediate"
-stack_max = 20
+id = 502
+name = "Wooden Shovel"
+icon = "⛏"
+category = "tool"
+stack_max = 1
+melee_damage = 0.08
+melee_speed = 1.2
+melee_range = 1.4
+melee_knockback = 3.0
+melee_bleed = 0.0
+weapon_type = 3
+tool_type = "shovel"
 
 [[item]]
-id = 30
+id = 503
+name = "Hunting Knife"
+icon = "🔪"
+category = "tool"
+stack_max = 1
+melee_damage = 0.20
+melee_speed = 1.8
+melee_range = 0.8
+melee_knockback = 0.2
+melee_bleed = 0.6
+weapon_type = 5
+tool_type = "knife"
+
+# ── Weapons (600–699) ──
+
+[[item]]
+id = 600
 name = "Pistol"
 icon = "🔫"
 category = "weapon"
@@ -139,3 +212,40 @@ ranged_spread = 0.10
 ranged_aim_speed = 1.5
 magazine_size = 6
 reload_time = 2.5
+ammo_type = "9mm"
+
+# ── Ammo (800–899) ──
+
+[[item]]
+id = 800
+name = "Pistol Rounds"
+icon = "•"
+category = "ammo"
+stack_max = 50
+ammo_type = "9mm"
+
+# ── Equipment / Utility (700–799) ──
+
+[[item]]
+id = 700
+name = "Fiber Belt"
+icon = "🪢"
+category = "equipment"
+stack_max = 1
+is_belt = true
+belt_slots = 3
+
+[[item]]
+id = 701
+name = "Fishing Line"
+icon = "🎣"
+category = "tool"
+stack_max = 1
+tool_type = "fishing"
+
+[[item]]
+id = 702
+name = "Snare"
+icon = "🪤"
+category = "tool"
+stack_max = 3
