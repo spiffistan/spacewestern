@@ -42,6 +42,12 @@ Numbered technical decisions. Format: `DN-NNN-short-name.md`.
 | `DN-014-tall-grass.md` | Proposed | Vegetation as gameplay: concealment, fire fuel, harvesting |
 | `DN-015-leaders-and-ranks.md` | Implementing | Leaders, combat ranks, command shouts, morale aura |
 | `DN-016-terrain-elevation-and-water.md` | Proposed | 1024x1024 elevation, GPU water flow, digging, moats |
+| `DN-017-fauna-and-food.md` | Implementing | Passive wildlife, hunting, trapping, fishing, cooking, early food loop |
+| `DN-018-equipment-system.md` | Proposed | Layered body equipment: belt/vest/pack grids, Diablo-style sizing, pouches for tiny items, auto-deploy |
+| `DN-019-knowledge-and-crafting.md` | Proposed | Knowledge gradient (6 levels), three-lock crafting, social transfer, deception, per-map calibration, domain dependencies |
+| `DN-020-traits-and-aptitudes.md` | Draft | Hidden traits, aptitudes, diverging from Rimworld skill model |
+| `DN-021-ui-philosophy.md` | Proposed | World-as-interface: thermal tinting, body language, diegetic elements, silhouettes, radial menus, tiered notifications |
+| `DN-022-skill-scale.md` | Draft | 0.0-10.0 skill scale, exponential XP curve, aptitude ceilings, failure rates, decay |
 
 ## Ideas (`ideas/`)
 
@@ -63,7 +69,13 @@ Early-stage exploration. Not commitments — creative brainstorming.
 | `alien-fauna.md` | Nocturnal alien creatures: duskweavers, thermogasts, glintcrawlers, hollowcalls, mistmaws, borers. Sound sourcing, system hooks. |
 | `emergent-physics.md` | 20+ ideas exploiting the physics stack: acoustic ecology, pressure traps, echo location, fire whirls, condensation, erosion, pipe organ. |
 | `the-human-layer.md` | Narrative/psychology/culture: planet lore, radio, dreams, moral drift, naming, superstition, scrap economy, saloon, silence, letters. |
-| `lore-and-research.md` | World lore, history, research mechanics |
+| `food-and-survival.md` | Alien crops, physics-driven spoilage, smokehouse as fluid sim showcase, cooking as heat transfer, cold chain engineering, hunting, fermentation, seasonal pressure. |
+| `lore-and-research.md` | Knowledge economy: observation, experimentation, lore items, library, trading knowledge, apprenticeship, unreliable narrators. |
+| `social-knowledge.md` | Social knowledge transfer: 6-level gradient, conversation mechanics, lies and deception, information veracity, chat bubbles, randomness, dependencies. |
+| `world-and-seasons.md` | Two-scale world (512×512 colony + hex world map), four seasons across all systems, expeditions, outposts, weather, living ecosystem, terrain memory, visual mood. |
+| `the-setting.md` | The wider universe: the Reach, the charters, the Perdition, the Silence, surviving settlements, hostile factions, the ancient layer, and how the lore enters gameplay through radio, traders, letters, and ruins. |
+| `light-and-sound.md` | Light and sound as twin gameplay senses: colored light as material language, the lightline, glass/lenses/mirrors, acoustic archaeology, the hollowcall as standing wave, noise discipline, music as physics, the night duality. |
+| `asset-pipeline.md` | Production tools: AI sound (ElevenLabs, Stable Audio, AudioCraft), AI sprites (PixelLab, Sprixen), AI music (Suno, Soundverse), free libraries (Freesound CC0), and the hybrid AI→refine workflow. |
 | `asides.md` | Misc design asides (thumper, drones, sunskirter) |
 | `tall-grass.md` | Tall grass terrain type design |
 | `water-flow.md` | Water flow, pooling, rain, rivers |

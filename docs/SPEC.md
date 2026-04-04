@@ -314,27 +314,57 @@ Scope for v1 is minimal:
 
 This is NOT a general rigid body engine. Keep scope tight.
 
-### Pleb AI (P0 - Required for Prototype)
+### Pleb AI (P0 - Implemented)
 
-- Needs-based behavior: each pleb has needs (hunger, warmth, rest, safety)
-- Job queue: player assigns priorities, plebs pick highest-priority available job
-- Pathfinding: A* on the block grid, with fluid state as cost modifiers (plebs avoid smoke, extreme cold, low O2 — all sampled from fluid grid)
-- Skills: each pleb has skill levels affecting work speed/quality
-- Health: temperature exposure, oxygen deprivation, injury — all derived from fluid grid state at pleb's position
+- 7 needs: hunger, thirst, rest, warmth, oxygen, mood, stress. Health damage from unmet needs.
+- Crisis system: auto-eat/sleep when critically low, overrides player commands
+- 6 skills: shooting, melee, crafting, farming, medical, construction (1-10 scale)
+- 4-priority work system: haul, farm, build, craft. Per-pleb priority toggles.
+- Pathfinding: A* with wall awareness, door passability, water cost gradient, terrain elevation
+- Activities: idle, walking, sleeping, harvesting, eating, hauling, farming, building, crafting, digging, filling, drinking, butchering, staggering, mental breaks
+- Combat: ranged (pistol with magazine/reload), melee (axe/pick/shovel), grenades, crouching, peek-fire, suppression, bleeding
+- Morale: S-curve stress, vulnerability spiral, leader aura recovery, panic contagion
+- Ranks: Green → Trained → Veteran → Hardened (combat experience tracking)
+- Leaders: command shouts (Rally/Advance/FallBack), morale aura
+- Equipment: auto-equip best weapon, equipped items protected from hauling
+- Need emotes: thought bubbles at hunger/thirst/rest/warmth thresholds with sound
+- Per-pleb event log (capped at 50 entries, shown in character sheet)
+- Hunt command: right-click fauna to stalk and shoot
 
-### Storyteller / Event System (P1 - Post-Prototype)
+### Weather System (P1 - Implemented)
+
+- 4 states: Clear, Cloudy, LightRain, HeavyRain with probabilistic transitions (30-90s)
+- Rain: wind-angled multi-layer streaks with parallax, ground splash ripples, atmospheric haze
+- Lightning strikes during heavy rain (random outdoor tile, 120dB thunder sound, power surge)
+- Per-tile wetness tracking with evaporation (sun-dependent)
+- Rain boosts water table, affects crop growth
+- Drought periods: no rain, boosted sun intensity
+
+### Fauna System (P1 - Implemented)
+
+- Data-driven creature definitions (creatures.toml): health, speed, damage, behavior flags
+- Hostile: Duskweavers (nocturnal pack hunters, flee light), Hollowcalls (immobile sound entities)
+- Passive: Dusthares (skittish, hop-based movement, Browse/Scatter AI)
+- Worldgen spawn (10-15 dusthares), slow reproduction (90-150s if 2+ alive, cap 20)
+- Hunting: right-click → Hunt command, pleb follows + precision aims
+- Butchering: right-click corpse → Butcher (4s), yields raw meat
+- Creature rendering: GPU buffer (32 max), per-species color/eyes, hop animation
+- Hover outlines on creatures, sprite blocks (trees, bushes, rocks)
+
+### Storyteller / Event System (P2 - Future)
 
 - Random event generator with difficulty scaling
-- Weather events (cold snaps, heat waves, rain, wind) — these inject forces and sources into the fluid sim
 - Raid events, wanderer joins, trade caravans
 - Modeled after Rimworld's storyteller concept
 
 ### Resource / Crafting System (P0 - Required for Prototype)
 
-- Resources: wood, stone, food, fuel (minimum viable set)
-- Gathering: plebs chop trees (wood), mine rocks (stone), forage (food)
-- Crafting: build walls, floors, doors, campfire, basic furniture
-- Stockpiles: designated zones for resource storage
+- Resources: wood, stone, clay, fiber, sticks, logs, planks, rope, berries, raw meat, cooked meat
+- Gathering: plebs chop trees (sticks+fiber), mine rocks, forage berries, hunt fauna
+- Crafting: data-driven recipes (recipes.toml). Stations: workbench, saw horse, kiln, hand
+- Storage: crate blocks for item storage, storage zones for ground items
+- Items: data-driven (items.toml) with icons, categories, nutrition, weapon stats, liquid capacity
+- Equipment: plebs auto-equip weapons/tools, equipped items protected from hauling
 
 ### UI / Player Interaction (P0 - Required for Prototype)
 
@@ -361,11 +391,14 @@ This is NOT a general rigid body engine. Keep scope tight.
 - Fast binary format (rkyv or bincode)
 - Autosave on interval
 
-### Audio (P2 - Future)
+### Audio (P1 - Implemented)
 
-- Ambient soundscape driven by world state (wind velocity from fluid sim, fire crackling, pleb chatter)
-- UI feedback sounds
-- Not in prototype scope
+- Procedural spatial audio: 8 sound patterns (impulse, sine, noise, thud, slash, gunshot, bullet_impact, explosion)
+- Spatialized with stereo panning and distance attenuation (60-tile range)
+- Rain ambience: continuous filtered noise layered (wash + patter + individual drops)
+- Thunder on lightning strikes
+- Need emote sounds (soft noise when hunger/thirst thresholds cross)
+- UI click sounds
 
 ### Multiplayer (P2 - Future / Maybe Never)
 
@@ -423,7 +456,7 @@ Phase transitions run on CPU (scan affected blocks each frame, check temperature
 
 ---
 
-## Implementation Status (v84)
+## Implementation Status (v186+)
 
 ### Completed
 
@@ -445,7 +478,7 @@ Phase transitions run on CPU (scan affected blocks each frame, check temperature
 - [x] GPU lightmap: 512x512 (2x res) with flood-fill propagation (26 iterations, viewport-culled)
 - [x] Proximity glow with line-of-sight tracing (wall-occluded, height-aware)
 - [x] Directional light bleed through windows/doors
-- [x] Tree sprites (8 variants: oak, pine, bush, willow, cedar, birch + clusters), noise-clustered forests
+- [x] Tree sprites (8 conifer variants), bush sprites (16 variants), rock sprites (32 variants), noise-clustered forests
 - [x] Build menu with drag-to-place, destroy tool, roofing, windows, doors
 - [x] sRGB gamma correction (consistent native/web appearance)
 
@@ -489,19 +522,28 @@ Phase transitions run on CPU (scan affected blocks each frame, check temperature
 - [x] Tank with fill gauge, inlet/outlet directional chevrons
 - [x] Pipe overlay mode
 
-**Phase 3: Plebs** (Partial)
+**Phase 3: Plebs** ✅
 - [x] Multi-pleb system (up to 16 colonists, Vec<Pleb>)
 - [x] Randomized appearance: skin tone, hair color/style, shirt, pants
 - [x] In-world sprite matches portrait (shirt body, skin head, hair)
-- [x] WASD direct control, Q/E rotation, click-to-select, click-to-move A*
+- [x] Click-to-select, right-click-to-move A*, group selection
 - [x] Auto-open doors (close after 2 seconds)
-- [x] Torch (T) and headlight (G) per pleb
+- [x] Torch and headlight (3 beam modes: wide/normal/focused) per pleb
 - [x] Colonist bar with portraits at top of screen
 - [x] GpuPleb storage buffer for multi-pleb GPU rendering
-- [ ] Needs system (hunger, rest, warmth, oxygen, safety, comfort)
-- [ ] Health system (damage from suffocation, cold, fire)
-- [ ] Utility-based AI decision making
-- [ ] Personality traits, mood system
+- [x] 7 needs: hunger, thirst, rest, warmth, oxygen, mood, stress
+- [x] Health system: damage from suffocation, cold, fire, combat, starvation, dehydration
+- [x] Crisis-driven AI: auto-eat/sleep when needs critical
+- [x] Work priority system (haul/farm/build/craft, per-pleb 0-3 priorities)
+- [x] Backstories + personality traits (data-driven)
+- [x] Non-linear morale: S-curve stress, vulnerability spiral, panic contagion
+- [x] Combat: ranged, melee, grenades, crouching, peek-fire, suppression
+- [x] Ranks (Green→Trained→Veteran→Hardened), leaders, command shouts
+- [x] BG2-style character window: equipment | portrait | stats, tabbed bottom (Gear/Log/Modifiers)
+- [x] Need-based thought bubbles + status labels with priority-based colored pills
+- [x] Equipment system: equip/unequip via right-click, haul protection
+- [x] Hunting: right-click fauna → Hunt command, follow + precision aim
+- [x] Butchering: right-click corpse → Butcher activity (4s) → raw meat
 
 **Phase 3b: Physics** ✅
 - [x] PhysicsBody with 3D position (x,y,z), velocity, rotation
@@ -519,7 +561,34 @@ Phase transitions run on CPU (scan affected blocks each frame, check temperature
 - [x] Toggleable glow/bleed/temporal via UI
 - [x] Lightmap throttling (every 2 frames, forced on grid changes)
 - [x] Precomputed sun parameters on CPU
-- [x] 29 unit tests across 4 modules
+- [x] 271 unit tests across 4 modules
+
+**Phase 3c: Weather & Water** ✅
+- [x] Weather state machine (Clear/Cloudy/LightRain/HeavyRain)
+- [x] Wind-angled rain with parallax layers, ground splashes, atmospheric haze
+- [x] Lightning strikes during heavy rain with thunder sound
+- [x] Per-tile wetness, evaporation, water table boost from rain
+- [x] GPU water physics (512x512 ping-pong, symmetric flow, percolation drain)
+- [x] Per-pixel water rendering with bilinear elevation sampling
+- [x] Water-aware pathfinding (quadratic cost gradient, deep water blocked)
+- [x] Sub-tile terrain elevation (1024x1024 heightmap), digging, berms
+
+**Phase 3d: Fauna & Food** (Partial)
+- [x] Creature system: data-driven (creatures.toml), GPU rendering, bleeding, corpses
+- [x] Duskweavers (nocturnal pack hunters), Hollowcalls (sound entities)
+- [x] Dusthares (passive fauna, Browse/Scatter AI, hop animation, worldgen spawn)
+- [x] Hunt command, butchering, raw/cooked meat items
+- [ ] Cooking work task (carry raw meat to campfire → cooked meat)
+- [ ] Berry bush finite supply + regrow
+- [ ] Snare trapping, fishing
+- [ ] Mudcrawler, Thornback creatures
+- [ ] Cooking combinations (Zelda-style)
+- [ ] Food preservation (salt, smoking, drying)
+
+**Phase 3e: Audio** ✅
+- [x] Procedural spatial audio (8 patterns, stereo panning, distance falloff)
+- [x] Rain ambience (continuous layered noise)
+- [x] Need emote sounds
 
 ### Not Yet Started
 
@@ -527,18 +596,12 @@ Phase transitions run on CPU (scan affected blocks each frame, check temperature
 - [ ] Water phase transitions (freeze/evaporate)
 - [ ] Chemical reactions (methane + fire = explosion)
 - [ ] Extended gas system (H2O, CH4, CO, H2)
-- [ ] Bloom on emissive surfaces
 
-**Phase 3 remaining:**
-- [ ] Pleb needs system (hunger, rest, warmth, oxygen, safety, comfort)
-- [ ] Health + death
-- [ ] Fluid-aware pathfinding costs
-- [ ] Personality traits + mood + mental breaks
-- [ ] Multiple pleb AI (utility-based decision making)
-
-**Phase 4: Resources & Building** — partially started (build menu + 30 block types, no resource gathering/crafting)
-**Phase 5: Weather & Survival** — not started (wind exists, no weather events)
-**Phase 6: Polish & Ship** — not started (save/load, storyteller, audio)
+**Phase 4: Content & Survival**
+- [ ] Save/load (world state serialization)
+- [ ] Storyteller / event system
+- [ ] Trade caravans, wanderer joins
+- [ ] Tech tree / research
 
 ---
 
