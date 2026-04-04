@@ -2317,7 +2317,7 @@ impl App {
                     };
 
                     let p_event_log = pleb.event_log.clone();
-                    let p_activity = format!("{:?}", pleb.activity.inner());
+                    let _p_activity = format!("{:?}", pleb.activity.inner());
 
                     let mut open = self.show_inventory;
                     egui::Window::new(pleb_name)
@@ -3512,7 +3512,7 @@ impl App {
     fn draw_build_bar(&mut self, ctx: &egui::Context) {
         // --- Build categories (bottom-left, vertical 2-column grid, flows upward) ---
         let cat_s = 14.0;
-        let mut categories: Vec<(&str, &str)> = vec![
+        let categories: Vec<(&str, &str)> = vec![
             ("Walls", "\u{1f9f1}"),
             ("Floor", "\u{2b1c}"),
             ("Roof", "\u{1f3e0}"),
@@ -8326,14 +8326,16 @@ impl App {
                         } else {
                             name.to_string()
                         };
-                        egui::show_tooltip_at_pointer(
-                            ctx,
+                        egui::Tooltip::always_open(
+                            ctx.clone(),
                             egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("item_tip")),
                             egui::Id::new("item_tip_inner"),
-                            |ui| {
-                                ui.label(egui::RichText::new(tip).size(11.0));
-                            },
-                        );
+                            mp,
+                        )
+                        .at_pointer()
+                        .show(|ui| {
+                            ui.label(egui::RichText::new(tip).size(11.0));
+                        });
                     }
                 }
             }

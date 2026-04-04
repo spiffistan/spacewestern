@@ -36,9 +36,9 @@ use pleb::{
 mod morale;
 mod needs;
 use needs::{
-    AirReadback, BERRY_HUNGER_RESTORE, BreathingState, HEAT_CRISIS_TEMP, WELL_DRINK_TIME,
-    WELL_THIRST_RESTORE, breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate,
-    find_nearest_well, mood_label, sample_environment, tick_needs,
+    AirReadback, BreathingState, HEAT_CRISIS_TEMP, WELL_DRINK_TIME, WELL_THIRST_RESTORE,
+    breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate, find_nearest_well,
+    mood_label, sample_environment, tick_needs,
 };
 
 mod build;
@@ -3356,7 +3356,7 @@ impl App {
             }
 
             // Readback at cursor position: dye (debug only) + water (always)
-            let ctrl_for_debug = self.pressed_keys.contains(&KeyCode::ControlLeft)
+            let _ctrl_for_debug = self.pressed_keys.contains(&KeyCode::ControlLeft)
                 || self.pressed_keys.contains(&KeyCode::ControlRight);
             {
                 // Water readback always runs (needed for hover info + water_depth_cpu)

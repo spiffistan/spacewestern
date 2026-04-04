@@ -223,7 +223,7 @@ impl App {
 
     /// Update all simulation state. Returns frame delta time.
     pub(crate) fn update_simulation(&mut self) -> f32 {
-        let mut events: Vec<GameEventKind> = Vec::new();
+        let mut events: Vec<GameEventKind> = Vec::with_capacity(16);
 
         // Advance time + FPS tracking
         let now = Instant::now();
@@ -5372,8 +5372,8 @@ impl App {
             }
         }
 
-        // --- Auto-haul ground items to storage zones ---
-        if !self.ground_items.is_empty() {
+        // --- Auto-haul ground items to storage zones (throttled) ---
+        if !self.ground_items.is_empty() && self.frame_count % 30 == 10 {
             // Collect storage zone tiles
             let storage_tiles: Vec<(i32, i32)> = self
                 .zones
