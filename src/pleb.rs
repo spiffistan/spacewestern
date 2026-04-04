@@ -952,6 +952,34 @@ impl Pleb {
         self.gain_xp(skill_idx, base_xp * 1.5)
     }
 
+    /// Grant XP and auto-log level-ups. Combines gain_xp + event logging.
+    pub fn gain_xp_logged(&mut self, skill_idx: usize, base_xp: f32, time: f32) {
+        if let Some(new_level) = self.gain_xp(skill_idx, base_xp) {
+            self.log_event(
+                time,
+                format!(
+                    "{} improved to {:.1}",
+                    SKILL_NAMES.get(skill_idx).unwrap_or(&"?"),
+                    new_level,
+                ),
+            );
+        }
+    }
+
+    /// Grant failure XP and auto-log level-ups.
+    pub fn gain_xp_failure_logged(&mut self, skill_idx: usize, base_xp: f32, time: f32) {
+        if let Some(new_level) = self.gain_xp_failure(skill_idx, base_xp) {
+            self.log_event(
+                time,
+                format!(
+                    "{} improved to {:.1}",
+                    SKILL_NAMES.get(skill_idx).unwrap_or(&"?"),
+                    new_level,
+                ),
+            );
+        }
+    }
+
     /// Set skills from legacy [u8; 6] (backstory), preserving existing aptitudes
     pub fn set_skills_from_legacy(&mut self, old: [u8; 6]) {
         for i in 0..NUM_SKILLS {

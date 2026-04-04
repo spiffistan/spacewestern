@@ -1482,18 +1482,11 @@ impl App {
                                     count: rock_yield,
                                     item: "rock".into(),
                                 });
-                                if let Some(new_level) =
-                                    pleb.gain_xp(pleb::SKILL_CONSTRUCTION, 10.0)
-                                {
-                                    pleb.log_event(
-                                        self.time_of_day,
-                                        format!(
-                                            "{} improved to {:.1}",
-                                            pleb::SKILL_NAMES[pleb::SKILL_CONSTRUCTION],
-                                            new_level
-                                        ),
-                                    );
-                                }
+                                pleb.gain_xp_logged(
+                                    pleb::SKILL_CONSTRUCTION,
+                                    10.0,
+                                    self.time_of_day,
+                                );
                             } else if let Some(wi) = {
                                 // Prefer the specific item type the blueprint needs
                                 let prefer_id: Option<u16> =
@@ -4081,7 +4074,7 @@ impl App {
                 if let PlebActivity::Farming(progress) = &pleb.activity {
                     // Speed varies: trees take longer than crops/bushes
                     // Stone axe: 2x tree chopping speed
-                    let has_axe = pleb.inventory.count_of(ITEM_STONE_AXE) > 0;
+                    let has_axe = pleb.has_tool("axe");
                     // Trees require Stone Axe — cancel if pleb doesn't have one
                     let is_tree_target = pleb.work_target.is_some_and(|(tx, ty)| {
                         let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
@@ -4116,17 +4109,11 @@ impl App {
                                     self.crop_timers.insert(tidx as u32, 0.0);
                                     self.grid_dirty = true;
                                     events.push(GameEventKind::Planted(pleb.name.clone()));
-                                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0)
-                                    {
-                                        pleb.log_event(
-                                            self.time_of_day,
-                                            format!(
-                                                "{} improved to {:.1}",
-                                                pleb::SKILL_NAMES[pleb::SKILL_FARMING],
-                                                new_level
-                                            ),
-                                        );
-                                    }
+                                    pleb.gain_xp_logged(
+                                        pleb::SKILL_FARMING,
+                                        10.0,
+                                        self.time_of_day,
+                                    );
                                 } else if tbt == BT_CROP {
                                     let roof_h = tblock & 0xFF000000;
                                     let fflags = block_flags_rs(tblock) as u32;
@@ -4149,17 +4136,11 @@ impl App {
                                         pleb: pleb.name.clone(),
                                         what: "a crop (berries + fiber)",
                                     });
-                                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0)
-                                    {
-                                        pleb.log_event(
-                                            self.time_of_day,
-                                            format!(
-                                                "{} improved to {:.1}",
-                                                pleb::SKILL_NAMES[pleb::SKILL_FARMING],
-                                                new_level
-                                            ),
-                                        );
-                                    }
+                                    pleb.gain_xp_logged(
+                                        pleb::SKILL_FARMING,
+                                        10.0,
+                                        self.time_of_day,
+                                    );
                                 } else if tbt == BT_BERRY_BUSH {
                                     self.ground_items.push(resources::GroundItem {
                                         x: pleb.x,
@@ -4170,17 +4151,11 @@ impl App {
                                         pleb: pleb.name.clone(),
                                         what: "berries",
                                     });
-                                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0)
-                                    {
-                                        pleb.log_event(
-                                            self.time_of_day,
-                                            format!(
-                                                "{} improved to {:.1}",
-                                                pleb::SKILL_NAMES[pleb::SKILL_FARMING],
-                                                new_level
-                                            ),
-                                        );
-                                    }
+                                    pleb.gain_xp_logged(
+                                        pleb::SKILL_FARMING,
+                                        10.0,
+                                        self.time_of_day,
+                                    );
                                 } else if tbt == BT_TREE {
                                     // Chop down tree → remove all quadrants (2x2), drop 10 wood
                                     // Find the top-left corner from the quadrant flags
@@ -4240,17 +4215,11 @@ impl App {
                                         pleb: pleb.name.clone(),
                                         what: "a tree (log + sticks + fiber)",
                                     });
-                                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0)
-                                    {
-                                        pleb.log_event(
-                                            self.time_of_day,
-                                            format!(
-                                                "{} improved to {:.1}",
-                                                pleb::SKILL_NAMES[pleb::SKILL_FARMING],
-                                                new_level
-                                            ),
-                                        );
-                                    }
+                                    pleb.gain_xp_logged(
+                                        pleb::SKILL_FARMING,
+                                        10.0,
+                                        self.time_of_day,
+                                    );
                                 }
                             }
                             self.active_work.remove(&(tx, ty));
@@ -4696,16 +4665,7 @@ impl App {
                             }
                         }
                         self.active_work.remove(&(tx, ty));
-                        if let Some(new_level) = pleb.gain_xp(pleb::SKILL_CONSTRUCTION, 20.0) {
-                            pleb.log_event(
-                                self.time_of_day,
-                                format!(
-                                    "{} improved to {:.1}",
-                                    pleb::SKILL_NAMES[pleb::SKILL_CONSTRUCTION],
-                                    new_level
-                                ),
-                            );
-                        }
+                        pleb.gain_xp_logged(pleb::SKILL_CONSTRUCTION, 20.0, self.time_of_day);
                         // Chain to adjacent blueprint if one exists (build walls sequentially)
                         let mut chained = false;
                         for &(dx, dy) in &[(1i32, 0), (-1, 0), (0, 1), (0, -1)] {
@@ -4823,16 +4783,7 @@ impl App {
                             }
                             self.active_work.remove(&(tx, ty));
                         }
-                        if let Some(new_level) = pleb.gain_xp(pleb::SKILL_CRAFTING, 15.0) {
-                            pleb.log_event(
-                                self.time_of_day,
-                                format!(
-                                    "{} improved to {:.1}",
-                                    pleb::SKILL_NAMES[pleb::SKILL_CRAFTING],
-                                    new_level
-                                ),
-                            );
-                        }
+                        pleb.gain_xp_logged(pleb::SKILL_CRAFTING, 15.0, self.time_of_day);
                         pleb.work_target = None;
                         pleb.activity = PlebActivity::Idle;
                     } else {
@@ -4882,16 +4833,7 @@ impl App {
                             }
                         }
                     }
-                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_CRAFTING, 15.0) {
-                        pleb.log_event(
-                            self.time_of_day,
-                            format!(
-                                "{} improved to {:.1}",
-                                pleb::SKILL_NAMES[pleb::SKILL_CRAFTING],
-                                new_level
-                            ),
-                        );
-                    }
+                    pleb.gain_xp_logged(pleb::SKILL_CRAFTING, 15.0, self.time_of_day);
                     pleb.activity = PlebActivity::Idle;
                     pleb.work_target = None;
                 } else {
@@ -4926,16 +4868,7 @@ impl App {
                             format!("{} cooked fish", pleb.name),
                         ));
                     }
-                    if let Some(new_level) = pleb.gain_xp(pleb::SKILL_CRAFTING, 10.0) {
-                        pleb.log_event(
-                            self.time_of_day,
-                            format!(
-                                "{} improved to {:.1}",
-                                pleb::SKILL_NAMES[pleb::SKILL_CRAFTING],
-                                new_level
-                            ),
-                        );
-                    }
+                    pleb.gain_xp_logged(pleb::SKILL_CRAFTING, 10.0, self.time_of_day);
                     pleb.activity = PlebActivity::Idle;
                     pleb.work_target = None;
                 } else {
@@ -4965,30 +4898,12 @@ impl App {
                             types::EventCategory::General,
                             format!("{} caught a fish", pleb.name),
                         ));
-                        if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0) {
-                            pleb.log_event(
-                                self.time_of_day,
-                                format!(
-                                    "{} improved to {:.1}",
-                                    pleb::SKILL_NAMES[pleb::SKILL_FARMING],
-                                    new_level
-                                ),
-                            );
-                        }
+                        pleb.gain_xp_logged(pleb::SKILL_FARMING, 10.0, self.time_of_day);
                         pleb.activity = PlebActivity::Idle;
                         pleb.work_target = None;
                     } else {
                         pleb.log_event(self.time_of_day, "No catch...".into());
-                        if let Some(new_level) = pleb.gain_xp_failure(pleb::SKILL_FARMING, 8.0) {
-                            pleb.log_event(
-                                self.time_of_day,
-                                format!(
-                                    "{} improved to {:.1}",
-                                    pleb::SKILL_NAMES[pleb::SKILL_FARMING],
-                                    new_level
-                                ),
-                            );
-                        }
+                        pleb.gain_xp_failure_logged(pleb::SKILL_FARMING, 8.0, self.time_of_day);
                         // Restart fishing (loop)
                         pleb.activity = PlebActivity::Fishing(0.0);
                     }
@@ -5070,16 +4985,11 @@ impl App {
                 }
                 let bp = &self.blueprints[&(bx, by)];
 
-                // For roofs: check if any pleb has the special resource
-                let special_ready = if bp.is_roof() {
+                // Check if blueprint is ready to build
+                let ready = if bp.is_roof() {
                     self.plebs
                         .iter()
                         .any(|p| !p.is_enemy && p.inventory.count_of(ITEM_FIBER) >= 1)
-                } else {
-                    true // standard blueprints don't need special check
-                };
-                let ready = if bp.is_roof() {
-                    special_ready
                 } else {
                     bp.resources_met()
                 };
@@ -6371,14 +6281,20 @@ impl App {
                     self.creatures[ci].x = *sx as f32 + 0.5;
                     self.creatures[ci].y = *sy as f32 + 0.5;
 
-                    // Decrement snare durability
-                    let h = (self.grid_data[*sidx] >> 8) & 0xFF;
-                    if h > 1 {
-                        self.grid_data[*sidx] =
-                            (self.grid_data[*sidx] & 0xFFFF00FF) | ((h - 1) << 8);
+                    // Decrement snare durability (sidx bounds-checked in scan above)
+                    let h = if *sidx < self.grid_data.len() {
+                        (self.grid_data[*sidx] >> 8) & 0xFF
                     } else {
-                        // Broken: set height to 0
-                        self.grid_data[*sidx] = self.grid_data[*sidx] & 0xFFFF00FF;
+                        0
+                    };
+                    if *sidx < self.grid_data.len() {
+                        if h > 1 {
+                            self.grid_data[*sidx] =
+                                (self.grid_data[*sidx] & 0xFFFF00FF) | ((h - 1) << 8);
+                        } else {
+                            // Broken: set height to 0
+                            self.grid_data[*sidx] = self.grid_data[*sidx] & 0xFFFF00FF;
+                        }
                     }
                     self.grid_dirty = true;
 
@@ -6505,16 +6421,7 @@ fn tick_pleb_activity(
                         }
                     }
                 }
-                if let Some(new_level) = pleb.gain_xp(pleb::SKILL_FARMING, 10.0) {
-                    pleb.log_event(
-                        time_of_day,
-                        format!(
-                            "{} improved to {:.1}",
-                            pleb::SKILL_NAMES[pleb::SKILL_FARMING],
-                            new_level
-                        ),
-                    );
-                }
+                pleb.gain_xp_logged(pleb::SKILL_FARMING, 10.0, time_of_day);
                 pleb.harvest_target = None;
                 if was_crisis {
                     pleb.activity = PlebActivity::Crisis(
