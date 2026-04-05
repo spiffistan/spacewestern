@@ -2832,7 +2832,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if is_exterior_south {
         let height_diff = f32(bheight - south_h);
-        let face_height = min(height_diff * camera.oblique_strength, 0.35);
+        // Always show at least a baseline face (0.08) + oblique slider adds more
+        let face_height = min(height_diff * max(camera.oblique_strength, 0.08), 0.35);
         let face_start = 1.0 - face_height; // face occupies bottom strip of tile
         if fy > face_start {
             // Thin wall: only show face where wall sub-cells exist.
@@ -6053,6 +6054,42 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Fire is emissive — boost brightness above 1.0, not dimmed by shadows
             let emissive_fire = fire_ov.rgb * (1.2 + 0.8 * burn_i);
             color = mix(color, emissive_fire, fire_ov.a);
+        }
+    }
+
+    // --- 2.5D wall cap: walls to the south project upward into this tile ---
+    // Applied after pleb rendering so we can show pleb outlines through walls.
+    if !is_wall_face && bheight == 0u && by + 1 < i32(camera.grid_h) {
+        let south_wall_h2 = effective_tile_height(bx, by + 1);
+        if south_wall_h2 > 0u {
+            let cap_depth = min(f32(south_wall_h2) * 0.06, 0.12);
+            let cap_start = 1.0 - cap_depth;
+            if fy > cap_start {
+                let t = smoothstep(0.0, 1.0, (fy - cap_start) / cap_depth);
+                // Get wall material color for cap
+                let s_wd_idx2 = u32(by + 1) * u32(camera.grid_w) + u32(bx);
+                let s_wd2 = read_wall_data(s_wd_idx2);
+                var cap_col: vec3<f32>;
+                if s_wd2 != 0u && (s_wd2 & 0xFu) != 0u {
+                    cap_col = wall_material_color(wd_material_s(s_wd2));
+                } else {
+                    let s_block2 = get_block(bx, by + 1);
+                    cap_col = block_base_color(block_type(s_block2), block_flags(s_block2));
+                }
+                cap_col *= 1.05; // top surface catches more light
+                // Apply shadow/lighting to cap
+                cap_col = cap_col * (ambient + sun_color * light_factor * 0.7);
+
+                if drew_pleb {
+                    // Pleb behind wall: show outline through cap
+                    // Blend cap on top but leave a bright outline edge around the pleb
+                    let pleb_outline_col = vec3(0.85, 0.90, 0.75);
+                    color = mix(color, pleb_outline_col, t * 0.4);
+                } else {
+                    // Normal cap: opaque wall top surface
+                    color = mix(color, cap_col, t * 0.75);
+                }
+            }
         }
     }
 
