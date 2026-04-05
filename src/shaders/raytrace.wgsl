@@ -2934,11 +2934,34 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
+        // Glassless window in face: opening with frame
+        let face_has_window = wd_has_window(wd) && !face_is_door && !face_is_open_door;
+        if face_has_window {
+            // Window opening: center 40% of the wall width, between sill and lintel
+            let win_sill = 0.35; // bottom of window (% of face height)
+            let win_lintel = 0.85; // top of window
+            let win_left = 0.25;
+            let win_right = 0.75;
+            let in_win = fx > win_left && fx < win_right
+                && wall_face_t > win_sill && wall_face_t < win_lintel;
+            if in_win {
+                // Frame check
+                let near_edge = fx < win_left + 0.04 || fx > win_right - 0.04
+                    || wall_face_t < win_sill + 0.04 || wall_face_t > win_lintel - 0.04;
+                if near_edge {
+                    face_color = vec3<f32>(0.30, 0.22, 0.12); // wood frame
+                } else {
+                    // Opening — dark interior
+                    face_color = vec3<f32>(0.10, 0.09, 0.08);
+                }
+            }
+        }
+
         // Darken toward bottom of face (ambient occlusion at ground junction)
         face_color *= (0.60 + 0.40 * (1.0 - wall_face_t));
 
-        // Subtle mortar/plank lines along the face (skip for doors — already has planks)
-        if !face_is_door {
+        // Subtle mortar/plank lines along the face (skip for doors/windows)
+        if !face_is_door && !face_has_window {
             let line = fract(fx * 4.0);
             let mortar = f32(line < 0.06) * 0.04;
             face_color -= vec3<f32>(mortar);
@@ -4394,6 +4417,23 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Wall pixel from wall_data layer — use wall material color
             let wmat = wd_material_s(wd);
             color = wall_material_color(wmat);
+            // Glassless window opening: cut a hole in the center of the wall
+            if wd_has_window(wd) {
+                let edges = wd_edges_s(wd);
+                var in_window_opening = false;
+                // N/S edges: window is in center 40% of X axis
+                if ((edges & 1u) != 0u && fy < 0.25) || ((edges & 4u) != 0u && fy > 0.75) {
+                    if fx > 0.30 && fx < 0.70 { in_window_opening = true; }
+                }
+                // E/W edges: window is in center 40% of Y axis
+                if ((edges & 2u) != 0u && fx > 0.75) || ((edges & 8u) != 0u && fx < 0.25) {
+                    if fy > 0.30 && fy < 0.70 { in_window_opening = true; }
+                }
+                if in_window_opening {
+                    // Show ground behind the window (it's an opening)
+                    color = block_base_color(BT_GROUND, 0u) * 0.7; // slightly darker
+                }
+            }
         } else if wd != 0u && !wd_is_wall_pixel {
             // Open portion of a tile with walls — show the underlying block
             color = block_base_color(btype, bflags);

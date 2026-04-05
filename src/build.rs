@@ -9,14 +9,15 @@ pub enum BuildTool {
     RemoveFloor,
     RemoveRoof,
     Dig,
-    Door,        // special: placed on existing walls, toggles door flag
-    Window,      // special: placed on existing walls, replaces with glass
-    WoodBox,     // special: spawns physics body, not grid block
-    GrowingZone, // paint growing zone overlay on dirt tiles
-    StorageZone, // paint storage zone overlay — each tile stores one item stack
-    DigZone,     // paint dig zone — plebs will dig terrain to target depth
-    BermZone,    // paint berm zone — plebs dump dirt to raise terrain
-    WaterFill,   // sandbox: continuously inject water while mouse held
+    Door,          // special: placed on existing walls, toggles door flag
+    Window,        // special: placed on existing walls, replaces with glass
+    WindowOpening, // special: adds glassless window opening to existing wall
+    WoodBox,       // special: spawns physics body, not grid block
+    GrowingZone,   // paint growing zone overlay on dirt tiles
+    StorageZone,   // paint storage zone overlay — each tile stores one item stack
+    DigZone,       // paint dig zone — plebs will dig terrain to target depth
+    BermZone,      // paint berm zone — plebs dump dirt to raise terrain
+    WaterFill,     // sandbox: continuously inject water while mouse held
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

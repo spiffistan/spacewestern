@@ -1993,6 +1993,24 @@ impl App {
                         }
                     }
                 }
+                BuildTool::WindowOpening => {
+                    // Glassless window: set has_window flag on wall_data
+                    let wd = if idx < self.wall_data.len() {
+                        self.wall_data[idx]
+                    } else {
+                        0
+                    };
+                    let has_wall = wd_edges(wd) != 0
+                        || (is_wall_block(bt) && block_height_rs(block) as u32 > 0);
+                    let already_has = (wd & (1 << 12)) != 0;
+                    if has_wall && !already_has {
+                        if idx < self.wall_data.len() {
+                            self.wall_data[idx] |= 1 << 12; // WD_HAS_WINDOW bit
+                        }
+                        self.grid_dirty = true;
+                        log::info!("Added window opening at ({}, {})", bx, by);
+                    }
+                }
                 BuildTool::RemoveFloor => {
                     let block = self.grid_data[idx];
                     let bt_here = block_type_rs(block);

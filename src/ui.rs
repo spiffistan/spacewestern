@@ -4070,7 +4070,13 @@ impl App {
                                                 "\u{1f4e6}",
                                                 "Crate",
                                             );
-                                            icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Window");
+                                            icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Glass");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::WindowOpening,
+                                                "\u{25a1}",
+                                                "Opening",
+                                            );
                                             icon_btn(ui, BuildTool::Door, "\u{1f6aa}", "Door");
                                             icon_btn(
                                                 ui,
@@ -4665,7 +4671,9 @@ impl App {
                                     | BuildTool::RemoveFloor
                                     | BuildTool::RemoveRoof => "Click/drag".to_string(),
                                     BuildTool::WoodBox => "Click to drop".to_string(),
-                                    BuildTool::Window | BuildTool::Door => "Click wall".to_string(),
+                                    BuildTool::Window
+                                    | BuildTool::Door
+                                    | BuildTool::WindowOpening => "Click wall".to_string(),
                                     BuildTool::Roof => "Drag (needs support)".to_string(),
                                     BuildTool::Dig => "Sandbox: instant dig".to_string(),
                                     BuildTool::DigZone => "Drag to mark dig area".to_string(),
