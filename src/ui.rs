@@ -6892,6 +6892,39 @@ impl App {
                     // Full-thickness wall or non-wall block
                     bp_painter.rect_filled(rect, 0.0, tint);
                 }
+                // 2.5D preview: south face strip below the blueprint
+                if bp.is_wall() || is_wall_block(bp.block_data & 0xFF) {
+                    let tw = sx1 - sx0;
+                    let face_h = tw * 0.12; // face height proportional to tile size
+                    let face_tint = if bp.resources_met() {
+                        egui::Color32::from_rgba_unmultiplied(40, 120, 90, 70)
+                    } else {
+                        egui::Color32::from_rgba_unmultiplied(40, 90, 170, 70)
+                    };
+                    // Face strip directly below the tile
+                    let face_rect =
+                        egui::Rect::from_min_size(egui::pos2(sx0, sy1), egui::vec2(tw, face_h));
+                    // Only show for edges that face south (bit 2 = S)
+                    let has_south = if bp.is_wall() {
+                        (bp.wall_edges & 4) != 0 || bp.wall_thickness >= 4
+                    } else {
+                        true // full block walls always have south face
+                    };
+                    if has_south {
+                        bp_painter.rect_filled(face_rect, 0.0, face_tint);
+                        // Darker bottom for AO effect
+                        let ao_rect = egui::Rect::from_min_size(
+                            egui::pos2(sx0, sy1 + face_h * 0.6),
+                            egui::vec2(tw, face_h * 0.4),
+                        );
+                        bp_painter.rect_filled(
+                            ao_rect,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 30),
+                        );
+                    }
+                }
+
                 // Progress bar at bottom (construction progress)
                 if bp.progress > 0.01 {
                     let bar_h = (tile_px * 0.08).max(2.0);
