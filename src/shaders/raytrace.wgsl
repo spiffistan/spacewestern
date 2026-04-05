@@ -2828,7 +2828,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     let mat = get_material(btype);
     let has_wall_face = mat.shows_wall_face > 0.5 || is_wd_wall;
     let any_door_open = (is_door(block) && is_open(block)) || (wd_has_door(wd) && wd_door_open(wd));
-    let is_exterior_south = bheight > south_h && has_wall_face && !any_door_open;
+    // Show face even when door is open (open door shows dark opening in face)
+    let is_exterior_south = bheight > south_h && has_wall_face;
 
     if is_exterior_south {
         let height_diff = f32(bheight - south_h);
@@ -2896,13 +2897,52 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Use wall_data material color if available, otherwise block color
         var face_color = select(block_base_color(btype, bflags), wall_material_color(wd_material_s(wd)), is_wd_wall);
 
+        // Open door: dark opening in the face
+        let face_is_open_door = wd_has_door(wd) && wd_door_open(wd);
+        if face_is_open_door {
+            // Show dark interior through the opening
+            face_color = vec3<f32>(0.08, 0.07, 0.06);
+            // Door frame on sides
+            if fx < 0.08 || fx > 0.92 {
+                face_color = vec3<f32>(0.30, 0.22, 0.12);
+            }
+            // Lintel (top of doorway)
+            if wall_face_t < 0.08 {
+                face_color = vec3<f32>(0.30, 0.22, 0.12);
+            }
+        }
+
+        // Closed door face: darker wood with vertical plank lines and handle
+        let face_is_door = wd_has_door(wd) && !wd_door_open(wd);
+        if face_is_door {
+            // Dark wood door
+            face_color = vec3<f32>(0.35, 0.25, 0.15);
+            // Vertical plank lines (3 planks)
+            let plank = fract(fx * 3.0);
+            if plank < 0.04 || plank > 0.96 {
+                face_color *= 0.7; // dark gap between planks
+            }
+            // Handle/knob (small bright dot on the right side)
+            let knob_x = fx - 0.65;
+            let knob_y = wall_face_t - 0.55;
+            if knob_x * knob_x + knob_y * knob_y < 0.003 {
+                face_color = vec3<f32>(0.55, 0.50, 0.35); // brass knob
+            }
+            // Slight frame around door edges
+            if fx < 0.06 || fx > 0.94 || wall_face_t < 0.05 {
+                face_color = vec3<f32>(0.30, 0.22, 0.12); // darker frame
+            }
+        }
+
         // Darken toward bottom of face (ambient occlusion at ground junction)
         face_color *= (0.60 + 0.40 * (1.0 - wall_face_t));
 
-        // Subtle mortar/plank lines along the face
-        let line = fract(fx * 4.0);
-        let mortar = f32(line < 0.06) * 0.04;
-        face_color -= vec3<f32>(mortar);
+        // Subtle mortar/plank lines along the face (skip for doors — already has planks)
+        if !face_is_door {
+            let line = fract(fx * 4.0);
+            let mortar = f32(line < 0.06) * 0.04;
+            face_color -= vec3<f32>(mortar);
+        }
 
         // Glass face: window between sill and lintel with frame detail
         if btype == BT_GLASS {
