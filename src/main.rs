@@ -18,11 +18,11 @@ mod cards;
 mod creature_defs;
 mod creatures;
 mod grid;
-mod theme;
 pub mod item_defs;
 mod materials;
 pub mod recipe_defs;
 mod sprites;
+mod theme;
 
 use grid::*;
 use item_defs::{ITEM_ROCK, ITEM_SCRAP_WOOD};

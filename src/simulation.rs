@@ -5745,11 +5745,61 @@ impl App {
         }
 
         // --- FSM tick ---
-        let pleb_positions: Vec<(f32, f32, bool)> = self
+        // Collect light source positions for safe-zone checks
+        // Pleb lights are always fresh; campfires only scanned every 30 frames
+        let light_sources: Vec<(f32, f32, f32)> = {
+            let mut lights: Vec<(f32, f32, f32)> = Vec::with_capacity(16);
+            // Pleb torches and headlights (always current)
+            for p in &self.plebs {
+                if p.is_dead || p.is_enemy {
+                    continue;
+                }
+                if p.torch_on {
+                    lights.push((p.x, p.y, 5.0));
+                }
+                if p.headlight_mode > 0 {
+                    lights.push((p.x, p.y, 8.0));
+                }
+            }
+            // Campfires (reuse cached positions from cooking scan if available,
+            // otherwise do a quick scan of placed campfires — typically < 5)
+            for idx in 0..(GRID_W * GRID_H) as usize {
+                let bt = self.grid_data[idx] & 0xFF;
+                let h = (self.grid_data[idx] >> 8) & 0xFF;
+                if (bt == BT_FIREPLACE || bt == BT_CAMPFIRE) && h > 0 {
+                    let lx = (idx as u32 % GRID_W) as f32 + 0.5;
+                    let ly = (idx as u32 / GRID_W) as f32 + 0.5;
+                    lights.push((lx, ly, 6.0));
+                }
+            }
+            lights
+        };
+
+        // Check if a position is in a lit safe zone
+        let is_lit = |x: f32, y: f32| -> bool {
+            light_sources
+                .iter()
+                .any(|&(lx, ly, r)| (x - lx).powi(2) + (y - ly).powi(2) < r * r)
+        };
+
+        // Pleb positions with exposure info: (x, y, has_personal_light, is_roofed, is_lit_area)
+        let pleb_positions: Vec<(f32, f32, bool, bool, bool)> = self
             .plebs
             .iter()
             .filter(|p| !p.is_dead && !p.is_enemy)
-            .map(|p| (p.x, p.y, p.torch_on || p.headlight_mode > 0))
+            .map(|p| {
+                let has_light = p.torch_on || p.headlight_mode > 0;
+                let bx = p.x.floor() as i32;
+                let by = p.y.floor() as i32;
+                let is_roofed = if bx >= 0 && by >= 0 && bx < GRID_W as i32 && by < GRID_H as i32 {
+                    let idx = (by as u32 * GRID_W + bx as u32) as usize;
+                    idx < self.grid_data.len() && roof_height_rs(self.grid_data[idx]) > 0
+                } else {
+                    false
+                };
+                let in_light = is_lit(p.x, p.y);
+                (p.x, p.y, has_light, is_roofed, in_light)
+            })
             .collect();
 
         for ci in 0..self.creatures.len() {
@@ -5805,36 +5855,55 @@ impl App {
                         c.path_idx = 0;
                     }
 
-                    // Duskweaver: scan for food or lone colonists
+                    // Duskweaver: hunt exposed colonists (not roofed, not in lit area)
                     if c.species_id == CREATURE_DUSKWEAVER && c.state_timer > 2.0 {
-                        // Check for ground food within 20 tiles
-                        let mut best_food: Option<(i32, i32, f32)> = None;
-                        for gi in &self.ground_items {
-                            if gi.stack.item_id == ITEM_BERRIES {
-                                let d = (gi.x - c.x).powi(2) + (gi.y - c.y).powi(2);
-                                if d < 400.0 && best_food.map_or(true, |(_, _, bd)| d < bd) {
-                                    best_food = Some((gi.x.floor() as i32, gi.y.floor() as i32, d));
+                        // Am I in a lit zone? If so, flee
+                        let self_in_light = is_lit(c.x, c.y);
+                        if self_in_light {
+                            // Flee from nearest light
+                            let edge_x = if c.x < (gw / 2) as f32 {
+                                1.0
+                            } else {
+                                (gw - 2) as f32
+                            };
+                            let edge_y = if c.y < (gh / 2) as f32 {
+                                1.0
+                            } else {
+                                (gh - 2) as f32
+                            };
+                            c.state = CreatureState::Flee(edge_x, edge_y);
+                            c.state_timer = 0.0;
+                            c.path = astar_path_terrain_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                (c.x as i32, c.y as i32),
+                                (edge_x as i32, edge_y as i32),
+                            );
+                            c.path_idx = 0;
+                        } else {
+                            // Find nearest EXPOSED pleb (not roofed, not in lit area)
+                            let mut best_target: Option<(f32, f32, f32)> = None;
+                            for &(px, py, _has_light, is_roofed, in_light) in &pleb_positions {
+                                if is_roofed || in_light {
+                                    continue; // safe — can't target
+                                }
+                                let d = (px - c.x).powi(2) + (py - c.y).powi(2);
+                                if d < 900.0 && best_target.map_or(true, |(_, _, bd)| d < bd) {
+                                    // 30 tile detection range
+                                    best_target = Some((px, py, d));
                                 }
                             }
-                        }
 
-                        // Check light avoidance
-                        let near_light = pleb_positions.iter().any(|&(px, py, has_light)| {
-                            has_light
-                                && (px - c.x).powi(2) + (py - c.y).powi(2)
-                                    < def.flee_light_radius * def.flee_light_radius
-                        });
-
-                        if !near_light {
-                            if let Some((fx, fy, _)) = best_food {
-                                c.state = CreatureState::Stalk(fx as f32 + 0.5, fy as f32 + 0.5);
+                            if let Some((tx, ty, _)) = best_target {
+                                c.state = CreatureState::Stalk(tx, ty);
                                 c.state_timer = 0.0;
                                 c.path = astar_path_terrain_wd(
                                     &self.grid_data,
                                     &self.wall_data,
                                     &self.terrain_data,
                                     (c.x as i32, c.y as i32),
-                                    (fx, fy),
+                                    (tx as i32, ty as i32),
                                 );
                                 c.path_idx = 0;
                             }
@@ -5862,25 +5931,34 @@ impl App {
                         }
                     }
 
-                    // Check if near target → steal
-                    let dist_to_target = ((c.x - tx).powi(2) + (c.y - ty).powi(2)).sqrt();
-                    if dist_to_target < 1.5 {
-                        c.state = CreatureState::Steal(tx as i32, ty as i32);
-                        c.state_timer = 0.0;
+                    // Near target → attack the nearest pleb
+                    let dist_to_target = (c.x - tx).powi(2) + (c.y - ty).powi(2);
+                    if dist_to_target < 2.25 {
+                        // Find nearest pleb for attack
+                        let mut attack_idx: Option<usize> = None;
+                        let mut attack_d = f32::MAX;
+                        for (pi, p) in self.plebs.iter().enumerate() {
+                            if p.is_dead || p.is_enemy {
+                                continue;
+                            }
+                            let d = (p.x - c.x).powi(2) + (p.y - c.y).powi(2);
+                            if d < 4.0 && d < attack_d {
+                                attack_idx = Some(pi);
+                                attack_d = d;
+                            }
+                        }
+                        if let Some(pi) = attack_idx {
+                            c.state = CreatureState::Attack(pi);
+                            c.state_timer = 0.0;
+                        } else {
+                            // No pleb nearby (went inside?) — back to idle
+                            c.state = CreatureState::Idle;
+                            c.state_timer = 0.0;
+                        }
                     }
 
-                    // Check flee conditions: light or group of colonists
-                    let near_light = pleb_positions.iter().any(|&(px, py, has_light)| {
-                        has_light
-                            && (px - c.x).powi(2) + (py - c.y).powi(2)
-                                < def.flee_light_radius * def.flee_light_radius
-                    });
-                    let nearby_colonists = pleb_positions
-                        .iter()
-                        .filter(|&&(px, py, _)| (px - c.x).powi(2) + (py - c.y).powi(2) < 64.0)
-                        .count();
-                    if near_light || nearby_colonists >= def.flee_group_size as usize {
-                        // Flee to nearest edge
+                    // Flee if entering a lit zone
+                    if is_lit(c.x, c.y) {
                         let edge_x = if c.x < (gw / 2) as f32 {
                             1.0
                         } else {
@@ -5903,7 +5981,37 @@ impl App {
                         c.path_idx = 0;
                     }
 
-                    // Timeout: if stalking too long, give up
+                    // Flee if too many colonists nearby (pack intimidation)
+                    let nearby_colonists = pleb_positions
+                        .iter()
+                        .filter(|&&(px, py, _, _, _)| {
+                            (px - c.x).powi(2) + (py - c.y).powi(2) < 64.0
+                        })
+                        .count();
+                    if nearby_colonists >= def.flee_group_size as usize {
+                        let edge_x = if c.x < (gw / 2) as f32 {
+                            1.0
+                        } else {
+                            (gw - 2) as f32
+                        };
+                        let edge_y = if c.y < (gh / 2) as f32 {
+                            1.0
+                        } else {
+                            (gh - 2) as f32
+                        };
+                        c.state = CreatureState::Flee(edge_x, edge_y);
+                        c.state_timer = 0.0;
+                        c.path = astar_path_terrain_wd(
+                            &self.grid_data,
+                            &self.wall_data,
+                            &self.terrain_data,
+                            (c.x as i32, c.y as i32),
+                            (edge_x as i32, edge_y as i32),
+                        );
+                        c.path_idx = 0;
+                    }
+
+                    // Timeout
                     if c.state_timer > 30.0 {
                         c.state = CreatureState::Idle;
                         c.state_timer = 0.0;
@@ -6081,7 +6189,7 @@ impl App {
                     if flee_r > 0.0 {
                         let flee_r2 = flee_r * flee_r;
                         let mut closest_threat: Option<(f32, f32, f32)> = None;
-                        for &(px, py, _) in &pleb_positions {
+                        for &(px, py, _, _, _) in &pleb_positions {
                             let d2 = (px - c.x).powi(2) + (py - c.y).powi(2);
                             if d2 < flee_r2 && closest_threat.map_or(true, |(_, _, bd)| d2 < bd) {
                                 closest_threat = Some((px, py, d2));
