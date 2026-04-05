@@ -7077,6 +7077,72 @@ impl App {
                     );
                 }
 
+                // 2.5D preview: south face strip for wall placements
+                let is_wall_tool = matches!(
+                    self.build_tool,
+                    BuildTool::Place(bt) if is_wall_block(bt)
+                );
+                if is_wall_tool && state != 0 {
+                    let tw = sx1 - sx0;
+                    let face_h = tw * 0.12;
+                    let face_color = egui::Color32::from_rgba_unmultiplied(60, 140, 200, 60);
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(egui::pos2(sx0, sy1), egui::vec2(tw, face_h)),
+                        0.0,
+                        face_color,
+                    );
+                    // AO at bottom of face
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(sx0, sy1 + face_h * 0.6),
+                            egui::vec2(tw, face_h * 0.4),
+                        ),
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 25),
+                    );
+                }
+
+                // Door/window preview on hovered wall tile
+                if matches!(
+                    self.build_tool,
+                    BuildTool::Door | BuildTool::WindowOpening | BuildTool::Window
+                ) && state != 0
+                {
+                    let tw = sx1 - sx0;
+                    let face_h = tw * 0.12;
+                    // Show existing wall face + the door/window overlay
+                    let feature_color = match self.build_tool {
+                        BuildTool::Door => egui::Color32::from_rgba_unmultiplied(140, 100, 50, 100),
+                        BuildTool::WindowOpening => {
+                            egui::Color32::from_rgba_unmultiplied(40, 40, 40, 100)
+                        }
+                        BuildTool::Window => {
+                            egui::Color32::from_rgba_unmultiplied(100, 150, 200, 80)
+                        }
+                        _ => egui::Color32::TRANSPARENT,
+                    };
+                    // Feature in center of the face
+                    let feat_left = sx0 + tw * 0.25;
+                    let feat_right = sx0 + tw * 0.75;
+                    let feat_top = sy1;
+                    let feat_bottom = sy1 + face_h;
+                    // Wall face background
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(egui::pos2(sx0, sy1), egui::vec2(tw, face_h)),
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(120, 110, 90, 70),
+                    );
+                    // Feature opening/panel
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(feat_left, feat_top + face_h * 0.1),
+                            egui::pos2(feat_right, feat_bottom - face_h * 0.05),
+                        ),
+                        0.0,
+                        feature_color,
+                    );
+                }
+
                 // Wind turbine: show wind direction arrows across the 2x2 area (first tile only)
                 if self.build_tool == BuildTool::Place(41)
                     && tx == blueprint_tiles[0].0.0
