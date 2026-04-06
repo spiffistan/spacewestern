@@ -8184,6 +8184,40 @@ impl App {
             }
         }
 
+        // Render footprints (subtle ground marks)
+        if tile_px > 6.0 {
+            let screen_r = ctx.content_rect();
+            let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;
+            let fp_painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::new("footprints"),
+            ));
+            let fp_lifetime = 60.0; // seconds before fully faded
+            for &(fx, fy, _angle, age) in &self.footprints {
+                if age < 0.0 || age > fp_lifetime {
+                    continue;
+                }
+                let sx = ((fx - cam_cx) * cam_zoom + cam_sw * 0.5) / self.render_scale / bp_ppp;
+                let sy = ((fy - cam_cy) * cam_zoom + cam_sh * 0.5) / self.render_scale / bp_ppp;
+                // Cull off-screen
+                if sx < -10.0
+                    || sy < -10.0
+                    || sx > screen_r.max.x + 10.0
+                    || sy > screen_r.max.y + 10.0
+                {
+                    continue;
+                }
+                let fade = 1.0 - (age / fp_lifetime);
+                let r = tile_px * 0.04; // tiny mark
+                let alpha = (fade * 40.0) as u8; // very subtle
+                fp_painter.circle_filled(
+                    egui::pos2(sx, sy),
+                    r.max(0.8),
+                    egui::Color32::from_rgba_unmultiplied(30, 25, 15, alpha),
+                );
+            }
+        }
+
         // Render ground items (harvest drops)
         if !self.ground_items.is_empty() {
             let (cam_cx, cam_cy, cam_zoom, cam_sw, cam_sh) = bp_cam;

@@ -391,15 +391,18 @@ struct App {
     dusthare_repro_timer: f32, // dusthare reproduction cooldown
     next_pack_id: u16,
     blood_stains: Vec<(f32, f32, f32)>, // (x, y, fade_timer) — blood drops on ground
-    detected_rooms: Vec<rooms::Room>,   // auto-detected enclosed rooms
-    room_map: Vec<u16>,                 // per-tile room ID (0 = no room)
+    /// Ring buffer of footprints: (x, y, angle, age). Fixed capacity, overwrites oldest.
+    footprints: Vec<(f32, f32, f32, f32)>,
+    footprint_idx: usize,             // write cursor into ring buffer
+    detected_rooms: Vec<rooms::Room>, // auto-detected enclosed rooms
+    room_map: Vec<u16>,               // per-tile room ID (0 = no room)
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
-    show_pleb_help: bool,               // show controls modal
-    show_inventory: bool,               // show pleb inventory window
-    inv_selected_slot: Option<usize>,   // selected inventory slot for swap/drop
-    charsheet_tab: u8,                  // 0=gear, 1=log, 2=modifiers
-    show_schedule: bool,                // show shift schedule window
-    show_priorities: bool,              // show work priorities window
+    show_pleb_help: bool,             // show controls modal
+    show_inventory: bool,             // show pleb inventory window
+    inv_selected_slot: Option<usize>, // selected inventory slot for swap/drop
+    charsheet_tab: u8,                // 0=gear, 1=log, 2=modifiers
+    show_schedule: bool,              // show shift schedule window
+    show_priorities: bool,            // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
     doors: Vec<Door>,     // physical hinged doors
     doors_dirty: bool,    // door angles changed, re-upload door_buffer
@@ -911,6 +914,8 @@ impl App {
             dusthare_repro_timer: 90.0,
             next_pack_id: 100, // offset past worldgen pack IDs
             blood_stains: Vec::new(),
+            footprints: vec![(0.0, 0.0, 0.0, -1.0); 256], // ring buffer, age -1 = inactive
+            footprint_idx: 0,
             detected_rooms: Vec::new(),
             room_map: vec![0u16; (GRID_W * GRID_H) as usize],
             cannon_angles: std::collections::HashMap::new(),

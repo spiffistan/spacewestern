@@ -2202,8 +2202,38 @@ impl App {
                     }
                 }
 
+                // Footprint stamping: drop prints at sub-tile intervals while walking
+                let moved_dx = pleb.x - pleb.prev_x;
+                let moved_dy = pleb.y - pleb.prev_y;
+                let moved_dist = moved_dx * moved_dx + moved_dy * moved_dy;
+                if moved_dist > 0.15 * 0.15 && !pleb.is_dead {
+                    // Alternate left/right with slight offset from center
+                    let side = (self.footprint_idx & 1) as f32 * 2.0 - 1.0; // -1 or +1
+                    let perp_x = -moved_dy.signum() * 0.06 * side;
+                    let perp_y = moved_dx.signum() * 0.06 * side;
+                    let fp = (
+                        pleb.x + perp_x,
+                        pleb.y + perp_y,
+                        pleb.angle,
+                        0.0f32, // age starts at 0
+                    );
+                    let cap = self.footprints.len();
+                    self.footprints[self.footprint_idx % cap] = fp;
+                    self.footprint_idx += 1;
+                }
+
                 pleb.prev_x = pleb.x;
                 pleb.prev_y = pleb.y;
+            }
+        }
+
+        // Age footprints
+        {
+            let dt_game = dt * self.time_speed;
+            for fp in &mut self.footprints {
+                if fp.3 >= 0.0 {
+                    fp.3 += dt_game;
+                }
             }
         }
 
