@@ -10971,6 +10971,24 @@ impl App {
             .map(|gi| gi.stack.count as u32)
             .sum();
 
+        // Room at this tile
+        let room_label = {
+            let ridx = (by as u32 * GRID_W + bx as u32) as usize;
+            if ridx < self.room_map.len() {
+                let room_id = self.room_map[ridx];
+                if room_id > 0 {
+                    self.detected_rooms
+                        .iter()
+                        .find(|r| r.id == room_id)
+                        .map(|r| format!("{} ({})", r.label, r.size))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         // Build the info lines
         let screen = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::new(
@@ -10989,6 +11007,19 @@ impl App {
         };
         let x = screen.max.x - 10.0;
         let mut y = screen.max.y - log_offset;
+
+        // Line 5: room (if any)
+        if let Some(ref rl) = room_label {
+            Self::shadow_text(
+                &painter,
+                egui::pos2(x, y),
+                egui::Align2::RIGHT_BOTTOM,
+                rl,
+                font_s.clone(),
+                egui::Color32::from_rgb(180, 170, 130),
+            );
+            y -= 14.0;
+        }
 
         // Line 4: items (if any)
         if item_count > 0 {

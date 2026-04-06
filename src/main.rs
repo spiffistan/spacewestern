@@ -21,6 +21,7 @@ mod grid;
 pub mod item_defs;
 mod materials;
 pub mod recipe_defs;
+mod rooms;
 mod sprites;
 mod theme;
 
@@ -390,6 +391,8 @@ struct App {
     dusthare_repro_timer: f32, // dusthare reproduction cooldown
     next_pack_id: u16,
     blood_stains: Vec<(f32, f32, f32)>, // (x, y, fade_timer) — blood drops on ground
+    detected_rooms: Vec<rooms::Room>,   // auto-detected enclosed rooms
+    room_map: Vec<u16>,                 // per-tile room ID (0 = no room)
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
     show_pleb_help: bool,               // show controls modal
     show_inventory: bool,               // show pleb inventory window
@@ -908,6 +911,8 @@ impl App {
             dusthare_repro_timer: 90.0,
             next_pack_id: 100, // offset past worldgen pack IDs
             blood_stains: Vec::new(),
+            detected_rooms: Vec::new(),
+            room_map: vec![0u16; (GRID_W * GRID_H) as usize],
             cannon_angles: std::collections::HashMap::new(),
             show_pleb_help: false,
             show_inventory: false,

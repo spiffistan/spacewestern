@@ -5616,6 +5616,13 @@ impl App {
             self.log_event(cat, msg);
         }
 
+        // --- Room detection (throttled: every 60 frames or on grid change) ---
+        if self.frame_count % 60 == 15 || self.grid_dirty {
+            let (rooms, map) = rooms::detect_rooms(&self.grid_data, &self.wall_data, &self.doors);
+            self.detected_rooms = rooms;
+            self.room_map = map;
+        }
+
         dt
     }
 

@@ -28,6 +28,7 @@ pub mod pipes;
 pub mod pleb;
 pub mod recipe_defs;
 pub mod resources;
+pub mod rooms;
 pub mod sprites;
 pub mod terrain;
 pub mod theme;
