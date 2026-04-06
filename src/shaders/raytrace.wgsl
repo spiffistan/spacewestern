@@ -605,9 +605,9 @@ fn terrain_detail(
     let tidx = u32(by) * u32(camera.grid_w) + u32(bx);
     let tdata = terrain_buf[tidx];
     let t_type = tdata & 0xFu;
-    let t_compact = f32((tdata >> 24u) & 0x1Fu) / 31.0;   // 0..1 compaction (foot traffic)
+    let t_compact = f32((tdata >> 24u) & 0x1Fu) / 31.0;   // 0..1 compaction (per-tile, used for speed)
     let t_veg_raw = f32((tdata >> 4u) & 0x1Fu) / 31.0;    // 0..1 base vegetation density
-    let t_veg = t_veg_raw * (1.0 - t_compact * 0.9);      // compaction kills vegetation
+    var t_veg = t_veg_raw; // vegetation adjusted after bilinear compaction below
     let t_grain = f32((tdata >> 9u) & 0xFu) / 15.0;       // 0..1 texture grain
     let t_rough = f32((tdata >> 13u) & 0x3u) / 3.0;        // 0..1 roughness
 
@@ -634,10 +634,16 @@ fn terrain_detail(
     soil_base = mix(soil_base, soil_base * (0.85 + soil_noise * 0.3), 0.5);
     var color = soil_base;
 
-    // Compacted soil: darker, smoother, worn path appearance
-    if t_compact > 0.05 {
+    // Compacted soil: bilinear-blended for smooth path edges
+    let cp00 = f32((terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] >> 24u) & 0x1Fu) / 31.0;
+    let cp10 = f32((terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] >> 24u) & 0x1Fu) / 31.0;
+    let cp01 = f32((terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] >> 24u) & 0x1Fu) / 31.0;
+    let cp11 = f32((terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] >> 24u) & 0x1Fu) / 31.0;
+    let compact_smooth = mix(mix(cp00, cp10, bl_ux), mix(cp01, cp11, bl_ux), bl_uy);
+    t_veg = t_veg_raw * (1.0 - compact_smooth * 0.9); // compaction kills vegetation (smooth)
+    if compact_smooth > 0.05 {
         let path_col = soil_base * 0.72; // darker packed earth
-        color = mix(color, path_col, t_compact * 0.6);
+        color = mix(color, path_col, compact_smooth * 0.6);
     }
 
     // --- 2. Moisture influence (from water table) ---
