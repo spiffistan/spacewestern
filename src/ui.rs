@@ -2602,6 +2602,7 @@ impl App {
                         pleb.equipment.belt[..pleb.equipment.belt_capacity as usize].to_vec();
                     let p_active_item = pleb.equipment.active_item;
                     let p_nauseous = pleb.nauseous_timer > 0.0;
+                    let p_smoke = pleb.smoke_exposure;
                     let p_water = {
                         let px = pleb.x.floor() as i32;
                         let py = pleb.y.floor() as i32;
@@ -3678,6 +3679,13 @@ impl App {
                                     if p_nauseous {
                                         mods.push(("Nauseous", "Ate raw food — nutrition wasted".into(),
                                             egui::Color32::from_rgb(140, 160, 50)));
+                                    }
+                                    if p_smoke > 0.3 {
+                                        mods.push(("Choking", format!("Smoke: {:.0}% — mood penalty, work slowed", p_smoke * 100.0),
+                                            egui::Color32::from_rgb(140, 130, 100)));
+                                    } else if p_smoke > 0.1 {
+                                        mods.push(("Smoky", format!("Smoke: {:.0}% — eyes watering", p_smoke * 100.0),
+                                            egui::Color32::from_rgb(160, 150, 120)));
                                     }
 
                                     // Mental
@@ -9797,6 +9805,12 @@ impl App {
                                 Some("Suppressed"),
                                 egui::Color32::from_rgb(255, 240, 220),
                                 egui::Color32::from_rgb(150, 100, 30),
+                            )
+                        } else if pleb.smoke_exposure > 0.3 {
+                            (
+                                Some("Choking"),
+                                egui::Color32::WHITE,
+                                egui::Color32::from_rgb(120, 110, 90),
                             )
                         } else {
                             (None, egui::Color32::TRANSPARENT, egui::Color32::TRANSPARENT)

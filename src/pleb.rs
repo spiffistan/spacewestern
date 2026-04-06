@@ -663,6 +663,7 @@ pub struct Pleb {
     pub command_cooldown: f32, // seconds until next command shout allowed
     pub hunt_target: Option<usize>, // creature index being hunted (stalk + shoot)
     pub nauseous_timer: f32, // >0 = nauseous from raw food (seconds remaining)
+    pub smoke_exposure: f32, // current smoke density at position (updated from air readback)
     /// Tracks which need-emote thresholds have fired (reset when need recovers).
     /// Bits: 0=hunger_low, 1=hunger_crit, 2=thirst_low, 3=thirst_crit,
     ///       4=rest_low, 5=rest_crit, 6=warmth_low, 7=warmth_crit
@@ -810,6 +811,7 @@ impl Pleb {
             command_cooldown: 0.0,
             hunt_target: None,
             nauseous_timer: 0.0,
+            smoke_exposure: 0.0,
             need_emote_flags: 0,
             event_log: Vec::new(),
         }

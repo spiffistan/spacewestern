@@ -1225,6 +1225,38 @@ impl App {
                     // (Applied as effective health — stored as >1.0 for display)
                 }
 
+                // --- Smoke discomfort: mood penalty, cough, speed reduction ---
+                if !pleb.is_enemy && !pleb.is_dead {
+                    let smoke_level = air.map(|a| a.smoke).unwrap_or(0.0);
+                    pleb.smoke_exposure = smoke_level;
+                    if smoke_level > 0.1 {
+                        let t = dt * self.time_speed;
+                        if smoke_level > 0.5 {
+                            // Suffocating: health damage
+                            pleb.needs.health -= 0.005 * t;
+                            pleb.needs.mood -= 0.5 * t;
+                        } else if smoke_level > 0.3 {
+                            // Choking: mood penalty + work speed implied by mood
+                            pleb.needs.mood -= 0.3 * t;
+                        } else {
+                            // Eyes watering: mild mood hit
+                            pleb.needs.mood -= 0.1 * t;
+                        }
+                        // Cough bubble (throttled: only when no bubble active)
+                        if smoke_level > 0.2 && pleb.bubble.is_none() {
+                            // Random cough timing based on smoke density
+                            let cough_seed =
+                                (pleb.x * 97.3 + pleb.y * 211.7 + self.time_of_day * 1000.0) as u32;
+                            let cough_roll =
+                                (cough_seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0;
+                            // Higher smoke = more frequent coughs
+                            if cough_roll < smoke_level * 0.02 {
+                                pleb.set_bubble(pleb::BubbleKind::Thought("*cough*".into()), 1.5);
+                            }
+                        }
+                    }
+                }
+
                 // --- Need emotes: thought bubbles when needs drop below thresholds ---
                 if !pleb.is_enemy && !pleb.is_dead {
                     let mut f = pleb.need_emote_flags;
