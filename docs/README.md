@@ -48,6 +48,14 @@ Numbered technical decisions. Format: `DN-NNN-short-name.md`.
 | `DN-020-traits-and-aptitudes.md` | Draft | Hidden traits, aptitudes, diverging from Rimworld skill model |
 | `DN-021-ui-philosophy.md` | Proposed | World-as-interface: thermal tinting, body language, diegetic elements, silhouettes, radial menus, tiered notifications |
 | `DN-022-skill-scale.md` | Draft | 0.0-10.0 skill scale, exponential XP curve, aptitude ceilings, failure rates, decay |
+| `DN-023-sub-tile-mining.md` | Draft | 8x8 sub-cell mining grid, mineral veins, directional carving, geology skill, structural rock types |
+| `DN-024-terrain-and-wilderness.md` | Draft | Three-zone map (clearing/margins/deep forest), glades, game trails, geological zones, alien flora integration |
+| `DN-025-primitive-tools.md` | Draft | Hands → stone → flint → metal tool chain, durability, knapping, in-hand crafting, mining speed gates |
+| `DN-026-world-lore-and-discovery.md` | Draft | World reveals itself through lore stages: survival → adaptation → comprehension → mastery → ancient. Per-pleb knowledge, lore journal, label progression |
+| `DN-027-discovery-feel.md` | Draft | Two-tier discovery: silent passive identification (common) vs conditional moments (rare). No markers, no examine action, serendipity over system |
+| `DN-028-wall-conduits.md` | Draft | Wire/gas/liquid pipes inside walls, thickness-gated capacity, wall outlets/vents/taps, overlay X-ray view |
+| `DN-029-wall-types-and-progression.md` | Draft | 14 wall types from brush fence to resonite, biome-driven building, thermal/structural/conduit trade-offs, palisade defense system |
+| `DN-030-terrain-types.md` | Draft | New terrain types: mineral-stained soil (mining clues), leaf litter (forest floor), sand (glass-making), volcanic (future) |
 
 ## Ideas (`ideas/`)
 
@@ -59,6 +67,7 @@ Early-stage exploration. Not commitments — creative brainstorming.
 | `cards.md` | Cards as narrative meta-layer: events, blueprints, abilities, crises |
 | `artstyle.md` | Six art direction options (Dust & Iron, Moebius, Dime Novel, etc.) |
 | `sprites.md` | Practical sprite design: what needs sprites, production approaches |
+| `exploration-directions.md` | Future directions: fire infrastructure, seasons, night ecology, trade, underground, relationships |
 | `walls-and-ground.md` | Wall and ground rendering assessment — procedural vs sprites |
 | `multi-level.md` | Underground levels: depth as difficulty, fluid coupling, UX |
 | `character-visuals.md` | Character visuals: wear, emotes, relationships, scars, paper doll |

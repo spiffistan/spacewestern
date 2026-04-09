@@ -109,6 +109,14 @@ impl CreatureRegistry {
     pub fn name(&self, id: u8) -> &str {
         self.get(id).map(|d| d.name.as_str()).unwrap_or("Unknown")
     }
+
+    /// Iterate all defined creatures (id, def) in ID order.
+    pub fn all(&self) -> impl Iterator<Item = (u8, &CreatureDef)> {
+        self.defs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, d)| d.as_ref().map(|def| (i as u8, def)))
+    }
 }
 
 #[cfg(test)]
@@ -127,8 +135,9 @@ mod tests {
 
         let hc = reg.get(CREATURE_HOLLOWCALL).unwrap();
         assert_eq!(hc.name, "Hollowcall");
-        assert_eq!(hc.speed, 0.0);
-        assert_eq!(hc.body_radius, 0.0);
+        assert!(hc.speed > 0.0); // slow creep
+        assert!(hc.body_radius > 0.0); // visible when uncloaked
+        assert!(hc.nocturnal);
 
         let dh = reg.get(CREATURE_DUSTHARE).unwrap();
         assert_eq!(dh.name, "Dusthare");

@@ -1,7 +1,7 @@
 //! Block grid — constants, packing, generation, and roof computation.
 
-pub const GRID_W: u32 = 256;
-pub const GRID_H: u32 = 256;
+pub const GRID_W: u32 = 512;
+pub const GRID_H: u32 = 512;
 
 // Block type IDs (must match blocks.toml). u32 for direct comparison with extracted block types.
 pub const BT_AIR: u32 = 0;
@@ -69,6 +69,12 @@ pub const BT_SAW_HORSE: u32 = 61;
 pub const BT_CAMPFIRE: u32 = 62;
 pub const BT_LOW_WALL: u32 = 63;
 pub const BT_SNARE: u32 = 64;
+pub const BT_DUSTWHISKER: u32 = 65;
+pub const BT_HOLLOW_REED: u32 = 66;
+pub const BT_THORNBRAKE: u32 = 67;
+pub const BT_SALTBRUSH: u32 = 68;
+pub const BT_DUSKBLOOM: u32 = 69;
+pub const BT_CHARCOAL_MOUND: u32 = 70;
 
 /// Generate WGSL `const BT_*: u32 = N;` lines for all block type constants.
 /// Prepend this to shader source so WGSL can use the same names as Rust.
@@ -140,6 +146,12 @@ pub fn wgsl_block_constants() -> String {
         ("BT_CAMPFIRE", BT_CAMPFIRE),
         ("BT_LOW_WALL", BT_LOW_WALL),
         ("BT_SNARE", BT_SNARE),
+        ("BT_DUSTWHISKER", BT_DUSTWHISKER),
+        ("BT_HOLLOW_REED", BT_HOLLOW_REED),
+        ("BT_THORNBRAKE", BT_THORNBRAKE),
+        ("BT_SALTBRUSH", BT_SALTBRUSH),
+        ("BT_DUSKBLOOM", BT_DUSKBLOOM),
+        ("BT_CHARCOAL_MOUND", BT_CHARCOAL_MOUND),
     ];
     for &(name, val) in consts {
         s.push_str(&format!("const {}: u32 = {}u;\n", name, val));
@@ -796,8 +808,11 @@ pub fn compute_roof_heights_wd(grid: &mut [u32], wall_data: &[u16]) {
             if (flags & 2) != 0 {
                 // Has roof flag
                 is_building[idx] = true;
-            } else if (block >> 8) & 0xFF > 0 || (flags & 1) != 0 || has_wd {
-                // Has height, is a door, or has wall_data — check if adjacent to a roofed tile
+            } else if (((block >> 8) & 0xFF > 0) && is_wall_block(block & 0xFF))
+                || (flags & 1) != 0
+                || has_wd
+            {
+                // Is a wall with height, is a door, or has wall_data — check if adjacent to a roofed tile
                 'outer: for dy in -1i32..=1 {
                     for dx in -1i32..=1 {
                         let nx = x + dx;
@@ -869,26 +884,9 @@ pub fn compute_roof_heights_wd(grid: &mut [u32], wall_data: &[u16]) {
                         let nbh = ((nb >> 8) & 0xFF) as u8;
                         let nb_flags = ((nb >> 16) & 0xFF) as u8;
                         if nbh > 0 && (nb_flags & 2) == 0 {
-                            let nbt = (nb & 0xFF) as u8;
-                            let skip = bt_is!(
-                                nbt as u32,
-                                BT_TREE,
-                                BT_FIREPLACE,
-                                BT_CAMPFIRE,
-                                BT_CEILING_LIGHT,
-                                BT_CRATE,
-                                BT_WIRE,
-                                BT_DIMMER,
-                                BT_RESTRICTOR,
-                                BT_LIQUID_PIPE,
-                                BT_PIPE_BRIDGE,
-                                BT_WIRE_BRIDGE,
-                                BT_LIQUID_INTAKE,
-                                BT_LIQUID_PUMP,
-                                BT_LIQUID_OUTPUT,
-                                BT_LOW_WALL
-                            );
-                            if !skip {
+                            let nbt = nb & 0xFF;
+                            // Only count actual wall block types, not plants/furniture/pipes
+                            if is_wall_block(nbt) {
                                 walls_found += 1;
                                 break;
                             }
@@ -1072,6 +1070,14 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
     let cy = GRID_H as f32 / 2.0;
     let spawn_clear_radius_sq: f32 = 8.0 * 8.0;
 
+    // Test strip: row of rocks south of spawn for Stone Lab iteration
+    for dx in -4..4i32 {
+        let rx = (cx as i32 + dx).clamp(0, GRID_W as i32 - 1) as u32;
+        let ry = (cy as i32 + 6).clamp(0, GRID_H as i32 - 1) as u32;
+        let ridx = (ry * w + rx) as usize;
+        grid[ridx] = make_block(BT_ROCK as u8, 0, 0);
+    }
+
     for y in 0..GRID_H {
         for x in 0..GRID_W {
             let idx = (y * w + x) as usize;
@@ -1187,11 +1193,186 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
                 ((base_rocks + cluster_rocks) as f32 * spawn_factor.max(0.3)) as u32;
             if r_rock < rock_threshold && grid[idx] == dirt_block {
                 grid[idx] = make_block(BT_ROCK as u8, 0, 0);
+                continue;
+            }
+
+            // --- ALIEN FLORA: terrain-specific plant spawning ---
+            // Each flora type gets its own random roll from different hash bits
+            let h2 = tile_hash(x.wrapping_add(137), y.wrapping_add(311));
+            let r_flora = (h >> 2) & 0xFFF;
+
+            // Dustwhisker (tall grass): common on open plains, not rocky/gravelly
+            if !is_rocky && !is_gravelly && forest < 0.40 && terrain_suitability > 0.3 {
+                let whisker_chance = (12.0 * spawn_factor * (1.0 - forest * 2.0).max(0.0)) as u32;
+                if r_flora < whisker_chance && grid[idx] == dirt_block {
+                    grid[idx] = make_block(BT_DUSTWHISKER as u8, 2, 0);
+                    continue;
+                }
+            }
+
+            // Hollow Reed: near water (high moisture), not rocky
+            if moisture_val > 0.6 && !is_rocky && terrain_suitability > 0.1 {
+                let reed_chance = ((moisture_val - 0.6) * 60.0 * spawn_factor) as u32;
+                let r_reed = (h2 >> 4) & 0xFFF;
+                if r_reed < reed_chance && grid[idx] == dirt_block {
+                    grid[idx] = make_block(BT_HOLLOW_REED as u8, 3, 0);
+                    continue;
+                }
+            }
+
+            // Thornbrake: rocky / dry edges, sparse
+            if (is_rocky || rock_val > 0.6) && !is_gravelly {
+                let thorn_chance = (8.0 * spawn_factor) as u32;
+                let r_thorn = (h2 >> 8) & 0xFFF;
+                if r_thorn < thorn_chance && grid[idx] == dirt_block {
+                    grid[idx] = make_block(BT_THORNBRAKE as u8, 2, 0);
+                    continue;
+                }
+            }
+
+            // Saltbrush: near water + warm/dry (arid near moisture)
+            if moisture_val > 0.5 && arid_val > 0.4 && !is_rocky {
+                let salt_chance =
+                    ((moisture_val - 0.5) * (arid_val - 0.4) * 80.0 * spawn_factor) as u32;
+                let r_salt = (h2 >> 12) & 0xFFF;
+                if r_salt < salt_chance && grid[idx] == dirt_block {
+                    grid[idx] = make_block(BT_SALTBRUSH as u8, 2, 0);
+                    continue;
+                }
+            }
+
+            // Duskbloom: scattered everywhere, uncommon
+            if terrain_suitability > 0.2 && !is_rocky {
+                let bloom_chance = (3.0 * spawn_factor) as u32;
+                let r_bloom = (h2 >> 16) & 0xFFF;
+                if r_bloom < bloom_chance && grid[idx] == dirt_block {
+                    grid[idx] = make_block(BT_DUSKBLOOM as u8, 1, 0);
+                    continue;
+                }
             }
         }
     }
 
     grid
+}
+
+/// Remove vegetation from wet/near-water tiles and create wetland buffer.
+/// `water_depth`: equilibrium water depth per tile (>0 = submerged).
+/// `water_table`: adjusted water table per tile.
+/// `elevation`: per-tile elevation.
+pub fn apply_wetland_buffer(
+    grid: &mut [u32],
+    water_depth: &[f32],
+    water_table: &[f32],
+    elevation: &[f32],
+    seed: u32,
+) {
+    let w = GRID_W as usize;
+    let h = GRID_H as usize;
+    let n = w * h;
+    let dirt = make_block(BT_GROUND as u8, 0, 0);
+
+    // Step 1: compute distance-to-water
+    // "Wet" = has equilibrium water OR water table above ground OR water table very near surface
+    let mut water_dist = vec![255u8; n];
+    for idx in 0..n {
+        let eq = if idx < water_depth.len() {
+            water_depth[idx]
+        } else {
+            0.0
+        };
+        let seep = if idx < water_table.len() && idx < elevation.len() {
+            water_table[idx] - elevation[idx]
+        } else {
+            -10.0
+        };
+        if eq > 0.0 || seep > 0.0 {
+            water_dist[idx] = 0;
+        }
+    }
+
+    // Step 2: expand distance field (4 passes = 4 tile buffer)
+    for _pass in 0..4 {
+        let prev = water_dist.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let idx = y * w + x;
+                if prev[idx] == 0 {
+                    continue;
+                }
+                let mut min_n = prev[idx];
+                if x > 0 {
+                    min_n = min_n.min(prev[idx - 1]);
+                }
+                if x < w - 1 {
+                    min_n = min_n.min(prev[idx + 1]);
+                }
+                if y > 0 {
+                    min_n = min_n.min(prev[idx - w]);
+                }
+                if y < h - 1 {
+                    min_n = min_n.min(prev[idx + w]);
+                }
+                if min_n < 255 {
+                    water_dist[idx] = water_dist[idx].min(min_n + 1);
+                }
+            }
+        }
+    }
+
+    // Step 3: apply buffer zones
+    let tile_rng = |idx: usize, shift: u32| -> u32 {
+        (idx as u32).wrapping_mul(2654435761).wrapping_add(seed) >> shift & 0xF
+    };
+
+    for idx in 0..n.min(grid.len()) {
+        let bt = block_type_rs(grid[idx]);
+        let dist = water_dist[idx];
+        let roof = grid[idx] & 0xFF000000;
+        let is_tree = bt == BT_TREE;
+        let is_veg = is_tree
+            || bt == BT_BERRY_BUSH
+            || bt == BT_DUSTWHISKER
+            || bt == BT_HOLLOW_REED
+            || bt == BT_THORNBRAKE
+            || bt == BT_SALTBRUSH
+            || bt == BT_DUSKBLOOM
+            || bt == BT_ROCK;
+
+        match dist {
+            0 => {
+                // Submerged / will flood: remove all vegetation
+                if is_veg {
+                    grid[idx] = dirt | roof;
+                }
+            }
+            1 => {
+                // Water edge: trees → reeds, bare ground gets reeds
+                if is_tree {
+                    grid[idx] = make_block(BT_HOLLOW_REED as u8, 3, 0) | roof;
+                } else if (bt == BT_GROUND || bt == BT_DUSTWHISKER) && tile_rng(idx, 16) < 6 {
+                    grid[idx] = make_block(BT_HOLLOW_REED as u8, 3, 0) | roof;
+                }
+            }
+            2 => {
+                // Near water: remove trees, allow small plants
+                if is_tree {
+                    if tile_rng(idx, 20) < 8 {
+                        grid[idx] = make_block(BT_DUSTWHISKER as u8, 2, 0) | roof;
+                    } else {
+                        grid[idx] = dirt | roof;
+                    }
+                }
+            }
+            3 => {
+                // Damp margin: thin out trees
+                if is_tree && tile_rng(idx, 24) < 5 {
+                    grid[idx] = dirt | roof;
+                }
+            }
+            _ => {} // 4+ = normal, no changes
+        }
+    }
 }
 
 /// Add sample buildings to an existing world grid for demo/testing.
@@ -1430,10 +1611,10 @@ pub fn generate_sample_buildings_wd(grid: &mut [u32], wall_data: &mut [u16]) {
 
 /// Generate the water table height map (256x256).
 pub fn generate_water_table(grid: &[u32]) -> Vec<f32> {
-    generate_water_table_seeded(grid, 0)
+    generate_water_table_seeded(grid, 0, 0.4)
 }
 
-pub fn generate_water_table_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
+pub fn generate_water_table_seeded(grid: &[u32], seed: u32, wt_level: f32) -> Vec<f32> {
     let w = GRID_W;
     let h = GRID_H;
     let mut table = vec![-2.0f32; (w * h) as usize];
@@ -1469,8 +1650,10 @@ pub fn generate_water_table_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
             let n2 = noise(x as f32 * scale2 + 200.0, y as f32 * scale2 + 200.0) * 0.4;
             let base = n1 + n2; // 0.0 to 1.4 range
 
-            // Map to water table depth: -3.0 (deep/dry) to -0.3 (near surface/wet)
-            let depth = -3.0 + base * 2.0; // range: -3.0 to -0.2
+            // Map to water table depth. wt_level shifts the whole table:
+            // 0.0 = deep/dry (-4.0 base), 1.0 = high/wet (-1.0 base)
+            let wt_base = -4.0 + wt_level * 3.0; // -4.0 (dry) to -1.0 (wet)
+            let depth = wt_base + base * 2.0;
 
             // Boost near dug ground
             let bt = block_type_rs(grid[idx]);
@@ -1481,6 +1664,110 @@ pub fn generate_water_table_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
     }
 
     table
+}
+
+/// Compute equilibrium water depth using priority-flood depression filling.
+/// This determines where water pools after flowing to equilibrium — lakes, ponds,
+/// and flooded depressions. Returns a per-tile water depth (0 = dry, >0 = water surface).
+pub fn compute_equilibrium_water(elevation: &[f32], water_table: &[f32]) -> Vec<f32> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    // Wrapper for f32 in BinaryHeap (total ordering via to_bits)
+    #[derive(Clone, Copy, PartialEq)]
+    struct F(f32);
+    impl Eq for F {}
+    impl PartialOrd for F {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for F {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.0.total_cmp(&other.0)
+        }
+    }
+
+    let w = GRID_W as usize;
+    let h = GRID_H as usize;
+    let n = w * h;
+    if elevation.len() < n || water_table.len() < n {
+        return vec![0.0; n];
+    }
+
+    let mut water_surface = vec![f32::MAX; n];
+    let mut processed = vec![false; n];
+    let mut heap: BinaryHeap<Reverse<(F, usize)>> = BinaryHeap::with_capacity(w * 2 + h * 2);
+
+    // Seed edges: they drain to off-map
+    for x in 0..w {
+        for &y in &[0, h - 1] {
+            let idx = y * w + x;
+            water_surface[idx] = elevation[idx];
+            processed[idx] = true;
+            heap.push(Reverse((F(elevation[idx]), idx)));
+        }
+    }
+    for y in 1..h - 1 {
+        for &x in &[0, w - 1] {
+            let idx = y * w + x;
+            water_surface[idx] = elevation[idx];
+            processed[idx] = true;
+            heap.push(Reverse((F(elevation[idx]), idx)));
+        }
+    }
+
+    // Seed tiles with water table above elevation (water sources)
+    for idx in 0..n {
+        if water_table[idx] > elevation[idx] && !processed[idx] {
+            let level = water_table[idx];
+            water_surface[idx] = level;
+            processed[idx] = true;
+            heap.push(Reverse((F(level), idx)));
+        }
+    }
+
+    // Priority flood: process from lowest to highest
+    let dirs: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    while let Some(Reverse((F(level), idx))) = heap.pop() {
+        let ix = (idx % w) as i32;
+        let iy = (idx / w) as i32;
+
+        for &(dx, dy) in &dirs {
+            let nx = ix + dx;
+            let ny = iy + dy;
+            if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                continue;
+            }
+            let nidx = ny as usize * w + nx as usize;
+            if processed[nidx] {
+                continue;
+            }
+            processed[nidx] = true;
+
+            // Neighbor's water surface = max(neighbor elevation, current level)
+            // This fills depressions: if neighbor is lower, water fills to current level
+            let mut n_level = elevation[nidx].max(level);
+
+            // Water table contribution: if water table is above the computed level
+            if water_table[nidx] > n_level {
+                n_level = water_table[nidx];
+            }
+
+            water_surface[nidx] = n_level;
+            heap.push(Reverse((F(n_level), nidx)));
+        }
+    }
+
+    // Convert water surface to water depth (surface - elevation, clamped to 0)
+    let mut depth = vec![0.0f32; n];
+    for idx in 0..n {
+        let d = water_surface[idx] - elevation[idx];
+        if d > 0.01 {
+            depth[idx] = d;
+        }
+    }
+    depth
 }
 
 /// Compute terrain ambient occlusion by tracing rays in dawn AND dusk sun directions.
@@ -1605,10 +1892,10 @@ pub fn adjust_water_table_for_elevation(water_table: &mut [f32], elevation: &[f3
 
 /// Generate terrain elevation map using multi-octave noise.
 pub fn generate_elevation(grid: &[u32]) -> Vec<f32> {
-    generate_elevation_seeded(grid, 0)
+    generate_elevation_seeded(grid, 0, 0.3)
 }
 
-pub fn generate_elevation_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
+pub fn generate_elevation_seeded(grid: &[u32], seed: u32, hilliness: f32) -> Vec<f32> {
     let w = GRID_W;
     let h = GRID_H;
     let mut elev = vec![0.0f32; (w * h) as usize];
@@ -1647,11 +1934,13 @@ pub fn generate_elevation_seeded(grid: &[u32], seed: u32) -> Vec<f32> {
             let n3 = noise(fx * 0.15 + 800.0, fy * 0.15 + 400.0) * 0.15; // fine bumps
             let raw = n1 + n2 + n3; // ~0.0–1.55 range
 
-            // Threshold: only values above ~0.7 produce hills (keeps most of map flat)
-            let hill_threshold = 0.65;
+            // Threshold: controlled by hilliness param (0=flat, 1=very hilly)
+            // Low hilliness → high threshold (few hills). High → low threshold (many hills).
+            let hill_threshold = 0.85 - hilliness * 0.5; // 0.85 (flat) to 0.35 (hilly)
             let hill_raw = ((raw - hill_threshold) / (1.0 - hill_threshold)).max(0.0);
-            // Smooth ramp: square root for gentle slopes, scale to max ~4 tiles high
-            let height = hill_raw.sqrt() * 4.0;
+            // Height scale: also influenced by hilliness
+            let max_height = 2.0 + hilliness * 6.0; // 2 (gentle) to 8 (dramatic)
+            let height = hill_raw.sqrt() * max_height;
 
             // Subtle undulation everywhere (very low amplitude, gives life to flat areas)
             let micro = noise(fx * 0.08 + 150.0, fy * 0.08 + 250.0) * 0.15;
@@ -1680,6 +1969,11 @@ pub const TERRAIN_GRAVEL: u32 = 4;
 pub const TERRAIN_PEAT: u32 = 5;
 pub const TERRAIN_MARSH: u32 = 6;
 pub const TERRAIN_LOAM: u32 = 7;
+pub const TERRAIN_IRON_STAIN: u32 = 8;
+pub const TERRAIN_COPPER_STAIN: u32 = 9;
+pub const TERRAIN_FLINT_BEARING: u32 = 10;
+pub const TERRAIN_LEAF_LITTER: u32 = 11;
+pub const TERRAIN_SAND: u32 = 12;
 
 /// Terrain data packing:
 ///   bits 0-3:   terrain type (0-15)
@@ -1757,7 +2051,7 @@ pub fn terrain_remove_dig_hole(t: &mut u32) {
 
 /// Parameters controlling terrain generation. Each weight (0.0-1.0) controls
 /// how much of that terrain type appears. Higher = more area coverage.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TerrainParams {
     pub grass: f32,
     pub loam: f32,
@@ -1769,6 +2063,9 @@ pub struct TerrainParams {
     pub marsh: f32,
     pub pond_density: f32,  // 0.0 = no ponds, 1.0 = many ponds
     pub grass_density: f32, // 0.0 = sparse, 1.0 = dense tall grass everywhere
+    pub hilliness: f32,     // 0.0 = flat, 1.0 = very hilly
+    pub water_table: f32,   // 0.0 = deep/dry, 1.0 = high/wet (more surface water)
+    pub tree_density: f32,  // 0.0 = barren, 1.0 = dense forest
     pub seed: u32,
 }
 
@@ -1785,7 +2082,13 @@ impl Default for TerrainParams {
             marsh: 0.06,  // ~6% — wet lowlands
             pond_density: 0.5,
             grass_density: 0.6,
-            seed: 42,
+            hilliness: 0.3,
+            water_table: 0.4,
+            tree_density: 0.5,
+            seed: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| (d.as_millis() % 10000) as u32)
+                .unwrap_or(42),
         }
     }
 }
@@ -1873,52 +2176,51 @@ pub fn generate_terrain_with_params(
             //
             // threshold = 1.0 - weight (so weight=0.40 → threshold=0.60, needs noise>0.60)
             // Environmental biases nudge the noise ±0.15 to steer terrain to suitable spots.
-            let terrain_type = if pond_factor > pond_thresh {
+            let mut terrain_type = if pond_factor > pond_thresh {
                 TERRAIN_MARSH
             } else if pond_factor > pond_thresh - 0.15 && params.clay > 0.01 {
                 TERRAIN_CLAY
             } else {
                 // Each terrain: (type, noise_value + env_bias, threshold)
-                // Evaluate rarest first so they get their clusters
+                // Use two-octave noise for smoother, rounder patch boundaries
+                // Low freq (0.02) for broad regions + medium freq (0.06) for organic edges
+                let fbm2 = |extra: u32| -> f32 {
+                    let n1 = noise_seeded(fx * 0.02, fy * 0.02, extra);
+                    let n2 =
+                        noise_seeded(fx * 0.06 + 50.0, fy * 0.06 + 50.0, extra.wrapping_add(1000));
+                    n1 * 0.7 + n2 * 0.3
+                };
                 let candidates: [(u32, f32, f32); 8] = [
                     (
                         TERRAIN_CHALKY,
-                        noise_seeded(fx * 0.05, fy * 0.05, 40) + aridity * 0.1,
+                        fbm2(40) + aridity * 0.1,
                         1.0 - params.chalky,
                     ),
-                    (
-                        TERRAIN_PEAT,
-                        noise_seeded(fx * 0.05, fy * 0.05, 70) + moisture * 0.15,
-                        1.0 - params.peat,
-                    ),
+                    (TERRAIN_PEAT, fbm2(70) + moisture * 0.15, 1.0 - params.peat),
                     (
                         TERRAIN_MARSH,
-                        noise_seeded(fx * 0.05, fy * 0.05, 80) + (wt + 2.0).max(0.0) * 0.15,
+                        fbm2(80) + (wt + 2.0).max(0.0) * 0.15,
                         1.0 - params.marsh,
                     ),
                     (
                         TERRAIN_ROCKY,
-                        noise_seeded(fx * 0.04, fy * 0.04, 50) + rockiness * 0.2,
+                        fbm2(50) + rockiness * 0.2,
                         1.0 - params.rocky,
                     ),
                     (
                         TERRAIN_GRAVEL,
-                        noise_seeded(fx * 0.05, fy * 0.05, 60) + rockiness * 0.1,
+                        fbm2(60) + rockiness * 0.1,
                         1.0 - params.gravel,
                     ),
-                    (
-                        TERRAIN_CLAY,
-                        noise_seeded(fx * 0.05, fy * 0.05, 30) + moisture * 0.1,
-                        1.0 - params.clay,
-                    ),
+                    (TERRAIN_CLAY, fbm2(30) + moisture * 0.1, 1.0 - params.clay),
                     (
                         TERRAIN_LOAM,
-                        noise_seeded(fx * 0.06, fy * 0.06, 20) + (1.0 - aridity) * 0.1,
+                        fbm2(20) + (1.0 - aridity) * 0.1,
                         1.0 - params.loam,
                     ),
                     (
                         TERRAIN_GRASS,
-                        noise_seeded(fx * 0.06, fy * 0.06, 10) + (1.0 - rockiness) * 0.05,
+                        fbm2(10) + (1.0 - rockiness) * 0.05,
                         0.0, // grass is the default fallback
                     ),
                 ];
@@ -1932,6 +2234,46 @@ pub fn generate_terrain_with_params(
                 chosen
             };
 
+            // --- Override with special terrain types ---
+
+            // Leaf litter: under dense forest canopy
+            let forest_here = noise_seeded(fx * 0.02, fy * 0.02, 0) * 0.7
+                + noise_seeded(fx * 0.06 + 50.0, fy * 0.06 + 50.0, 1000) * 0.3;
+            if forest_here > 0.55 && terrain_type == TERRAIN_GRASS || terrain_type == TERRAIN_LOAM {
+                terrain_type = TERRAIN_LEAF_LITTER;
+            }
+
+            // Sand: near water in low-vegetation areas
+            if moisture > 0.6
+                && aridity > 0.3
+                && rockiness < 0.3
+                && (terrain_type == TERRAIN_GRASS || terrain_type == TERRAIN_MARSH)
+            {
+                let sand_noise = noise_seeded(fx * 0.03, fy * 0.03, 500);
+                if sand_noise > 0.65 {
+                    terrain_type = TERRAIN_SAND;
+                }
+            }
+
+            // Mineral stains: correlated with mining vein noise (same seeds as mining.rs)
+            if terrain_type == TERRAIN_ROCKY
+                || terrain_type == TERRAIN_GRAVEL
+                || terrain_type == TERRAIN_CHALKY
+            {
+                let iron_v = crate::mining::vein_noise(fx * 3.0, fy * 3.0, 100);
+                let copper_v = crate::mining::vein_noise(fx * 6.0, fy * 6.0, 200);
+                let flint_v = crate::mining::vein_noise(fx * 5.0, fy * 5.0, 300);
+                if iron_v > 0.75 && terrain_type == TERRAIN_ROCKY {
+                    terrain_type = TERRAIN_IRON_STAIN;
+                } else if copper_v > 0.82 && terrain_type == TERRAIN_ROCKY {
+                    terrain_type = TERRAIN_COPPER_STAIN;
+                } else if flint_v > 0.78
+                    && (terrain_type == TERRAIN_CHALKY || terrain_type == TERRAIN_GRAVEL)
+                {
+                    terrain_type = TERRAIN_FLINT_BEARING;
+                }
+            }
+
             // --- Vegetation density ---
             let veg_base = match terrain_type {
                 TERRAIN_GRASS => 0.6 + (1.0 - aridity) * 0.4,
@@ -1942,6 +2284,10 @@ pub fn generate_terrain_with_params(
                 TERRAIN_ROCKY => 0.02,
                 TERRAIN_GRAVEL => 0.1 + (1.0 - aridity) * 0.15,
                 TERRAIN_PEAT => 0.25 + moisture_noise * 0.2,
+                TERRAIN_IRON_STAIN | TERRAIN_COPPER_STAIN => 0.05,
+                TERRAIN_FLINT_BEARING => 0.10 + moisture_noise * 0.1,
+                TERRAIN_LEAF_LITTER => 0.5 + moisture_noise * 0.3,
+                TERRAIN_SAND => 0.02,
                 _ => 0.3,
             };
             let veg_noise = noise(fx * 0.15 + 4000.0, fy * 0.15 + 4000.0);
@@ -1960,36 +2306,40 @@ pub fn generate_terrain_with_params(
 
             // --- Grain/texture scale ---
             let grain = match terrain_type {
-                TERRAIN_CHALKY => 6,  // chalky crumble
-                TERRAIN_ROCKY => 12,  // coarse
-                TERRAIN_GRAVEL => 10, // coarse-medium
-                TERRAIN_GRASS => 4,   // fine
-                TERRAIN_LOAM => 3,    // fine
-                TERRAIN_MARSH => 5,   // medium
-                TERRAIN_CLAY => 4,    // fine-medium
-                TERRAIN_PEAT => 3,    // fine, soft
+                TERRAIN_CHALKY | TERRAIN_FLINT_BEARING => 6,
+                TERRAIN_ROCKY | TERRAIN_IRON_STAIN | TERRAIN_COPPER_STAIN => 12,
+                TERRAIN_GRAVEL => 10,
+                TERRAIN_GRASS => 4,
+                TERRAIN_LOAM => 3,
+                TERRAIN_MARSH => 5,
+                TERRAIN_CLAY => 4,
+                TERRAIN_PEAT => 3,
+                TERRAIN_LEAF_LITTER => 2, // very fine (organic)
+                TERRAIN_SAND => 8,        // medium-coarse (granular)
                 _ => 5,
             };
 
             // --- Surface roughness ---
             let roughness = match terrain_type {
-                TERRAIN_ROCKY => 3,
-                TERRAIN_GRAVEL => 2,
+                TERRAIN_ROCKY | TERRAIN_IRON_STAIN | TERRAIN_COPPER_STAIN => 3,
+                TERRAIN_GRAVEL | TERRAIN_FLINT_BEARING => 2,
                 TERRAIN_CHALKY => 1,
-                TERRAIN_PEAT => 0,
+                TERRAIN_PEAT | TERRAIN_LEAF_LITTER | TERRAIN_SAND => 0,
                 _ => 1,
             };
 
             // --- Soil richness (farming potential) ---
             let richness_base = match terrain_type {
                 TERRAIN_LOAM => 0.85,
+                TERRAIN_LEAF_LITTER => 0.75, // rich organic soil
                 TERRAIN_GRASS => 0.6,
                 TERRAIN_CLAY => 0.5,
                 TERRAIN_MARSH => 0.7,
                 TERRAIN_PEAT => 0.55,
-                TERRAIN_CHALKY => 0.15,
+                TERRAIN_CHALKY | TERRAIN_FLINT_BEARING => 0.15,
                 TERRAIN_GRAVEL => 0.15,
-                TERRAIN_ROCKY => 0.05,
+                TERRAIN_ROCKY | TERRAIN_IRON_STAIN | TERRAIN_COPPER_STAIN => 0.05,
+                TERRAIN_SAND => 0.10,
                 _ => 0.4,
             };
             let rich_noise = noise(fx * 0.08 + 5000.0, fy * 0.08 + 5000.0);
@@ -2000,12 +2350,14 @@ pub fn generate_terrain_with_params(
             let moist_ret = match terrain_type {
                 TERRAIN_CLAY => 12,
                 TERRAIN_LOAM => 10,
+                TERRAIN_LEAF_LITTER => 11,
                 TERRAIN_MARSH => 14,
                 TERRAIN_GRASS => 8,
                 TERRAIN_PEAT => 13,
-                TERRAIN_CHALKY => 3,
+                TERRAIN_CHALKY | TERRAIN_FLINT_BEARING => 3,
                 TERRAIN_GRAVEL => 3,
-                TERRAIN_ROCKY => 1,
+                TERRAIN_ROCKY | TERRAIN_IRON_STAIN | TERRAIN_COPPER_STAIN => 1,
+                TERRAIN_SAND => 2, // fast drainage
                 _ => 6,
             };
 

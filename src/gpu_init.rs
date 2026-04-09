@@ -209,6 +209,54 @@ impl App {
             mapped_at_creation: false,
         });
 
+        // Stone Lab debug parameter buffer (uniform, updated from UI)
+        let stone_lab_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("stone-lab-buffer"),
+            size: std::mem::size_of::<StoneLabGpu>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Mining sub-cell texture (GRID_W*8 × GRID_H*8, R8Uint)
+        // Each texel: high nibble = material, low nibble = hardness. 0xFF = no mining grid.
+        let mining_tex_w = GRID_W * 8;
+        let mining_tex_h = GRID_H * 8;
+        let mining_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mining-texture"),
+            size: wgpu::Extent3d {
+                width: mining_tex_w,
+                height: mining_tex_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // Initialize to 0xFF (no mining data)
+        let mining_init = vec![0xFFu8; (mining_tex_w * mining_tex_h) as usize];
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &mining_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &mining_init,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(mining_tex_w),
+                rows_per_image: Some(mining_tex_h),
+            },
+            wgpu::Extent3d {
+                width: mining_tex_w,
+                height: mining_tex_h,
+                depth_or_array_layers: 1,
+            },
+        );
+
         // Block temperature buffer (256x256 f32, initialized to 15°C ambient)
         let voltage_data = vec![0.0f32; (GRID_W * GRID_H) as usize];
         let voltage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1797,6 +1845,28 @@ impl App {
                         },
                         count: None,
                     },
+                    // Stone Lab debug parameters (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 29,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Mining sub-cell texture (R8Uint)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 30,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Uint,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1826,7 +1896,13 @@ impl App {
             label: Some("water-level-b"),
             ..water_tex_desc_early
         });
-        let water_zeros = vec![0u8; (GRID_W * GRID_H * 4) as usize];
+        // Initialize water textures with equilibrium depth (pre-computed pooling)
+        let water_init: Vec<f32> = if self.water_equilibrium.len() == (GRID_W * GRID_H) as usize {
+            self.water_equilibrium.clone()
+        } else {
+            vec![0.0f32; (GRID_W * GRID_H) as usize]
+        };
+        let water_init_bytes: &[u8] = bytemuck::cast_slice(&water_init);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &water_a,
@@ -1834,7 +1910,7 @@ impl App {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &water_zeros,
+            water_init_bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(GRID_W * 4),
@@ -1853,7 +1929,7 @@ impl App {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &water_zeros,
+            water_init_bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(GRID_W * 4),
@@ -1914,9 +1990,13 @@ impl App {
             ..Default::default()
         });
 
-        // Water table: static height map generated from terrain
-        let water_table_data = generate_water_table(&self.grid_data);
-        self.water_table = water_table_data.clone();
+        // Water table: use pre-computed data from regenerate_world_preview if available,
+        // otherwise generate with defaults (for tests / direct launch)
+        if self.water_table.len() != (GRID_W * GRID_H) as usize {
+            let water_table_data = generate_water_table(&self.grid_data);
+            self.water_table = water_table_data;
+            adjust_water_table_for_elevation(&mut self.water_table, &self.elevation_data);
+        }
         let water_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("water-table"),
             size: (GRID_W * GRID_H * 4) as u64,
@@ -1929,12 +2009,15 @@ impl App {
             bytemuck::cast_slice(&self.water_table),
         );
 
-        // Elevation: terrain height map generated from noise
-        let elevation_data = generate_elevation(&self.grid_data);
-        self.elevation_data = elevation_data.clone();
+        // Elevation: use pre-computed data if available
+        if self.elevation_data.len() != (GRID_W * GRID_H) as usize {
+            self.elevation_data = generate_elevation(&self.grid_data);
+        }
 
-        // Sub-tile elevation: 1024x1024 heightmap for smooth terrain and digging
-        self.sub_elevation = crate::terrain::generate_elevation(&self.elevation_data);
+        // Sub-tile elevation
+        if self.sub_elevation.len() != (crate::terrain::ELEV_W * crate::terrain::ELEV_H) as usize {
+            self.sub_elevation = crate::terrain::generate_elevation(&self.elevation_data);
+        }
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &elevation_tex,
@@ -2086,16 +2169,18 @@ impl App {
             shadow_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Sound textures (created early for raytrace bind group)
+        // Capped at 512×512 regardless of grid size — sound doesn't need full-grid 2x resolution
+        let sound_res = (GRID_W * 2).min(512);
         let sound_tex_a_early = make_fluid_tex(
             "sound-a",
-            GRID_W * 2,
-            GRID_H * 2,
+            sound_res,
+            sound_res,
             wgpu::TextureFormat::Rg32Float,
         );
         let sound_tex_b_early = make_fluid_tex(
             "sound-b",
-            GRID_W * 2,
-            GRID_H * 2,
+            sound_res,
+            sound_res,
             wgpu::TextureFormat::Rg32Float,
         );
         let sound_sample_view =
@@ -2223,6 +2308,16 @@ impl App {
                     binding: 28,
                     resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 29,
+                    resource: stone_lab_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 30,
+                    resource: wgpu::BindingResource::TextureView(
+                        &mining_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
+                },
             ],
         });
         let compute_bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2344,6 +2439,16 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 28,
                     resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 29,
+                    resource: stone_lab_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 30,
+                    resource: wgpu::BindingResource::TextureView(
+                        &mining_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
                 },
             ],
         });
@@ -2467,6 +2572,16 @@ impl App {
                     binding: 28,
                     resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 29,
+                    resource: stone_lab_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 30,
+                    resource: wgpu::BindingResource::TextureView(
+                        &mining_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
+                },
             ],
         });
         let compute_bind_group_3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2588,6 +2703,16 @@ impl App {
                 wgpu::BindGroupEntry {
                     binding: 28,
                     resource: wgpu::BindingResource::TextureView(&fv_elevation_rt),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 29,
+                    resource: stone_lab_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 30,
+                    resource: wgpu::BindingResource::TextureView(
+                        &mining_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
                 },
             ],
         });
@@ -3446,6 +3571,8 @@ impl App {
             wall_buffer,
             door_buffer,
             creature_buffer,
+            stone_lab_buffer,
+            mining_texture,
             voltage_buffer,
             pipe_flow_buffer,
             power_pipeline: power_pipeline_val,

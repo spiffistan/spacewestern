@@ -6,6 +6,11 @@ use crate::recipe_defs;
 use crate::zones::*;
 use crate::*;
 
+/// Pleb activity speed multiplier. Since time_speed 0.1 = "100%", activities need
+/// this boost to feel responsive. Pleb movement is decoupled (real-time), but
+/// farming, building, mining, cooking etc. scale with time_speed × this constant.
+const ACTION_SPEED_MUL: f32 = 10.0;
+
 /// Smoothly interpolate between two angles, handling wraparound.
 #[inline]
 fn lerp_angle(from: f32, to: f32, t: f32) -> f32 {
@@ -554,25 +559,160 @@ impl App {
                 self.time_speed,
                 GRID_W,
             );
-            // Berry bush regrow: depleted bushes slowly regenerate berries
-            // Check every ~2 game-seconds (not every frame) for performance
-            if self.frame_count % 120 == 0 {
+            // --- Fire fuel consumption ---
+            // Campfires and fireplaces consume fuel over time.
+            // Height byte = fuel level (1-5). At 0, fire goes out.
+            // Check every 120 frames (~2 game-seconds).
+            if self.frame_count % 120 == 17 {
+                const FUEL_CONSUME_CHANCE: u32 = 8; // ~1 in 8 checks = fuel lasts ~16 game-seconds per level
                 let grid_size = (GRID_W * GRID_H) as usize;
                 for idx in 0..grid_size {
-                    if (self.grid_data[idx] & 0xFF) == BT_BERRY_BUSH {
-                        let berries = (self.grid_data[idx] >> 8) & 0xFF;
-                        if berries < 4 {
-                            // ~0.5% chance per check to add a berry (avg ~4 min regrow per berry)
-                            let hash = (idx as u32)
-                                .wrapping_mul(2654435761)
-                                .wrapping_add(self.frame_count as u32);
-                            if hash % 200 == 0 {
-                                self.grid_data[idx] =
-                                    (self.grid_data[idx] & 0xFFFF00FF) | ((berries + 1) << 8);
-                                self.grid_dirty = true;
-                            }
+                    let bt = self.grid_data[idx] & 0xFF;
+                    if bt != BT_CAMPFIRE && bt != BT_FIREPLACE {
+                        continue;
+                    }
+                    let fuel = (self.grid_data[idx] >> 8) & 0xFF;
+                    if fuel == 0 {
+                        continue; // already out
+                    }
+                    let hash = (idx as u32)
+                        .wrapping_mul(2654435761)
+                        .wrapping_add(self.frame_count as u32);
+                    if hash % FUEL_CONSUME_CHANCE == 0 {
+                        let new_fuel = fuel - 1;
+                        self.grid_data[idx] = (self.grid_data[idx] & 0xFFFF00FF) | (new_fuel << 8);
+                        self.grid_dirty = true;
+                    }
+                }
+            }
+
+            // --- Charcoal mound conversion ---
+            // Height byte: 0=empty/done, 1=loaded (needs lighting), 2=smoldering, 3-5=converting
+            // Smoldering mounds slowly convert: height decreases over time.
+            // When height reaches 0: replace with BT_GROUND + drop charcoal items.
+            if self.frame_count % 240 == 33 {
+                const MOUND_CONVERT_CHANCE: u32 = 15; // ~1 game-minute per stage
+                let grid_size = (GRID_W * GRID_H) as usize;
+                for idx in 0..grid_size {
+                    let bt = self.grid_data[idx] & 0xFF;
+                    if bt != BT_CHARCOAL_MOUND {
+                        continue;
+                    }
+                    let stage = (self.grid_data[idx] >> 8) & 0xFF;
+                    if stage < 2 {
+                        continue; // not lit yet
+                    }
+                    let hash = (idx as u32)
+                        .wrapping_mul(2654435761)
+                        .wrapping_add(self.frame_count as u32);
+                    if hash % MOUND_CONVERT_CHANCE == 0 {
+                        if stage <= 2 {
+                            // Done! Drop charcoal and remove mound
+                            let mx = (idx as u32 % GRID_W) as f32 + 0.5;
+                            let my = (idx as u32 / GRID_W) as f32 + 0.5;
+                            self.ground_items.push(resources::GroundItem::new(
+                                mx,
+                                my,
+                                item_defs::ITEM_CHARCOAL,
+                                4, // 4 charcoal per mound
+                            ));
+                            let roof = self.grid_data[idx] & 0xFF000000;
+                            self.grid_data[idx] = make_block(BT_GROUND as u8, 0, 0) | roof;
+                            self.grid_dirty = true;
+                        } else {
+                            let new_stage = stage - 1;
+                            self.grid_data[idx] =
+                                (self.grid_data[idx] & 0xFFFF00FF) | (new_stage << 8);
+                            self.grid_dirty = true;
                         }
                     }
+                }
+            }
+
+            // Vegetation regrowth: slow, realistic timescales
+            // Check every ~4 game-seconds (240 frames) for performance
+            // Berry bushes: ~5-7 game-days per berry (1 day = 60s)
+            // Dustwhisker: ~8 game-days to respawn on empty ground
+            // Hollow Reed: ~18 game-days, only near existing reeds
+            // Thornbrake: ~30 game-days, only near existing thornbrake
+            if self.frame_count % 240 == 0 {
+                let grid_size = (GRID_W * GRID_H) as usize;
+                // Chance per check: checks happen every 4s game-time.
+                // 1 game-day = 60s = 15 checks. For N-day regrow: chance = 1/(15*N)
+                const BERRY_CHANCE: u32 = 90; // 1/90 ≈ 6 game-days per berry
+                const WHISKER_CHANCE: u32 = 120; // 1/120 ≈ 8 game-days
+                const REED_CHANCE: u32 = 270; // 1/270 ≈ 18 game-days
+                const THORN_CHANCE: u32 = 450; // 1/450 ≈ 30 game-days
+
+                for idx in 0..grid_size {
+                    let bt = self.grid_data[idx] & 0xFF;
+                    let hash = (idx as u32)
+                        .wrapping_mul(2654435761)
+                        .wrapping_add(self.frame_count as u32);
+
+                    // Berry bush: regrow berries on existing bushes
+                    if bt == BT_BERRY_BUSH {
+                        let berries = (self.grid_data[idx] >> 8) & 0xFF;
+                        if berries < 4 && hash % BERRY_CHANCE == 0 {
+                            self.grid_data[idx] =
+                                (self.grid_data[idx] & 0xFFFF00FF) | ((berries + 1) << 8);
+                            self.grid_dirty = true;
+                        }
+                        continue;
+                    }
+
+                    // Only regrow on empty ground tiles
+                    if bt != BT_GROUND {
+                        continue;
+                    }
+
+                    // Dustwhisker: regrows on open ground (not near trees/rocks)
+                    if hash % WHISKER_CHANCE == 0 {
+                        // Check terrain suitability: not rocky, not waterlogged
+                        let has_neighbor_tree = idx >= GRID_W as usize
+                            && (self.grid_data[idx - GRID_W as usize] & 0xFF) == BT_TREE;
+                        if !has_neighbor_tree {
+                            self.grid_data[idx] = make_block(BT_DUSTWHISKER as u8, 2, 0);
+                            self.grid_dirty = true;
+                        }
+                        continue;
+                    }
+
+                    // Hollow Reed: only regrows adjacent to existing reeds
+                    if hash % REED_CHANCE == 0 {
+                        let x = (idx as u32) % GRID_W;
+                        let y = (idx as u32) / GRID_W;
+                        let has_neighbor_reed = [
+                            idx.wrapping_sub(1),
+                            idx + 1,
+                            idx.wrapping_sub(GRID_W as usize),
+                            idx + GRID_W as usize,
+                        ]
+                        .iter()
+                        .any(|&ni| ni < grid_size && (self.grid_data[ni] & 0xFF) == BT_HOLLOW_REED);
+                        if has_neighbor_reed && x > 0 && y > 0 {
+                            self.grid_data[idx] = make_block(BT_HOLLOW_REED as u8, 3, 0);
+                            self.grid_dirty = true;
+                        }
+                        continue;
+                    }
+
+                    // Thornbrake: only regrows adjacent to existing thornbrake
+                    if hash % THORN_CHANCE == 0 {
+                        let has_neighbor_thorn = [
+                            idx.wrapping_sub(1),
+                            idx + 1,
+                            idx.wrapping_sub(GRID_W as usize),
+                            idx + GRID_W as usize,
+                        ]
+                        .iter()
+                        .any(|&ni| ni < grid_size && (self.grid_data[ni] & 0xFF) == BT_THORNBRAKE);
+                        if has_neighbor_thorn {
+                            self.grid_data[idx] = make_block(BT_THORNBRAKE as u8, 2, 0);
+                            self.grid_dirty = true;
+                        }
+                    }
+                    // Saltbrush and Duskbloom: no regrowth (finite resources)
                 }
             }
 
@@ -941,7 +1081,7 @@ impl App {
             comms::compute_flocking(&self.plebs, &flock_enemy_pos, self.flock_spacing);
 
         // --- Update all plebs ---
-        let move_speed = 20.0f32;
+        let move_speed = 8.0f32; // tiles/sec base (NOT scaled by time_speed)
         let sel = self.selected_pleb;
 
         for (i, pleb) in self.plebs.iter_mut().enumerate() {
@@ -1093,6 +1233,9 @@ impl App {
                             1.0
                         }
                     };
+                    let wet_mul = needs::wetness_speed_mult(pleb.needs.wetness);
+                    // Movement speed is NOT multiplied by time_speed — plebs move at
+                    // a fixed visual rate. Only activities/day-night scale with sim speed.
                     let effective_speed = move_speed
                         * speed_mul
                         * injury_mul
@@ -1100,14 +1243,17 @@ impl App {
                         * stagger_mul
                         * crouch_mul
                         * water_mul
-                        * self.time_speed;
+                        * wet_mul;
                     // Apply flocking adjustment (separation/cohesion forces)
                     let flock = flock_adjustments.iter().find(|a| a.pleb_idx == i);
                     let flock_speed = flock.map(|a| a.speed_mul).unwrap_or(1.0);
                     let flock_dx = flock.map(|a| a.dx).unwrap_or(0.0) * dt;
                     let flock_dy = flock.map(|a| a.dy).unwrap_or(0.0) * dt;
-                    let step_x = ndx * effective_speed * flock_speed * dt + flock_dx;
-                    let step_y = ndy * effective_speed * flock_speed * dt + flock_dy;
+                    let raw_step = effective_speed * flock_speed * dt;
+                    // Clamp step to not overshoot the waypoint (prevents oscillation)
+                    let clamped_step = raw_step.min(dist);
+                    let step_x = ndx * clamped_step + flock_dx;
+                    let step_y = ndy * clamped_step + flock_dy;
                     let nx = pleb.x + step_x;
                     let ny = pleb.y + step_y;
                     // Check walkability AND wall edge crossings
@@ -1212,6 +1358,7 @@ impl App {
                     is_moving,
                     is_sleeping,
                     air,
+                    self.camera.rain_intensity,
                 );
 
                 // --- Trait modifiers applied after needs tick ---
@@ -1334,6 +1481,24 @@ impl App {
                         f &= !192;
                     }
                     pleb.need_emote_flags = f;
+
+                    // Wetness emotes (separate flag field)
+                    let w = pleb.needs.wetness;
+                    let wf = pleb.wetness_emote;
+                    if w > 0.5 && (wf & 1) == 0 {
+                        pleb.wetness_emote |= 1;
+                        pleb.set_bubble(pleb::BubbleKind::Thought("Getting soaked...".into()), 3.0);
+                        pleb.log_event(gt, "Getting wet in the rain".into());
+                    }
+                    if w > 0.8 && (wf & 2) == 0 {
+                        pleb.wetness_emote |= 2;
+                        pleb.set_bubble(pleb::BubbleKind::Thought("Drenched!".into()), 3.0);
+                        pleb.log_event(gt, "Soaked to the bone".into());
+                    }
+                    // Reset when dried off
+                    if w < 0.2 {
+                        pleb.wetness_emote = 0;
+                    }
                 }
 
                 // Undrafted flee: civilians run to safety when enemies are near
@@ -1526,7 +1691,7 @@ impl App {
                                         self.blueprints.get(&(cx, cy)).and_then(|bp| {
                                             if bp.is_roof() {
                                                 Some(ITEM_FIBER)
-                                            } else if bp.is_campfire() {
+                                            } else if bp.uses_sticks() {
                                                 Some(ITEM_SCRAP_WOOD)
                                             } else {
                                                 None
@@ -1640,7 +1805,7 @@ impl App {
                                 // Deliver materials to blueprint
                                 if let Some(bp) = self.blueprints.get_mut(&(cx, cy)) {
                                     if bp.wood_delivered < bp.wood_needed {
-                                        let is_cf = bp.is_campfire();
+                                        let is_cf = bp.uses_sticks();
                                         let have = if is_cf {
                                             pleb.inventory.count_of(ITEM_SCRAP_WOOD) as u32
                                         } else {
@@ -2018,7 +2183,7 @@ impl App {
                                 pleb.path_idx = 0;
                                 pleb.activity = PlebActivity::Walking;
                                 pleb.work_target = Some((hx, hy));
-                                pleb.harvest_target = None;
+                                pleb.harvest_target = Some((hx, hy));
                                 pleb.haul_target = None;
                             }
                         }
@@ -2197,6 +2362,26 @@ impl App {
                                     pleb.activity = PlebActivity::Walking;
                                     pleb.work_target = Some((fx, fy));
                                 }
+                            }
+                        }
+                        PlebCommand::Mine(mx, my) => {
+                            let adj =
+                                adjacent_walkable(&self.grid_data, mx, my).unwrap_or((mx, my));
+                            let path = pleb::astar_path_terrain_water_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                &self.water_depth_cpu,
+                                start,
+                                adj,
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.work_target = Some((mx, my));
+                                pleb.harvest_target = Some((mx, my));
+                                pleb.haul_target = None;
                             }
                         }
                     }
@@ -3391,6 +3576,11 @@ impl App {
                             // Bleeding: set a bleed timer
                             creature.bleeding = (creature.bleeding + 0.3).min(1.0);
 
+                            // Decloak on hit (Hollowcall becomes visible for 10s)
+                            if creature.species_id == creature_defs::CREATURE_HOLLOWCALL {
+                                creature.uncloak_timer = 10.0;
+                            }
+
                             // Shooter name
                             let shooter = self
                                 .selected_pleb
@@ -4153,8 +4343,11 @@ impl App {
                     } else {
                         0.4 // ~2.5s for crops/bushes
                     };
-                    let new_progress =
-                        progress + dt * self.time_speed * base_speed * pleb.farming_speed();
+                    let new_progress = progress
+                        + dt * self.time_speed
+                            * ACTION_SPEED_MUL
+                            * base_speed
+                            * pleb.farming_speed();
                     if new_progress >= 1.0 {
                         // Complete the task
                         if let Some((tx, ty)) = pleb.work_target {
@@ -4218,6 +4411,15 @@ impl App {
                                         10.0,
                                         self.time_of_day,
                                     );
+                                } else if crate::block_defs::BlockRegistry::cached()
+                                    .get(tbt)
+                                    .is_some_and(|d| d.is_harvestable)
+                                {
+                                    // Alien flora harvest — set harvest_target and switch to Harvesting activity
+                                    // (actual item drops handled in tick_pleb_activity Harvesting branch)
+                                    pleb.harvest_target = Some((tx, ty));
+                                    pleb.activity = PlebActivity::Harvesting(0.0);
+                                    pleb.work_target = None;
                                 } else if tbt == BT_TREE {
                                     // Chop down tree → remove all quadrants (2x2), drop 10 wood
                                     // Find the top-left corner from the quadrant flags
@@ -4302,7 +4504,7 @@ impl App {
                         } else {
                             terrain::DIG_SPEED_SHOVEL * 0.5
                         };
-                        pleb.swing_progress += dt * self.time_speed * dig_speed;
+                        pleb.swing_progress += dt * self.time_speed * ACTION_SPEED_MUL * dig_speed;
                         if pleb.swing_progress >= 1.0 {
                             pleb.swing_progress = 0.0;
                             // Apply dig stroke at the work target tile center
@@ -4359,7 +4561,8 @@ impl App {
                 // Handle Filling activity: pleb dumps dirt at berm zone
                 if pleb.activity == PlebActivity::Filling {
                     if let Some((tx, ty)) = pleb.work_target {
-                        pleb.swing_progress += dt * self.time_speed * terrain::DIG_SPEED_SHOVEL;
+                        pleb.swing_progress +=
+                            dt * self.time_speed * ACTION_SPEED_MUL * terrain::DIG_SPEED_SHOVEL;
                         if pleb.swing_progress >= 1.0 {
                             pleb.swing_progress = 0.0;
                             let wx = tx as f32 + 0.5;
@@ -4471,6 +4674,31 @@ impl App {
                                 if tbt == BT_TREE
                                     && pleb.harvest_target.is_some()
                                     && !pleb.has_tool("axe")
+                                {
+                                    pleb.activity = PlebActivity::Harvesting(0.0);
+                                    pleb.work_target = None;
+                                    pleb.path.clear();
+                                    pleb.path_idx = 0;
+                                // Rock: start sub-tile mining
+                                } else if tbt == BT_ROCK && pleb.harvest_target.is_some() {
+                                    // Create mining grid if needed
+                                    let (mx, my) = pleb.harvest_target.unwrap();
+                                    if !self.mining_grids.contains_key(&(mx, my)) {
+                                        let rt = mining::rock_type_at(mx, my);
+                                        self.mining_grids.insert(
+                                            (mx, my),
+                                            mining::generate_mining_grid(mx, my, rt),
+                                        );
+                                    }
+                                    pleb.draw_tool("pick");
+                                    pleb.activity = PlebActivity::Mining(0.0);
+                                    pleb.path.clear();
+                                    pleb.path_idx = 0;
+                                // Alien flora: direct harvest on arrival
+                                } else if crate::block_defs::BlockRegistry::cached()
+                                    .get(tbt)
+                                    .is_some_and(|d| d.is_harvestable)
+                                    && pleb.harvest_target.is_some()
                                 {
                                     pleb.activity = PlebActivity::Harvesting(0.0);
                                     pleb.work_target = None;
@@ -4639,7 +4867,10 @@ impl App {
                                     // Auto-draw the appropriate tool for this task
                                     if tbt == BT_TREE {
                                         pleb.draw_tool("axe");
-                                    } else if tbt == BT_BERRY_BUSH || tbt == BT_CROP {
+                                    } else if crate::block_defs::BlockRegistry::cached()
+                                        .get(tbt)
+                                        .is_some_and(|d| d.is_harvestable)
+                                    {
                                         pleb.draw_tool("knife"); // soft bonus, not required
                                     }
                                     pleb.activity = PlebActivity::Farming(0.0);
@@ -4667,7 +4898,9 @@ impl App {
             if let PlebActivity::Building(progress) = &pleb.activity {
                 if let Some((tx, ty)) = pleb.work_target {
                     let new_progress = if let Some(bp) = self.blueprints.get(&(tx, ty)) {
-                        progress + dt * self.time_speed * pleb.construction_speed() / bp.build_time
+                        progress
+                            + dt * self.time_speed * ACTION_SPEED_MUL * pleb.construction_speed()
+                                / bp.build_time
                     } else {
                         1.0 // blueprint gone, finish immediately
                     };
@@ -4686,7 +4919,7 @@ impl App {
                                         block: "roof".to_string(),
                                     });
                                 } else if bp.is_wall() {
-                                    // Mud walls: auto-dig nearby dirt tile
+                                    // Wattle & daub: auto-dig nearby dirt tile for daub
                                     let bp_bt = bp.block_data & 0xFF;
                                     if bp_bt == BT_MUD_WALL {
                                         dig_marks.push((tx, ty));
@@ -4810,8 +5043,9 @@ impl App {
             if let PlebActivity::Crafting(recipe_id, progress) = pleb.activity {
                 let recipe_reg = recipe_defs::RecipeRegistry::cached();
                 if let Some(recipe) = recipe_reg.get(recipe_id) {
-                    let new_progress =
-                        progress + dt * self.time_speed * pleb.crafting_speed() / recipe.time;
+                    let new_progress = progress
+                        + dt * self.time_speed * ACTION_SPEED_MUL * pleb.crafting_speed()
+                            / recipe.time;
                     if new_progress >= 1.0 {
                         // Crafting complete — drop output on ground near pleb
                         self.ground_items.push(resources::GroundItem::new(
@@ -4863,7 +5097,7 @@ impl App {
                 continue;
             }
             if let PlebActivity::Butchering(progress) = pleb.activity {
-                let new_progress = progress + dt * self.time_speed * 0.25;
+                let new_progress = progress + dt * self.time_speed * ACTION_SPEED_MUL * 0.25;
                 if new_progress >= 1.0 {
                     // Find the creature corpse at work_target and mark it butchered
                     if let Some((wx, wy)) = pleb.work_target {
@@ -4910,7 +5144,7 @@ impl App {
                 continue;
             }
             if let PlebActivity::Cooking(progress) = pleb.activity {
-                let new_progress = progress + dt * self.time_speed * 0.2; // ~5 seconds
+                let new_progress = progress + dt * self.time_speed * ACTION_SPEED_MUL * 0.2;
                 if new_progress >= 1.0 {
                     // Convert raw food → cooked food (meat first, then fish)
                     if pleb.inventory.count_of(ITEM_RAW_MEAT) > 0 {
@@ -4945,7 +5179,7 @@ impl App {
                 continue;
             }
             if let PlebActivity::Fishing(progress) = pleb.activity {
-                let new_progress = progress + dt * self.time_speed * 0.05; // ~20 seconds
+                let new_progress = progress + dt * self.time_speed * ACTION_SPEED_MUL * 0.05;
                 if new_progress >= 1.0 {
                     // Hash-based catch roll: 35% chance
                     let seed = (pleb.x.to_bits())
@@ -4971,6 +5205,149 @@ impl App {
                     }
                 } else {
                     pleb.activity = PlebActivity::Fishing(new_progress);
+                }
+            }
+        }
+
+        // --- Mining: chip sub-cells, drop materials ---
+        for pleb in self.plebs.iter_mut() {
+            if pleb.is_dead || pleb.is_enemy {
+                continue;
+            }
+            if let PlebActivity::Mining(progress) = pleb.activity {
+                let has_pick = pleb.has_tool("pick");
+                let mine_speed = if has_pick { 0.33 } else { 0.12 }; // pick: ~3s, hands: ~8s per cell
+                let new_progress = progress + dt * self.time_speed * ACTION_SPEED_MUL * mine_speed;
+                if new_progress >= 1.0 {
+                    // Mine one sub-cell
+                    if let Some((mx, my)) = pleb.harvest_target {
+                        // Determine facing direction from pleb position
+                        let dx = mx as f32 + 0.5 - pleb.x;
+                        let dy = my as f32 + 0.5 - pleb.y;
+                        let face = if dx.abs() > dy.abs() {
+                            if dx > 0.0 { 3u8 } else { 1u8 } // west or east face
+                        } else if dy > 0.0 {
+                            0u8 // north face (pleb south of rock)
+                        } else {
+                            2u8 // south face
+                        };
+
+                        let mut mined_mat = None;
+                        if let Some(grid) = self.mining_grids.get_mut(&(mx, my)) {
+                            if let Some((sx, sy)) = mining::next_mine_target(grid, face) {
+                                mined_mat = mining::mine_cell(grid, sx, sy);
+                            }
+                        }
+
+                        if let Some(mat) = mined_mat {
+                            // Drop appropriate item
+                            let drop_item = match mat {
+                                mining::MAT_HOST => Some((ITEM_ROCK, 1u16)),
+                                mining::MAT_IRON => Some((item_defs::ITEM_ROCK, 1)), // TODO: iron ore item
+                                mining::MAT_COPPER => Some((item_defs::ITEM_ROCK, 1)), // TODO: copper ore
+                                mining::MAT_FLINT => Some((item_defs::ITEM_ROCK, 1)), // TODO: flint item
+                                mining::MAT_COAL => Some((item_defs::ITEM_ROCK, 1)), // TODO: coal item
+                                mining::MAT_CRYSTAL => Some((item_defs::ITEM_ROCK, 1)), // TODO: crystal
+                                _ => None, // void: nothing drops
+                            };
+                            if let Some((item_id, count)) = drop_item {
+                                self.ground_items.push(resources::GroundItem::new(
+                                    pleb.x, pleb.y, item_id, count,
+                                ));
+                            }
+                            if mat != mining::MAT_HOST && mat != mining::MAT_VOID {
+                                let name = mining::material_name(mat);
+                                pleb.log_event(self.time_of_day, format!("Found {}!", name));
+                            }
+                            self.grid_dirty = true;
+                        }
+
+                        // Check if fully mined → remove rock block
+                        let fully_mined = self
+                            .mining_grids
+                            .get(&(mx, my))
+                            .is_some_and(|g| mining::is_fully_mined(g));
+                        if fully_mined {
+                            let idx = (my as u32 * GRID_W + mx as u32) as usize;
+                            if idx < self.grid_data.len() {
+                                let roof = self.grid_data[idx] & 0xFF000000;
+                                self.grid_data[idx] = make_block(BT_GROUND as u8, 0, 0) | roof;
+                            }
+                            self.mining_grids.remove(&(mx, my));
+                            pleb.harvest_target = None;
+                            pleb.work_target = None;
+                            pleb.activity = PlebActivity::Idle;
+                            self.grid_dirty = true;
+                        } else {
+                            // Continue mining next cell
+                            pleb.activity = PlebActivity::Mining(0.0);
+                        }
+                    } else {
+                        pleb.activity = PlebActivity::Idle;
+                    }
+                } else {
+                    pleb.activity = PlebActivity::Mining(new_progress);
+                }
+            }
+        }
+
+        // --- Auto-tend fires: idle pleb near a dying fire adds fuel ---
+        if self.frame_count % 60 == 11 {
+            for pleb in self.plebs.iter_mut() {
+                if pleb.is_dead || pleb.is_enemy {
+                    continue;
+                }
+                if !matches!(pleb.activity, PlebActivity::Idle) {
+                    continue;
+                }
+                // Check for nearby low-fuel fires (within 3 tiles)
+                let bx = pleb.x.floor() as i32;
+                let by = pleb.y.floor() as i32;
+                let mut best_fire: Option<(i32, i32, u32)> = None;
+                for dy in -3..=3i32 {
+                    for dx in -3..=3i32 {
+                        let fx = bx + dx;
+                        let fy = by + dy;
+                        if fx < 0 || fy < 0 || fx >= GRID_W as i32 || fy >= GRID_H as i32 {
+                            continue;
+                        }
+                        let fidx = (fy as u32 * GRID_W + fx as u32) as usize;
+                        let bt = self.grid_data[fidx] & 0xFF;
+                        if bt != BT_CAMPFIRE && bt != BT_FIREPLACE {
+                            continue;
+                        }
+                        let fuel = (self.grid_data[fidx] >> 8) & 0xFF;
+                        if fuel <= 2 {
+                            // Low fuel — needs tending
+                            if best_fire.is_none() || fuel < best_fire.unwrap().2 {
+                                best_fire = Some((fx, fy, fuel));
+                            }
+                        }
+                    }
+                }
+                if let Some((fx, fy, _fuel)) = best_fire {
+                    // Check if pleb has fuel items (sticks, logs, or charcoal)
+                    let has_sticks = pleb.inventory.count_of(ITEM_SCRAP_WOOD) >= 3;
+                    let has_log = pleb.inventory.count_of(item_defs::ITEM_LOG) > 0;
+                    let has_charcoal = pleb.inventory.count_of(item_defs::ITEM_CHARCOAL) > 0;
+                    if has_sticks || has_log || has_charcoal {
+                        let fidx = (fy as u32 * GRID_W + fx as u32) as usize;
+                        let fuel = (self.grid_data[fidx] >> 8) & 0xFF;
+                        // Add fuel: charcoal adds 3 levels, log adds 2, sticks add 1
+                        let (add, item_id, consume) = if has_charcoal {
+                            (3u32, item_defs::ITEM_CHARCOAL, 1u16)
+                        } else if has_log {
+                            (2, item_defs::ITEM_LOG, 1)
+                        } else {
+                            (1, ITEM_SCRAP_WOOD, 3)
+                        };
+                        let new_fuel = (fuel + add).min(5);
+                        self.grid_data[fidx] =
+                            (self.grid_data[fidx] & 0xFFFF00FF) | (new_fuel << 8);
+                        pleb.inventory.remove(item_id, consume);
+                        pleb.log_event(self.time_of_day, "Tended the fire".into());
+                        self.grid_dirty = true;
+                    }
                 }
             }
         }
@@ -5101,7 +5478,7 @@ impl App {
                     let need_item = if bp.is_roof() {
                         Some(ITEM_FIBER) // roof needs fiber (not tracked in standard fields)
                     } else if bp.wood_delivered < bp.wood_needed {
-                        if bp.is_campfire() {
+                        if bp.uses_sticks() {
                             Some(ITEM_SCRAP_WOOD)
                         } else {
                             Some(ITEM_LOG)
@@ -5285,7 +5662,7 @@ impl App {
             {
                 let ready = if bp.is_roof() {
                     pleb.inventory.count_of(ITEM_FIBER) >= 1
-                } else if bp.is_campfire() {
+                } else if bp.uses_sticks() {
                     pleb.inventory.count_of(ITEM_SCRAP_WOOD) >= 3
                 } else {
                     bp.resources_met()
@@ -5297,7 +5674,7 @@ impl App {
                     if dist < 1.5 {
                         if bp.is_roof() {
                             pleb.inventory.remove(ITEM_FIBER, 1);
-                        } else if bp.is_campfire() {
+                        } else if bp.uses_sticks() {
                             pleb.inventory.remove(ITEM_SCRAP_WOOD, 3);
                         }
                         pleb.activity = PlebActivity::Building(0.0);
@@ -5978,6 +6355,80 @@ impl App {
                             }
                         }
                     }
+
+                    // Hollowcall: invisible stalker — creeps toward isolated plebs
+                    if c.species_id == CREATURE_HOLLOWCALL && c.state_timer > 4.0 {
+                        let self_in_light = is_lit(c.x, c.y);
+                        if self_in_light {
+                            // Flee from light (more aggressively than duskweavers)
+                            let edge_x = if c.x < (gw / 2) as f32 {
+                                1.0
+                            } else {
+                                (gw - 2) as f32
+                            };
+                            let edge_y = if c.y < (gh / 2) as f32 {
+                                1.0
+                            } else {
+                                (gh - 2) as f32
+                            };
+                            c.state = CreatureState::Flee(edge_x, edge_y);
+                            c.state_timer = 0.0;
+                            c.path = astar_path_terrain_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                (c.x as i32, c.y as i32),
+                                (edge_x as i32, edge_y as i32),
+                            );
+                            c.path_idx = 0;
+                        } else if c.uncloak_timer <= 0.0 {
+                            // Only hunt when cloaked — flee when exposed
+                            let mut best_target: Option<(f32, f32, f32)> = None;
+                            for &(px, py, _has_light, is_roofed, in_light) in &pleb_positions {
+                                if is_roofed || in_light {
+                                    continue;
+                                }
+                                let d = (px - c.x).powi(2) + (py - c.y).powi(2);
+                                if d < 1600.0 && best_target.map_or(true, |(_, _, bd)| d < bd) {
+                                    best_target = Some((px, py, d));
+                                }
+                            }
+                            if let Some((tx, ty, _)) = best_target {
+                                c.state = CreatureState::Stalk(tx, ty);
+                                c.state_timer = 0.0;
+                                c.path = astar_path_terrain_wd(
+                                    &self.grid_data,
+                                    &self.wall_data,
+                                    &self.terrain_data,
+                                    (c.x as i32, c.y as i32),
+                                    (tx as i32, ty as i32),
+                                );
+                                c.path_idx = 0;
+                            }
+                        } else {
+                            // Decloaked — flee until cloak restores
+                            let edge_x = if c.x < (gw / 2) as f32 {
+                                1.0
+                            } else {
+                                (gw - 2) as f32
+                            };
+                            let edge_y = if c.y < (gh / 2) as f32 {
+                                1.0
+                            } else {
+                                (gh - 2) as f32
+                            };
+                            c.state = CreatureState::Flee(edge_x, edge_y);
+                            c.state_timer = 0.0;
+                            c.path = astar_path_terrain_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                (c.x as i32, c.y as i32),
+                                (edge_x as i32, edge_y as i32),
+                            );
+                            c.path_idx = 0;
+                        }
+                    }
                 }
 
                 CreatureState::Stalk(tx, ty) => {
@@ -6339,6 +6790,15 @@ impl App {
             }
         }
 
+        // --- Uncloak timer + position tracking ---
+        for c in &mut self.creatures {
+            if c.uncloak_timer > 0.0 {
+                c.uncloak_timer = (c.uncloak_timer - dt_game).max(0.0);
+            }
+            c.prev_x = c.x;
+            c.prev_y = c.y;
+        }
+
         // --- Bleeding: blood loss + blood drops on ground ---
         for c in &mut self.creatures {
             if c.is_dead || c.bleeding <= 0.0 {
@@ -6540,7 +7000,7 @@ fn tick_pleb_activity(
             };
             let harvest_speed =
                 if is_tree { 1.5 } else { 5.0 } * knife_bonus * pleb.farming_speed();
-            let new_progress = progress + dt * time_speed * harvest_speed;
+            let new_progress = progress + dt * time_speed * ACTION_SPEED_MUL * harvest_speed;
             if new_progress >= 1.0 {
                 // Check what we're harvesting: tree → sticks, bush → berries
                 let is_tree_target = pleb.harvest_target.is_some_and(|(hx, hy)| {
@@ -6571,30 +7031,117 @@ fn tick_pleb_activity(
                         stick_count,
                         fiber_count
                     );
-                } else {
-                    // Berry bush harvest: pick 1 berry, decrement bush supply
-                    if let Some((hx, hy)) = pleb.harvest_target {
-                        let hidx = (hy as u32 * GRID_W + hx as u32) as usize;
-                        if hidx < grid.len() && (grid[hidx] & 0xFF) == BT_BERRY_BUSH {
-                            let berries_left = (grid[hidx] >> 8) & 0xFF;
-                            if berries_left > 0 {
-                                // Decrement berry count in height byte
-                                let new_count = berries_left - 1;
-                                grid[hidx] = (grid[hidx] & 0xFFFF00FF) | (new_count << 8);
+                } else if let Some((hx, hy)) = pleb.harvest_target {
+                    let hidx = (hy as u32 * GRID_W + hx as u32) as usize;
+                    if hidx < grid.len() {
+                        let hbt = grid[hidx] & 0xFF;
+                        let h_left = (grid[hidx] >> 8) & 0xFF;
+                        match hbt {
+                            BT_BERRY_BUSH => {
+                                if h_left > 0 {
+                                    let new_count = h_left - 1;
+                                    grid[hidx] = (grid[hidx] & 0xFFFF00FF) | (new_count << 8);
+                                    ground_items.push(resources::GroundItem::new(
+                                        pleb.x,
+                                        pleb.y,
+                                        ITEM_BERRIES,
+                                        1,
+                                    ));
+                                }
+                            }
+                            BT_DUSTWHISKER => {
+                                // Harvest fiber from grass, then remove plant
+                                let rng = ((pleb.x * 97.3 + pleb.y * 211.7) as u32)
+                                    .wrapping_mul(2654435761);
+                                let count = 2 + (rng % 2) as u16; // 2-3 fiber
+                                ground_items.push(resources::GroundItem::new(
+                                    pleb.x, pleb.y, ITEM_FIBER, count,
+                                ));
+                                grid[hidx] = make_block(BT_GROUND as u8, 0, 0);
+                                log::info!(
+                                    "{} gathered {} fiber from dustwhisker",
+                                    pleb.name,
+                                    count
+                                );
+                            }
+                            BT_HOLLOW_REED => {
+                                let rng = ((pleb.x * 113.3 + pleb.y * 277.7) as u32)
+                                    .wrapping_mul(2654435761);
+                                let count = 2 + (rng % 2) as u16; // 2-3 reed stalks
                                 ground_items.push(resources::GroundItem::new(
                                     pleb.x,
                                     pleb.y,
-                                    ITEM_BERRIES,
-                                    1,
+                                    ITEM_REED_STALK,
+                                    count,
                                 ));
-                                log::info!(
-                                    "{} picked a berry ({} remaining on bush)",
-                                    pleb.name,
-                                    new_count
-                                );
-                            } else {
-                                log::info!("{}: bush is empty", pleb.name);
+                                grid[hidx] = make_block(BT_GROUND as u8, 0, 0);
+                                log::info!("{} gathered {} reed stalks", pleb.name, count);
                             }
+                            BT_THORNBRAKE => {
+                                let rng = ((pleb.x * 73.3 + pleb.y * 191.7) as u32)
+                                    .wrapping_mul(2654435761);
+                                let stick_count = 2 + (rng % 2) as u16;
+                                let thorn_count = 1 + (rng >> 8 & 1) as u16; // 1-2
+                                ground_items.push(resources::GroundItem::new(
+                                    pleb.x + 0.1,
+                                    pleb.y,
+                                    ITEM_SCRAP_WOOD,
+                                    stick_count,
+                                ));
+                                ground_items.push(resources::GroundItem::new(
+                                    pleb.x - 0.1,
+                                    pleb.y,
+                                    ITEM_THORNS,
+                                    thorn_count,
+                                ));
+                                grid[hidx] = make_block(BT_GROUND as u8, 0, 0);
+                                log::info!(
+                                    "{} harvested thornbrake: {} sticks + {} thorns",
+                                    pleb.name,
+                                    stick_count,
+                                    thorn_count
+                                );
+                            }
+                            BT_SALTBRUSH => {
+                                let rng = ((pleb.x * 53.3 + pleb.y * 317.7) as u32)
+                                    .wrapping_mul(2654435761);
+                                let count = 1 + (rng % 2) as u16; // 1-2 salt
+                                ground_items.push(resources::GroundItem::new(
+                                    pleb.x, pleb.y, ITEM_SALT, count,
+                                ));
+                                grid[hidx] = make_block(BT_GROUND as u8, 0, 0);
+                                log::info!("{} gathered {} salt from saltbrush", pleb.name, count);
+                            }
+                            BT_DUSKBLOOM => {
+                                // Time-dependent harvest: nectar at night, dried petals by day
+                                let day_frac = (time_of_day / DAY_DURATION).fract();
+                                let is_blooming = day_frac > 0.75 || day_frac < 0.15;
+                                if is_blooming {
+                                    ground_items.push(resources::GroundItem::new(
+                                        pleb.x,
+                                        pleb.y,
+                                        ITEM_NECTAR,
+                                        1,
+                                    ));
+                                    log::info!(
+                                        "{} harvested nectar from blooming duskbloom",
+                                        pleb.name
+                                    );
+                                } else {
+                                    ground_items.push(resources::GroundItem::new(
+                                        pleb.x,
+                                        pleb.y,
+                                        ITEM_DRIED_PETALS,
+                                        1,
+                                    ));
+                                    log::info!(
+                                        "{} collected dried petals from duskbloom",
+                                        pleb.name
+                                    );
+                                }
+                                grid[hidx] = make_block(BT_GROUND as u8, 0, 0);
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -6738,7 +7285,7 @@ fn tick_pleb_activity(
             }
         }
         PlebActivity::Drinking(progress) => {
-            let new_progress = progress + dt * time_speed / WELL_DRINK_TIME;
+            let new_progress = progress + dt * time_speed * ACTION_SPEED_MUL / WELL_DRINK_TIME;
             if new_progress >= 1.0 {
                 pleb.needs.thirst = (pleb.needs.thirst + WELL_THIRST_RESTORE).min(1.0);
                 log::info!(
@@ -6766,6 +7313,9 @@ fn tick_pleb_activity(
         }
         PlebActivity::Fishing(_) => {
             // Handled in main tick (needs ground_items access)
+        }
+        PlebActivity::Mining(_) => {
+            // Handled in main tick (needs mining_grids + ground_items access)
         }
         _ => {}
     }
@@ -6995,7 +7545,7 @@ impl App {
 
         // Check blueprints for missing materials
         for (&(_bx, _by), bp) in &self.blueprints {
-            if bp.resources_met() && !bp.is_roof() && !bp.is_campfire() {
+            if bp.resources_met() && !bp.is_roof() && !bp.uses_sticks() {
                 continue;
             }
 
@@ -7018,7 +7568,7 @@ impl App {
                     items.push(ITEM_FIBER);
                     blocks.push(BT_TREE); // gather branches from trees
                 }
-            } else if bp.is_campfire() {
+            } else if bp.uses_sticks() {
                 let sticks_avail: u32 = self
                     .ground_items
                     .iter()
@@ -7103,7 +7653,7 @@ impl App {
             if !missing.is_empty() {
                 let block_name = if bp.is_roof() {
                     "thatched roof".to_string()
-                } else if bp.is_campfire() {
+                } else if bp.uses_sticks() {
                     "campfire".to_string()
                 } else {
                     let bt = bp.block_data & 0xFF;

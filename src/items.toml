@@ -35,6 +35,15 @@ nutrition = 0.10
 spoil_time = 60.0
 sickness_chance = 0.10
 
+[[item]]
+id = 3
+name = "Nectar"
+icon = "🍯"
+category = "food"
+stack_max = 10
+nutrition = 0.08
+spoil_time = 180.0
+
 # ── Cooked Food (100–199) ──
 
 [[item]]
@@ -98,6 +107,41 @@ name = "Log"
 icon = "🪵"
 category = "raw"
 stack_max = 1
+
+[[item]]
+id = 206
+name = "Reed Stalk"
+icon = "🎋"
+category = "raw"
+stack_max = 10
+
+[[item]]
+id = 207
+name = "Thorns"
+icon = "🌵"
+category = "raw"
+stack_max = 20
+
+[[item]]
+id = 208
+name = "Salt"
+icon = "🧂"
+category = "raw"
+stack_max = 10
+
+[[item]]
+id = 209
+name = "Dried Petals"
+icon = "🌸"
+category = "raw"
+stack_max = 10
+
+[[item]]
+id = 210
+name = "Charcoal"
+icon = "ite"
+category = "raw"
+stack_max = 10
 
 # ── Intermediate / Crafted (300–399) ──
 

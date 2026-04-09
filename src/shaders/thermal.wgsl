@@ -41,14 +41,20 @@ fn block_height(b: u32) -> u32 {
     let h = (b >> 8u) & 0xFFu;
     let bt = b & 0xFFu;
     // Wall blocks: bits 4-7 of height = edge bitmask, not visual height
-    if bt == 1u || bt == 4u || bt == 5u || bt == 14u || (bt >= 21u && bt <= 25u) || bt == 35u || bt == 44u { return h & 0xFu; }
+    if matches_wall_type(bt) { return h & 0xFu; }
     return h;
 }
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 64u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 70u)]; }
+
+// Structural wall types that form the building envelope (not equipment/furniture)
+fn matches_wall_type(bt: u32) -> bool {
+    return bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
+        || (bt >= BT_WOOD_WALL && bt <= BT_LIMESTONE) || bt == BT_MUD_WALL || bt == BT_DIAGONAL || bt == BT_LOW_WALL;
+}
 
 // --- Thin wall edge helpers ---
 fn has_wall_on_edge_t(height: u32, flags: u32, edge: u32) -> bool {

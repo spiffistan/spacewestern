@@ -276,6 +276,20 @@ impl App {
             return;
         }
 
+        // Placing creature mode
+        if let Some(species_id) = self.placing_creature {
+            if is_walkable_pos(&self.grid_data, wx, wy)
+                && self.creatures.len() < creatures::MAX_CREATURES
+            {
+                let pack_id = self.next_pack_id;
+                self.next_pack_id += 1;
+                self.creatures
+                    .push(creatures::Creature::new(species_id, wx, wy, pack_id));
+                self.placing_creature = None;
+            }
+            return;
+        }
+
         // Click on rock (no build tool): open context menu
         if bt == BT_ROCK && self.build_tool == BuildTool::None {
             self.open_context_menu(self.last_mouse_x as f32, self.last_mouse_y as f32, wx, wy);

@@ -666,6 +666,8 @@ pub enum ContextAction {
     Butcher(i32, i32),
     /// Fish at water's edge (grid_x, grid_y)
     Fish(i32, i32),
+    /// Mine a rock tile at (grid_x, grid_y) — sub-tile mining
+    Mine(i32, i32),
 }
 
 /// A context menu action entry: (label, action, enabled).
@@ -802,8 +804,8 @@ impl Blueprint {
             BT_STONE_FLOOR | BT_CONCRETE_FLOOR => (1.5, 0, 0, 0, 2, 0),
             // --- Walls ---
             BT_WOOD_WALL => (4.0, 2, 0, 0, 0, 0), // raw logs, no saw needed
-            BT_MUD_WALL => (1.2, 0, 0, 0, 0, 0),  // auto-dug from ground, no material cost
-            BT_LOW_WALL => (0.8, 0, 0, 0, 0, 0),  // quick mud cover, no material cost
+            BT_MUD_WALL => (2.0, 2, 0, 0, 0, 0),  // wattle (sticks) + daub (mud from ground)
+            BT_LOW_WALL => (1.0, 1, 0, 0, 0, 0),  // low wattle fence
             BT_STONE | BT_WALL | BT_SANDSTONE | BT_GRANITE | BT_LIMESTONE => (3.0, 0, 0, 0, 3, 0),
             BT_GLASS => (3.0, 0, 0, 0, 2, 0),
             BT_INSULATED => (4.0, 0, 2, 2, 0, 0),
@@ -821,6 +823,7 @@ impl Blueprint {
             BT_WELL => (8.0, 3, 0, 0, 2, 1), // rope to lower bucket
             BT_FIREPLACE => (1.0, 8, 0, 0, 0, 0), // fireplace: 8 sticks
             BT_CAMPFIRE => (0.5, 5, 0, 0, 0, 0), // small campfire: 5 sticks
+            BT_CHARCOAL_MOUND => (3.0, 3, 0, 0, 0, 0), // 3 logs, smolders into charcoal
             BT_CANNON => (5.0, 0, 0, 0, 6, 0),
             BT_COMPOST => (1.0, 1, 0, 0, 0, 0),
             // --- Lighting ---
@@ -925,6 +928,27 @@ impl Blueprint {
     pub fn is_campfire(&self) -> bool {
         let bt = self.block_data & 0xFF;
         (bt == BT_FIREPLACE || bt == BT_CAMPFIRE) && self.wall_edges == 0
+    }
+
+    /// Primitive buildings that use sticks (ITEM_SCRAP_WOOD), not logs.
+    /// These are cheap early-game structures made from gathered branches.
+    pub fn uses_sticks(&self) -> bool {
+        let bt = self.block_data & 0xFF;
+        bt_is!(
+            bt,
+            BT_CAMPFIRE,
+            BT_FIREPLACE,
+            BT_MUD_WALL,    // wattle & daub: woven sticks
+            BT_LOW_WALL,    // low wattle fence
+            BT_ROUGH_FLOOR, // sticks laid flat
+            BT_SNARE,       // stick frame
+            BT_COMPOST,     // stick frame
+            BT_WALL_TORCH   // stick + fuel
+        ) || (self.wall_edges != 0 && {
+            // Wall-data walls: wattle uses sticks
+            let wmat = self.wall_material;
+            wmat == 9 // WMAT_MUD
+        })
     }
 
     pub fn is_wall(&self) -> bool {

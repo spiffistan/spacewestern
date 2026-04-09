@@ -225,6 +225,7 @@ pub enum PlebCommand {
     GatherBranches(i32, i32),
     Butcher(i32, i32),
     Fish(i32, i32),
+    Mine(i32, i32),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -244,6 +245,7 @@ pub enum PlebActivity {
     Butchering(f32),                   // progress 0-1, butchering a dead creature
     Cooking(f32),                      // progress 0-1, cooking food at a campfire
     Fishing(f32),                      // progress 0-1, fishing at water's edge (~20s per attempt)
+    Mining(f32),                       // progress 0-1, mining a sub-cell of rock
     Staggering(f32),                   // knockback recovery timer (seconds remaining)
     MentalBreak(MentalBreakKind, f32), // (kind, seconds remaining)
     /// Crisis override — pleb acts autonomously, ignoring player input.
@@ -599,8 +601,8 @@ pub struct GpuPleb {
     pub swing_progress: f32, // 0.0=idle, 0.01-0.99=windup, 1.0=strike
     pub crouch: f32,         // 0.0=standing, 0.5=peeking, 1.0=crouching
     pub stress: f32,         // 0.0-1.0 normalized stress (0=calm, 1=breaking)
-    pub _pad2: f32,
-    pub _pad3: f32,
+    pub wetness: f32,        // 0.0=dry, 1.0=soaked (darkens clothing)
+    pub sleeping: f32,       // >0.5 = sleeping (lay flat + Z's)
 }
 
 pub struct Pleb {
@@ -664,6 +666,7 @@ pub struct Pleb {
     pub hunt_target: Option<usize>, // creature index being hunted (stalk + shoot)
     pub nauseous_timer: f32, // >0 = nauseous from raw food (seconds remaining)
     pub smoke_exposure: f32, // current smoke density at position (updated from air readback)
+    pub wetness_emote: u8, // bit 0 = damp emote fired, bit 1 = soaked emote fired
     /// Tracks which need-emote thresholds have fired (reset when need recovers).
     /// Bits: 0=hunger_low, 1=hunger_crit, 2=thirst_low, 3=thirst_crit,
     ///       4=rest_low, 5=rest_crit, 6=warmth_low, 7=warmth_crit
@@ -812,6 +815,7 @@ impl Pleb {
             hunt_target: None,
             nauseous_timer: 0.0,
             smoke_exposure: 0.0,
+            wetness_emote: 0,
             need_emote_flags: 0,
             event_log: Vec::new(),
         }
@@ -866,8 +870,12 @@ impl Pleb {
                 self.crouch_progress
             },
             stress: (self.needs.stress / 100.0).clamp(0.0, 1.0),
-            _pad2: 0.0,
-            _pad3: 0.0,
+            wetness: self.needs.wetness,
+            sleeping: if matches!(self.activity.inner(), PlebActivity::Sleeping) {
+                1.0
+            } else {
+                0.0
+            },
         }
     }
 

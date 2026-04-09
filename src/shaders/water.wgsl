@@ -34,8 +34,8 @@ struct Camera {
 @group(0) @binding(4) var<storage, read> water_table: array<f32>;
 @group(0) @binding(5) var elevation_tex: texture_2d<f32>; // 1024x1024 sub-tile elevation
 
-const W: u32 = 256u;
-const H: u32 = 256u;
+// Grid dimensions from camera uniform (not hardcoded)
+// W and H are set per-invocation from camera.grid_w/grid_h
 
 // Flow rate must be < 0.25 for stability (4 neighbors × rate < 1.0).
 // At 0.15, max drain per step = 60%, leaving headroom for numerical safety.
@@ -55,10 +55,12 @@ fn block_height(b: u32) -> u32 {
 }
 fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 
-// Sample sub-tile elevation for a grid cell (center of 4x4 patch)
+// Sample sub-tile elevation for a grid cell (center of sub-tile patch)
 fn sample_sub_elevation(x: i32, y: i32) -> f32 {
-    let ep = vec2<i32>(x * 4 + 2, y * 4 + 2); // center of 4x4 sub-tile patch
-    let clamped = clamp(ep, vec2(0), vec2(1023));
+    let scale = 2; // ELEV_SCALE: sub-cells per tile
+    let tex_max = i32(camera.grid_w) * scale - 1;
+    let ep = vec2<i32>(x * scale + scale / 2, y * scale + scale / 2);
+    let clamped = clamp(ep, vec2(0), vec2(tex_max));
     return textureLoad(elevation_tex, clamped, 0).r;
 }
 
@@ -67,14 +69,15 @@ fn sample_sub_elevation(x: i32, y: i32) -> f32 {
 fn get_elevation(b: u32, x: i32, y: i32) -> f32 {
     let bt = block_type(b);
     let bh = block_height(b);
-    // Walls and solid blocks: treated as very high (water can't flow onto them)
-    if bh > 0u && bt != BT_TREE && bt != BT_FIREPLACE && bt != BT_CEILING_LIGHT && bt != BT_FLOOR_LAMP && bt != BT_BERRY_BUSH
-        && bt != BT_CRATE && bt != BT_ROCK && bt != BT_WIRE && bt != BT_DIMMER && bt != BT_CROP
-        && bt != BT_BREAKER && bt != BT_RESTRICTOR && bt != BT_WALL_TORCH && bt != BT_WALL_LAMP
-        && !(bt >= BT_PIPE && bt <= BT_INLET) // gas pipe components
-        && bt != BT_LIQUID_PIPE && bt != BT_PIPE_BRIDGE && bt != BT_LIQUID_INTAKE && bt != BT_LIQUID_PUMP && bt != BT_LIQUID_OUTPUT
-        && bt != BT_DUG_GROUND {
-        return 10.0; // effectively a wall — water won't flow here
+    // Only actual wall/structural blocks are treated as water barriers.
+    // Everything else (plants, furniture, pipes, etc.) allows water flow.
+    if bh > 0u {
+        let is_wall = bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
+            || bt == BT_WOOD_WALL || bt == BT_STEEL_WALL || bt == BT_SANDSTONE || bt == BT_GRANITE
+            || bt == BT_LIMESTONE || bt == BT_MUD_WALL || bt == BT_LOW_WALL || bt == BT_DIAGONAL;
+        if is_wall {
+            return 10.0;
+        }
     }
     // Use sub-tile elevation heightmap (includes dug terrain)
     return sample_sub_elevation(x, y);
@@ -86,6 +89,8 @@ fn is_wall_for_water(b: u32, x: i32, y: i32) -> bool {
 
 @compute @workgroup_size(8, 8)
 fn main_water(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let W = u32(camera.grid_w);
+    let H = u32(camera.grid_h);
     if gid.x >= W || gid.y >= H { return; }
 
     let x = i32(gid.x);

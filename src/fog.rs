@@ -50,8 +50,13 @@ fn blocks_vision(
         return false;
     }
 
-    // Glass and trees: don't block (can see through)
-    if bt_is!(bt, BT_GLASS, BT_TREE, BT_BERRY_BUSH, BT_CROP, BT_LOW_WALL) {
+    // Glass: transparent (see through)
+    if bt == BT_GLASS {
+        return false;
+    }
+
+    // Non-wall blocks: don't block vision (plants, furniture, pipes, etc.)
+    if !is_wall_block(bt) {
         return false;
     }
 

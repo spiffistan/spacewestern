@@ -21,6 +21,7 @@ pub mod fluid;
 pub mod grid;
 pub mod item_defs;
 pub mod materials;
+pub mod mining;
 pub mod morale;
 pub mod needs;
 pub mod physics;

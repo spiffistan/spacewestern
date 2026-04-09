@@ -16,6 +16,12 @@ pub const ITEM_FIBER: u16 = 202;
 pub const ITEM_CLAY: u16 = 203;
 pub const ITEM_SCRAP_WOOD: u16 = 204; // sticks/branches
 pub const ITEM_LOG: u16 = 205;
+pub const ITEM_REED_STALK: u16 = 206;
+pub const ITEM_THORNS: u16 = 207;
+pub const ITEM_SALT: u16 = 208;
+pub const ITEM_NECTAR: u16 = 3; // food category (raw 0-99)
+pub const ITEM_DRIED_PETALS: u16 = 209;
+pub const ITEM_CHARCOAL: u16 = 210;
 // Intermediate / crafted materials 300–399
 pub const ITEM_ROPE: u16 = 300;
 pub const ITEM_PLANK: u16 = 301;

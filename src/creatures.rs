@@ -36,6 +36,9 @@ pub struct Creature {
     pub corpse_timer: f32,     // seconds remaining as visible corpse
     pub hop_phase: f32,        // 0.0-1.0 hop animation cycle (for hopping creatures)
     pub dropped_loot: bool,    // true once loot has been spawned on death
+    pub uncloak_timer: f32,    // >0 = visible (decloaked by damage), counts down to re-cloak
+    pub prev_x: f32,           // previous position for movement tracking
+    pub prev_y: f32,
 }
 
 impl Creature {
@@ -67,6 +70,9 @@ impl Creature {
             corpse_timer: 0.0,
             hop_phase: 0.0,
             dropped_loot: false,
+            uncloak_timer: 0.0,
+            prev_x: x,
+            prev_y: y,
         }
     }
 
@@ -102,6 +108,17 @@ impl Creature {
         }
 
         let mut r = base_r;
+        // Cloaked creatures are invisible (radius 0) unless decloaked by damage
+        if self.uncloak_timer <= 0.0 && self.species_id == crate::creature_defs::CREATURE_HOLLOWCALL
+        {
+            r = 0.0;
+        } else if self.uncloak_timer > 0.0
+            && self.species_id == crate::creature_defs::CREATURE_HOLLOWCALL
+        {
+            // Fade back to invisible as timer runs out (last 3 seconds)
+            let fade = (self.uncloak_timer / 3.0).clamp(0.0, 1.0);
+            r = base_r * fade;
+        }
         if self.state == CreatureState::Despawn {
             r *= (self.state_timer / 2.0).clamp(0.0, 1.0);
         }

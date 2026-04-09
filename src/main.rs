@@ -28,6 +28,7 @@ mod theme;
 use grid::*;
 use item_defs::{ITEM_ROCK, ITEM_SCRAP_WOOD};
 use materials::{GpuMaterial, build_material_table};
+mod mining;
 use sprites::generate_tree_sprites;
 
 mod pleb;
@@ -41,7 +42,7 @@ mod needs;
 use needs::{
     AirReadback, BreathingState, HEAT_CRISIS_TEMP, WELL_DRINK_TIME, WELL_THIRST_RESTORE,
     breathing_label, find_breathable_tile, find_cool_tile, find_nearest_crate, find_nearest_well,
-    mood_label, sample_environment, tick_needs,
+    mood_label, sample_environment, tick_needs, wetness_label,
 };
 
 mod build;
@@ -88,6 +89,197 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
+
+/// Stone Lab: debug parameters for procedural stone rendering iteration.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct StoneLabGpu {
+    enabled: f32, // >0.5 = override BT_ROCK rendering
+    base_r: f32,
+    base_g: f32,
+    base_b: f32,
+    crack_density: f32,   // 0-1: how many cracks
+    crack_width: f32,     // 0-1: thickness of crack lines
+    grain_scale: f32,     // 1-20: noise frequency for surface texture
+    grain_strength: f32,  // 0-1: how visible the grain is
+    strata_strength: f32, // 0-1: horizontal banding visibility
+    strata_scale: f32,    // 1-10: band frequency
+    roughness: f32,       // 0-1: outline irregularity
+    weathering: f32,      // 0-1: edge darkening / moss
+    weather_r: f32,       // weathering tint color
+    weather_g: f32,
+    weather_b: f32,
+    specular: f32, // 0-1: highlight intensity
+}
+
+struct StoneLab {
+    gpu: StoneLabGpu,
+    preset: usize, // current preset index
+}
+
+impl Default for StoneLab {
+    fn default() -> Self {
+        StoneLab {
+            gpu: StoneLabGpu {
+                enabled: 0.0,
+                base_r: 0.55,
+                base_g: 0.52,
+                base_b: 0.48,
+                crack_density: 0.4,
+                crack_width: 0.3,
+                grain_scale: 8.0,
+                grain_strength: 0.3,
+                strata_strength: 0.0,
+                strata_scale: 4.0,
+                roughness: 0.3,
+                weathering: 0.2,
+                weather_r: 0.25,
+                weather_g: 0.35,
+                weather_b: 0.20,
+                specular: 0.2,
+            },
+            preset: 0,
+        }
+    }
+}
+
+impl StoneLab {
+    const PRESETS: &'static [(&'static str, StoneLabGpu)] = &[
+        (
+            "Granite",
+            StoneLabGpu {
+                enabled: 1.0,
+                base_r: 0.55,
+                base_g: 0.52,
+                base_b: 0.50,
+                crack_density: 0.3,
+                crack_width: 0.2,
+                grain_scale: 12.0,
+                grain_strength: 0.5,
+                strata_strength: 0.0,
+                strata_scale: 4.0,
+                roughness: 0.4,
+                weathering: 0.25,
+                weather_r: 0.20,
+                weather_g: 0.35,
+                weather_b: 0.15,
+                specular: 0.3,
+            },
+        ),
+        (
+            "Sandstone",
+            StoneLabGpu {
+                enabled: 1.0,
+                base_r: 0.72,
+                base_g: 0.58,
+                base_b: 0.38,
+                crack_density: 0.35,
+                crack_width: 0.25,
+                grain_scale: 6.0,
+                grain_strength: 0.2,
+                strata_strength: 0.7,
+                strata_scale: 5.0,
+                roughness: 0.2,
+                weathering: 0.15,
+                weather_r: 0.65,
+                weather_g: 0.55,
+                weather_b: 0.40,
+                specular: 0.1,
+            },
+        ),
+        (
+            "Basalt",
+            StoneLabGpu {
+                enabled: 1.0,
+                base_r: 0.22,
+                base_g: 0.20,
+                base_b: 0.22,
+                crack_density: 0.6,
+                crack_width: 0.15,
+                grain_scale: 15.0,
+                grain_strength: 0.15,
+                strata_strength: 0.0,
+                strata_scale: 4.0,
+                roughness: 0.5,
+                weathering: 0.1,
+                weather_r: 0.18,
+                weather_g: 0.20,
+                weather_b: 0.18,
+                specular: 0.15,
+            },
+        ),
+        (
+            "Limestone",
+            StoneLabGpu {
+                enabled: 1.0,
+                base_r: 0.82,
+                base_g: 0.78,
+                base_b: 0.70,
+                crack_density: 0.2,
+                crack_width: 0.35,
+                grain_scale: 5.0,
+                grain_strength: 0.15,
+                strata_strength: 0.5,
+                strata_scale: 6.0,
+                roughness: 0.15,
+                weathering: 0.3,
+                weather_r: 0.75,
+                weather_g: 0.72,
+                weather_b: 0.65,
+                specular: 0.1,
+            },
+        ),
+        (
+            "Slate",
+            StoneLabGpu {
+                enabled: 1.0,
+                base_r: 0.35,
+                base_g: 0.38,
+                base_b: 0.45,
+                crack_density: 0.5,
+                crack_width: 0.1,
+                grain_scale: 3.0,
+                grain_strength: 0.6,
+                strata_strength: 0.8,
+                strata_scale: 12.0,
+                roughness: 0.3,
+                weathering: 0.15,
+                weather_r: 0.30,
+                weather_g: 0.35,
+                weather_b: 0.32,
+                specular: 0.4,
+            },
+        ),
+        (
+            "Obsidian",
+            StoneLabGpu {
+                enabled: 1.0,
+                base_r: 0.08,
+                base_g: 0.07,
+                base_b: 0.10,
+                crack_density: 0.15,
+                crack_width: 0.4,
+                grain_scale: 20.0,
+                grain_strength: 0.05,
+                strata_strength: 0.0,
+                strata_scale: 4.0,
+                roughness: 0.1,
+                weathering: 0.0,
+                weather_r: 0.1,
+                weather_g: 0.1,
+                weather_b: 0.1,
+                specular: 0.8,
+            },
+        ),
+    ];
+
+    fn apply_preset(&mut self, idx: usize) {
+        if let Some((_, gpu)) = Self::PRESETS.get(idx) {
+            self.gpu = *gpu;
+            self.preset = idx;
+        }
+    }
+}
 
 mod types;
 use types::*;
@@ -384,6 +576,7 @@ struct App {
     selected_group: Vec<usize>,   // multi-selected pleb indices for group commands
     placing_pleb: bool,
     placing_enemy: bool,
+    placing_creature: Option<u8>, // creature species ID to place, or None
     next_pleb_id: usize,
     // Alien fauna
     creatures: Vec<creatures::Creature>,
@@ -396,13 +589,16 @@ struct App {
     footprint_idx: usize,             // write cursor into ring buffer
     detected_rooms: Vec<rooms::Room>, // auto-detected enclosed rooms
     room_map: Vec<u16>,               // per-tile room ID (0 = no room)
+    mining_grids: std::collections::HashMap<(i32, i32), mining::MiningGrid>,
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
-    show_pleb_help: bool,             // show controls modal
-    show_inventory: bool,             // show pleb inventory window
-    inv_selected_slot: Option<usize>, // selected inventory slot for swap/drop
-    charsheet_tab: u8,                // 0=gear, 1=log, 2=modifiers
-    show_schedule: bool,              // show shift schedule window
-    show_priorities: bool,            // show work priorities window
+    show_pleb_help: bool,                               // show controls modal
+    show_inventory: bool,                               // show pleb inventory window
+    inv_selected_slot: Option<usize>,                   // selected inventory slot for swap/drop
+    charsheet_tab: u8,                                  // 0=gear, 1=log, 2=modifiers
+    show_stone_lab: bool,                               // show stone material lab window
+    stone_lab: StoneLab,                                // debug stone rendering parameters
+    show_schedule: bool,                                // show shift schedule window
+    show_priorities: bool,                              // show work priorities window
     pressed_keys: std::collections::HashSet<KeyCode>,
     doors: Vec<Door>,     // physical hinged doors
     doors_dirty: bool,    // door angles changed, re-upload door_buffer
@@ -476,12 +672,14 @@ struct App {
     water_fill_sources: std::collections::HashMap<(i32, i32), f32>, // active fill: tile → accumulated level
     water_depth_cpu: Vec<f32>, // CPU mirror of water depth per tile (for pathfinding/movement)
     water_table: Vec<f32>,     // static water table height map (CPU copy for info overlay)
+    water_equilibrium: Vec<f32>, // pre-computed equilibrium water depth (for preview + init)
     elevation_data: Vec<f32>,  // terrain elevation at grid res (256x256)
     sub_elevation: Vec<f32>,   // sub-tile elevation heightmap (1024x1024)
     sub_elevation_dirty: bool, // true when sub_elevation needs re-upload
     terrain_data: Vec<u32>,    // per-tile terrain type, vegetation, richness etc.
     terrain_dirty: bool,       // true when terrain_data needs re-upload to GPU
     terrain_params: grid::TerrainParams,
+    terrain_params_prev: grid::TerrainParams, // for mapgen auto-preview
     game_state: GameState,
     // Character generation
     chargen_name: String,
@@ -530,15 +728,15 @@ struct App {
     dust_storm_active: bool,
 }
 
-const LIGHTMAP_SCALE: u32 = 2; // lightmap texels per grid cell (2x resolution)
+const LIGHTMAP_SCALE: u32 = 1; // lightmap texels per grid cell (1x at 512 grid)
 const LIGHTMAP_W: u32 = GRID_W * LIGHTMAP_SCALE;
 const LIGHTMAP_H: u32 = GRID_H * LIGHTMAP_SCALE;
 #[cfg(not(target_arch = "wasm32"))]
-const LIGHTMAP_PROP_ITERATIONS: u32 = 20; // covers ~10 tile radius (reduced from 26)
+const LIGHTMAP_PROP_ITERATIONS: u32 = 14; // covers ~7 tile radius
 #[cfg(target_arch = "wasm32")]
 const LIGHTMAP_PROP_ITERATIONS: u32 = 12; // reduced for browser perf
 #[cfg(not(target_arch = "wasm32"))]
-const LIGHTMAP_UPDATE_INTERVAL: u32 = 2; // recompute every N frames (~30fps lightmap at 60fps)
+const LIGHTMAP_UPDATE_INTERVAL: u32 = 3; // recompute every N frames (~20fps lightmap at 60fps)
 #[cfg(target_arch = "wasm32")]
 const LIGHTMAP_UPDATE_INTERVAL: u32 = 4; // less frequent for browser perf
 #[cfg(not(target_arch = "wasm32"))]
@@ -584,6 +782,8 @@ struct GfxState {
     wall_buffer: wgpu::Buffer, // u16 per tile: wall edges, thickness, material (DN-008)
     door_buffer: wgpu::Buffer, // physical door data for raytrace (binding 25)
     creature_buffer: wgpu::Buffer, // alien fauna data (binding 26)
+    stone_lab_buffer: wgpu::Buffer, // stone lab debug params (binding 29)
+    mining_texture: wgpu::Texture, // sub-cell mining data (binding 30)
     // Power grid
     voltage_buffer: wgpu::Buffer,
     power_pipeline: wgpu::ComputePipeline,
@@ -660,8 +860,8 @@ impl App {
             gfx: None,
             egui_state: None,
             camera: CameraUniform {
-                center_x: 128.0, // centered on the map
-                center_y: 128.0,
+                center_x: (GRID_W / 2) as f32,
+                center_y: (GRID_H / 2) as f32,
                 zoom: 1.0, // will be set in init_gfx_async to fit map
                 show_roofs: 0.0,
                 screen_w: 800.0,
@@ -738,7 +938,7 @@ impl App {
             time_of_day: DAY_DURATION * (CAMERA_START_HOUR / 24.0),
             time_paused: false,
             show_pause_menu: false,
-            time_speed: 0.25,
+            time_speed: 0.1,
             last_frame_time: Instant::now(),
             last_click_frame: 0,
             last_click_pos: (-1, -1),
@@ -886,6 +1086,7 @@ impl App {
             next_pleb_id: 3,
             placing_pleb: false,
             placing_enemy: false,
+            placing_creature: None,
             creatures: {
                 // Spawn dusthares scattered across open terrain at worldgen
                 use creature_defs::CREATURE_DUSTHARE;
@@ -918,11 +1119,14 @@ impl App {
             footprint_idx: 0,
             detected_rooms: Vec::new(),
             room_map: vec![0u16; (GRID_W * GRID_H) as usize],
+            mining_grids: std::collections::HashMap::new(),
             cannon_angles: std::collections::HashMap::new(),
             show_pleb_help: false,
             show_inventory: false,
             inv_selected_slot: None,
             charsheet_tab: 0,
+            show_stone_lab: false,
+            stone_lab: StoneLab::default(),
             show_schedule: false,
             show_priorities: false,
             pressed_keys: std::collections::HashSet::new(),
@@ -995,12 +1199,14 @@ impl App {
             water_fill_sources: std::collections::HashMap::new(),
             water_depth_cpu: vec![0.0; (grid::GRID_W * grid::GRID_H) as usize],
             water_table: Vec::new(),
+            water_equilibrium: Vec::new(),
             elevation_data: Vec::new(),
             sub_elevation: Vec::new(),
             sub_elevation_dirty: false,
             terrain_data: Vec::new(),
             terrain_dirty: false,
             terrain_params: grid::TerrainParams::default(),
+            terrain_params_prev: grid::TerrainParams::default(),
             game_state: GameState::MainMenu,
             chargen_name: "Jeff".to_string(),
             chargen_skin: [0.76, 0.60, 0.46],
@@ -1229,6 +1435,9 @@ impl App {
             .shadow_map_dummy
             .create_view(&wgpu::TextureViewDescriptor::default());
         let sound_view = gfx.sound_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
+        let mining_view = gfx
+            .mining_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         gfx.compute_bind_groups = [
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("compute-bg-0"), // dye_A, write output_A, read prev output_B
@@ -1352,6 +1561,14 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 28,
                         resource: wgpu::BindingResource::TextureView(&elev_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 29,
+                        resource: gfx.stone_lab_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 30,
+                        resource: wgpu::BindingResource::TextureView(&mining_view),
                     },
                 ],
             }),
@@ -1478,6 +1695,14 @@ impl App {
                         binding: 28,
                         resource: wgpu::BindingResource::TextureView(&elev_view),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 29,
+                        resource: gfx.stone_lab_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 30,
+                        resource: wgpu::BindingResource::TextureView(&mining_view),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1603,6 +1828,14 @@ impl App {
                         binding: 28,
                         resource: wgpu::BindingResource::TextureView(&elev_view),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 29,
+                        resource: gfx.stone_lab_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 30,
+                        resource: wgpu::BindingResource::TextureView(&mining_view),
+                    },
                 ],
             }),
             gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1727,6 +1960,14 @@ impl App {
                     wgpu::BindGroupEntry {
                         binding: 28,
                         resource: wgpu::BindingResource::TextureView(&elev_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 29,
+                        resource: gfx.stone_lab_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 30,
+                        resource: wgpu::BindingResource::TextureView(&mining_view),
                     },
                 ],
             }),
@@ -2309,7 +2550,8 @@ impl App {
                                     if has_wd && (nb_flags & 2) == 0 {
                                         break; // found built wall in this direction
                                     }
-                                    if nbh > 0 && (nb_flags & 2) == 0 {
+                                    let nbt = nb & 0xFF;
+                                    if nbh > 0 && (nb_flags & 2) == 0 && is_wall_block(nbt) {
                                         break; // found built block wall
                                     }
                                 }
@@ -2369,8 +2611,59 @@ impl App {
             }
             gfx.queue
                 .write_buffer(&gfx.wall_buffer, 0, bytemuck::cast_slice(&self.wall_data));
+            // Re-upload elevation + AO (interleaved) + water table
+            {
+                let terrain_ao = grid::compute_terrain_ao(&self.elevation_data);
+                let grid_size = (GRID_W * GRID_H) as usize;
+                let mut elev_ao = vec![0.0f32; grid_size * 2];
+                for i in 0..grid_size.min(self.elevation_data.len()) {
+                    elev_ao[i * 2] = self.elevation_data[i];
+                    elev_ao[i * 2 + 1] = if i < terrain_ao.len() {
+                        terrain_ao[i]
+                    } else {
+                        1.0
+                    };
+                }
+                gfx.queue
+                    .write_buffer(&gfx.elevation_buffer, 0, bytemuck::cast_slice(&elev_ao));
+            }
+            // Water table buffer
+            gfx.queue.write_buffer(
+                &gfx.water_table_buffer,
+                0,
+                bytemuck::cast_slice(&self.water_table),
+            );
+            // Water textures: initialize with equilibrium depth
+            if self.water_equilibrium.len() == (GRID_W * GRID_H) as usize {
+                let water_bytes: &[u8] = bytemuck::cast_slice(&self.water_equilibrium);
+                for i in 0..2 {
+                    gfx.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &gfx.water_textures[i],
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        water_bytes,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(GRID_W * 4),
+                            rows_per_image: Some(GRID_H),
+                        },
+                        wgpu::Extent3d {
+                            width: GRID_W,
+                            height: GRID_H,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+            }
+            // Sub-elevation texture
+            self.sub_elevation_dirty = true;
+            self.terrain_dirty = true;
+
             self.grid_dirty = false;
-            self.doors_dirty = true; // wall_data changed, refresh doors too
+            self.doors_dirty = true;
             self.pipe_network.rebuild(&self.grid_data);
             self.liquid_network
                 .rebuild_with(&self.grid_data, pipes::is_liquid_pipe_component);
@@ -2679,6 +2972,46 @@ impl App {
                 0,
                 bytemuck::cast_slice(&gpu_creatures),
             );
+            // Upload stone lab parameters
+            gfx.queue.write_buffer(
+                &gfx.stone_lab_buffer,
+                0,
+                bytemuck::bytes_of(&self.stone_lab.gpu),
+            );
+
+            // Upload active mining grids to GPU texture
+            for (&(tx, ty), grid) in &self.mining_grids {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
+                let packed = mining::pack_mining_grid(grid);
+                let origin_x = (tx as u32) * 8;
+                let origin_y = (ty as u32) * 8;
+                // Write 8 rows of 8 bytes each
+                gfx.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &gfx.mining_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: origin_x,
+                            y: origin_y,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &packed,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(8),
+                        rows_per_image: Some(8),
+                    },
+                    wgpu::Extent3d {
+                        width: 8,
+                        height: 8,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
         }
         // --- egui frame setup (before bp_cam/blueprint computation) ---
         // gfx borrow ends here (re-borrowed later for GPU submission)
@@ -3722,10 +4055,16 @@ impl App {
                 self.sound_sources.retain(|s| s.duration > 0.0);
 
                 // Dispatch wave equation iterations (ensure even count so result lands in texture A)
-                let iters = (self.sound_iters_per_frame / 2) * 2; // round down to even
-                let iters = iters.max(2);
-                let sw = (GRID_W * 2).div_ceil(WORKGROUP_SIZE);
-                let sh = (GRID_H * 2).div_ceil(WORKGROUP_SIZE);
+                // Skip dispatches entirely when no sound sources active (saves ~32K workgroups/frame)
+                let iters = if self.sound_sources.is_empty() {
+                    0
+                } else {
+                    let i = (self.sound_iters_per_frame / 2) * 2;
+                    i.max(2)
+                };
+                let sound_res = (GRID_W * 2).min(512);
+                let sw = sound_res.div_ceil(WORKGROUP_SIZE);
+                let sh = sound_res.div_ceil(WORKGROUP_SIZE);
                 for _ in 0..iters {
                     let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("sound-pass"),
@@ -3797,20 +4136,162 @@ impl App {
             // Submit the main encoder FIRST (compute + blit) so the surface has content
             gfx.queue.submit(std::iter::once(encoder.finish()));
 
-            // Write pipe gas temperatures into block_temps buffer (AFTER thermal shader)
-            // This makes pipe blocks show their internal gas temperature in the overlay
-            // and allows heat exchange with surrounding air via the dye shader.
-            // Batch: collect all pipe temps into a staging vec, write once
-            if !self.pipe_network.cells.is_empty() {
+            // --- Batched thermal overrides (single write_buffer call) ---
+            // Collect all per-cell temperature overrides into a sparse list,
+            // then write contiguous dirty ranges to avoid hundreds of small writes.
+            {
                 let grid_size = (GRID_W * GRID_H) as usize;
-                let mut temp_buf = vec![0.0f32; grid_size];
+                let gw = GRID_W as i32;
+                let gh = GRID_H as i32;
+                let day_frac = (self.time_of_day / 60.0).fract();
+                let sun_t = ((day_frac - 0.15) / 0.7).clamp(0.0, 1.0);
+                let ambient = 5.0 + 20.0 * (sun_t * std::f32::consts::PI).sin();
+
+                // Sparse overrides: (grid_index, temperature)
+                let mut overrides: Vec<(usize, f32)> = Vec::with_capacity(512);
+
+                // Pipe gas temperatures
                 for (&idx, cell) in &self.pipe_network.cells {
                     if (idx as usize) < grid_size {
-                        temp_buf[idx as usize] = cell.gas[3];
+                        overrides.push((idx as usize, cell.gas[3]));
                     }
                 }
-                gfx.queue
-                    .write_buffer(&gfx.block_temp_buffer, 0, bytemuck::cast_slice(&temp_buf));
+
+                // 1) Footprint heat
+                const FOOTPRINT_HEAT_DURATION: f32 = 30.0;
+                const FOOTPRINT_PEAK_TEMP: f32 = 33.0;
+                for &(fx, fy, _angle, age) in &self.footprints {
+                    if age < 0.0 || age > FOOTPRINT_HEAT_DURATION {
+                        continue;
+                    }
+                    let gx = fx as i32;
+                    let gy = fy as i32;
+                    if gx < 0 || gy < 0 || gx >= gw || gy >= gh {
+                        continue;
+                    }
+                    let t = age / FOOTPRINT_HEAT_DURATION;
+                    let heat = ambient + (FOOTPRINT_PEAK_TEMP - ambient) * (1.0 - t * t);
+                    overrides.push(((gy as u32 * GRID_W + gx as u32) as usize, heat));
+                }
+
+                // 2) Blood heat
+                const BLOOD_PEAK_TEMP: f32 = 35.0;
+                const BLOOD_MAX_TIMER: f32 = 5.0;
+                for &(bx, by, timer) in &self.blood_stains {
+                    let gx = bx as i32;
+                    let gy = by as i32;
+                    if gx < 0 || gy < 0 || gx >= gw || gy >= gh {
+                        continue;
+                    }
+                    let frac = (timer / BLOOD_MAX_TIMER).clamp(0.0, 1.0);
+                    let heat = ambient + (BLOOD_PEAK_TEMP - ambient) * frac;
+                    overrides.push(((gy as u32 * GRID_W + gx as u32) as usize, heat));
+                }
+
+                // 3) Creature heat signatures
+                {
+                    use creature_defs::{CREATURE_DUSKWEAVER, CREATURE_HOLLOWCALL};
+                    const WARM_BODY_TEMP: f32 = 36.0;
+                    const COLD_BODY_OFFSET: f32 = -5.0;
+                    const HOLLOWCALL_COLD_OFFSET: f32 = -10.0;
+                    for c in &self.creatures {
+                        let is_cold = c.species_id == CREATURE_DUSKWEAVER
+                            || c.species_id == CREATURE_HOLLOWCALL;
+                        if c.is_dead {
+                            if c.corpse_timer > 0.0 {
+                                let gx = c.x as i32;
+                                let gy = c.y as i32;
+                                if gx >= 0 && gy >= 0 && gx < gw && gy < gh {
+                                    let peak = if is_cold {
+                                        ambient + COLD_BODY_OFFSET
+                                    } else {
+                                        WARM_BODY_TEMP
+                                    };
+                                    let frac = (c.corpse_timer / 120.0).clamp(0.0, 1.0);
+                                    let heat = ambient + (peak - ambient) * frac;
+                                    overrides
+                                        .push(((gy as u32 * GRID_W + gx as u32) as usize, heat));
+                                }
+                            }
+                            continue;
+                        }
+                        let gx = c.x as i32;
+                        let gy = c.y as i32;
+                        if gx < 0 || gy < 0 || gx >= gw || gy >= gh {
+                            continue;
+                        }
+                        let heat = if c.species_id == CREATURE_HOLLOWCALL {
+                            ambient + HOLLOWCALL_COLD_OFFSET
+                        } else if c.species_id == CREATURE_DUSKWEAVER {
+                            ambient + COLD_BODY_OFFSET
+                        } else {
+                            WARM_BODY_TEMP
+                        };
+                        overrides.push(((gy as u32 * GRID_W + gx as u32) as usize, heat));
+
+                        // Hollowcall cold trail
+                        if c.species_id == CREATURE_HOLLOWCALL {
+                            let px = c.prev_x as i32;
+                            let py = c.prev_y as i32;
+                            if (px != gx || py != gy) && px >= 0 && py >= 0 && px < gw && py < gh {
+                                let trail = ambient + HOLLOWCALL_COLD_OFFSET * 0.5;
+                                overrides.push(((py as u32 * GRID_W + px as u32) as usize, trail));
+                            }
+                        }
+                    }
+                }
+
+                // 4) Rain evaporative cooling (throttled: every 15 frames)
+                if (self.camera.rain_intensity > 0.0 || self.frame_count % 15 == 0)
+                    && self.frame_count % 4 == 0
+                {
+                    const EVAP_COOLING_MAX: f32 = 8.0;
+                    for i in 0..grid_size {
+                        let w = self.wetness_data[i];
+                        if w < 0.05 {
+                            continue;
+                        }
+                        let roof_h = (self.grid_data[i] >> 24) & 0xFF;
+                        if roof_h > 0 {
+                            continue;
+                        }
+                        overrides.push((i, ambient - EVAP_COOLING_MAX * w));
+                    }
+                }
+
+                // Batch write: sort by index, write contiguous runs
+                if !overrides.is_empty() {
+                    overrides.sort_unstable_by_key(|&(idx, _)| idx);
+                    overrides.dedup_by_key(|o| o.0); // last write wins for dupes
+                    // Build staging buffer with only modified cells
+                    let mut run_start = overrides[0].0;
+                    let mut run_buf: Vec<f32> = Vec::with_capacity(overrides.len());
+                    let mut prev_idx = run_start;
+
+                    for &(idx, temp) in &overrides {
+                        if idx != prev_idx + 1 && !run_buf.is_empty() {
+                            // Flush current run
+                            gfx.queue.write_buffer(
+                                &gfx.block_temp_buffer,
+                                (run_start as u64) * 4,
+                                bytemuck::cast_slice(&run_buf),
+                            );
+                            run_buf.clear();
+                            run_start = idx;
+                        } else if run_buf.is_empty() {
+                            run_start = idx;
+                        }
+                        run_buf.push(temp);
+                        prev_idx = idx;
+                    }
+                    if !run_buf.is_empty() {
+                        gfx.queue.write_buffer(
+                            &gfx.block_temp_buffer,
+                            (run_start as u64) * 4,
+                            bytemuck::cast_slice(&run_buf),
+                        );
+                    }
+                }
             }
 
             // Apply pipe outlet injections to dye texture (AFTER shader runs)

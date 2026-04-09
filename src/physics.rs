@@ -722,20 +722,7 @@ fn dda_bullet_trace(
             if bullet_z_here > block_h {
                 // Bullet is above this block, skip
             } else {
-                let passable = bt_is!(
-                    bt,
-                    BT_AIR,
-                    BT_GROUND,
-                    BT_DUG_GROUND,
-                    BT_TREE,
-                    BT_FIREPLACE,
-                    BT_CAMPFIRE,
-                    BT_CEILING_LIGHT,
-                    BT_FLOOR_LAMP,
-                    BT_BERRY_BUSH,
-                    BT_CROP,
-                    BT_ROCK
-                );
+                let passable = !is_wall_block(bt);
                 let is_thin = is_wall_block(bt) && thin_wall_is_walkable(block);
                 #[allow(clippy::nonminimal_bool)]
                 if !passable && !is_thin && !(is_door && is_open) {

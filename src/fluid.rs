@@ -10,7 +10,7 @@ pub const FLUID_SIM_H: u32 = 256;
 pub const FLUID_DYE_W: u32 = 512;
 pub const FLUID_DYE_H: u32 = 512;
 #[cfg(not(target_arch = "wasm32"))]
-pub const FLUID_PRESSURE_ITERS: u32 = 25; // reduced from 35: -20 dispatches/frame, minimal quality loss
+pub const FLUID_PRESSURE_ITERS: u32 = 18; // reduced from 25 for 512 grid perf
 #[cfg(target_arch = "wasm32")]
 pub const FLUID_PRESSURE_ITERS: u32 = 20;
 
@@ -67,29 +67,7 @@ pub fn build_obstacle_field(grid: &[u32], wall_data: &[u16]) -> Vec<u8> {
             let is_open_door = (b >> 16) & 4 != 0;
 
             // Determine base obstacle for this tile (from block grid)
-            let passable = bt_is!(
-                bt,
-                BT_TREE,
-                BT_FIREPLACE,
-                BT_CAMPFIRE,
-                BT_CEILING_LIGHT,
-                BT_FLOOR_LAMP,
-                BT_TABLE_LAMP,
-                BT_FAN,
-                BT_COMPOST,
-                BT_BERRY_BUSH,
-                BT_CROP,
-                BT_LIQUID_PIPE,
-                BT_PIPE_BRIDGE,
-                BT_LIQUID_INTAKE,
-                BT_LIQUID_PUMP,
-                BT_LIQUID_OUTPUT,
-                BT_WIRE,
-                BT_DIMMER,
-                BT_BREAKER,
-                BT_WIRE_BRIDGE,
-                BT_RESTRICTOR
-            ) || (BT_PIPE..=BT_VALVE).contains(&bt);
+            let passable = !is_wall_block(bt);
             let is_thin = bh > 0 && is_wall_block(bt) && thin_wall_is_walkable(b);
             #[allow(clippy::nonminimal_bool)]
             let block_solid = bh > 0 && !passable && !is_thin && !(is_door && is_open_door);

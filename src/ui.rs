@@ -8,23 +8,26 @@ impl App {
     fn regenerate_world_preview(&mut self) {
         let seed = self.terrain_params.seed;
         self.grid_data = grid::generate_world(seed);
-        self.elevation_data = grid::generate_elevation_seeded(&self.grid_data, seed);
+        self.elevation_data =
+            grid::generate_elevation_seeded(&self.grid_data, seed, self.terrain_params.hilliness);
         self.sub_elevation = crate::terrain::generate_elevation(&self.elevation_data);
-        self.water_table = grid::generate_water_table_seeded(&self.grid_data, seed);
+        self.water_table = grid::generate_water_table_seeded(
+            &self.grid_data,
+            seed,
+            self.terrain_params.water_table,
+        );
         grid::adjust_water_table_for_elevation(&mut self.water_table, &self.elevation_data);
-        // Remove trees/bushes from submerged tiles
-        let dirt = grid::make_block(grid::BT_GROUND as u8, 0, 0);
-        for idx in 0..self.grid_data.len() {
-            let bt = grid::block_type_rs(self.grid_data[idx]);
-            if (bt == grid::BT_TREE || bt == grid::BT_BERRY_BUSH)
-                && idx < self.water_table.len()
-                && idx < self.elevation_data.len()
-                && self.water_table[idx] - self.elevation_data[idx] > -0.5
-            {
-                let roof = self.grid_data[idx] & 0xFF000000;
-                self.grid_data[idx] = dirt | roof;
-            }
-        }
+        // Compute equilibrium water depth (pre-flow pooling)
+        self.water_equilibrium =
+            grid::compute_equilibrium_water(&self.elevation_data, &self.water_table);
+        // Wetland buffer: remove vegetation from wet tiles, create reed edges
+        grid::apply_wetland_buffer(
+            &mut self.grid_data,
+            &self.water_equilibrium,
+            &self.water_table,
+            &self.elevation_data,
+            seed,
+        );
         self.terrain_data = grid::generate_terrain_with_params(
             &self.elevation_data,
             &self.water_table,
@@ -242,6 +245,7 @@ impl App {
                 self.draw_hover_info(ctx);
                 self.draw_game_log(ctx);
                 self.draw_minimap(ctx);
+                self.draw_stone_lab(ctx);
 
                 // Pause overlay (darkened screen + centered text)
                 if self.time_paused && !self.show_pause_menu {
@@ -531,25 +535,22 @@ impl App {
 
                         ui.add_space(6.0);
                         ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Ponds").size(13.0));
-                            ui.spacing_mut().slider_width = 140.0;
-                            ui.add(
-                                egui::Slider::new(&mut self.terrain_params.pond_density, 0.0..=1.0)
-                                    .show_value(false),
-                            );
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Tall Grass").size(13.0));
-                            ui.spacing_mut().slider_width = 140.0;
-                            ui.add(
-                                egui::Slider::new(
-                                    &mut self.terrain_params.grass_density,
-                                    0.0..=1.0,
-                                )
-                                .show_value(false),
-                            );
-                        });
+                        ui.label(egui::RichText::new("Landscape").strong().size(15.0));
+                        ui.add_space(4.0);
+
+                        let landscape_slider = |ui: &mut egui::Ui, label: &str, val: &mut f32| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(label).size(13.0).monospace());
+                                ui.spacing_mut().slider_width = 140.0;
+                                ui.add(egui::Slider::new(val, 0.0..=1.0).show_value(false));
+                            });
+                        };
+
+                        landscape_slider(ui, "Hills  ", &mut self.terrain_params.hilliness);
+                        landscape_slider(ui, "Water  ", &mut self.terrain_params.water_table);
+                        landscape_slider(ui, "Trees  ", &mut self.terrain_params.tree_density);
+                        landscape_slider(ui, "Ponds  ", &mut self.terrain_params.pond_density);
+                        landscape_slider(ui, "Grass  ", &mut self.terrain_params.grass_density);
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Seed").size(13.0));
                             let mut seed_i = self.terrain_params.seed as i32;
@@ -573,8 +574,9 @@ impl App {
                                 .size(11.0)
                                 .weak(),
                         );
-                        ui.add_space(6.0);
-                        if self.hover_click_button(ui, egui::RichText::new("Preview").size(14.0)) {
+                        // Auto-regenerate when any param changes
+                        if self.terrain_params != self.terrain_params_prev {
+                            self.terrain_params_prev = self.terrain_params.clone();
                             self.regenerate_world_preview();
                         }
                     });
@@ -593,36 +595,97 @@ impl App {
                         painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 20));
 
                         let scale = preview_size / GRID_W as f32;
-                        let colors: [egui::Color32; 8] = [
-                            egui::Color32::from_rgb(107, 92, 56),
-                            egui::Color32::from_rgb(173, 168, 153),
-                            egui::Color32::from_rgb(115, 107, 97),
-                            egui::Color32::from_rgb(128, 97, 64),
-                            egui::Color32::from_rgb(122, 117, 107),
-                            egui::Color32::from_rgb(56, 46, 31),
-                            egui::Color32::from_rgb(77, 89, 56),
-                            egui::Color32::from_rgb(97, 77, 46),
+                        let colors: [egui::Color32; 13] = [
+                            egui::Color32::from_rgb(107, 92, 56),   // 0: grass
+                            egui::Color32::from_rgb(173, 168, 153), // 1: chalky
+                            egui::Color32::from_rgb(115, 107, 97),  // 2: rocky
+                            egui::Color32::from_rgb(128, 97, 64),   // 3: clay
+                            egui::Color32::from_rgb(122, 117, 107), // 4: gravel
+                            egui::Color32::from_rgb(56, 46, 31),    // 5: peat
+                            egui::Color32::from_rgb(77, 89, 56),    // 6: marsh
+                            egui::Color32::from_rgb(97, 77, 46),    // 7: loam
+                            egui::Color32::from_rgb(122, 76, 50),   // 8: iron-stained
+                            egui::Color32::from_rgb(97, 115, 102),  // 9: copper-stained
+                            egui::Color32::from_rgb(153, 148, 132), // 10: flint-bearing
+                            egui::Color32::from_rgb(64, 51, 30),    // 11: leaf litter
+                            egui::Color32::from_rgb(184, 166, 115), // 12: sand
                         ];
                         let step = 4u32;
                         let px_size = scale * step as f32;
                         for ty in (0..GRID_H).step_by(step as usize) {
                             for tx in (0..GRID_W).step_by(step as usize) {
                                 let idx = (ty * GRID_W + tx) as usize;
-                                if idx < self.terrain_data.len() {
-                                    let tt = (self.terrain_data[idx] & 0xF) as usize;
-                                    if tt < 8 {
-                                        let px = rect.min.x + tx as f32 * scale;
-                                        let py = rect.min.y + ty as f32 * scale;
-                                        painter.rect_filled(
-                                            egui::Rect::from_min_size(
-                                                egui::pos2(px, py),
-                                                egui::vec2(px_size, px_size),
-                                            ),
-                                            0.0,
-                                            colors[tt],
-                                        );
-                                    }
+                                if idx >= self.terrain_data.len() {
+                                    continue;
                                 }
+
+                                let tt = (self.terrain_data[idx] & 0xF) as usize;
+                                let bt = if idx < self.grid_data.len() {
+                                    self.grid_data[idx] & 0xFF
+                                } else {
+                                    0
+                                };
+
+                                // Elevation shading
+                                let elev = if idx < self.elevation_data.len() {
+                                    self.elevation_data[idx]
+                                } else {
+                                    0.0
+                                };
+                                let e = (elev * 10.0).clamp(0.0, 30.0) as u8;
+
+                                // Water: use pre-computed equilibrium depth (includes pooling)
+                                let eq_depth = if idx < self.water_equilibrium.len() {
+                                    self.water_equilibrium[idx]
+                                } else {
+                                    0.0
+                                };
+                                let has_water = eq_depth > 0.01 || bt == 3;
+                                let seep = if idx < self.water_table.len() {
+                                    self.water_table[idx] - elev
+                                } else {
+                                    -5.0
+                                };
+                                let is_damp = seep > -0.5 && !has_water;
+
+                                let color = if has_water {
+                                    let depth = eq_depth.clamp(0.0, 2.0);
+                                    let d = (depth * 40.0) as u8;
+                                    egui::Color32::from_rgb(
+                                        20_u8.saturating_sub(d),
+                                        45_u8.saturating_sub(d),
+                                        100 + d.min(50),
+                                    )
+                                } else if bt == 8 {
+                                    // BT_TREE
+                                    egui::Color32::from_rgb(25 + e / 3, 55 + e / 2, 22 + e / 3)
+                                } else if tt < 13 {
+                                    let base = colors[tt];
+                                    let mut r = base.r().saturating_add(e / 2);
+                                    let mut g = base.g().saturating_add(e / 3);
+                                    let mut b = base.b().saturating_add(e / 4);
+                                    // Damp ground: darken + blue-shift where water table is close
+                                    if is_damp {
+                                        let damp_t = ((seep + 0.5) / 0.5).clamp(0.0, 1.0) as f32;
+                                        r = (r as f32 * (1.0 - damp_t * 0.2)) as u8;
+                                        g = (g as f32 * (1.0 - damp_t * 0.1)) as u8;
+                                        b = (b as f32 * (1.0 + damp_t * 0.1)).min(255.0) as u8;
+                                    }
+                                    egui::Color32::from_rgb(r, g, b)
+                                } else {
+                                    egui::Color32::from_rgb(35 + e, 40 + e / 2, 20 + e / 3)
+                                };
+
+                                let px = rect.min.x + tx as f32 * scale;
+                                let py = rect.min.y + ty as f32 * scale;
+                                painter.rect_filled(
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(px, py),
+                                        egui::vec2(px_size, px_size),
+                                    ),
+                                    0.0,
+                                    color,
+                                );
                             }
                         }
                     });
@@ -1157,9 +1220,10 @@ impl App {
         use crate::cards;
         use crate::theme::{palette, spacing, text};
 
-        // Dark overlay
+        // Dark background
         egui::Area::new(egui::Id::new("manifest_bg"))
             .anchor(egui::Align2::LEFT_TOP, [0.0, 0.0])
+            .order(egui::Order::Background)
             .interactable(false)
             .show(ctx, |ui| {
                 let screen = ctx.content_rect();
@@ -1173,11 +1237,14 @@ impl App {
         let mut do_pass = false;
         let mut do_land = false;
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(egui::Color32::TRANSPARENT))
+        let cw = 150.0;
+        egui::Window::new("THE MANIFEST")
+            .collapsible(false)
+            .resizable(false)
+            .title_bar(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(20.0);
                     ui.label(
                         egui::RichText::new("THE MANIFEST")
                             .size(22.0)
@@ -1189,145 +1256,147 @@ impl App {
                             .size(text::BODY)
                             .color(palette::INK_FAINT),
                     );
-                    ui.add_space(spacing::LG);
                 });
+                ui.add_space(spacing::LG);
 
-                ui.horizontal(|ui| {
-                    ui.add_space(30.0);
-
-                    // --- Applicant cards ---
+                ui.columns(4, |cols| {
+                    // --- Applicant cards (columns 0-2) ---
                     if !crew_full {
                         let item_reg = item_defs::ItemRegistry::cached();
-                        for (i, card) in self.manifest_applicants.iter().enumerate() {
-                            let resp = cards::draw_card(ui, cards::CardType::Person, 170.0, |ui| {
-                                // Portrait
-                                cards::card_portrait(ui, 154.0, 70.0, |painter, rect| {
-                                    let c = rect.center();
-                                    let shirt_c = egui::Color32::from_rgb(
-                                        (card.appearance.shirt_r * 255.0) as u8,
-                                        (card.appearance.shirt_g * 255.0) as u8,
-                                        (card.appearance.shirt_b * 255.0) as u8,
-                                    );
-                                    let skin_c = egui::Color32::from_rgb(
-                                        (card.appearance.skin_r * 255.0) as u8,
-                                        (card.appearance.skin_g * 255.0) as u8,
-                                        (card.appearance.skin_b * 255.0) as u8,
-                                    );
-                                    let hair_c = egui::Color32::from_rgb(
-                                        (card.appearance.hair_r * 255.0) as u8,
-                                        (card.appearance.hair_g * 255.0) as u8,
-                                        (card.appearance.hair_b * 255.0) as u8,
-                                    );
-                                    // Body
-                                    painter.circle_filled(
-                                        c + egui::Vec2::new(0.0, 10.0),
-                                        14.0,
-                                        shirt_c,
-                                    );
-                                    // Head
-                                    painter.circle_filled(
-                                        c + egui::Vec2::new(0.0, -8.0),
-                                        9.0,
-                                        skin_c,
-                                    );
-                                    // Hair
-                                    painter.circle_filled(
-                                        c + egui::Vec2::new(0.0, -15.0),
-                                        6.0,
-                                        hair_c,
-                                    );
-                                });
+                        for i in 0..self.manifest_applicants.len().min(3) {
+                            let card = &self.manifest_applicants[i];
+                            let ui = &mut cols[i];
+                            let parch = egui::Color32::from_rgb(240, 232, 215);
+                            let border_c = egui::Color32::from_rgb(170, 140, 80);
+                            let ink = egui::Color32::from_rgb(40, 35, 25);
+                            let ink_dim = egui::Color32::from_rgb(100, 90, 70);
+                            let ink_faint = egui::Color32::from_rgb(140, 125, 100);
 
-                                // Name + backstory
-                                cards::card_title(ui, &card.name);
-                                cards::card_subtitle(ui, card.backstory.name());
-
-                                cards::card_divider(ui);
-
-                                // Top 4 skills
-                                cards::card_section(ui, "SKILLS");
-                                let skill_order = [0, 1, 2, 3, 4, 5]; // show all 6
-                                for &si in &skill_order {
-                                    cards::card_skill_bar(
-                                        ui,
-                                        pleb::SKILL_SHORT[si],
-                                        card.skills[si].value,
-                                        10.0,
-                                        palette::skill_color(si),
+                            egui::Frame::NONE
+                                .fill(parch)
+                                .stroke(egui::Stroke::new(1.5, border_c))
+                                .corner_radius(3.0)
+                                .inner_margin(8)
+                                .show(ui, |ui| {
+                                    // Name
+                                    ui.label(
+                                        egui::RichText::new(&card.name)
+                                            .size(13.0)
+                                            .strong()
+                                            .color(ink),
                                     );
-                                }
+                                    ui.label(
+                                        egui::RichText::new(card.backstory.name())
+                                            .size(9.0)
+                                            .color(ink_dim),
+                                    );
+                                    ui.add_space(4.0);
 
-                                cards::card_divider(ui);
-
-                                // Traits
-                                cards::card_section(ui, "TRAITS");
-                                ui.horizontal_wrapped(|ui| {
-                                    if let Some(ref t) = card.trait_visible {
-                                        cards::card_trait_tag(ui, t.name(), true);
-                                    }
-                                    cards::card_hidden_trait(ui);
-                                });
-
-                                cards::card_divider(ui);
-
-                                // Gear
-                                cards::card_section(ui, "GEAR");
-                                ui.horizontal_wrapped(|ui| {
-                                    for &item_id in &card.gear_belt {
-                                        if let Some(def) = item_reg.get(item_id) {
-                                            ui.label(egui::RichText::new(&def.icon).size(14.0))
-                                                .on_hover_text(&def.name);
-                                        }
-                                    }
-                                    for &(item_id, count) in &card.gear_inv {
-                                        if let Some(def) = item_reg.get(item_id) {
+                                    // Skills
+                                    ui.label(
+                                        egui::RichText::new("SKILLS")
+                                            .size(8.0)
+                                            .strong()
+                                            .color(ink_faint),
+                                    );
+                                    for si in 0..6 {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(pleb::SKILL_SHORT[si])
+                                                    .size(8.0)
+                                                    .monospace()
+                                                    .color(ink_dim),
+                                            );
                                             ui.label(
                                                 egui::RichText::new(format!(
-                                                    "{}×{}",
-                                                    def.icon, count
+                                                    "{:.1}",
+                                                    card.skills[si].value
                                                 ))
-                                                .size(10.0)
-                                                .color(palette::INK_DIM),
+                                                .size(8.0)
+                                                .color(ink_faint),
                                             );
+                                        });
+                                    }
+                                    ui.add_space(4.0);
+
+                                    // Traits
+                                    if let Some(ref t) = card.trait_visible {
+                                        ui.label(
+                                            egui::RichText::new(t.name())
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(55, 155, 45)),
+                                        );
+                                    }
+                                    ui.label(
+                                        egui::RichText::new("??? Hidden")
+                                            .size(9.0)
+                                            .color(egui::Color32::from_gray(100)),
+                                    );
+                                    ui.add_space(4.0);
+
+                                    // Gear
+                                    ui.horizontal_wrapped(|ui| {
+                                        for &item_id in &card.gear_belt {
+                                            if let Some(def) = item_reg.get(item_id) {
+                                                ui.label(egui::RichText::new(&def.icon).size(12.0))
+                                                    .on_hover_text(&def.name);
+                                            }
                                         }
+                                        for &(item_id, count) in &card.gear_inv {
+                                            if let Some(def) = item_reg.get(item_id) {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "{}×{}",
+                                                        def.icon, count
+                                                    ))
+                                                    .size(9.0)
+                                                    .color(ink_dim),
+                                                );
+                                            }
+                                        }
+                                    });
+
+                                    // Quote
+                                    ui.label(
+                                        egui::RichText::new(format!("\"{}\"", card.quote))
+                                            .size(8.0)
+                                            .italics()
+                                            .color(ink_faint),
+                                    );
+                                    ui.add_space(6.0);
+
+                                    // Recruit button
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new("RECRUIT")
+                                                    .size(10.0)
+                                                    .strong()
+                                                    .color(egui::Color32::from_rgb(40, 35, 20)),
+                                            )
+                                            .fill(egui::Color32::from_rgb(170, 145, 85))
+                                            .corner_radius(2.0),
+                                        )
+                                        .clicked()
+                                    {
+                                        recruit_idx = Some(i);
                                     }
                                 });
-
-                                // Quote
-                                cards::card_quote(ui, card.quote);
-
-                                ui.add_space(spacing::SM);
-
-                                // Recruit button
-                                if cards::card_button(ui, "RECRUIT") {
-                                    // handled below
-                                }
-                            });
-
-                            if resp.clicked() {
-                                recruit_idx = Some(i);
-                            }
-
-                            ui.add_space(spacing::MD);
                         }
                     } else {
-                        // All recruited — show "ready to land"
-                        ui.vertical_centered(|ui| {
+                        cols[0].vertical_centered(|ui| {
                             ui.add_space(60.0);
                             ui.label(
                                 egui::RichText::new("Crew assembled.")
                                     .size(16.0)
                                     .color(palette::AMBER),
                             );
-                            ui.add_space(spacing::LG);
                         });
                     }
 
-                    ui.add_space(30.0);
-
-                    // --- Right panel: recruited crew + actions ---
+                    // --- Right column: recruited crew + actions ---
+                    let ui = &mut cols[3];
                     ui.vertical(|ui| {
-                        ui.set_min_width(160.0);
                         ui.label(
                             egui::RichText::new("CREW")
                                 .size(text::HEADING)
@@ -2033,9 +2102,10 @@ impl App {
                         if ui.button(if paused { "Play" } else { "Pause" }).clicked() {
                             paused = !paused;
                         }
+                        let pct = (speed / 0.1 * 100.0).round() as u32;
                         ui.add(
-                            egui::Slider::new(&mut speed, 0.1..=5.0)
-                                .text("Speed")
+                            egui::Slider::new(&mut speed, 0.05..=0.4)
+                                .text(format!("{}%", pct))
                                 .logarithmic(true),
                         );
                     });
@@ -2376,10 +2446,6 @@ impl App {
                 if ui.button("Priorities").clicked() {
                     self.show_priorities = !self.show_priorities;
                 }
-                if ui.button("Main Menu").clicked() {
-                    self.game_state = GameState::MainMenu;
-                }
-
                 // Debug menu
                 egui::containers::menu::MenuButton::new("Debug")
                     .config(keep_open)
@@ -2462,6 +2528,13 @@ impl App {
                             self.fog_dirty = true;
                         }
                         ui.separator();
+                        if ui.button("Stone Lab").clicked() {
+                            self.show_stone_lab = !self.show_stone_lab;
+                            self.stone_lab.gpu.enabled =
+                                if self.show_stone_lab { 1.0 } else { 0.0 };
+                            ui.close();
+                        }
+                        ui.separator();
                         if ui.button("Test Audio Beep").clicked() {
                             if self.audio_output.is_none() {
                                 self.audio_output = audio::AudioOutput::new();
@@ -2475,31 +2548,54 @@ impl App {
                     });
 
                 ui.separator();
-                ui.menu_button("Admin", |ui| {
-                    let pleb_label = format!("Add Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
+                ui.menu_button("Creatures", |ui| {
+                    // Colonist placement
+                    let pleb_label = format!("Colonist ({}/{})", self.plebs.len(), MAX_PLEBS);
                     if ui.button(pleb_label).clicked() {
                         self.placing_pleb = !self.placing_pleb;
+                        self.placing_enemy = false;
+                        self.placing_creature = None;
                         if self.placing_pleb {
                             self.build_tool = BuildTool::None;
                         }
                         ui.close();
                     }
-                    if self.placing_pleb {
-                        ui.label(egui::RichText::new("Click to place").weak().size(10.0));
-                    }
-                    ui.separator();
-                    if ui.button("Place Redskull Enemy").clicked() {
+
+                    // Redskull enemy
+                    if ui.button("Redskull Enemy").clicked() {
                         self.placing_enemy = true;
                         self.placing_pleb = false;
+                        self.placing_creature = None;
                         self.build_tool = BuildTool::None;
                         ui.close();
                     }
-                    if self.placing_enemy {
-                        ui.label(
-                            egui::RichText::new("Click to place enemy")
-                                .weak()
-                                .size(10.0),
-                        );
+
+                    ui.separator();
+
+                    // All creature types from registry
+                    let reg = creature_defs::CreatureRegistry::cached();
+                    let defs: Vec<(u8, String)> =
+                        reg.all().map(|(id, def)| (id, def.name.clone())).collect();
+                    for (id, name) in defs {
+                        let count = self
+                            .creatures
+                            .iter()
+                            .filter(|c| c.species_id == id && !c.is_dead)
+                            .count();
+                        let label = format!("{name} ({count})");
+                        if ui.button(label).clicked() {
+                            self.placing_creature = Some(id);
+                            self.placing_pleb = false;
+                            self.placing_enemy = false;
+                            self.build_tool = BuildTool::None;
+                            ui.close();
+                        }
+                    }
+
+                    // Status hint
+                    if self.placing_pleb || self.placing_enemy || self.placing_creature.is_some() {
+                        ui.separator();
+                        ui.label(egui::RichText::new("Click map to place").weak().size(10.0));
                     }
                 });
             });
@@ -3819,99 +3915,174 @@ impl App {
     }
 
     fn draw_build_bar(&mut self, ctx: &egui::Context) {
-        // --- Build categories (bottom-left, vertical 2-column grid, flows upward) ---
-        let cat_s = 14.0;
-        let categories: Vec<(&str, &str)> = vec![
-            ("Walls", "\u{1f9f1}"),
-            ("Floor", "\u{2b1c}"),
-            ("Roof", "\u{1f3e0}"),
-            ("Build", "\u{1f528}"),
-            ("Craft", "\u{2692}"),
-            ("Light", "\u{1f4a1}"),
-            ("Power", "\u{26a1}"),
-            ("Gas", "\u{1f4a8}"),
-            ("Liquid", "\u{1f4a7}"),
-            ("Zones", "\u{1f33e}"),
-            ("Terrain", "\u{26f0}"),
-            ("Water", "\u{1f30a}"),
+        // --- Build categories: organized by player intent, not construction type ---
+        // Colors: muted, warm, each category has a distinct accent
+        struct CatStyle {
+            name: &'static str,
+            icon: &'static str,
+            accent: egui::Color32,
+        }
+        let categories = [
+            CatStyle {
+                name: "Survival",
+                icon: "\u{1f525}",
+                accent: egui::Color32::from_rgb(195, 130, 55),
+            },
+            CatStyle {
+                name: "Shelter",
+                icon: "\u{1f3e0}",
+                accent: egui::Color32::from_rgb(140, 105, 65),
+            },
+            CatStyle {
+                name: "Light",
+                icon: "\u{1f4a1}",
+                accent: egui::Color32::from_rgb(190, 165, 50),
+            },
+            CatStyle {
+                name: "Food",
+                icon: "\u{1f33f}",
+                accent: egui::Color32::from_rgb(85, 140, 55),
+            },
+            CatStyle {
+                name: "Craft",
+                icon: "\u{2692}",
+                accent: egui::Color32::from_rgb(105, 120, 140),
+            },
+            CatStyle {
+                name: "Power",
+                icon: "\u{26a1}",
+                accent: egui::Color32::from_rgb(70, 120, 175),
+            },
+            CatStyle {
+                name: "Pipes",
+                icon: "\u{1f4a8}",
+                accent: egui::Color32::from_rgb(85, 140, 130),
+            },
+            CatStyle {
+                name: "Zones",
+                icon: "\u{1f4cd}",
+                accent: egui::Color32::from_rgb(140, 105, 140),
+            },
         ];
 
         egui::Area::new(egui::Id::new("build_categories"))
             .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
             .show(ctx, |ui| {
-                egui::Frame::window(ui.style()).show(ui, |ui| {
-                    // Tool buttons at top
-                    ui.horizontal(|ui| {
-                        if ui
-                            .selectable_label(
-                                self.build_tool == BuildTool::Destroy,
-                                egui::RichText::new("\u{274c} Destroy").size(cat_s),
-                            )
-                            .clicked()
-                        {
-                            self.build_tool = if self.build_tool == BuildTool::Destroy {
-                                BuildTool::None
-                            } else {
-                                BuildTool::Destroy
-                            };
-                            self.build_category = None;
-                        }
-                        // Dig button: always zone-based (pleb work order)
-                        if ui
-                            .selectable_label(
-                                self.build_tool == BuildTool::DigZone,
-                                egui::RichText::new("\u{26cf} Dig").size(cat_s),
-                            )
-                            .clicked()
-                        {
-                            self.build_tool = if self.build_tool == BuildTool::DigZone {
-                                BuildTool::None
-                            } else {
-                                BuildTool::DigZone
-                            };
-                            self.build_category = None;
-                        }
-                    });
-                    ui.separator();
-                    // 2-column category grid
-                    egui::Grid::new("build_cat_grid")
-                        .num_columns(2)
-                        .spacing([4.0, 2.0])
-                        .show(ui, |ui| {
-                            for (i, &(name, icon)) in categories.iter().enumerate() {
-                                let selected = self.build_category == Some(name);
-                                let label = format!("{} {}", icon, name);
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        egui::RichText::new(label).size(cat_s),
+                egui::Frame::NONE
+                    .fill(egui::Color32::from_rgba_unmultiplied(25, 28, 32, 230))
+                    .corner_radius(6.0)
+                    .inner_margin(6)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(50)))
+                    .show(ui, |ui| {
+                        // Tool buttons (always visible)
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            let tool_btn = |ui: &mut egui::Ui,
+                                            tool: BuildTool,
+                                            icon: &str,
+                                            label: &str,
+                                            current: &BuildTool|
+                             -> bool {
+                                let sel = *current == tool;
+                                let bg = if sel {
+                                    egui::Color32::from_rgb(160, 60, 50)
+                                } else {
+                                    egui::Color32::from_rgb(45, 40, 38)
+                                };
+                                let resp = ui.add(
+                                    egui::Button::new(
+                                        egui::RichText::new(format!("{} {}", icon, label))
+                                            .size(11.0)
+                                            .color(egui::Color32::from_gray(210)),
                                     )
-                                    .clicked()
-                                {
-                                    if selected {
-                                        self.build_category = None;
-                                        self.build_tool = BuildTool::None;
-                                        self.sandbox_tool = SandboxTool::None;
-                                        self.terrain_tool = None;
-                                    } else {
-                                        self.build_category = Some(name);
-                                        self.world_sel = WorldSelection::none();
-                                        self.selected_pleb = None;
-                                        self.selected_group.clear();
-                                        self.terrain_tool = None;
-                                        if name == "Sandbox" {
-                                            self.build_tool = BuildTool::None;
-                                        } else {
-                                            self.sandbox_tool = SandboxTool::None;
-                                        }
-                                    }
-                                }
-                                if i % 2 == 1 {
-                                    ui.end_row();
-                                }
+                                    .fill(bg)
+                                    .corner_radius(3.0)
+                                    .min_size(egui::Vec2::new(60.0, 22.0)),
+                                );
+                                resp.clicked()
+                            };
+                            if tool_btn(
+                                ui,
+                                BuildTool::Destroy,
+                                "\u{274c}",
+                                "Destroy",
+                                &self.build_tool,
+                            ) {
+                                self.build_tool = if self.build_tool == BuildTool::Destroy {
+                                    BuildTool::None
+                                } else {
+                                    BuildTool::Destroy
+                                };
+                                self.build_category = None;
+                            }
+                            if tool_btn(ui, BuildTool::DigZone, "\u{26cf}", "Dig", &self.build_tool)
+                            {
+                                self.build_tool = if self.build_tool == BuildTool::DigZone {
+                                    BuildTool::None
+                                } else {
+                                    BuildTool::DigZone
+                                };
+                                self.build_category = None;
                             }
                         });
-                });
+
+                        ui.add_space(4.0);
+
+                        // Category buttons — single column, colored accent bars
+                        for cat in &categories {
+                            let selected = self.build_category == Some(cat.name);
+                            let bg = if selected {
+                                egui::Color32::from_rgb(
+                                    (cat.accent.r() as u16 * 60 / 100) as u8 + 20,
+                                    (cat.accent.g() as u16 * 60 / 100) as u8 + 20,
+                                    (cat.accent.b() as u16 * 60 / 100) as u8 + 20,
+                                )
+                            } else {
+                                egui::Color32::from_rgb(35, 37, 42)
+                            };
+                            let text_col = if selected {
+                                egui::Color32::from_gray(240)
+                            } else {
+                                egui::Color32::from_gray(170)
+                            };
+
+                            let resp = ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new(format!("{} {}", cat.icon, cat.name))
+                                        .size(12.0)
+                                        .color(text_col),
+                                )
+                                .fill(bg)
+                                .corner_radius(3.0)
+                                .min_size(egui::Vec2::new(110.0, 24.0)),
+                            );
+
+                            // Colored accent bar on left edge when selected
+                            if selected {
+                                let bar = egui::Rect::from_min_size(
+                                    resp.rect.left_top(),
+                                    egui::Vec2::new(3.0, resp.rect.height()),
+                                );
+                                ui.painter().rect_filled(bar, 1.0, cat.accent);
+                            }
+
+                            if resp.clicked() {
+                                if selected {
+                                    self.build_category = None;
+                                    self.build_tool = BuildTool::None;
+                                    self.sandbox_tool = SandboxTool::None;
+                                    self.terrain_tool = None;
+                                } else {
+                                    self.build_category = Some(cat.name);
+                                    self.world_sel = WorldSelection::none();
+                                    self.selected_pleb = None;
+                                    self.selected_group.clear();
+                                    self.terrain_tool = None;
+                                    self.sandbox_tool = SandboxTool::None;
+                                }
+                            }
+                        }
+                    });
             });
 
         // --- Build items / Selection actions panel (center bottom, single column) ---
@@ -3938,20 +4109,15 @@ impl App {
                             let icon_s = 24.0;
                             let label_s = 11.0;
 
-                            // Count items per category for 1 vs 2 column layout
                             let item_count: usize = match cat {
-                                "Walls" => 2,
-                                "Floor" => 4,
-                                "Roof" => 2,
-                                "Build" => 9,
-                                "Craft" => 2,
+                                "Survival" => 6,
+                                "Shelter" => 11,
                                 "Light" => 6,
+                                "Food" => 4,
+                                "Craft" => 3,
                                 "Power" => 10,
-                                "Gas" => 9,
-                                "Liquid" => 5,
-                                "Zones" => 2,
-                                "Terrain" => 2,
-                                "Water" => 2,
+                                "Pipes" => 12,
+                                "Zones" => 4,
                                 _ => 5,
                             };
                             let items_per_row = if item_count > 10 {
@@ -4022,93 +4188,94 @@ impl App {
                                             }
                                         };
                                     match cat {
-                                        "Walls" => {
-                                            icon_btn(ui, BuildTool::Place(35), "\u{1f3da}", "Mud");
+                                        "Survival" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(62),
+                                                "\u{1f525}",
+                                                "Campfire",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(70),
+                                                "\u{1f4a8}",
+                                                "Charcoal",
+                                            );
                                             icon_btn(
                                                 ui,
                                                 BuildTool::Place(63),
                                                 "\u{1f9f1}",
-                                                "Low Mud",
+                                                "Low Fence",
                                             );
-                                            icon_btn(ui, BuildTool::Place(21), "\u{1fab5}", "Wood");
-                                        }
-                                        "Floor" => {
-                                            icon_btn(ui, BuildTool::Place(26), "\u{1fab5}", "Wood");
-                                            icon_btn(ui, BuildTool::Place(27), "\u{2b1b}", "Stone");
                                             icon_btn(
                                                 ui,
-                                                BuildTool::Place(28),
+                                                BuildTool::Place(60),
                                                 "\u{2b1c}",
-                                                "Flagstone",
+                                                "Rough Floor",
                                             );
                                             icon_btn(
                                                 ui,
-                                                BuildTool::RemoveFloor,
-                                                "\u{274c}",
-                                                "Remove",
+                                                BuildTool::Place(64),
+                                                "\u{1fa9c}",
+                                                "Snare",
                                             );
-                                        }
-                                        "Roof" => {
-                                            icon_btn(ui, BuildTool::Roof, "\u{1f3da}", "Thatch");
                                             icon_btn(
                                                 ui,
-                                                BuildTool::RemoveRoof,
-                                                "\u{274c}",
-                                                "Remove",
+                                                BuildTool::Place(13),
+                                                "\u{267b}",
+                                                "Compost",
                                             );
                                         }
-                                        "Build" => {
+                                        "Shelter" => {
                                             icon_btn(
                                                 ui,
-                                                BuildTool::Place(62),
+                                                BuildTool::Place(35),
+                                                "\u{1f3da}",
+                                                "Wattle",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(21),
                                                 "\u{1fab5}",
-                                                "Campfire",
+                                                "Wood Wall",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(1), "\u{1f9f1}", "Stone");
+                                            icon_btn(ui, BuildTool::Door, "\u{1f6aa}", "Door");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::WindowOpening,
+                                                "\u{25a1}",
+                                                "Window",
+                                            );
+                                            icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Glass");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(26),
+                                                "\u{1fab5}",
+                                                "Wood Floor",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(27),
+                                                "\u{2b1b}",
+                                                "Stone Floor",
+                                            );
+                                            icon_btn(ui, BuildTool::Roof, "\u{1f3e0}", "Roof");
+                                            icon_btn(ui, BuildTool::Place(30), "\u{1f6cf}", "Bed");
+                                            icon_btn(ui, BuildTool::Place(9), "\u{1fa91}", "Bench");
+                                        }
+                                        "Light" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(55),
+                                                "\u{1f525}",
+                                                "Torch",
                                             );
                                             icon_btn(
                                                 ui,
                                                 BuildTool::Place(6),
                                                 "\u{1f525}",
                                                 "Fireplace",
-                                            );
-                                            icon_btn(ui, BuildTool::Place(9), "\u{1fa91}", "Bench");
-                                            icon_btn(ui, BuildTool::Place(30), "\u{1f6cf}", "Bed");
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::Place(33),
-                                                "\u{1f4e6}",
-                                                "Crate",
-                                            );
-                                            icon_btn(ui, BuildTool::Window, "\u{1fa9f}", "Glass");
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::WindowOpening,
-                                                "\u{25a1}",
-                                                "Opening",
-                                            );
-                                            icon_btn(ui, BuildTool::Door, "\u{1f6aa}", "Door");
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::Place(29),
-                                                "\u{1f4a5}",
-                                                "Cannon",
-                                            );
-                                            icon_btn(ui, BuildTool::Place(59), "\u{1fa63}", "Well");
-                                        }
-                                        "Craft" => {
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::Place(57),
-                                                "\u{1f528}",
-                                                "Workbench",
-                                            );
-                                            icon_btn(ui, BuildTool::Place(58), "\u{1f3ed}", "Kiln");
-                                        }
-                                        "Light" => {
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::Place(7),
-                                                "\u{1f4a1}",
-                                                "Ceiling",
                                             );
                                             icon_btn(
                                                 ui,
@@ -4124,12 +4291,6 @@ impl App {
                                             );
                                             icon_btn(
                                                 ui,
-                                                BuildTool::Place(55),
-                                                "\u{1f525}",
-                                                "Wall Torch",
-                                            );
-                                            icon_btn(
-                                                ui,
                                                 BuildTool::Place(56),
                                                 "\u{1f4a1}",
                                                 "Wall Lamp",
@@ -4140,6 +4301,42 @@ impl App {
                                                 "\u{1f526}",
                                                 "Floodlight",
                                             );
+                                        }
+                                        "Food" => {
+                                            icon_btn(ui, BuildTool::Place(59), "\u{1fa63}", "Well");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(33),
+                                                "\u{1f4e6}",
+                                                "Crate",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::GrowingZone,
+                                                "\u{1f33f}",
+                                                "Farm Zone",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::StorageZone,
+                                                "\u{1f4e6}",
+                                                "Storage",
+                                            );
+                                        }
+                                        "Craft" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(57),
+                                                "\u{1f528}",
+                                                "Workbench",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(61),
+                                                "\u{1fa9a}",
+                                                "Saw Horse",
+                                            );
+                                            icon_btn(ui, BuildTool::Place(58), "\u{1f3ed}", "Kiln");
                                         }
                                         "Power" => {
                                             icon_btn(ui, BuildTool::Place(36), "\u{26a1}", "Wire");
@@ -4188,15 +4385,19 @@ impl App {
                                                 "Bridge",
                                             );
                                         }
-                                        "Gas" => {
-                                            icon_btn(ui, BuildTool::Place(15), "\u{1f4a8}", "Pipe");
+                                        "Pipes" => {
                                             icon_btn(
                                                 ui,
-                                                BuildTool::Place(46),
-                                                "\u{2298}",
-                                                "Restrictor",
+                                                BuildTool::Place(15),
+                                                "\u{1f4a8}",
+                                                "Gas Pipe",
                                             );
-                                            icon_btn(ui, BuildTool::Place(16), "\u{2699}", "Pump");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(16),
+                                                "\u{2699}",
+                                                "Gas Pump",
+                                            );
                                             icon_btn(ui, BuildTool::Place(17), "\u{1f6e2}", "Tank");
                                             icon_btn(
                                                 ui,
@@ -4214,25 +4415,53 @@ impl App {
                                             icon_btn(ui, BuildTool::Place(12), "\u{1f32c}", "Fan");
                                             icon_btn(
                                                 ui,
-                                                BuildTool::Place(50),
-                                                "\u{2a2f}",
-                                                "Bridge",
+                                                BuildTool::Place(46),
+                                                "\u{2298}",
+                                                "Restrictor",
                                             );
-                                        }
-                                        "Liquid" => {
-                                            icon_btn(ui, BuildTool::Place(49), "\u{1f4a7}", "Pipe");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(49),
+                                                "\u{1f4a7}",
+                                                "Liq Pipe",
+                                            );
                                             icon_btn(
                                                 ui,
                                                 BuildTool::Place(52),
                                                 "\u{1f6b0}",
                                                 "Intake",
                                             );
-                                            icon_btn(ui, BuildTool::Place(53), "\u{2699}", "Pump");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(53),
+                                                "\u{2699}",
+                                                "Liq Pump",
+                                            );
                                             icon_btn(
                                                 ui,
                                                 BuildTool::Place(54),
                                                 "\u{1f4a6}",
                                                 "Output",
+                                            );
+                                        }
+                                        "Zones" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(29),
+                                                "\u{1f4a5}",
+                                                "Cannon",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::RemoveFloor,
+                                                "\u{274c}",
+                                                "Rm Floor",
+                                            );
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::RemoveRoof,
+                                                "\u{274c}",
+                                                "Rm Roof",
                                             );
                                             icon_btn(
                                                 ui,
@@ -4240,74 +4469,7 @@ impl App {
                                                 "\u{2a2f}",
                                                 "Bridge",
                                             );
-                                        }
-                                        "Zones" => {
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::GrowingZone,
-                                                "\u{1f33f}",
-                                                "Farm",
-                                            );
-                                            icon_btn(
-                                                ui,
-                                                BuildTool::StorageZone,
-                                                "\u{1f4e6}",
-                                                "Storage",
-                                            );
-                                        }
-                                        "Terrain" => {
-                                            // Zone-based terrain tools (pleb work tasks)
-                                            let dz_sel = self.build_tool == BuildTool::DigZone;
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new("\u{26cf} Dig")
-                                                            .size(8.0),
-                                                    )
-                                                    .selected(dz_sel),
-                                                )
-                                                .clicked()
-                                            {
-                                                self.build_tool = if dz_sel {
-                                                    BuildTool::None
-                                                } else {
-                                                    BuildTool::DigZone
-                                                };
-                                                self.terrain_tool = None;
-                                            }
-                                            if dz_sel {
-                                                ui.horizontal(|ui| {
-                                                    ui.spacing_mut().item_spacing.x = 2.0;
-                                                    for &(label, depth) in &[
-                                                        ("Shallow", 0.3f32),
-                                                        ("Trench", 0.8),
-                                                        ("Moat", 1.5),
-                                                    ] {
-                                                        let sel =
-                                                            (self.dig_depth - depth).abs() < 0.05;
-                                                        if ui
-                                                            .add(
-                                                                egui::Button::new(
-                                                                    egui::RichText::new(label)
-                                                                        .size(8.0),
-                                                                )
-                                                                .selected(sel),
-                                                            )
-                                                            .clicked()
-                                                        {
-                                                            self.dig_depth = depth;
-                                                        }
-                                                    }
-                                                });
-                                                ui.add(
-                                                    egui::Slider::new(
-                                                        &mut self.dig_depth,
-                                                        0.1..=3.0,
-                                                    )
-                                                    .text("Depth")
-                                                    .step_by(0.1),
-                                                );
-                                            }
+                                            // Terrain tools
                                             let bz_sel = self.build_tool == BuildTool::BermZone;
                                             if ui
                                                 .add(
@@ -4326,8 +4488,7 @@ impl App {
                                                 };
                                                 self.terrain_tool = None;
                                             }
-                                        }
-                                        "Water" => {
+                                            // Water tools
                                             let wf_sel = self.build_tool == BuildTool::WaterFill;
                                             if ui
                                                 .add(
@@ -4379,7 +4540,7 @@ impl App {
                                     }
                                 });
                             // Zone work priority toggle (outside grid)
-                            if self.build_category == Some("Zones") {
+                            if self.build_category == Some("Food") {
                                 ui.separator();
                                 let prio_label = match self.work_priority {
                                     zones::WorkPriority::PlantFirst => "Plant 1st",
@@ -4880,6 +5041,9 @@ impl App {
                                 PlebActivity::Fishing(pr) => {
                                     format!("Fishing {:.0}%", pr * 100.0)
                                 }
+                                PlebActivity::Mining(pr) => {
+                                    format!("Mining {:.0}%", pr * 100.0)
+                                }
                                 PlebActivity::Staggering(_) => "Staggering!".to_string(),
                                 PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                             };
@@ -5317,6 +5481,7 @@ impl App {
                 }
                 ContextAction::Butcher(bx, by) => Some(PlebCommand::Butcher(*bx, *by)),
                 ContextAction::Fish(bx, by) => Some(PlebCommand::Fish(*bx, *by)),
+                ContextAction::Mine(bx, by) => Some(PlebCommand::Mine(*bx, *by)),
                 ContextAction::FireAt(_)
                 | ContextAction::ThrowGrenade(_, _)
                 | ContextAction::Hunt(_)
@@ -5688,6 +5853,32 @@ impl App {
                     }
                 }
                 ContextAction::Fish(bx, by) => {
+                    if let Some(sel_idx) = self.selected_pleb {
+                        let pleb = &mut self.plebs[sel_idx];
+                        if !pleb.is_enemy && !pleb.activity.is_crisis() {
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let adj =
+                                adjacent_walkable(&self.grid_data, bx, by).unwrap_or((bx, by));
+                            let path = pleb::astar_path_terrain_water_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                &self.water_depth_cpu,
+                                start,
+                                adj,
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.work_target = Some((bx, by));
+                                pleb.harvest_target = None;
+                                pleb.haul_target = None;
+                            }
+                        }
+                    }
+                }
+                ContextAction::Mine(bx, by) => {
                     if let Some(sel_idx) = self.selected_pleb {
                         let pleb = &mut self.plebs[sel_idx];
                         if !pleb.is_enemy && !pleb.activity.is_crisis() {
@@ -7340,7 +7531,8 @@ impl App {
                         PlebCommand::HandCraft(_) => (pleb.x, pleb.y),
                         PlebCommand::GatherBranches(x, y)
                         | PlebCommand::Butcher(x, y)
-                        | PlebCommand::Fish(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
+                        | PlebCommand::Fish(x, y)
+                        | PlebCommand::Mine(x, y) => (*x as f32 + 0.5, *y as f32 + 0.5),
                     };
                     let qp = to_screen(tx, ty);
                     // Dashed line to next waypoint
@@ -9846,6 +10038,12 @@ impl App {
                                 egui::Color32::WHITE,
                                 egui::Color32::from_rgb(120, 110, 90),
                             )
+                        } else if pleb.needs.wetness > 0.5 {
+                            (
+                                Some(needs::wetness_label(pleb.needs.wetness)),
+                                egui::Color32::WHITE,
+                                egui::Color32::from_rgb(50, 100, 160),
+                            )
                         } else {
                             (None, egui::Color32::TRANSPARENT, egui::Color32::TRANSPARENT)
                         };
@@ -9968,6 +10166,9 @@ impl App {
                             }
                             PlebActivity::Fishing(_) => {
                                 (Some("Fishing"), egui::Color32::from_rgb(60, 140, 200))
+                            }
+                            PlebActivity::Mining(_) => {
+                                (Some("Mining"), egui::Color32::from_rgb(160, 120, 80))
                             }
                             PlebActivity::Staggering(_) => {
                                 (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40))
@@ -10949,7 +11150,7 @@ impl App {
             });
     }
 
-    /// Ambient hover info — compact tile summary in the lower-right corner.
+    /// Ambient hover info — styled tile summary panel near the cursor.
     fn draw_hover_info(&self, ctx: &egui::Context) {
         let (wx, wy) = self.hover_world;
         let bx = wx.floor() as i32;
@@ -10966,55 +11167,61 @@ impl App {
         let reg = block_defs::BlockRegistry::cached();
         let type_name = reg.name(bt);
 
-        // Elevation
         let elev = if idx < self.elevation_data.len() {
             self.elevation_data[idx]
         } else {
             0.0
         };
 
-        // Terrain type
-        let terrain_name = if idx < self.terrain_data.len() {
-            let td = self.terrain_data[idx];
-            match terrain_type(td) {
-                0 => "Grass",
-                1 => "Chalky",
-                2 => "Rocky",
-                3 => "Clay",
-                4 => "Gravel",
-                5 => "Peat",
-                6 => "Marsh",
-                7 => "Loam",
-                _ => "",
-            }
-        } else {
-            ""
-        };
-
-        // Temperature (from debug readback)
         #[cfg(not(target_arch = "wasm32"))]
         let temp = self.debug.fluid_density[3];
         #[cfg(target_arch = "wasm32")]
         let temp = 15.0_f32;
 
-        // Ground items at this tile
-        let item_count: u32 = self
-            .ground_items
-            .iter()
-            .filter(|gi| gi.x.floor() as i32 == bx && gi.y.floor() as i32 == by)
-            .map(|gi| gi.stack.count as u32)
-            .sum();
+        // Terrain type + vegetation
+        let (terrain_name, terrain_veg) = if idx < self.terrain_data.len() {
+            let td = self.terrain_data[idx];
+            let veg = ((td >> 4) & 0x1F) as f32 / 31.0;
+            let name = match terrain_type(td) {
+                0 => "Grassland",
+                1 => "Chalky Ground",
+                2 => "Rocky Ground",
+                3 => "Clay Soil",
+                4 => "Gravel",
+                5 => "Peatland",
+                6 => "Marsh",
+                7 => "Loam",
+                8 => "Iron-Stained Ground",
+                9 => "Copper-Stained Ground",
+                10 => "Flint-Bearing Ground",
+                11 => "Forest Floor",
+                12 => "Sandy Ground",
+                _ => "",
+            };
+            let veg_label = if veg > 0.65 {
+                "Dense vegetation"
+            } else if veg > 0.4 {
+                "Moderate vegetation"
+            } else if veg > 0.15 {
+                "Sparse scrub"
+            } else {
+                "Barren"
+            };
+            (name, veg_label)
+        } else {
+            ("", "")
+        };
 
-        // Room at this tile
+        // Room
         let room_label = {
-            let ridx = (by as u32 * GRID_W + bx as u32) as usize;
+            let ridx = idx;
             if ridx < self.room_map.len() {
                 let room_id = self.room_map[ridx];
                 if room_id > 0 {
                     self.detected_rooms
                         .iter()
                         .find(|r| r.id == room_id)
-                        .map(|r| format!("{} ({})", r.label, r.size))
+                        .map(|r| format!("{} ({} tiles)", r.label, r.size))
                 } else {
                     None
                 }
@@ -11023,157 +11230,157 @@ impl App {
             }
         };
 
-        // Build the info lines
-        let screen = ctx.content_rect();
-        let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Foreground,
-            egui::Id::new("hover_info"),
-        ));
-        let font_s = egui::FontId::proportional(10.0);
-        let font_m = egui::FontId::proportional(11.0);
-        let col = egui::Color32::from_gray(200);
-        let col_dim = egui::Color32::from_gray(140);
+        // Ground items
+        let ground_items: Vec<String> = self
+            .ground_items
+            .iter()
+            .filter(|gi| gi.x.floor() as i32 == bx && gi.y.floor() as i32 == by)
+            .map(|gi| {
+                let name = item_defs::ItemRegistry::cached()
+                    .name(gi.stack.item_id)
+                    .to_string();
+                if gi.stack.count > 1 {
+                    format!("{}x {}", gi.stack.count, name)
+                } else {
+                    name
+                }
+            })
+            .collect();
 
+        // Water depth
+        let water_depth = {
+            let widx = idx;
+            if widx < self.water_depth_cpu.len() {
+                self.water_depth_cpu[widx]
+            } else {
+                0.0
+            }
+        };
+
+        // Is it a block worth naming or just ground?
+        let is_ground = bt == BT_GROUND || bt == BT_AIR;
+        let is_flora = block_defs::BlockRegistry::cached()
+            .get(bt)
+            .is_some_and(|d| d.is_plant);
+
+        // Colors
+        let bg = egui::Color32::from_rgba_unmultiplied(18, 20, 25, 220);
+        let border = egui::Color32::from_gray(50);
+        let title_col = egui::Color32::from_gray(230);
+        let label_col = egui::Color32::from_gray(140);
+        let value_col = egui::Color32::from_gray(195);
+        let accent = egui::Color32::from_rgb(170, 145, 85);
+
+        // Position: anchored above the game log in bottom-right
         let log_offset = if self.game_log.is_empty() {
             10.0
         } else {
             170.0
         };
-        let x = screen.max.x - 10.0;
-        let mut y = screen.max.y - log_offset;
 
-        // Line 5: room (if any)
-        if let Some(ref rl) = room_label {
-            Self::shadow_text(
-                &painter,
-                egui::pos2(x, y),
-                egui::Align2::RIGHT_BOTTOM,
-                rl,
-                font_s.clone(),
-                egui::Color32::from_rgb(180, 170, 130),
-            );
-            y -= 14.0;
-        }
+        egui::Area::new(egui::Id::new("hover_info_panel"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -log_offset])
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::NONE
+                    .fill(bg)
+                    .corner_radius(4.0)
+                    .inner_margin(8)
+                    .stroke(egui::Stroke::new(1.0, border))
+                    .show(ui, |ui| {
+                        ui.set_max_width(180.0);
 
-        // Line 4: items (if any)
-        if item_count > 0 {
-            Self::shadow_text(
-                &painter,
-                egui::pos2(x, y),
-                egui::Align2::RIGHT_BOTTOM,
-                &format!("{} items on ground", item_count),
-                font_s.clone(),
-                col_dim,
-            );
-            y -= 14.0;
-        }
+                        // Title: block name or terrain name
+                        let title = if is_ground {
+                            if terrain_name.is_empty() {
+                                "Ground".to_string()
+                            } else {
+                                terrain_name.to_string()
+                            }
+                        } else {
+                            type_name.to_string()
+                        };
+                        ui.label(
+                            egui::RichText::new(&title)
+                                .size(12.0)
+                                .strong()
+                                .color(title_col),
+                        );
 
-        // Line 3: temp + elevation
-        let mut env_parts = Vec::new();
-        if elev > 0.05 {
-            env_parts.push(format!("elev {:.1}", elev));
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let temp_str = format!("{:.0}°C", temp);
-            env_parts.push(temp_str);
-        }
-        if self.debug.water_level > 0.01 {
-            env_parts.push(format!("water {:.2}", self.debug.water_level));
-        }
-        // Show CPU pathfinding water depth at hovered tile (always, for debugging)
-        {
-            let hx = self.hover_world.0.floor() as i32;
-            let hy = self.hover_world.1.floor() as i32;
-            if hx >= 0 && hy >= 0 && hx < grid::GRID_W as i32 && hy < grid::GRID_H as i32 {
-                let widx = (hy as u32 * grid::GRID_W + hx as u32) as usize;
-                let cpu_depth = if widx < self.water_depth_cpu.len() {
-                    self.water_depth_cpu[widx]
-                } else {
-                    0.0
-                };
-                env_parts.push(format!("pw {:.2}", cpu_depth));
-                // Debug: show array sizes and raw values
-                env_parts.push(format!(
-                    "wt:{} se:{} cpu:{}",
-                    self.water_table.len(),
-                    self.sub_elevation.len(),
-                    self.water_depth_cpu.len(),
-                ));
-                if widx < self.water_table.len() {
-                    let wt = self.water_table[widx];
-                    let se = crate::terrain::sample_elevation(
-                        &self.sub_elevation,
-                        hx as f32 + 0.5,
-                        hy as f32 + 0.5,
-                    );
-                    let off = self.camera.water_table_offset;
-                    let d = (wt + off) - se;
-                    env_parts.push(format!("wt={:.2}+{:.1} se={:.2} d={:.2}", wt, off, se, d,));
-                }
-            }
-        }
-        if !env_parts.is_empty() {
-            Self::shadow_text(
-                &painter,
-                egui::pos2(x, y),
-                egui::Align2::RIGHT_BOTTOM,
-                &env_parts.join("  "),
-                font_s.clone(),
-                col_dim,
-            );
-            y -= 14.0;
-        }
+                        // Coordinates (subtle)
+                        ui.label(
+                            egui::RichText::new(format!("{}, {}", bx, by))
+                                .size(9.0)
+                                .color(label_col),
+                        );
 
-        // Line 2: terrain type + modifiers
-        let mut detail = String::new();
-        if !terrain_name.is_empty() && (bt == BT_GROUND || bt == BT_AIR) {
-            detail.push_str(terrain_name);
-        }
-        if bh > 0 {
-            if !detail.is_empty() {
-                detail.push_str("  ");
-            }
-            detail.push_str(&format!("h:{}", bh));
-        }
-        if flags & 2 != 0 {
-            if !detail.is_empty() {
-                detail.push_str("  ");
-            }
-            detail.push_str("roofed");
-        }
-        if flags & 1 != 0 {
-            if !detail.is_empty() {
-                detail.push_str("  ");
-            }
-            detail.push_str(if flags & 4 != 0 {
-                "door open"
-            } else {
-                "door closed"
+                        // Terrain details for ground tiles
+                        if is_ground && !terrain_name.is_empty() {
+                            ui.add_space(2.0);
+                            // Vegetation
+                            if !terrain_veg.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(terrain_veg)
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(100, 140, 80)),
+                                );
+                            }
+                        }
+
+                        // Flora name (for plant tiles)
+                        if is_flora && !is_ground {
+                            ui.add_space(2.0);
+                            if !terrain_name.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(terrain_name)
+                                        .size(10.0)
+                                        .color(label_col),
+                                );
+                            }
+                        }
+
+                        // Environment: temp, elevation, water
+                        ui.add_space(3.0);
+                        let mut env_line = format!("{:.0}°C", temp);
+                        if elev > 0.05 {
+                            env_line.push_str(&format!("   elev {:.1}", elev));
+                        }
+                        if water_depth > 0.01 {
+                            env_line.push_str(&format!("   water {:.1}", water_depth));
+                        }
+                        ui.label(egui::RichText::new(&env_line).size(9.5).color(value_col));
+
+                        // Modifiers
+                        if flags & 2 != 0 {
+                            ui.label(egui::RichText::new("Roofed").size(9.5).color(label_col));
+                        }
+                        if flags & 1 != 0 {
+                            let door_state = if flags & 4 != 0 {
+                                "Door (open)"
+                            } else {
+                                "Door (closed)"
+                            };
+                            ui.label(egui::RichText::new(door_state).size(9.5).color(label_col));
+                        }
+
+                        // Room
+                        if let Some(ref rl) = room_label {
+                            ui.label(egui::RichText::new(rl).size(9.5).color(accent));
+                        }
+
+                        // Ground items
+                        if !ground_items.is_empty() {
+                            ui.add_space(2.0);
+                            for item in &ground_items {
+                                ui.label(
+                                    egui::RichText::new(format!("  {}", item))
+                                        .size(9.5)
+                                        .color(egui::Color32::from_rgb(140, 160, 180)),
+                                );
+                            }
+                        }
+                    });
             });
-        }
-        if !detail.is_empty() {
-            Self::shadow_text(
-                &painter,
-                egui::pos2(x, y),
-                egui::Align2::RIGHT_BOTTOM,
-                &detail,
-                font_s,
-                col_dim,
-            );
-            y -= 15.0;
-        }
-
-        // Line 1: block type + coords (header)
-        let header = format!("{}  ({}, {})", type_name, bx, by);
-        Self::shadow_text(
-            &painter,
-            egui::pos2(x, y),
-            egui::Align2::RIGHT_BOTTOM,
-            &header,
-            font_m,
-            col,
-        );
     }
 
     fn draw_game_log(&self, ctx: &egui::Context) {
@@ -11426,6 +11633,7 @@ impl App {
                 PlebActivity::Butchering(_) => "Butchering",
                 PlebActivity::Cooking(_) => "Cooking",
                 PlebActivity::Fishing(_) => "Fishing",
+                PlebActivity::Mining(_) => "Mining",
                 PlebActivity::Staggering(_) => "Staggering",
                 PlebActivity::Crisis(_, _) => "Crisis",
             }
@@ -12369,8 +12577,79 @@ impl App {
             });
     }
 
+    // --- Stone Lab: procedural stone material iteration tool ---
+    fn draw_stone_lab(&mut self, ctx: &egui::Context) {
+        if !self.show_stone_lab {
+            return;
+        }
+
+        egui::Window::new("Stone Lab")
+            .collapsible(true)
+            .resizable(false)
+            .default_pos([10.0, 40.0])
+            .show(ctx, |ui| {
+                // Preset buttons
+                ui.horizontal(|ui| {
+                    for (i, (name, _)) in StoneLab::PRESETS.iter().enumerate() {
+                        let selected = self.stone_lab.preset == i;
+                        if ui.selectable_label(selected, *name).clicked() {
+                            self.stone_lab.apply_preset(i);
+                        }
+                    }
+                });
+                ui.separator();
+
+                let sl = &mut self.stone_lab.gpu;
+                sl.enabled = 1.0;
+
+                // Base color
+                ui.label(egui::RichText::new("Base Color").size(10.0).strong());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().slider_width = 100.0;
+                    ui.add(egui::Slider::new(&mut sl.base_r, 0.0..=1.0).text("R"));
+                });
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().slider_width = 100.0;
+                    ui.add(egui::Slider::new(&mut sl.base_g, 0.0..=1.0).text("G"));
+                });
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().slider_width = 100.0;
+                    ui.add(egui::Slider::new(&mut sl.base_b, 0.0..=1.0).text("B"));
+                });
+
+                ui.separator();
+                ui.label(egui::RichText::new("Surface").size(10.0).strong());
+                ui.add(egui::Slider::new(&mut sl.grain_scale, 1.0..=25.0).text("Grain scale"));
+                ui.add(egui::Slider::new(&mut sl.grain_strength, 0.0..=1.0).text("Grain str"));
+                ui.add(egui::Slider::new(&mut sl.roughness, 0.0..=1.0).text("Roughness"));
+
+                ui.separator();
+                ui.label(egui::RichText::new("Cracks").size(10.0).strong());
+                ui.add(egui::Slider::new(&mut sl.crack_density, 0.0..=1.0).text("Density"));
+                ui.add(egui::Slider::new(&mut sl.crack_width, 0.0..=1.0).text("Width"));
+
+                ui.separator();
+                ui.label(egui::RichText::new("Strata").size(10.0).strong());
+                ui.add(egui::Slider::new(&mut sl.strata_strength, 0.0..=1.0).text("Strength"));
+                ui.add(egui::Slider::new(&mut sl.strata_scale, 1.0..=15.0).text("Scale"));
+
+                ui.separator();
+                ui.label(egui::RichText::new("Weathering").size(10.0).strong());
+                ui.add(egui::Slider::new(&mut sl.weathering, 0.0..=1.0).text("Amount"));
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().slider_width = 60.0;
+                    ui.add(egui::Slider::new(&mut sl.weather_r, 0.0..=1.0).text("R"));
+                    ui.add(egui::Slider::new(&mut sl.weather_g, 0.0..=1.0).text("G"));
+                    ui.add(egui::Slider::new(&mut sl.weather_b, 0.0..=1.0).text("B"));
+                });
+
+                ui.separator();
+                ui.add(egui::Slider::new(&mut sl.specular, 0.0..=1.0).text("Specular"));
+            });
+    }
+
     // --- Minimap: world overview (bottom-left corner, above build bar) ---
-    fn draw_minimap(&self, ctx: &egui::Context) {
+    fn draw_minimap(&mut self, ctx: &egui::Context) {
         // Temperature label above minimap
         let ambient_temp = self
             .selected_pleb
@@ -12407,12 +12686,24 @@ impl App {
         let gw = GRID_W as f32;
         let gh = GRID_H as f32;
 
+        let mut minimap_click: Option<(f32, f32)> = None;
         egui::Area::new(egui::Id::new("minimap"))
             .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -180.0])
-            .interactable(false)
+            .interactable(true)
             .show(ctx, |ui| {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::Vec2::splat(map_size), egui::Sense::hover());
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::Vec2::splat(map_size),
+                    egui::Sense::click_and_drag(),
+                );
+
+                // Click or drag: convert screen position to world coordinates
+                if resp.clicked() || resp.dragged() {
+                    if let Some(pos) = resp.interact_pointer_pos() {
+                        let wx = ((pos.x - rect.min.x) / map_size * gw).clamp(0.0, gw - 1.0);
+                        let wy = ((pos.y - rect.min.y) / map_size * gh).clamp(0.0, gh - 1.0);
+                        minimap_click = Some((wx, wy));
+                    }
+                }
                 let painter = ui.painter_at(rect);
 
                 // Background
@@ -12493,6 +12784,12 @@ impl App {
                     egui::StrokeKind::Outside,
                 );
             });
+
+        // Apply camera move from minimap interaction
+        if let Some((wx, wy)) = minimap_click {
+            self.camera.center_x = wx;
+            self.camera.center_y = wy;
+        }
     }
 
     fn draw_hints(&mut self, ctx: &egui::Context, bp_cam: (f32, f32, f32, f32, f32), bp_ppp: f32) {

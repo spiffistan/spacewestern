@@ -6,9 +6,9 @@
 use crate::grid::{GRID_H, GRID_W};
 
 // --- Resolution ---
-pub const ELEV_W: u32 = GRID_W * 4; // 1024
-pub const ELEV_H: u32 = GRID_H * 4; // 1024
-pub const ELEV_SCALE: u32 = 4; // sub-cells per tile
+pub const ELEV_W: u32 = GRID_W * 2; // sub-tile elevation resolution
+pub const ELEV_H: u32 = GRID_H * 2;
+pub const ELEV_SCALE: u32 = 2; // sub-cells per tile
 
 // --- Digging constants ---
 pub const DIG_BRUSH_RADIUS: f32 = 1.8; // sub-cells (~0.45 tiles)

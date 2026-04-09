@@ -63,7 +63,7 @@ pub fn draw_card(
     let border = card_type.border_color();
     let ribbon = card_type.ribbon_color();
 
-    let resp = egui::Frame::NONE
+    egui::Frame::NONE
         .fill(CARD_BG)
         .stroke(egui::Stroke::new(1.5, border))
         .corner_radius(3.0)
@@ -74,7 +74,12 @@ pub fn draw_card(
             bottom: 8,
         })
         .show(ui, |ui| {
-            ui.set_width(width);
+            // Hard-constrain: shrink the available rect to exactly `width`
+            let cursor = ui.cursor().min;
+            let max = egui::Rect::from_min_size(cursor, egui::vec2(width, ui.available_height()));
+            ui.shrink_width_to_current();
+            ui.expand_to_include_rect(egui::Rect::from_min_size(cursor, egui::vec2(width, 0.0)));
+            *ui = ui.new_child(egui::UiBuilder::new().max_rect(max));
 
             // Ribbon at top
             let (ribbon_rect, _) =
@@ -94,9 +99,8 @@ pub fn draw_card(
 
             // Content
             add_contents(ui);
-        });
-
-    resp.response
+        })
+        .response
 }
 
 /// Draw a card portrait area (dark recessed rectangle for face/image).

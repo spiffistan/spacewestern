@@ -1243,20 +1243,22 @@ impl App {
         let mut menu = ContextMenu::new(screen_x, screen_y, "");
         let mut has_actions = false;
 
-        // Harvestable: berry bush or mature crop
-        if sel_pleb.is_some() && (bt == BT_BERRY_BUSH || bt == BT_CROP) {
+        // Harvestable: berry bush, crop, or alien flora
+        let is_harvestable_plant = crate::block_defs::BlockRegistry::cached()
+            .get(bt)
+            .is_some_and(|d| d.is_harvestable);
+        if sel_pleb.is_some() && is_harvestable_plant {
             let block_h = (self.grid_data[(by as u32 * GRID_W + bx as u32) as usize] >> 8) & 0xFF;
             let can_harvest = if bt == BT_CROP {
-                block_h >= 3 // mature crop
+                block_h >= 3
+            } else if bt == BT_BERRY_BUSH {
+                block_h > 0
             } else {
-                block_h > 0 // berry bush with berries remaining
+                true // alien flora always harvestable
             };
             if can_harvest {
-                menu.title = if bt == BT_BERRY_BUSH {
-                    "Berry Bush".into()
-                } else {
-                    "Crop".into()
-                };
+                let reg = crate::block_defs::BlockRegistry::cached();
+                menu.title = reg.name(bt).to_string();
                 menu.actions.push((
                     format!("Harvest ({})", pleb_name),
                     ContextAction::Harvest(bx, by),
@@ -1286,19 +1288,21 @@ impl App {
             has_actions = true;
         }
 
-        // Rock: mine (needs pick) or pick up small rocks
+        // Rock: mine (sub-tile)
         if bt == BT_ROCK && sel_pleb.is_some() {
-            menu.title = "Rock".into();
+            // Determine rock type for display
+            let rt = crate::mining::rock_type_at(bx, by);
+            menu.title = crate::mining::rock_type_name(rt).to_string();
             let has_pick = sel_pleb
                 .and_then(|pi| self.plebs.get(pi))
                 .is_some_and(|p| p.has_tool("pick"));
             let mine_label = if has_pick {
-                format!("\u{26cf} Mine rock ({})", pleb_name)
+                format!("\u{26cf} Mine ({})", pleb_name)
             } else {
-                "\u{26cf} Mine rock (needs pick)".to_string()
+                format!("\u{26cf} Mine — slow ({})", pleb_name)
             };
             menu.actions
-                .push((mine_label, ContextAction::Haul(bx, by), has_pick));
+                .push((mine_label, ContextAction::Mine(bx, by), true));
             has_actions = true;
         }
 

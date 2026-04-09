@@ -547,18 +547,18 @@ thermal = { heat_capacity = 3.0, conductivity = 0.02, solar_absorption = 0.6 }
 
 [[block]]
 id = 35
-name = "Mud Wall"
+name = "Wattle & Daub"
 color = [0.52, 0.40, 0.25]
 is_solid = true
 fluid_obstacle = true
 default_height = 3.0
 shows_wall_face = true
 is_wall = true
-thermal = { heat_capacity = 5.0, conductivity = 0.004, solar_absorption = 0.5 }
+thermal = { heat_capacity = 4.0, conductivity = 0.006, solar_absorption = 0.5 }
 [block.placement]
 category = "Walls"
 icon = "🏚"
-label = "Mud"
+label = "Wattle"
 click = "simple"
 place_height = 3
 drag = "hollow_rect"
@@ -875,6 +875,7 @@ is_plant = true
 is_flammable = true
 ignition_temp = 130.0
 light_transmission = 0.8
+is_harvestable = true
 thermal = { heat_capacity = 1.0, conductivity = 0.001, solar_absorption = 0.3 }
 
 [[block]]
@@ -1024,7 +1025,7 @@ place_height = 1
 
 [[block]]
 id = 63
-name = "Low Mud Wall"
+name = "Low Wattle Fence"
 color = [0.55, 0.42, 0.28]
 is_solid = true
 fluid_obstacle = false
@@ -1052,5 +1053,82 @@ default_height = 5.0
 category = "Hunting"
 icon = "X"
 label = "Snare"
+click = "simple"
+place_height = 5
+
+[[block]]
+id = 65
+name = "Dustwhisker"
+color = [0.72, 0.62, 0.35]
+walkable = true
+is_plant = true
+is_flammable = true
+ignition_temp = 80.0
+light_transmission = 0.8
+is_harvestable = true
+thermal = { heat_capacity = 0.5, conductivity = 0.001, solar_absorption = 0.2 }
+
+[[block]]
+id = 66
+name = "Hollow Reed"
+color = [0.45, 0.58, 0.38]
+walkable = true
+is_plant = true
+is_flammable = true
+ignition_temp = 120.0
+light_transmission = 0.7
+is_harvestable = true
+thermal = { heat_capacity = 1.0, conductivity = 0.001, solar_absorption = 0.25 }
+
+[[block]]
+id = 67
+name = "Thornbrake"
+color = [0.45, 0.30, 0.22]
+walkable = true
+is_plant = true
+is_flammable = true
+ignition_temp = 200.0
+light_transmission = 0.4
+is_harvestable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.002, solar_absorption = 0.4 }
+
+[[block]]
+id = 68
+name = "Saltbrush"
+color = [0.60, 0.62, 0.55]
+walkable = true
+is_plant = true
+is_flammable = true
+ignition_temp = 130.0
+light_transmission = 0.6
+is_harvestable = true
+thermal = { heat_capacity = 1.5, conductivity = 0.001, solar_absorption = 0.3 }
+
+[[block]]
+id = 69
+name = "Duskbloom"
+color = [0.40, 0.38, 0.35]
+walkable = true
+is_plant = true
+is_flammable = true
+ignition_temp = 100.0
+light_transmission = 0.9
+is_harvestable = true
+thermal = { heat_capacity = 0.5, conductivity = 0.001, solar_absorption = 0.15 }
+
+[[block]]
+id = 70
+name = "Charcoal Mound"
+color = [0.20, 0.18, 0.15]
+is_solid = true
+fluid_obstacle = true
+default_height = 2.0
+is_flammable = true
+ignition_temp = 250.0
+thermal = { heat_capacity = 3.0, conductivity = 0.003, solar_absorption = 0.6 }
+[block.placement]
+category = "Build"
+icon = "🕳"
+label = "Charcoal"
 click = "simple"
 place_height = 5

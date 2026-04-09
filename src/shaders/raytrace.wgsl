@@ -109,6 +109,20 @@ const MAX_CREATURES: u32 = 32u;
 @group(0) @binding(27) var dust_tex: texture_2d<f32>;
 @group(0) @binding(28) var elevation_tex: texture_2d<f32>;
 
+// Stone Lab debug parameters
+struct StoneLabParams {
+    enabled: f32,
+    base_r: f32, base_g: f32, base_b: f32,
+    crack_density: f32, crack_width: f32,
+    grain_scale: f32, grain_strength: f32,
+    strata_strength: f32, strata_scale: f32,
+    roughness: f32, weathering: f32,
+    weather_r: f32, weather_g: f32, weather_b: f32,
+    specular: f32,
+};
+@group(0) @binding(29) var<uniform> stone_lab: StoneLabParams;
+@group(0) @binding(30) var mining_tex: texture_2d<u32>;
+
 // Bush sprites packed after tree sprites in the same buffer
 const BUSH_SPRITE_SIZE: u32 = 64u;
 const BUSH_SPRITE_VARIANTS: u32 = 16u;
@@ -343,7 +357,7 @@ struct GpuPleb {
     hair_r: f32, hair_g: f32, hair_b: f32, aim_progress: f32,
     shirt_r: f32, shirt_g: f32, shirt_b: f32, weapon_type: f32,
     pants_r: f32, pants_g: f32, pants_b: f32, swing_progress: f32,
-    crouch: f32, stress: f32, _pad2: f32, _pad3: f32,
+    crouch: f32, stress: f32, wetness: f32, sleeping: f32,
 };
 
 const MAX_PLEBS: u32 = 16u;
@@ -373,7 +387,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 64u)];
+    return materials[min(bt, 70u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -490,6 +504,23 @@ fn pixel_is_wall(fx: f32, fy: f32, height: u32, flags: u32) -> bool {
     if (mask & 8u) != 0u && edge_covers_pixel(fx, fy, 3u, wall_frac) { return true; } // W
     return false;
 }
+// Check if wall exists at horizontal position fx (for south face projection).
+// The face is a vertical drop — only X matters, not Y.
+fn wall_covers_x(fx: f32, height: u32, flags: u32) -> bool {
+    let thick = wall_thickness(flags);
+    if thick >= 4u { return true; }
+    let mask = wall_edge_mask(height);
+    if mask == 0u { return true; }
+    let wall_frac = f32(thick) * 0.25;
+    // N or S edges span full tile width
+    if (mask & 5u) != 0u { return true; }
+    // E edge: right strip
+    if (mask & 2u) != 0u && fx > (1.0 - wall_frac) { return true; }
+    // W edge: left strip
+    if (mask & 8u) != 0u && fx < wall_frac { return true; }
+    return false;
+}
+
 // Structural wall types that form the building envelope (not equipment/furniture)
 fn matches_wall_type(bt: u32) -> bool {
     return bt == BT_STONE || bt == BT_WALL || bt == BT_GLASS || bt == BT_INSULATED
@@ -578,7 +609,16 @@ fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
 //
 // This function is the single point to replace with sprite sampling later.
 // Terrain hue palette — indexed by terrain type (bits 0-3 of terrain_buf)
-// 0=grass, 1=sand, 2=rocky, 3=clay, 4=gravel, 5=snow, 6=marsh, 7=loam
+// Grass style for bilinear blending: x = dry factor, y = moss factor
+fn grass_style(tt: u32) -> vec2<f32> {
+    if tt == 6u || tt == 7u { return vec2(0.0, 0.0); } // marsh/loam: dark rich
+    if tt == 1u || tt == 4u || tt == 10u { return vec2(1.0, 0.0); } // chalky/gravel/flint: dry yellow
+    if tt == 5u || tt == 11u { return vec2(0.0, 1.0); } // peat/leaf litter: mossy
+    if tt == 8u || tt == 9u || tt == 12u { return vec2(0.8, 0.2); } // mineral/sand: sparse dry
+    return vec2(0.5, 0.5); // default grass
+}
+
+// Terrain base colors by type
 fn terrain_base_color(terrain_type: u32) -> vec3<f32> {
     if terrain_type == 1u { return vec3(0.68, 0.66, 0.60); }  // chalky: pale grey-white
     if terrain_type == 2u { return vec3(0.45, 0.42, 0.38); }  // rocky: grey
@@ -587,6 +627,11 @@ fn terrain_base_color(terrain_type: u32) -> vec3<f32> {
     if terrain_type == 5u { return vec3(0.22, 0.18, 0.12); }  // peat: dark brown-black
     if terrain_type == 6u { return vec3(0.30, 0.35, 0.22); }  // marsh: dark green-brown
     if terrain_type == 7u { return vec3(0.38, 0.30, 0.18); }  // loam: dark fertile
+    if terrain_type == 8u { return vec3(0.48, 0.30, 0.20); }  // iron-stained: rusty red-brown
+    if terrain_type == 9u { return vec3(0.38, 0.45, 0.40); }  // copper-stained: green-grey
+    if terrain_type == 10u { return vec3(0.60, 0.58, 0.52); } // flint-bearing: pale with dark
+    if terrain_type == 11u { return vec3(0.25, 0.20, 0.12); } // leaf litter: dark organic brown
+    if terrain_type == 12u { return vec3(0.72, 0.65, 0.45); } // sand: warm yellow-tan
     return vec3(0.42, 0.36, 0.22);                            // grass: default earth
 }
 
@@ -611,10 +656,15 @@ fn terrain_detail(
     let t_grain = f32((tdata >> 9u) & 0xFu) / 15.0;       // 0..1 texture grain
     let t_rough = f32((tdata >> 13u) & 0x3u) / 3.0;        // 0..1 roughness
 
-    // --- 1. Base soil color — bilinear blend between neighboring terrain types ---
-    // This eliminates hard tile-edge transitions between terrain types.
-    let bl_gx = wx - 0.5;
-    let bl_gy = wy - 0.5;
+    // --- 1. Base soil color — noise-shifted bilinear blend ---
+    // Noise offsets the blend coordinates so terrain transitions wander organically
+    // instead of following the tile grid. Creates irregular, natural-looking boundaries.
+    let edge_n1 = value_noise(pos * 0.7 + vec2(41.7, 73.2));
+    let edge_n2 = value_noise(pos * 1.4 + vec2(91.3, 27.8));
+    let edge_offset_x = (edge_n1 - 0.5) * 0.5;
+    let edge_offset_y = (edge_n2 - 0.5) * 0.5;
+    let bl_gx = wx - 0.5 + edge_offset_x;
+    let bl_gy = wy - 0.5 + edge_offset_y;
     let bl_ix = i32(floor(bl_gx));
     let bl_iy = i32(floor(bl_gy));
     let bl_fx = fract(bl_gx);
@@ -624,23 +674,66 @@ fn terrain_detail(
     let bl_gw = i32(camera.grid_w);
     let bl_gh = i32(camera.grid_h);
     let bl_w = u32(camera.grid_w);
-    let bl_c00 = terrain_base_color(terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] & 0xFu);
-    let bl_c10 = terrain_base_color(terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] & 0xFu);
-    let bl_c01 = terrain_base_color(terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] & 0xFu);
-    let bl_c11 = terrain_base_color(terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] & 0xFu);
+
+    // Sample terrain types of 4 neighboring tiles
+    let tt00 = terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] & 0xFu;
+    let tt10 = terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] & 0xFu;
+    let tt01 = terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] & 0xFu;
+    let tt11 = terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] & 0xFu;
+
+    // Bilinear-blend base soil color
+    let bl_c00 = terrain_base_color(tt00);
+    let bl_c10 = terrain_base_color(tt10);
+    let bl_c01 = terrain_base_color(tt01);
+    let bl_c11 = terrain_base_color(tt11);
     var soil_base = mix(mix(bl_c00, bl_c10, bl_ux), mix(bl_c01, bl_c11, bl_ux), bl_uy);
+
+    // Compute blended "rocky factor" for feature scattering at transitions.
+    // Rocky/gravel terrain → 1.0, grass/loam → 0.0. Blended across tile edges.
+    // Rocky/gravel/chalky → 1.0, grass/loam → 0.0
+    let rf00 = select(0.0, 1.0, tt00 == 2u || tt00 == 4u || tt00 == 1u);
+    let rf10 = select(0.0, 1.0, tt10 == 2u || tt10 == 4u || tt10 == 1u);
+    let rf01 = select(0.0, 1.0, tt01 == 2u || tt01 == 4u || tt01 == 1u);
+    let rf11 = select(0.0, 1.0, tt11 == 2u || tt11 == 4u || tt11 == 1u);
+    let rocky_blend = mix(mix(rf00, rf10, bl_ux), mix(rf01, rf11, bl_ux), bl_uy);
+
     // Per-pixel noise variation
     let soil_noise = value_noise(pos * 0.4 + vec2(97.3, 41.2));
     soil_base = mix(soil_base, soil_base * (0.85 + soil_noise * 0.3), 0.5);
     var color = soil_base;
 
+    // Read terrain data from all 4 blend neighbors (reuse for veg, grain, roughness)
+    let td00 = terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))];
+    let td10 = terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))];
+    let td01 = terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))];
+    let td11 = terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))];
+
+    // Vegetation density: bilinear-blended
+    t_veg = mix(
+        mix(f32((td00 >> 4u) & 0x1Fu) / 31.0, f32((td10 >> 4u) & 0x1Fu) / 31.0, bl_ux),
+        mix(f32((td01 >> 4u) & 0x1Fu) / 31.0, f32((td11 >> 4u) & 0x1Fu) / 31.0, bl_ux),
+        bl_uy,
+    );
+
+    // Grain + roughness: bilinear-blended (prevents abrupt texture changes at boundaries)
+    let t_grain_smooth = mix(
+        mix(f32((td00 >> 9u) & 0xFu) / 15.0, f32((td10 >> 9u) & 0xFu) / 15.0, bl_ux),
+        mix(f32((td01 >> 9u) & 0xFu) / 15.0, f32((td11 >> 9u) & 0xFu) / 15.0, bl_ux),
+        bl_uy,
+    );
+    let t_rough_smooth = mix(
+        mix(f32((td00 >> 13u) & 0x3u) / 3.0, f32((td10 >> 13u) & 0x3u) / 3.0, bl_ux),
+        mix(f32((td01 >> 13u) & 0x3u) / 3.0, f32((td11 >> 13u) & 0x3u) / 3.0, bl_ux),
+        bl_uy,
+    );
+
     // Compacted soil: bilinear-blended for smooth path edges
-    let cp00 = f32((terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] >> 24u) & 0x1Fu) / 31.0;
-    let cp10 = f32((terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] >> 24u) & 0x1Fu) / 31.0;
-    let cp01 = f32((terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] >> 24u) & 0x1Fu) / 31.0;
-    let cp11 = f32((terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] >> 24u) & 0x1Fu) / 31.0;
+    let cp00 = f32((td00 >> 24u) & 0x1Fu) / 31.0;
+    let cp10 = f32((td10 >> 24u) & 0x1Fu) / 31.0;
+    let cp01 = f32((td01 >> 24u) & 0x1Fu) / 31.0;
+    let cp11 = f32((td11 >> 24u) & 0x1Fu) / 31.0;
     let compact_smooth = mix(mix(cp00, cp10, bl_ux), mix(cp01, cp11, bl_ux), bl_uy);
-    t_veg = t_veg_raw * (1.0 - compact_smooth * 0.9); // compaction kills vegetation (smooth)
+    t_veg *= (1.0 - compact_smooth * 0.9); // compaction kills vegetation (smooth)
     if compact_smooth > 0.05 {
         let path_col = soil_base * 0.72; // darker packed earth
         color = mix(color, path_col, compact_smooth * 0.6);
@@ -652,33 +745,42 @@ fn terrain_detail(
     color *= (1.0 - rain * 0.15);
 
     // --- 3. Vegetation (density from terrain buffer, not hardcoded noise) ---
-    // Vegetation is scaled by t_veg: 0 = barren, 1 = lush
-    if t_veg > 0.05 {
+    // At rocky-to-grass transitions, boost vegetation slightly so grass tufts
+    // scatter into the rocky zone (inverse of pebble scattering into grass).
+    let veg_with_scatter = max(t_veg, (1.0 - rocky_blend) * 0.3 * t_veg_raw);
+    if veg_with_scatter > 0.05 {
         // Per-pixel grass noise modulates local presence within the vegetation density
         let grass_noise = fbm(pos * 0.25 + vec2(31.7, 73.1), 3);
-        let grass_threshold = 1.0 - t_veg; // higher veg = lower threshold = more grass
+        let grass_threshold = 1.0 - veg_with_scatter; // higher veg = lower threshold = more grass
         let grass_amount = smoothstep(grass_threshold - 0.1, grass_threshold + 0.1, grass_noise);
 
         if grass_amount > 0.01 {
-            // Grass color varies by terrain type
+            // Grass color: bilinear-blended across tile edges (matches soil blend)
             let grass_hue = value_noise(pos * 0.4 + vec2(97.3, 41.2));
-            var grass_green = vec3(0.22, 0.40, 0.12);
-            var grass_yellow = vec3(0.38, 0.42, 0.15);
-            // Marsh/loam: darker, richer greens
-            if t_type == 6u || t_type == 7u {
-                grass_green = vec3(0.15, 0.32, 0.08);
-                grass_yellow = vec3(0.28, 0.35, 0.12);
-            }
-            // Chalky/gravel: sparse, yellowed scrub
-            if t_type == 1u || t_type == 4u {
-                grass_green = vec3(0.35, 0.38, 0.18);
-                grass_yellow = vec3(0.45, 0.42, 0.22);
-            }
-            // Peat: dark mossy tones
-            if t_type == 5u {
-                grass_green = vec3(0.18, 0.28, 0.10);
-                grass_yellow = vec3(0.25, 0.30, 0.15);
-            }
+            // Blend grass style across 4 neighboring tiles
+            let gf00 = grass_style(terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] & 0xFu);
+            let gf10 = grass_style(terrain_buf[u32(clamp(bl_iy, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] & 0xFu);
+            let gf01 = grass_style(terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix, 0, bl_gw-1))] & 0xFu);
+            let gf11 = grass_style(terrain_buf[u32(clamp(bl_iy+1, 0, bl_gh-1)) * bl_w + u32(clamp(bl_ix+1, 0, bl_gw-1))] & 0xFu);
+            let gf = mix(mix(gf00, gf10, bl_ux), mix(gf01, gf11, bl_ux), bl_uy);
+
+            // Interpolate between grass styles based on blended terrain
+            let dark_green = vec3(0.15, 0.32, 0.08);  // marsh/loam
+            let dark_yellow = vec3(0.28, 0.35, 0.12);
+            let norm_green = vec3(0.22, 0.40, 0.12);   // normal grass
+            let norm_yellow = vec3(0.38, 0.42, 0.15);
+            let dry_green = vec3(0.35, 0.38, 0.18);    // chalky/gravel
+            let dry_yellow = vec3(0.45, 0.42, 0.22);
+            let moss_green = vec3(0.18, 0.28, 0.10);   // peat
+            let moss_yellow = vec3(0.25, 0.30, 0.15);
+
+            // gf.x: 0=dark, 0.5=normal, 1.0=dry
+            // gf.y: 0=dark, 0.5=normal, 1.0=mossy
+            var grass_green = mix(dark_green, mix(norm_green, dry_green, gf.x), 0.5 + gf.x * 0.5);
+            var grass_yellow = mix(dark_yellow, mix(norm_yellow, dry_yellow, gf.x), 0.5 + gf.x * 0.5);
+            grass_green = mix(grass_green, moss_green, max(gf.y - 0.5, 0.0) * 2.0);
+            grass_yellow = mix(grass_yellow, moss_yellow, max(gf.y - 0.5, 0.0) * 2.0);
+
             var grass_col = mix(grass_green, grass_yellow, grass_hue * 0.5);
             grass_col = mix(grass_col, grass_col * 0.7, moisture * 0.3);
 
@@ -771,14 +873,14 @@ fn terrain_detail(
         }
     }
 
-    // --- 4. Fine soil grain (frequency from terrain buffer) ---
-    let grain_freq = 4.0 + t_grain * 12.0; // 4..16 — fine to coarse
+    // --- 4. Fine soil grain (frequency from blended terrain data) ---
+    let grain_freq = 4.0 + t_grain_smooth * 12.0; // 4..16 — fine to coarse
     let grain_val = value_noise(pos * grain_freq);
-    let grain_strength = 0.03 + t_rough * 0.05; // rougher = more variation
+    let grain_strength = 0.03 + t_rough_smooth * 0.05; // rougher = more variation
     color += vec3((grain_val - 0.5) * grain_strength);
 
     // Freshly dug earth: max roughness creates a disturbed look
-    if t_rough > 0.9 {
+    if t_rough_smooth > 0.9 {
         // Clumpy, dark, uneven — visible soil chunks and exposed subsurface
         let clump = value_noise(pos * 8.0);
         let streak = value_noise(pos * vec2(2.0, 12.0)); // directional streaks (shovel marks)
@@ -792,8 +894,8 @@ fn terrain_detail(
     }
 
     // --- 5. Surface detail per terrain type ---
-    // Pebbles/stones: more common with high roughness
-    let pebble_density = t_rough * (1.0 - t_veg * 0.7);
+    // Pebbles/stones: driven by roughness + rocky_blend (scatters into grassy areas at transitions)
+    let pebble_density = max(t_rough_smooth, rocky_blend * 0.6) * (1.0 - t_veg * 0.5);
     if pebble_density > 0.1 {
         let pebble_hash = hash2(floor(pos * 5.0) + vec2(419.7, 137.3));
         if pebble_hash > 1.0 - pebble_density * 0.2 {
@@ -809,31 +911,108 @@ fn terrain_detail(
         }
     }
 
-    // Chalky soil: pale streaks and exposed chalk fragments
-    if t_type == 1u {
+    // Terrain-type-specific features: use blended weight so features
+    // fade at boundaries instead of cutting off at tile edges.
+    // Compute how much each neighbor contributes of each terrain type.
+    let chalk_w = mix(
+        mix(select(0.0, 1.0, tt00 == 1u), select(0.0, 1.0, tt10 == 1u), bl_ux),
+        mix(select(0.0, 1.0, tt01 == 1u), select(0.0, 1.0, tt11 == 1u), bl_ux), bl_uy);
+    let peat_w = mix(
+        mix(select(0.0, 1.0, tt00 == 5u), select(0.0, 1.0, tt10 == 5u), bl_ux),
+        mix(select(0.0, 1.0, tt01 == 5u), select(0.0, 1.0, tt11 == 5u), bl_ux), bl_uy);
+    let marsh_w = mix(
+        mix(select(0.0, 1.0, tt00 == 6u), select(0.0, 1.0, tt10 == 6u), bl_ux),
+        mix(select(0.0, 1.0, tt01 == 6u), select(0.0, 1.0, tt11 == 6u), bl_ux), bl_uy);
+
+    // Chalky soil: pale streaks and exposed chalk fragments (fades at boundaries)
+    if chalk_w > 0.05 {
         let chalk_streak = sin(wx * 2.5 + wy * 1.2 + value_noise(pos * 0.4) * 3.0) * 0.5 + 0.5;
-        color = mix(color, vec3(0.78, 0.76, 0.70), chalk_streak * 0.25);
-        // White chalk fragments
+        color = mix(color, vec3(0.78, 0.76, 0.70), chalk_streak * 0.25 * chalk_w);
         let frag = value_noise(pos * 12.0);
         if frag > 0.88 {
-            color = mix(color, vec3(0.82, 0.80, 0.75), (frag - 0.88) * 8.0 * 0.4);
+            color = mix(color, vec3(0.82, 0.80, 0.75), (frag - 0.88) * 8.0 * 0.4 * chalk_w);
         }
     }
 
-    // Peat: dark wet sheen, waterlogged patches
-    if t_type == 5u {
+    // Peat: dark wet sheen (fades at boundaries)
+    if peat_w > 0.05 {
         let wet_patch = value_noise(pos * 3.0 + vec2(17.3, 41.7));
         if wet_patch > 0.5 {
             let wet_t = (wet_patch - 0.5) * 2.0;
-            color = mix(color, color * vec3(0.7, 0.75, 0.8), wet_t * 0.4); // dark wet sheen
+            color = mix(color, color * vec3(0.7, 0.75, 0.8), wet_t * 0.4 * peat_w);
         }
     }
 
-    // Marsh: water glints near ponds
-    if t_type == 6u {
+    // Marsh: water glints (fades at boundaries)
+    if marsh_w > 0.05 {
         let glint = value_noise(pos * 8.0 + vec2(time * 0.3, 0.0));
         if glint > 0.92 {
-            color = mix(color, vec3(0.4, 0.55, 0.7), (glint - 0.92) * 12.0 * 0.3);
+            color = mix(color, vec3(0.4, 0.55, 0.7), (glint - 0.92) * 12.0 * 0.3 * marsh_w);
+        }
+    }
+
+    // Iron-stained: rusty streaks and orange mineral deposits
+    let iron_w = mix(
+        mix(select(0.0, 1.0, tt00 == 8u), select(0.0, 1.0, tt10 == 8u), bl_ux),
+        mix(select(0.0, 1.0, tt01 == 8u), select(0.0, 1.0, tt11 == 8u), bl_ux), bl_uy);
+    if iron_w > 0.05 {
+        let rust_streak = value_noise(pos * 4.0 + vec2(73.1, 41.7));
+        color = mix(color, vec3(0.55, 0.25, 0.12), rust_streak * 0.35 * iron_w);
+        let rust_spot = value_noise(pos * 10.0);
+        if rust_spot > 0.85 {
+            color = mix(color, vec3(0.62, 0.30, 0.10), (rust_spot - 0.85) * 6.0 * iron_w);
+        }
+    }
+
+    // Copper-stained: green-blue patina on soil
+    let copper_w = mix(
+        mix(select(0.0, 1.0, tt00 == 9u), select(0.0, 1.0, tt10 == 9u), bl_ux),
+        mix(select(0.0, 1.0, tt01 == 9u), select(0.0, 1.0, tt11 == 9u), bl_ux), bl_uy);
+    if copper_w > 0.05 {
+        let patina = value_noise(pos * 5.0 + vec2(17.3, 91.7));
+        color = mix(color, vec3(0.30, 0.50, 0.42), patina * 0.3 * copper_w);
+    }
+
+    // Flint-bearing: dark nodules on pale ground
+    let flint_w = mix(
+        mix(select(0.0, 1.0, tt00 == 10u), select(0.0, 1.0, tt10 == 10u), bl_ux),
+        mix(select(0.0, 1.0, tt01 == 10u), select(0.0, 1.0, tt11 == 10u), bl_ux), bl_uy);
+    if flint_w > 0.05 {
+        let nodule = value_noise(pos * 8.0 + vec2(53.1, 27.3));
+        if nodule > 0.82 {
+            color = mix(color, vec3(0.12, 0.12, 0.15), (nodule - 0.82) * 5.0 * flint_w);
+        }
+    }
+
+    // Leaf litter: scattered leaf shapes and twig details
+    let litter_w = mix(
+        mix(select(0.0, 1.0, tt00 == 11u), select(0.0, 1.0, tt10 == 11u), bl_ux),
+        mix(select(0.0, 1.0, tt01 == 11u), select(0.0, 1.0, tt11 == 11u), bl_ux), bl_uy);
+    if litter_w > 0.05 {
+        // Leaf patches: irregular brown/yellow blotches
+        let leaf1 = value_noise(pos * 6.0 + vec2(31.7, 73.1));
+        let leaf2 = value_noise(pos * 9.0 + vec2(91.3, 17.8));
+        let leaf_col = mix(vec3(0.30, 0.22, 0.10), vec3(0.42, 0.35, 0.15), leaf1);
+        color = mix(color, leaf_col, leaf2 * 0.3 * litter_w);
+        // Occasional twig lines
+        let twig = fract(sin(wx * 17.0 + wy * 31.0) * 43758.5);
+        if twig > 0.95 {
+            color = mix(color, vec3(0.20, 0.15, 0.08), 0.3 * litter_w);
+        }
+    }
+
+    // Sand: fine granular texture with wind ripples
+    let sand_w = mix(
+        mix(select(0.0, 1.0, tt00 == 12u), select(0.0, 1.0, tt10 == 12u), bl_ux),
+        mix(select(0.0, 1.0, tt01 == 12u), select(0.0, 1.0, tt11 == 12u), bl_ux), bl_uy);
+    if sand_w > 0.05 {
+        // Wind ripple pattern
+        let ripple = sin(wx * 3.0 + wy * 1.5 + value_noise(pos * 0.3) * 4.0) * 0.5 + 0.5;
+        color = mix(color, color * (0.92 + ripple * 0.12), sand_w * 0.6);
+        // Occasional small stones
+        let stone = value_noise(pos * 14.0);
+        if stone > 0.92 {
+            color = mix(color, vec3(0.55, 0.52, 0.48), (stone - 0.92) * 10.0 * sand_w);
         }
     }
 
@@ -1410,11 +1589,11 @@ fn trace_glow_visibility(x0: f32, y0: f32, x1: f32, y1: f32, light_h: f32) -> f3
             continue;
         }
 
-        // Berry bushes + crops: soft dappled shadow
-        if sbt == BT_BERRY_BUSH || sbt == BT_CROP {
-            vis *= 0.6;
-            if vis < 0.02 { return 0.0; }
-            continue;
+        // Small plants: fully transparent to light (don't darken tiles)
+        if sbt == BT_BERRY_BUSH || sbt == BT_CROP || sbt == BT_DUSTWHISKER
+            || sbt == BT_HOLLOW_REED || sbt == BT_THORNBRAKE || sbt == BT_SALTBRUSH
+            || sbt == BT_DUSKBLOOM || sbt == BT_SNARE || sbt == BT_CHARCOAL_MOUND {
+            continue; // pass through, no light reduction
         }
 
         // Solid wall: blocked
@@ -2417,7 +2596,8 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         let is_wire_block = bt == BT_WIRE || bt == BT_WIRE_BRIDGE; // height = connection mask, not visual
         let is_dimmer_block = bt == BT_DIMMER || bt == BT_FIREPLACE; // height = level/intensity, not visual
         let is_breaker_block = bt == BT_BREAKER; // height = trip threshold, not visual
-        let is_plant_block = false; // berry bush + crop now cast soft shadows (handled below)
+        let mat_here = get_material(bt);
+        let is_plant_block = bh > 0.0 && mat_here.walkable > 0.5 && !matches_wall_type(bt);
 
         // Diagonal wall: only occlude if ray is on the wall half
         let is_diag_block = bt == BT_DIAGONAL;
@@ -2535,16 +2715,8 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
                 }
             }
             // Skip the normal block shadow test for trees
-        } else if bt == BT_BERRY_BUSH || bt == BT_CROP {
-            // Berry bush / crop: soft dappled shadow (lighter than trees)
-            if effective_h > current_h {
-                let plant_seed = sx * 97.3 + sy * 213.5 + camera.time * 0.3;
-                let dapple = 0.6 + 0.4 * fract(sin(plant_seed) * 43758.5453);
-                let opacity = 0.25 * dapple * SHADOW_STEP * 2.0;
-                light *= (1.0 - clamp(opacity, 0.0, 0.2));
-                tint *= mix(vec3<f32>(1.0), vec3<f32>(0.85, 1.0, 0.78), opacity * 0.3);
-                if light < 0.02 { return vec4<f32>(tint, 0.0); }
-            }
+        } else if is_plant_block {
+            // Small plants: no shadow (effective_h = 0 already skips the hard shadow below)
         } else
 
         // Does this block/roof intersect the ray?
@@ -2574,8 +2746,11 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
 // --- Wall side face detection (3D bevel) ---
 // Get effective height at a tile, including wall_data walls
 fn effective_tile_height(nx: i32, ny: i32) -> u32 {
-    let bh = block_height(get_block(nx, ny));
-    if bh > 0u { return bh; }
+    let b = get_block(nx, ny);
+    let bh = block_height(b);
+    let bt = block_type(b);
+    // Only return height for actual wall/structural blocks, not plants/trees/furniture
+    if bh > 0u && matches_wall_type(bt) { return bh; }
     // Check wall_data for wall height
     if nx >= 0 && ny >= 0 && nx < i32(camera.grid_w) && ny < i32(camera.grid_h) {
         let wd = read_wall_data(u32(ny) * u32(camera.grid_w) + u32(nx));
@@ -2831,24 +3006,24 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     var wall_face_t = 0.0; // 0=top of face, 1=bottom of face
 
     let south_h = effective_tile_height(bx, by + 1);
+    let this_eff_h = effective_tile_height(bx, by); // includes wall_data height
     let mat = get_material(btype);
     let has_wall_face = mat.shows_wall_face > 0.5 || is_wd_wall;
     let any_door_open = (is_door(block) && is_open(block)) || (wd_has_door(wd) && wd_door_open(wd));
     // Show face even when door is open (open door shows dark opening in face)
-    let is_exterior_south = bheight > south_h && has_wall_face;
+    let is_exterior_south = this_eff_h > south_h && has_wall_face;
 
     if is_exterior_south {
-        let height_diff = f32(bheight - south_h);
-        // Always show at least a baseline face (0.08) + oblique slider adds more
-        let face_height = min(height_diff * max(camera.oblique_strength, 0.08), 0.35);
+        let height_diff = f32(this_eff_h - south_h);
+        // Wall face height scales with wall height; taller walls project further
+        let face_height = min(height_diff * max(camera.oblique_strength, 0.15), 0.55);
         let face_start = 1.0 - face_height; // face occupies bottom strip of tile
         if fy > face_start {
-            // Thin wall: only show face where wall sub-cells exist.
-            // Check at the pixel's actual position — the face only shows
-            // where the pixel is within the wall portion of the tile.
+            // Thin wall: face only shows at X positions where wall exists.
+            // Use wall_covers_x (ignores fy — face is a vertical projection).
             var show_face = true;
             if is_thin_wall(bflags) {
-                show_face = pixel_is_wall(fx, fy, bheight_raw, bflags);
+                show_face = wall_covers_x(fx, bheight_raw, bflags);
             }
             if show_face {
                 is_wall_face = true;
@@ -3160,6 +3335,8 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let check_x = i32(floor(ray_x + sun_n.y * f32(perp_off)));
                 let check_y = i32(floor(ray_y - sun_n.x * f32(perp_off)));
                 if check_x < 0 || check_y < 0 || check_x >= i32(camera.grid_w) || check_y >= i32(camera.grid_h) { continue; }
+                // Skip self-tile: don't let a tree darken its own ground pixels
+                if check_x == bx && check_y == by { continue; }
                 let ttb = get_block(check_x, check_y);
                 if block_type(ttb) != BT_TREE { continue; }
                 let tid = f32(check_x) * 137.0 + f32(check_y) * 311.0;
@@ -3791,6 +3968,98 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                 color = vec3(0.38, 0.30, 0.18);
             }
         }
+    } else if btype == BT_DUSTWHISKER {
+        // Dustwhisker: pale amber grass tufts with curling tips
+        color = block_base_color(BT_GROUND, 0u);
+        let seed = floor(world_x) * 137.0 + floor(world_y) * 311.0;
+        let h1 = fract(sin(seed) * 43758.5);
+        // 3-5 stalks per tile
+        for (var si = 0u; si < 4u; si++) {
+            let sh = fract(sin(seed + f32(si) * 73.1) * 27183.6);
+            let sx = 0.15 + sh * 0.7;
+            let sy = 0.15 + fract(sh * 7.3) * 0.7;
+            let dx = fx - sx;
+            let dy = fy - sy;
+            let d = abs(dx) + abs(dy) * 0.3; // elongated vertically
+            if d < 0.06 {
+                let amber = mix(vec3(0.72, 0.58, 0.30), vec3(0.80, 0.68, 0.40), sh);
+                color = amber * (0.8 + 0.2 * (1.0 - d / 0.06));
+                is_tree_pixel = true;
+            }
+        }
+    } else if btype == BT_HOLLOW_REED {
+        // Hollow Reed: pale green segmented tubes in clusters
+        color = block_base_color(BT_GROUND, 0u);
+        let seed = floor(world_x) * 197.0 + floor(world_y) * 73.0;
+        for (var ri = 0u; ri < 5u; ri++) {
+            let rh = fract(sin(seed + f32(ri) * 53.7) * 31415.9);
+            let rx = 0.1 + rh * 0.8;
+            let ry = 0.1 + fract(rh * 11.3) * 0.8;
+            let dx = fx - rx;
+            let dy = fy - ry;
+            let d = sqrt(dx * dx + dy * dy);
+            if d < 0.04 {
+                // Segmented: alternate light/dark bands
+                let seg = fract(fy * 8.0 + rh * 3.0);
+                let reed_col = mix(vec3(0.40, 0.55, 0.35), vec3(0.50, 0.65, 0.42), step(0.5, seg));
+                color = reed_col;
+                is_tree_pixel = true;
+            }
+        }
+    } else if btype == BT_THORNBRAKE {
+        // Thornbrake: dense dark reddish-brown spiny mass
+        color = block_base_color(BT_GROUND, 0u);
+        let cx_t = fx - 0.5;
+        let cy_t = fy - 0.5;
+        let d = sqrt(cx_t * cx_t + cy_t * cy_t);
+        if d < 0.40 {
+            let n1 = fract(sin(world_x * 31.0 + world_y * 47.0) * 43758.5);
+            let thorn_base = mix(vec3(0.38, 0.22, 0.15), vec3(0.50, 0.32, 0.20), n1);
+            color = thorn_base * (0.7 + 0.3 * (1.0 - d / 0.40));
+            // Spine highlights
+            let spine = fract(sin(fx * 19.0 + fy * 29.0 + world_x * 3.0) * 17183.0);
+            if spine > 0.85 {
+                color = mix(color, vec3(0.65, 0.55, 0.40), 0.5); // pale thorn tips
+            }
+            is_tree_pixel = true;
+        }
+    } else if btype == BT_SALTBRUSH {
+        // Saltbrush: grey-green bush with white salt crystal deposits
+        color = block_base_color(BT_GROUND, 0u);
+        let cx_s = fx - 0.5;
+        let cy_s = fy - 0.5;
+        let d = sqrt(cx_s * cx_s + cy_s * cy_s);
+        if d < 0.35 {
+            let n1 = fract(sin(world_x * 23.0 + world_y * 41.0) * 43758.5);
+            let bush_col = mix(vec3(0.45, 0.50, 0.38), vec3(0.55, 0.58, 0.45), n1);
+            color = bush_col * (0.75 + 0.25 * (1.0 - d / 0.35));
+            // White salt crystals on leaves
+            let salt = fract(sin(fx * 37.0 + fy * 53.0 + world_x * 11.0) * 27183.6);
+            if salt > 0.8 {
+                color = mix(color, vec3(0.90, 0.88, 0.85), 0.7);
+            }
+            is_tree_pixel = true;
+        }
+    } else if btype == BT_DUSKBLOOM {
+        // Duskbloom: small grey bud by day, vivid orange-red flower at dusk/night
+        color = block_base_color(BT_GROUND, 0u);
+        let cx_d = fx - 0.5;
+        let cy_d = fy - 0.5;
+        let d = sqrt(cx_d * cx_d + cy_d * cy_d);
+        let day_frac = fract(camera.time / 60.0);
+        // Bloom at dusk (0.75-0.85) and night, close at dawn
+        let bloom = smoothstep(0.70, 0.80, day_frac) * (1.0 - smoothstep(0.12, 0.18, day_frac));
+        let petal_r = 0.12 + bloom * 0.15; // opens wider at night
+        if d < petal_r {
+            let closed_col = vec3(0.40, 0.38, 0.32); // grey bud
+            let open_col = vec3(0.85, 0.35, 0.15); // vivid orange-red
+            color = mix(closed_col, open_col, bloom) * (0.8 + 0.2 * (1.0 - d / petal_r));
+            // Center dot
+            if d < 0.04 {
+                color = mix(vec3(0.90, 0.75, 0.20), vec3(0.30, 0.25, 0.20), 1.0 - bloom);
+            }
+            is_tree_pixel = true;
+        }
     } else if btype == BT_DUG_GROUND {
         // Dug ground: excavated pit, 20% per depth level (max 5 = one full block)
         let depth = f32(bheight); // 1-5, each = 20% of a block
@@ -3871,19 +4140,132 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             color = ground;
         }
     } else if btype == BT_ROCK {
-        // Rock: sprite-based rendering
-        let rock_id = floor(world_x) * 59.0 + floor(world_y) * 173.0;
-        let rock_hash = fract(sin(rock_id) * 43758.5453);
-        let rock_var = u32(rock_hash * f32(ROCK_SPRITE_VARIANTS)) % ROCK_SPRITE_VARIANTS;
-        let rock_su = fx;
-        let rock_sv = 1.0 - fy;
-        let rock_sp = sample_rock_sprite(rock_var, rock_su, rock_sv);
-        is_tree_pixel = rock_sp.w > 0.05;
-        if is_tree_pixel {
-            color = rock_sp.xyz * (0.85 + rock_hash * 0.2);
+        // Check mining sub-cell texture
+        let mine_sx = u32(fx * 8.0);
+        let mine_sy = u32(fy * 8.0);
+        let mine_tx = u32(bx) * 8u + min(mine_sx, 7u);
+        let mine_ty = u32(by) * 8u + min(mine_sy, 7u);
+        let mine_cell = textureLoad(mining_tex, vec2<i32>(i32(mine_tx), i32(mine_ty)), 0).r;
+        let mine_hardness = mine_cell & 0xFu;
+        let mine_material = (mine_cell >> 4u) & 0xFu;
+        let has_mining = mine_cell != 255u;
+
+        if has_mining && mine_hardness == 0u {
+            // Mined-out sub-cell: dark void with cut-face shadow at edges
+            color = block_base_color(BT_GROUND, 0u) * 0.5;
+            // Check neighbors for cut-face edge shadow
+            var near_wall = false;
+            for (var dd = 0; dd < 4; dd++) {
+                let dxy = array<vec2<i32>, 4>(vec2(1, 0), vec2(-1, 0), vec2(0, 1), vec2(0, -1));
+                let np = vec2<i32>(i32(mine_tx), i32(mine_ty)) + dxy[dd];
+                let nc = textureLoad(mining_tex, np, 0).r;
+                if nc != 255u && (nc & 0xFu) > 0u { near_wall = true; }
+            }
+            if near_wall {
+                color *= 0.6; // deeper shadow at cut face
+            }
+            is_tree_pixel = false; // mined = ground level
         } else {
-            color = block_base_color(BT_GROUND, 0u);
+            // Intact sub-cell: normal rock rendering, with mineral tint if exposed
+            var mineral_override = vec3(0.0, 0.0, 0.0);
+            var show_mineral = false;
+            if has_mining && mine_material > 0u && mine_material < 7u {
+                // Check if adjacent to a mined cell (mineral visible in cut face)
+                for (var dd = 0; dd < 4; dd++) {
+                    let dxy = array<vec2<i32>, 4>(vec2(1, 0), vec2(-1, 0), vec2(0, 1), vec2(0, -1));
+                    let np = vec2<i32>(i32(mine_tx), i32(mine_ty)) + dxy[dd];
+                    let nc = textureLoad(mining_tex, np, 0).r;
+                    if nc != 255u && (nc & 0xFu) == 0u { show_mineral = true; }
+                }
+                if show_mineral {
+                    if mine_material == 1u { mineral_override = vec3(0.65, 0.30, 0.15); }
+                    else if mine_material == 2u { mineral_override = vec3(0.25, 0.55, 0.50); }
+                    else if mine_material == 3u { mineral_override = vec3(0.15, 0.15, 0.18); }
+                    else if mine_material == 4u { mineral_override = vec3(0.70, 0.60, 0.80); }
+                    else if mine_material == 5u { mineral_override = vec3(0.10, 0.10, 0.10); }
+                }
+            }
+
+        // Procedural stone rendering (uses stone lab params when active)
+        let sl_active = stone_lab.enabled > 0.5;
+        let sl_base = select(vec3(0.55, 0.52, 0.48), vec3(stone_lab.base_r, stone_lab.base_g, stone_lab.base_b), sl_active);
+        let sl_crack_d = select(0.4, stone_lab.crack_density, sl_active);
+        let sl_crack_w = select(0.3, stone_lab.crack_width, sl_active);
+        let sl_grain = select(8.0, stone_lab.grain_scale, sl_active);
+        let sl_grain_str = select(0.3, stone_lab.grain_strength, sl_active);
+        let sl_strata = select(0.0, stone_lab.strata_strength, sl_active);
+        let sl_strata_s = select(4.0, stone_lab.strata_scale, sl_active);
+        let sl_rough = select(0.3, stone_lab.roughness, sl_active);
+        let sl_weather = select(0.2, stone_lab.weathering, sl_active);
+        let sl_weather_col = select(vec3(0.25, 0.35, 0.20), vec3(stone_lab.weather_r, stone_lab.weather_g, stone_lab.weather_b), sl_active);
+        let sl_spec = select(0.2, stone_lab.specular, sl_active);
+
+        color = block_base_color(BT_GROUND, 0u);
+        let rock_seed = floor(world_x) * 59.0 + floor(world_y) * 173.0;
+        let rh = fract(sin(rock_seed) * 43758.5453);
+
+        // Wobbled outline for irregular shape
+        let rcx = fx - 0.5;
+        let rcy = fy - 0.5;
+        let rdist = sqrt(rcx * rcx + rcy * rcy);
+        let rangle = atan2(rcy, rcx);
+        let wobble = sl_rough * (
+            0.06 * sin(rangle * 3.0 + rh * 20.0)
+            + 0.04 * sin(rangle * 7.0 + rh * 50.0)
+            + 0.02 * sin(rangle * 13.0 + rh * 80.0)
+        );
+        let rock_r = 0.32 + rh * 0.08 + wobble;
+
+        if rdist < rock_r {
+            // Base color with per-tile variation
+            var sc = sl_base * (0.9 + rh * 0.2);
+
+            // Surface grain (FBM noise)
+            let gn1 = fract(sin(world_x * sl_grain + world_y * sl_grain * 1.3 + rh * 100.0) * 43758.5);
+            let gn2 = fract(sin(world_x * sl_grain * 2.1 + world_y * sl_grain * 2.7) * 27183.6);
+            sc *= 1.0 + (gn1 + gn2 - 1.0) * sl_grain_str;
+
+            // Strata (horizontal banding)
+            if sl_strata > 0.01 {
+                let band = sin(world_y * sl_strata_s + rh * 10.0) * 0.5 + 0.5;
+                sc *= 1.0 + (band - 0.5) * sl_strata * 0.3;
+            }
+
+            // Cracks (Voronoi-like dark lines)
+            let crack_n = fract(sin(world_x * 17.3 + world_y * 31.7) * 43758.5);
+            let crack_n2 = fract(sin(world_x * 43.1 + world_y * 19.3 + rh * 7.0) * 27183.6);
+            let crack_val = min(crack_n, crack_n2);
+            if crack_val < sl_crack_w * 0.1 && fract(sin(rock_seed + crack_val * 100.0) * 31415.9) < sl_crack_d {
+                sc *= 0.6; // dark crack
+            }
+
+            // Rounded mound shading (height falloff from center)
+            let height_t = 1.0 - rdist / rock_r;
+            sc *= 0.7 + 0.3 * height_t;
+
+            // Specular highlight (north-facing, catches light)
+            if sl_spec > 0.01 {
+                let spec_t = max(0.0, -rcy / rock_r) * height_t;
+                sc += sl_spec * spec_t * 0.4;
+            }
+
+            // Weathering (darker + tinted at edges, especially south side)
+            if sl_weather > 0.01 {
+                let edge_t = 1.0 - height_t;
+                let south_bias = max(0.0, rcy / rock_r) * 0.5 + 0.5;
+                let w_amount = edge_t * south_bias * sl_weather;
+                sc = mix(sc, sl_weather_col * 0.5, w_amount);
+            }
+
+            // Apply mineral tint if exposed in cut face
+            if show_mineral {
+                sc = mix(sc, mineral_override, 0.7);
+            }
+
+            color = sc;
+            is_tree_pixel = true;
         }
+        } // end else (intact sub-cell / no mining)
     } else if btype == BT_WIRE || btype == BT_WIRE_BRIDGE {
         // Wire / Wire Bridge: copper conductor with directional segments
         let ground = vec3<f32>(0.42, 0.35, 0.22);
@@ -4489,7 +4871,14 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- Procedural terrain detail (ground-level blocks only) ---
     // Replace this block with sprite sampling when migrating to sprites.
     let is_scorched_dirt = btype == BT_GROUND && (bflags & 8u) != 0u; // bit 3 = scorched
-    let is_transparent_vegetation = (btype == BT_TREE || btype == BT_BERRY_BUSH) && !is_tree_pixel;
+    let is_flora = btype == BT_TREE || btype == BT_BERRY_BUSH || btype == BT_DUSTWHISKER
+        || btype == BT_HOLLOW_REED || btype == BT_THORNBRAKE || btype == BT_SALTBRUSH || btype == BT_DUSKBLOOM;
+    let is_transparent_vegetation = is_flora && !is_tree_pixel;
+    // For non-sprite pixels on flora tiles, force ground base color so the tile
+    // blends seamlessly with surrounding terrain (no dark border/banding)
+    if is_transparent_vegetation {
+        color = block_base_color(BT_GROUND, 0u);
+    }
     let is_ground_tile = btype == BT_GROUND || btype == BT_AIR || btype == BT_DUG_GROUND
         || btype == BT_ROCK || is_transparent_vegetation;
     if camera.enable_terrain_detail > 0.5 && !is_tree_pixel && (bheight == 0u || is_transparent_vegetation) && is_ground_tile && !is_scorched_dirt {
@@ -4524,7 +4913,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- Elevation visual cues (ground-level blocks only) ---
     // Uses bilinear-interpolated elevation for smooth gradients (no tile-edge jaggies).
-    if camera.enable_terrain_detail > 0.5 && !is_tree_pixel && bheight == 0u && btype != BT_TREE && btype != BT_BERRY_BUSH {
+    if camera.enable_terrain_detail > 0.5 && !is_tree_pixel && (bheight == 0u || is_transparent_vegetation) {
         let elev = sample_elevation(world_x, world_y);
 
         // 1. Altitude brightness: higher = lighter, lower = darker (topographic convention)
@@ -4554,7 +4943,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // --- Elevation depth cues (edge darkening + hypsometric tinting) ---
-    if bheight == 0u && !is_wall_face && !is_tree_pixel && btype != BT_TREE && btype != BT_BERRY_BUSH && camera.enable_terrain_detail > 0.5 {
+    if (bheight == 0u || is_transparent_vegetation) && !is_wall_face && !is_tree_pixel && camera.enable_terrain_detail > 0.5 {
         let e_here = sample_elevation(world_x, world_y);
 
         // Edge darkening: darken where terrain drops to neighbors (crevice shadows)
@@ -4593,7 +4982,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Check both grid_data doors and wall_data doors (DN-008)
     let door_is_open = (is_door(block) && is_open(block)) || (wd_has_door(wd) && wd_door_open(wd));
     // Trees: transparent sprite pixels are ground-level; canopy keeps height for shadows
-    let is_tree_ground = (btype == BT_TREE || btype == BT_BERRY_BUSH) && !is_tree_pixel;
+    let is_tree_ground = is_flora && !is_tree_pixel;
     let is_pipe = (btype >= BT_PIPE && btype <= BT_INLET) || btype == BT_RESTRICTOR || btype == BT_LIQUID_PIPE || btype == BT_PIPE_BRIDGE || btype == BT_LIQUID_INTAKE || btype == BT_LIQUID_PUMP || btype == BT_LIQUID_OUTPUT;
     let is_dug = btype == BT_DUG_GROUND; // dug ground: height = depth, not visual height
     let is_rock = btype == BT_ROCK;
@@ -4703,12 +5092,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Sub-tile elevation: sample 1024x1024 heightmap for slope shading
-    let elev_uv_x = world_x * 4.0;
-    let elev_uv_y = world_y * 4.0;
+    // Sub-tile elevation: sample heightmap for slope shading (ELEV_SCALE = 2)
+    let elev_scale = 2.0;
+    let elev_uv_x = world_x * elev_scale;
+    let elev_uv_y = world_y * elev_scale;
     let elev_x0 = i32(floor(elev_uv_x));
     let elev_y0 = i32(floor(elev_uv_y));
-    let elev_max = vec2<i32>(i32(camera.grid_w) * 4 - 1, i32(camera.grid_h) * 4 - 1);
+    let elev_max = vec2<i32>(i32(camera.grid_w * elev_scale) - 1, i32(camera.grid_h * elev_scale) - 1);
     // Bilinear sample elevation
     let e00 = textureLoad(elevation_tex, clamp(vec2(elev_x0, elev_y0), vec2(0), elev_max), 0).r;
     let e10 = textureLoad(elevation_tex, clamp(vec2(elev_x0 + 1, elev_y0), vec2(0), elev_max), 0).r;
@@ -4837,7 +5227,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let pixel_water_depth = water_depth_here;
 
-    if pixel_water_depth > 0.005 {
+    if pixel_water_depth > 0.005 && !is_tree_pixel {
         let t = camera.time;
         let depth = pixel_water_depth;
         let terrain_below = color; // save terrain color for transparency blending
@@ -4942,6 +5332,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // --- Pleb rendering (all plebs from buffer) ---
+    var drew_pleb = false;
     for (var pi: u32 = 0u; pi < MAX_PLEBS; pi++) {
         let p = plebs[pi];
         if p.x < 0.5 && p.y < 0.5 { continue; } // empty slot
@@ -4960,7 +5351,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pdist = length(vec2(pdx, pdy));
 
         // Skip pleb lights on elevated block tops (not walls or sprite-rendered blocks)
-        let is_sprite_block = btype == BT_TREE || btype == BT_BERRY_BUSH || btype == BT_CROP
+        let is_sprite_block = is_flora || btype == BT_CROP
             || btype == BT_ROCK || btype == BT_CRATE;
         let is_elevated = effective_height > 0u && !is_wall_face && !is_wd_wall && !is_sprite_block;
 
@@ -5035,23 +5426,24 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         var ly = -pdy; // flip Y
 
         let is_corpse = p.health <= 0.0;
+        let is_sleeping = p.sleeping > 0.5 && !is_corpse;
         // Smooth crouch amount (0=standing, 1=fully crouched, 0-0.5 during peek)
         let crouch_t = p.crouch;
+        // Wet fabric darkening: soaked clothes appear darker and more saturated
+        let wet_dark = 1.0 - p.wetness * 0.35; // up to 35% darker when soaked
 
         let dir_x = cos(p.angle);
         let walk_phase = fract((p.x + p.y) * 2.0 + camera.time * 4.0);
-        let bob = select(sin(walk_phase * 6.28) * 0.008, 0.0, is_corpse || crouch_t > 0.3);
-        let head_dx = select(dir_x * 0.02 * s, 0.0, is_corpse);
+        let bob = select(sin(walk_phase * 6.28) * 0.008, 0.0, is_corpse || is_sleeping || crouch_t > 0.3);
+        let head_dx = select(dir_x * 0.02 * s, 0.0, is_corpse || is_sleeping);
 
-        // Corpse: rotate body to lay flat in facing direction
-        if is_corpse {
+        // Corpse or sleeping: rotate body to lay flat
+        if is_corpse || is_sleeping {
             let ca = cos(p.angle);
             let sa = sin(p.angle);
             lx = pdx * ca + pdy * sa;
-            ly = (-pdx * sa + pdy * ca) * 1.3; // slight squash: body seen from above when lying
+            ly = (-pdx * sa + pdy * ca) * 1.3;
         }
-
-        var drew_pleb = false;
 
         // Selection: bright pulsing ring at feet (green=normal, red=drafted)
         if p.selected > 0.5 {
@@ -5147,7 +5539,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let fy = ly - s * 0.07 + bob + feet_shift;
             let fd = (lx / (s * 0.12)) * (lx / (s * 0.12)) + (fy / (s * 0.06)) * (fy / (s * 0.06));
             if fd < 1.0 {
-                color = vec3(p.pants_r, p.pants_g, p.pants_b) * 0.55;
+                color = vec3(p.pants_r, p.pants_g, p.pants_b) * 0.55 * wet_dark;
                 drew_pleb = true;
             }
         }
@@ -5159,7 +5551,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let pd = (lx / (s * 0.22)) * (lx / (s * 0.22)) + (py_off / py_h) * (py_off / py_h);
             if pd < 1.0 {
                 let shade = 0.80 + 0.20 * (1.0 - pd);
-                color = vec3(p.pants_r, p.pants_g, p.pants_b) * shade;
+                color = vec3(p.pants_r, p.pants_g, p.pants_b) * shade * wet_dark;
                 drew_pleb = true;
             }
         }
@@ -5172,7 +5564,7 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sd = (sx_l / (s * 0.26)) * (sx_l / (s * 0.26)) + (sy / sy_h) * (sy / sy_h);
             if sd < 1.0 {
                 let shade = 0.80 + 0.20 * (1.0 - sd);
-                color = vec3(p.shirt_r, p.shirt_g, p.shirt_b) * shade;
+                color = vec3(p.shirt_r, p.shirt_g, p.shirt_b) * shade * wet_dark;
                 drew_pleb = true;
             }
         }
@@ -5343,6 +5735,29 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             let x2 = abs(xc_x + xc_y);
             if (x1 < s * 0.05 || x2 < s * 0.05) && abs(xc_x) < s * 0.15 && abs(xc_y) < s * 0.15 {
                 color = vec3(0.85, 0.15, 0.10);
+            }
+        }
+
+        // Sleeping Z's: 3 floating Z characters rising from sleeping pleb
+        if is_sleeping && drew_pleb {
+            let z_time = camera.time * 0.8;
+            for (var zi = 0u; zi < 3u; zi++) {
+                let z_phase = fract(z_time * 0.3 + f32(zi) * 0.33); // staggered, repeating
+                let z_size = 0.02 + f32(zi) * 0.008; // each Z is slightly larger
+                // Float upward and to the right from head area
+                let z_cx = pdx - s * 0.3 + f32(zi) * 0.06 + z_phase * 0.08;
+                let z_cy = pdy - s * 0.5 - z_phase * 0.25 - f32(zi) * 0.08;
+                let z_alpha = (1.0 - z_phase) * 0.6; // fade out as they rise
+                // Render Z shape: three horizontal bars with diagonal
+                let zx = (world_x - p.x) - z_cx;
+                let zy = (world_y - p.y) - z_cy;
+                let in_z = (abs(zy + z_size) < z_size * 0.2 && abs(zx) < z_size) // top bar
+                    || (abs(zy - z_size) < z_size * 0.2 && abs(zx) < z_size) // bottom bar
+                    || (abs(zx + zy * 0.9) < z_size * 0.2 && abs(zy) < z_size); // diagonal
+                if in_z && z_alpha > 0.05 {
+                    color = mix(color, vec3(0.85, 0.90, 1.0), z_alpha);
+                    drew_pleb = true;
+                }
             }
         }
 
@@ -5682,7 +6097,9 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         let is_solid_block = bh_for_temp > 0u && (bt_for_temp == 1u || bt_for_temp == 4u || bt_for_temp == 5u
             || bt_for_temp == 14u || (bt_for_temp >= 21u && bt_for_temp <= 25u) || bt_for_temp == 35u);
         let is_pipe_block_t = (bt_for_temp >= 15u && bt_for_temp <= 20u) || bt_for_temp == 46u || bt_for_temp == 49u || bt_for_temp == 50u || bt_for_temp == 52u || bt_for_temp == 53u || bt_for_temp == 54u;
-        let temp = select(smoke.a, block_temps[grid_idx], is_solid_block || is_pipe_block_t);
+        // For solid/pipe blocks, use block_temps directly.
+        // For ground tiles, use the higher of air temp (dye) and block temp (catches footprint heat).
+        let temp = select(max(smoke.a, block_temps[grid_idx]), block_temps[grid_idx], is_solid_block || is_pipe_block_t);
         // Remap: -30→0, 0→0.15, 15→0.30, 25→0.40, 40→0.55, 60→0.70, 100→0.85, 500→1.0
         var temp_norm: f32;
         if temp < -30.0 {
@@ -6143,12 +6560,12 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // --- 2.5D wall cap: walls to the south project upward into this tile ---
+    // --- 2.5D wall cap: walls to the south project a top surface into this tile ---
     // Applied after pleb rendering so we can show pleb outlines through walls.
-    if !is_wall_face && bheight == 0u && by + 1 < i32(camera.grid_h) {
+    if !is_wall_face && this_eff_h == 0u && by + 1 < i32(camera.grid_h) {
         let south_wall_h2 = effective_tile_height(bx, by + 1);
         if south_wall_h2 > 0u {
-            let cap_depth = min(f32(south_wall_h2) * 0.06, 0.12);
+            let cap_depth = min(f32(south_wall_h2) * 0.10, 0.20);
             let cap_start = 1.0 - cap_depth;
             if fy > cap_start {
                 let t = smoothstep(0.0, 1.0, (fy - cap_start) / cap_depth);
@@ -6162,17 +6579,13 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let s_block2 = get_block(bx, by + 1);
                     cap_col = block_base_color(block_type(s_block2), block_flags(s_block2));
                 }
-                cap_col *= 1.05; // top surface catches more light
-                // Apply shadow/lighting to cap
+                cap_col *= 1.05;
                 cap_col = cap_col * (ambient + sun_color * light_factor * 0.7);
 
                 if drew_pleb {
-                    // Pleb behind wall: show outline through cap
-                    // Blend cap on top but leave a bright outline edge around the pleb
                     let pleb_outline_col = vec3(0.85, 0.90, 0.75);
                     color = mix(color, pleb_outline_col, t * 0.4);
                 } else {
-                    // Normal cap: opaque wall top surface
                     color = mix(color, cap_col, t * 0.75);
                 }
             }
