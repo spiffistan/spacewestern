@@ -376,55 +376,79 @@ impl ManifestCard {
             None
         };
 
-        // Starting gear by backstory
+        // Starting gear by backstory — mostly primitive tools
         let (gear_belt, gear_inv, quote) = match bs {
             Backstory::Sheriff => (
-                vec![item_defs::ITEM_PISTOL, item_defs::ITEM_KNIFE],
-                vec![(item_defs::ITEM_PISTOL_ROUNDS, 18)],
+                vec![
+                    item_defs::ITEM_PISTOL,
+                    item_defs::ITEM_PRIMITIVE_STONE_BLADE,
+                ],
+                vec![(item_defs::ITEM_PISTOL_ROUNDS, 12)],
                 "Kept the peace in Dry Gulch. Until the peace kept itself.",
             ),
             Backstory::Prospector => (
-                vec![item_defs::ITEM_STONE_PICK, item_defs::ITEM_STONE_AXE],
-                vec![],
+                vec![
+                    item_defs::ITEM_STONE_PICK,
+                    item_defs::ITEM_PRIMITIVE_HAMMERSTONE,
+                ],
+                vec![(item_defs::ITEM_ROCK, 3)],
                 "Spent 20 years looking for gold. Found mostly dirt.",
             ),
             Backstory::RanchHand => (
-                vec![item_defs::ITEM_WOODEN_SHOVEL, item_defs::ITEM_KNIFE],
+                vec![
+                    item_defs::ITEM_PRIMITIVE_DIGGING_STICK,
+                    item_defs::ITEM_PRIMITIVE_STONE_BLADE,
+                ],
                 vec![(item_defs::ITEM_BERRIES, 5)],
                 "Could rope a steer at 50 paces. Cows, less so.",
             ),
             Backstory::Mechanic => (
-                vec![item_defs::ITEM_STONE_AXE, item_defs::ITEM_STONE_PICK],
+                vec![
+                    item_defs::ITEM_STONE_AXE,
+                    item_defs::ITEM_PRIMITIVE_HAMMERSTONE,
+                ],
                 vec![(item_defs::ITEM_SCRAP_WOOD, 5)],
                 "If it's broke, she'll fix it. If it ain't, she'll improve it.",
             ),
             Backstory::FrontierDoc => (
-                vec![item_defs::ITEM_KNIFE],
+                vec![item_defs::ITEM_PRIMITIVE_STONE_BLADE],
                 vec![(item_defs::ITEM_BERRIES, 5), (item_defs::ITEM_FIBER, 3)],
                 "Lost his license. Kept his scalpel.",
             ),
             Backstory::Outlaw => (
-                vec![item_defs::ITEM_PISTOL, item_defs::ITEM_KNIFE],
+                vec![
+                    item_defs::ITEM_PISTOL,
+                    item_defs::ITEM_PRIMITIVE_STONE_BLADE,
+                ],
                 vec![(item_defs::ITEM_PISTOL_ROUNDS, 6)],
                 "Three counties want him. Fourth one got him.",
             ),
             Backstory::Preacher => (
-                vec![item_defs::ITEM_WOODEN_SHOVEL],
-                vec![(item_defs::ITEM_BERRIES, 10)],
+                vec![item_defs::ITEM_PRIMITIVE_DIGGING_STICK],
+                vec![(item_defs::ITEM_BERRIES, 10), (item_defs::ITEM_FIBER, 5)],
                 "Came to save souls. Staying to save lives.",
             ),
             Backstory::Drifter => (
-                vec![item_defs::ITEM_KNIFE, item_defs::ITEM_FISHING_LINE],
+                vec![
+                    item_defs::ITEM_PRIMITIVE_STONE_BLADE,
+                    item_defs::ITEM_FISHING_LINE,
+                ],
                 vec![],
                 "No past worth mentioning. No future worth planning.",
             ),
             Backstory::Engineer => (
-                vec![item_defs::ITEM_STONE_AXE, item_defs::ITEM_STONE_PICK],
+                vec![
+                    item_defs::ITEM_STONE_AXE,
+                    item_defs::ITEM_PRIMITIVE_HAMMERSTONE,
+                ],
                 vec![(item_defs::ITEM_SCRAP_WOOD, 5)],
                 "Built bridges on three worlds. Burned one.",
             ),
             Backstory::Scout => (
-                vec![item_defs::ITEM_KNIFE, item_defs::ITEM_FISHING_LINE],
+                vec![
+                    item_defs::ITEM_PRIMITIVE_STONE_BLADE,
+                    item_defs::ITEM_FISHING_LINE,
+                ],
                 vec![(item_defs::ITEM_FIBER, 3)],
                 "Knows the land better than most know themselves.",
             ),

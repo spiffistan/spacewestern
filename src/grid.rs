@@ -1007,7 +1007,7 @@ pub fn compute_roof_heights_wd(grid: &mut [u32], wall_data: &[u16]) {
 }
 
 /// Generate a natural world with trees, bushes, and rocks.
-pub fn generate_world(seed: u32) -> Vec<u32> {
+pub fn generate_world(seed: u32, tree_density: f32) -> Vec<u32> {
     let dirt_block = make_block(BT_GROUND as u8, 0, 0);
     let mut grid = vec![dirt_block; (GRID_W * GRID_H) as usize];
     let w = GRID_W;
@@ -1065,10 +1065,15 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
             .wrapping_add(seed)
     };
 
-    // Spawn clearing: keep ~8-tile radius around center mostly open
+    // Zone-based vegetation density:
+    // Zone 1 (center ~30 tile radius): open clearing for building
+    // Zone 2 (margins ~15 tiles): transitional, moderate trees
+    // Zone 3 (outer): dense forest that gets thicker toward map edges
     let cx = GRID_W as f32 / 2.0;
     let cy = GRID_H as f32 / 2.0;
-    let spawn_clear_radius_sq: f32 = 8.0 * 8.0;
+    let clearing_radius = 30.0; // Zone 1: open clearing
+    let margin_radius = 50.0; // Zone 2: transition zone ends here
+    let map_half = (GRID_W.min(GRID_H) as f32) / 2.0;
 
     // Test strip: row of rocks south of spawn for Stone Lab iteration
     for dx in -4..4i32 {
@@ -1088,12 +1093,32 @@ pub fn generate_world(seed: u32) -> Vec<u32> {
             let fx = x as f32;
             let fy = y as f32;
 
-            // Distance from spawn (used to thin features near start)
-            let spawn_dist_sq = (fx - cx) * (fx - cx) + (fy - cy) * (fy - cy);
-            let spawn_factor = (spawn_dist_sq / spawn_clear_radius_sq).min(1.0); // 0 at center, 1 at edge
+            // Distance from center (Chebyshev for more square-ish clearing)
+            let dist_from_center = ((fx - cx).abs()).max((fy - cy).abs());
 
-            // Forest density: multi-octave noise for organic clusters
-            let forest = fbm(fx, fy, 0.06, 0);
+            // Zone factor: 0 at center, ramps through margin, 1+ in deep forest
+            // Noise-shifted boundary for organic edges (not a perfect circle)
+            let boundary_noise = noise(fx * 0.04, fy * 0.04, 55555) * 15.0 - 7.5;
+            let effective_dist = dist_from_center + boundary_noise;
+
+            let zone_factor = if effective_dist < clearing_radius {
+                0.0 // Zone 1: open clearing, almost no trees
+            } else if effective_dist < margin_radius {
+                let t = (effective_dist - clearing_radius) / (margin_radius - clearing_radius);
+                t * t // Zone 2: quadratic ramp into forest
+            } else {
+                // Zone 3: deep forest, density increases toward edges
+                let deep = (effective_dist - margin_radius) / (map_half - margin_radius);
+                1.0 + deep.clamp(0.0, 1.0) * 0.5 // 1.0 to 1.5
+            };
+
+            // Combined spawn factor: zone density × tree_density slider
+            let spawn_factor = (zone_factor * tree_density).clamp(0.0, 2.0);
+
+            // Forest density: multi-octave noise biased by zone
+            // Deep forest zones push the noise higher, making clusters more likely
+            let forest_raw = fbm(fx, fy, 0.06, 0);
+            let forest = (forest_raw + spawn_factor * 0.15).min(1.0);
             // Small-scale jitter so trees don't form a grid even within clusters
             let jitter = noise(fx * 0.3, fy * 0.3, 9999);
 

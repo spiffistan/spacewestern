@@ -30,10 +30,19 @@ pub const ITEM_UNFIRED_JUG: u16 = 302;
 pub const ITEM_WOODEN_BUCKET: u16 = 400;
 pub const ITEM_CLAY_JUG: u16 = 401;
 // Tools 500–599
+// Stone tier (Tier 1: knapped stone + stick handle)
 pub const ITEM_STONE_AXE: u16 = 500;
 pub const ITEM_STONE_PICK: u16 = 501;
 pub const ITEM_WOODEN_SHOVEL: u16 = 502;
-pub const ITEM_KNIFE: u16 = 503;
+pub const ITEM_KNIFE: u16 = 503; // stone knife (legacy name kept for compat)
+// Primitive tier (Tier 0-1: hands + found materials)
+pub const ITEM_PRIMITIVE_HAMMERSTONE: u16 = 504;
+pub const ITEM_PRIMITIVE_STONE_BLADE: u16 = 505;
+pub const ITEM_PRIMITIVE_DIGGING_STICK: u16 = 509;
+// Flint tier (Tier 2: requires flint from chalk/limestone)
+pub const ITEM_FLINT_BLADE: u16 = 506;
+pub const ITEM_FLINT_PICK: u16 = 507;
+pub const ITEM_FLINT_AXE: u16 = 508;
 // Weapons 600–699
 pub const ITEM_PISTOL: u16 = 600;
 // Ammo 800–899
@@ -109,6 +118,9 @@ pub struct ItemDef {
     /// Ammo type this weapon uses or this ammo provides (e.g. "9mm")
     #[serde(default)]
     pub ammo_type: String,
+    /// Maximum durability (uses) for tools. 0 = indestructible.
+    #[serde(default)]
+    pub max_durability: u16,
 }
 
 impl ItemDef {
@@ -144,6 +156,8 @@ pub struct ItemStack {
     pub liquid: Option<(LiquidType, u16)>,
     /// Freshness: 1.0 = fresh, 0.0 = spoiled. Only meaningful for items with spoil_time > 0.
     pub freshness: f32,
+    /// Durability: remaining uses. 0 = broken. Only meaningful for tools with max_durability > 0.
+    pub durability: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -159,11 +173,17 @@ impl PartialEq for ItemStack {
 
 impl ItemStack {
     pub fn new(item_id: u16, count: u16) -> Self {
+        // Auto-set durability from item def
+        let dur = ItemRegistry::cached()
+            .get(item_id)
+            .map(|d| d.max_durability)
+            .unwrap_or(0);
         Self {
             item_id,
             count,
             liquid: None,
             freshness: 1.0,
+            durability: dur,
         }
     }
 

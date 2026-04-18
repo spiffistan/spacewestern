@@ -7,7 +7,7 @@ impl App {
     /// Regenerate elevation, water table, and terrain from current params.
     fn regenerate_world_preview(&mut self) {
         let seed = self.terrain_params.seed;
-        self.grid_data = grid::generate_world(seed);
+        self.grid_data = grid::generate_world(seed, self.terrain_params.tree_density);
         self.elevation_data =
             grid::generate_elevation_seeded(&self.grid_data, seed, self.terrain_params.hilliness);
         self.sub_elevation = crate::terrain::generate_elevation(&self.elevation_data);
