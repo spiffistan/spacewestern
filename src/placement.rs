@@ -1516,7 +1516,7 @@ impl App {
                     };
                     let offsets = crate::comms::spread_offsets(
                         move_indices.len(),
-                        self.flock_spacing.min_spacing(),
+                        self.combat.flock_spacing.min_spacing(),
                     );
                     for (k, &pi) in move_indices.iter().enumerate() {
                         if let Some(pleb) = self.plebs.get_mut(pi) {

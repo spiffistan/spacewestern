@@ -1679,12 +1679,12 @@ impl App {
                     continue;
                 }
                 // Hide in fog of war
-                if self.fog_enabled {
+                if self.fog.enabled {
                     let fx = item.x.floor() as i32;
                     let fy = item.y.floor() as i32;
                     if fx >= 0 && fy >= 0 && fx < GRID_W as i32 && fy < GRID_H as i32 {
                         let fidx = (fy as u32 * GRID_W + fx as u32) as usize;
-                        if fidx < self.fog_visibility.len() && self.fog_visibility[fidx] < 128 {
+                        if fidx < self.fog.visibility.len() && self.fog.visibility[fidx] < 128 {
                             continue;
                         }
                     }
@@ -2917,8 +2917,12 @@ impl App {
                 .filter(|p| p.is_enemy && !p.is_dead)
                 .map(|p| (p.x, p.y))
                 .collect();
-            let links =
-                comms::compute_flock_links(&self.plebs, &enemy_pos, true, self.flock_spacing);
+            let links = comms::compute_flock_links(
+                &self.plebs,
+                &enemy_pos,
+                true,
+                self.combat.flock_spacing,
+            );
 
             for link in &links {
                 let a = to_scr(link.ax, link.ay);
@@ -3544,7 +3548,7 @@ impl App {
 
                     // In attack mode: snap to enemy near cursor
                     let (hover_wx, hover_wy) = self.hover_world;
-                    let hover_enemy = if self.attack_mode {
+                    let hover_enemy = if self.combat.attack_mode {
                         self.plebs
                             .iter()
                             .filter(|e| !e.is_dead && e.is_enemy)
@@ -3566,7 +3570,7 @@ impl App {
                         };
 
                         // Target: attack mode cursor > active aim > aim_pos
-                        let (tx, ty, is_enemy_target) = if self.attack_mode {
+                        let (tx, ty, is_enemy_target) = if self.combat.attack_mode {
                             hover_enemy.unwrap_or((hover_wx, hover_wy, false))
                         } else if let Some(ti) = pleb.aim_target {
                             if let Some(target) = self.plebs.get(ti) {
@@ -3580,7 +3584,7 @@ impl App {
                             continue;
                         };
 
-                        if !self.attack_mode && pleb.aim_progress <= 0.0 {
+                        if !self.combat.attack_mode && pleb.aim_progress <= 0.0 {
                             continue;
                         }
 
@@ -3677,7 +3681,7 @@ impl App {
                 }
 
                 // Move mode: path preview
-                if self.move_mode {
+                if self.combat.move_mode {
                     if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
                         let (hx, hy) = self.hover_world;
                         let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
@@ -3728,13 +3732,13 @@ impl App {
                 }
 
                 // Grenade charge bar above selected pleb
-                if self.grenade_charging
+                if self.combat.grenade_charging
                     && let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i))
                 {
                     let bar_pos = to_screen(pleb.x - 0.4, pleb.y - 0.6);
                     let bar_w = tile_px * 0.8;
                     let bar_h = tile_px * 0.08;
-                    let charge = self.grenade_charge.clamp(0.0, 1.0);
+                    let charge = self.combat.grenade_charge.clamp(0.0, 1.0);
                     // Background
                     label_painter.rect_filled(
                         egui::Rect::from_min_size(bar_pos, egui::Vec2::new(bar_w, bar_h)),
@@ -3752,7 +3756,7 @@ impl App {
                 }
 
                 // Grenade targeting overlay: line, arc preview, impact circle
-                if self.grenade_targeting
+                if self.combat.grenade_targeting
                     && let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i))
                 {
                     let (hx, hy) = self.hover_world;
@@ -3760,7 +3764,7 @@ impl App {
                     let dy = hy - pleb.y;
                     let dist = (dx * dx + dy * dy).sqrt();
                     let strength = pleb.skills[1].value;
-                    let max_range = crate::grenade_max_range(strength, self.grenade_arc);
+                    let max_range = crate::grenade_max_range(strength, self.combat.grenade_arc);
                     let in_range = dist <= max_range;
 
                     let pleb_screen = to_screen(pleb.x, pleb.y);
@@ -3783,14 +3787,14 @@ impl App {
 
                     // Ballistic arc preview + ground shadow
                     if in_range && dist > 0.5 {
-                        let elev = match self.grenade_arc {
+                        let elev = match self.combat.grenade_arc {
                             0 => 0.3f32,
                             2 => 1.0,
                             _ => 0.6,
                         };
                         let ndx = dx / dist;
                         let ndy = dy / dist;
-                        let speed_mul = match self.grenade_arc {
+                        let speed_mul = match self.combat.grenade_arc {
                             0 => 1.0f32,
                             2 => 0.6,
                             _ => 0.85,
@@ -3848,7 +3852,7 @@ impl App {
                     // Impact probability circle
                     {
                         let base_spread = 0.5 + dist * 0.04;
-                        let arc_spread = match self.grenade_arc {
+                        let arc_spread = match self.combat.grenade_arc {
                             0 => 0.0f32,
                             2 => 0.4,
                             _ => 0.15,

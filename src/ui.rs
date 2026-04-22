@@ -674,27 +674,27 @@ impl App {
                         }
                         ui.separator();
                         if ui
-                            .selectable_label(self.fog_enabled, "Fog of War")
+                            .selectable_label(self.fog.enabled, "Fog of War")
                             .clicked()
                         {
-                            self.fog_enabled = !self.fog_enabled;
-                            self.fog_dirty = true;
-                            if !self.fog_enabled {
-                                self.fog_texture_data.iter_mut().for_each(|v| *v = 255);
-                                self.fog_dirty = true;
+                            self.fog.enabled = !self.fog.enabled;
+                            self.fog.dirty = true;
+                            if !self.fog.enabled {
+                                self.fog.texture_data.iter_mut().for_each(|v| *v = 255);
+                                self.fog.dirty = true;
                             }
                         }
-                        if self.fog_enabled
+                        if self.fog.enabled
                             && ui
-                                .selectable_label(self.fog_start_explored, "Pre-revealed Map")
+                                .selectable_label(self.fog.start_explored, "Pre-revealed Map")
                                 .clicked()
                         {
-                            self.fog_start_explored = !self.fog_start_explored;
-                            if self.fog_start_explored {
-                                self.fog_explored.iter_mut().for_each(|v| *v = 255);
+                            self.fog.start_explored = !self.fog.start_explored;
+                            if self.fog.start_explored {
+                                self.fog.explored.iter_mut().for_each(|v| *v = 255);
                             }
-                            self.fog_prev_tiles.clear();
-                            self.fog_dirty = true;
+                            self.fog.prev_tiles.clear();
+                            self.fog.dirty = true;
                         }
                         ui.separator();
                         if ui.button("Stone Lab").clicked() {
@@ -2840,7 +2840,7 @@ impl App {
                     };
                     let offsets = crate::comms::spread_offsets(
                         move_indices.len(),
-                        self.flock_spacing.min_spacing(),
+                        self.combat.flock_spacing.min_spacing(),
                     );
                     for (k, &pi) in move_indices.iter().enumerate() {
                         if let Some(pleb) = self.plebs.get_mut(pi) {
@@ -4468,12 +4468,12 @@ impl App {
                     .and_then(|wid| reg.get(wid))
                     .is_some_and(|d| d.is_ranged_weapon())
         });
-        let is_burst = self.burst_mode;
-        let is_attack_mode = self.attack_mode;
-        let is_grenade_targeting = self.grenade_targeting;
-        let grenade_arc = self.grenade_arc;
-        let cur_aim_mode = self.aim_mode;
-        let cur_spacing = self.flock_spacing;
+        let is_burst = self.combat.burst_mode;
+        let is_attack_mode = self.combat.attack_mode;
+        let is_grenade_targeting = self.combat.grenade_targeting;
+        let grenade_arc = self.combat.grenade_arc;
+        let cur_aim_mode = self.combat.aim_mode;
+        let cur_spacing = self.combat.flock_spacing;
         let any_headlight = friendly.iter().any(|&i| self.plebs[i].headlight_mode > 0);
         let headlight_mode = if count == 1 {
             self.plebs[friendly[0]].headlight_mode
@@ -4798,7 +4798,7 @@ impl App {
                                     egui::Sense::click(),
                                 );
                                 let painter = ui.painter_at(rect);
-                                let bg = if self.move_mode {
+                                let bg = if self.combat.move_mode {
                                     egui::Color32::from_rgb(40, 65, 55)
                                 } else {
                                     default_bg
@@ -4820,7 +4820,7 @@ impl App {
                                 );
                                 draw_hint(&painter, rect, "M");
                                 if response.clicked() {
-                                    self.move_mode = !self.move_mode;
+                                    self.combat.move_mode = !self.combat.move_mode;
                                 }
                             }
 
@@ -4887,7 +4887,7 @@ impl App {
                                 }
                                 draw_hint(&painter, rect, "A");
                                 if response.clicked() {
-                                    self.attack_mode = !self.attack_mode;
+                                    self.combat.attack_mode = !self.combat.attack_mode;
                                 }
                             }
 
@@ -4968,7 +4968,7 @@ impl App {
                                     label_color,
                                 );
                                 if response.clicked() {
-                                    self.aim_mode = (self.aim_mode + 1) % 3;
+                                    self.combat.aim_mode = (self.combat.aim_mode + 1) % 3;
                                 }
                             }
 
@@ -5006,7 +5006,7 @@ impl App {
                                 );
                                 draw_hint(&painter, rect, "X");
                                 if response.clicked() {
-                                    self.burst_mode = !self.burst_mode;
+                                    self.combat.burst_mode = !self.combat.burst_mode;
                                 }
                             }
 
@@ -5039,7 +5039,7 @@ impl App {
                                 );
                                 draw_hint(&painter, rect, "B");
                                 if response.clicked() {
-                                    self.grenade_targeting = !self.grenade_targeting;
+                                    self.combat.grenade_targeting = !self.combat.grenade_targeting;
                                 }
                             }
 
@@ -5077,7 +5077,7 @@ impl App {
                                     label_color,
                                 );
                                 if response.clicked() {
-                                    self.grenade_arc = (self.grenade_arc + 1) % 3;
+                                    self.combat.grenade_arc = (self.combat.grenade_arc + 1) % 3;
                                 }
                             }
 
@@ -5260,7 +5260,7 @@ impl App {
                                     label_color,
                                 );
                                 if response.clicked() {
-                                    self.flock_spacing = cur_spacing.cycle();
+                                    self.combat.flock_spacing = cur_spacing.cycle();
                                 }
                             }
 
@@ -5309,7 +5309,7 @@ impl App {
                                                 2.0,
                                             );
                                             // Emit rally shout for processing
-                                            self.pending_command_shouts.push(comms::Shout {
+                                            self.combat.pending_command_shouts.push(comms::Shout {
                                                 kind: comms::ShoutKind::Rally,
                                                 x: self.plebs[i].x,
                                                 y: self.plebs[i].y,
@@ -5332,7 +5332,7 @@ impl App {
                                                 pleb::BubbleKind::Text("Move up!".into()),
                                                 2.0,
                                             );
-                                            self.pending_command_shouts.push(comms::Shout {
+                                            self.combat.pending_command_shouts.push(comms::Shout {
                                                 kind: comms::ShoutKind::Advance,
                                                 x: self.plebs[i].x,
                                                 y: self.plebs[i].y,

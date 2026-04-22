@@ -580,12 +580,12 @@ impl App {
                     if self.show_crash_card {
                         self.show_crash_card = false;
                         self.time_paused = false;
-                    } else if self.move_mode {
-                        self.move_mode = false;
-                    } else if self.grenade_targeting {
-                        self.grenade_targeting = false;
-                    } else if self.attack_mode {
-                        self.attack_mode = false;
+                    } else if self.combat.move_mode {
+                        self.combat.move_mode = false;
+                    } else if self.combat.grenade_targeting {
+                        self.combat.grenade_targeting = false;
+                    } else if self.combat.attack_mode {
+                        self.combat.attack_mode = false;
                     } else if self.show_pause_menu {
                         self.show_pause_menu = false;
                         self.time_paused = false;
@@ -726,16 +726,20 @@ impl App {
                 PhysicalKey::Code(KeyCode::KeyB) => {
                     if self.selected_pleb.is_some() {
                         // Start charging grenade
-                        self.grenade_charging = true;
-                        self.grenade_charge = 0.0;
+                        self.combat.grenade_charging = true;
+                        self.combat.grenade_charge = 0.0;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyX) => {
                     if self.selected_pleb.is_some() {
-                        self.burst_mode = !self.burst_mode;
+                        self.combat.burst_mode = !self.combat.burst_mode;
                         log::info!(
                             "Fire mode: {}",
-                            if self.burst_mode { "BURST" } else { "SINGLE" }
+                            if self.combat.burst_mode {
+                                "BURST"
+                            } else {
+                                "SINGLE"
+                            }
                         );
                     }
                 }
@@ -910,7 +914,7 @@ impl App {
                         self.plebs[li].command_cooldown = morale::COMMAND_COOLDOWN;
                         self.plebs[li]
                             .set_bubble(pleb::BubbleKind::Text("Hold the line!".into()), 2.0);
-                        self.pending_command_shouts.push(comms::Shout {
+                        self.combat.pending_command_shouts.push(comms::Shout {
                             kind: comms::ShoutKind::Rally,
                             x: lx,
                             y: ly,
@@ -980,13 +984,13 @@ impl App {
                 PhysicalKey::Code(KeyCode::KeyM) => {
                     // M: toggle move mode (when pleb selected)
                     if self.selected_pleb.is_some() {
-                        self.move_mode = !self.move_mode;
+                        self.combat.move_mode = !self.combat.move_mode;
                     }
                 }
                 PhysicalKey::Code(KeyCode::KeyA) => {
                     // A: toggle attack mode (when pleb selected)
                     if self.selected_pleb.is_some() {
-                        self.attack_mode = !self.attack_mode;
+                        self.combat.attack_mode = !self.combat.attack_mode;
                     }
                 }
                 PhysicalKey::Code(
@@ -1074,19 +1078,19 @@ impl App {
         // Key release: throw grenade on B release
         if !event.state.is_pressed()
             && let PhysicalKey::Code(KeyCode::KeyB) = event.physical_key
-            && self.grenade_charging
+            && self.combat.grenade_charging
         {
-            self.grenade_charging = false;
+            self.combat.grenade_charging = false;
             if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
                 let dx = pleb.angle.cos();
                 let dy = pleb.angle.sin();
                 let spawn_x = pleb.x + dx * 0.5;
                 let spawn_y = pleb.y + dy * 0.5;
-                let power = self.grenade_charge.clamp(0.0, 1.0);
+                let power = self.combat.grenade_charge.clamp(0.0, 1.0);
                 self.physics_bodies
                     .push(PhysicsBody::new_grenade(spawn_x, spawn_y, dx, dy, power));
             }
-            self.grenade_charge = 0.0;
+            self.combat.grenade_charge = 0.0;
         }
     }
 }

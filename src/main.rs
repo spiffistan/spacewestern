@@ -552,6 +552,71 @@ impl Default for ManifestState {
     }
 }
 
+/// Fog of war state.
+pub(crate) struct FogState {
+    pub enabled: bool,
+    pub visibility: Vec<u8>,   // per-tile: 0=not visible, 255=visible
+    pub explored: Vec<u8>,     // per-tile: 0=shrouded, 255=explored
+    pub texture_data: Vec<u8>, // composed for GPU upload
+    pub dirty: bool,
+    pub prev_tiles: Vec<(i32, i32)>, // per-pleb last known tile
+    pub vision_radius: i32,
+    pub start_explored: bool, // true = map starts pre-revealed
+}
+
+impl Default for FogState {
+    fn default() -> Self {
+        let size = (grid::GRID_W * grid::GRID_H) as usize;
+        Self {
+            enabled: true,
+            visibility: vec![0u8; size],
+            explored: vec![0u8; size],
+            texture_data: vec![0u8; size],
+            dirty: true,
+            prev_tiles: Vec::new(),
+            vision_radius: 25,
+            start_explored: false,
+        }
+    }
+}
+
+/// Combat targeting and firing state.
+pub(crate) struct CombatState {
+    pub grenade_charging: bool,
+    pub grenade_charge: f32,
+    pub grenade_impacts: Vec<(f32, f32)>,
+    pub move_mode: bool,
+    pub grenade_targeting: bool,
+    pub grenade_arc: u8,
+    pub aim_mode: u8,
+    pub burst_mode: bool,
+    pub burst_queue: u8,
+    pub burst_delay: f32,
+    pub attack_mode: bool,
+    pub flock_spacing: crate::comms::FlockSpacing,
+    pub pending_command_shouts: Vec<comms::Shout>,
+}
+
+impl Default for CombatState {
+    fn default() -> Self {
+        Self {
+            grenade_charging: false,
+            grenade_charge: 0.0,
+            grenade_impacts: Vec::new(),
+            move_mode: false,
+            grenade_targeting: false,
+            grenade_arc: 1,
+            aim_mode: 1,
+            burst_mode: false,
+            burst_queue: 0,
+            burst_delay: 0.0,
+            attack_mode: false,
+            flock_spacing: crate::comms::FlockSpacing::Normal,
+            pending_command_shouts: Vec::new(),
+        }
+    }
+}
+
 // --- Application state ---
 struct App {
     window: Option<Arc<Window>>,
@@ -715,21 +780,8 @@ struct App {
     // Storage crate inventories: grid_idx → stored items
     crate_contents: std::collections::HashMap<u32, CrateInventory>,
     craft_queues: std::collections::HashMap<u32, CraftQueue>,
-    // Rock context menu
     // Combat
-    grenade_charging: bool,
-    grenade_charge: f32,
-    grenade_impacts: Vec<(f32, f32)>,
-    move_mode: bool,         // click-to-move targeting mode (shows path preview)
-    grenade_targeting: bool, // cursor-directed grenade targeting mode
-    grenade_arc: u8,         // throw height: 0=flat, 1=medium, 2=lob
-    aim_mode: u8,            // 0=snap, 1=normal, 2=precise
-    burst_mode: bool,
-    burst_queue: u8,   // remaining burst shots to fire (0 = none)
-    burst_delay: f32,  // seconds until next burst shot
-    attack_mode: bool, // click-to-attack targeting mode
-    flock_spacing: crate::comms::FlockSpacing, // group spacing preset
-    pending_command_shouts: Vec<comms::Shout>, // command shouts queued from UI
+    combat: CombatState,
     // Weather system
     weather: WeatherState,
     weather_timer: f32,
@@ -783,14 +835,7 @@ struct App {
     voltage_data: Vec<f32>,
     voltage_readback_pending: bool,
     // Fog of war
-    fog_enabled: bool,
-    fog_visibility: Vec<u8>, // 256×256, per-tile: 0=not visible, 255=visible
-    fog_explored: Vec<u8>,   // 256×256, per-tile: 0=shrouded, 255=explored
-    fog_texture_data: Vec<u8>, // 256×256, composed for GPU upload
-    fog_dirty: bool,
-    fog_prev_tiles: Vec<(i32, i32)>, // per-pleb last known tile
-    fog_vision_radius: i32,
-    fog_start_explored: bool, // true = map starts pre-revealed
+    fog: FogState,
     // Fire system
     burn_progress: std::collections::HashMap<usize, f32>, // grid_idx → 0.0..1.0
     fire_intensity: f32, // sandbox ignite temperature multiplier (0.5 = smolder, 2.0 = inferno)
@@ -1236,19 +1281,7 @@ impl App {
             select_drag_start: None,
             crate_contents: std::collections::HashMap::new(),
             craft_queues: std::collections::HashMap::new(),
-            grenade_charging: false,
-            grenade_charge: 0.0,
-            grenade_impacts: Vec::new(),
-            move_mode: false,
-            grenade_targeting: false,
-            grenade_arc: 1,
-            aim_mode: 1, // normal
-            burst_mode: false,
-            burst_queue: 0,
-            burst_delay: 0.0,
-            attack_mode: false,
-            flock_spacing: crate::comms::FlockSpacing::Normal,
-            pending_command_shouts: Vec::new(),
+            combat: CombatState::default(),
             weather: WeatherState::Clear,
             weather_timer: 45.0,
             lightning_timer: 10.0,
@@ -1300,14 +1333,7 @@ impl App {
             menu_hover_id: None,
             voltage_data: Vec::new(),
             voltage_readback_pending: false,
-            fog_enabled: true,
-            fog_visibility: vec![0u8; (GRID_W * GRID_H) as usize],
-            fog_explored: vec![0u8; (GRID_W * GRID_H) as usize], // start unexplored (black)
-            fog_texture_data: vec![0u8; (GRID_W * GRID_H) as usize],
-            fog_dirty: true,
-            fog_prev_tiles: Vec::new(),
-            fog_vision_radius: 25,
-            fog_start_explored: false, // true = map starts pre-revealed
+            fog: FogState::default(),
             burn_progress: std::collections::HashMap::new(),
             fire_intensity: 1.0,
             dust_injections: Vec::new(),
@@ -2789,7 +2815,7 @@ impl App {
         }
 
         // Upload fog texture when changed
-        if self.fog_dirty {
+        if self.fog.dirty {
             gfx.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &gfx.fog_texture,
@@ -2797,7 +2823,7 @@ impl App {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                &self.fog_texture_data,
+                &self.fog.texture_data,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(GRID_W),
@@ -2809,7 +2835,7 @@ impl App {
                     depth_or_array_layers: 1,
                 },
             );
-            self.fog_dirty = false;
+            self.fog.dirty = false;
         }
 
         // Tick pipe network simulation — store outlet injections for post-shader application
@@ -2988,27 +3014,27 @@ impl App {
         };
         self.camera.contour_interval = self.contour_interval;
         self.camera.contour_major_mul = self.contour_major_mul;
-        self.camera.aim_mode = self.aim_mode as f32;
-        self.camera.fog_enabled = if self.fog_enabled { 1.0 } else { 0.0 };
+        self.camera.aim_mode = self.combat.aim_mode as f32;
+        self.camera.fog_enabled = if self.fog.enabled { 1.0 } else { 0.0 };
         self.camera.hover_x = self.hover_world.0;
         self.camera.hover_y = self.hover_world.1;
 
         // Fog of war: update visibility when enabled
-        if self.fog_enabled {
+        if self.fog.enabled {
             let changed = fog::update_fog(
                 &self.grid_data,
                 &self.wall_data,
                 &self.terrain_data,
                 &self.plebs,
                 self.camera.sun_intensity,
-                self.fog_vision_radius,
-                &mut self.fog_visibility,
-                &mut self.fog_explored,
-                &mut self.fog_texture_data,
-                &mut self.fog_prev_tiles,
+                self.fog.vision_radius,
+                &mut self.fog.visibility,
+                &mut self.fog.explored,
+                &mut self.fog.texture_data,
+                &mut self.fog.prev_tiles,
             );
             if changed {
-                self.fog_dirty = true;
+                self.fog.dirty = true;
             }
         }
 
@@ -4438,7 +4464,7 @@ impl App {
             }
 
             // Grenade toxic gas injection: continuous emission while fuse burns
-            for &(gx, gy) in &self.grenade_impacts {
+            for &(gx, gy) in &self.combat.grenade_impacts {
                 let radius = 1i32; // small source — fluid sim spreads it
                 for oy in -radius..=radius {
                     for ox in -radius..=radius {
@@ -4484,7 +4510,7 @@ impl App {
                     }
                 }
             }
-            self.grenade_impacts.clear();
+            self.combat.grenade_impacts.clear();
 
             // --- Batched GPU readbacks: map all pending buffers, ONE poll, then process ---
             // This avoids multiple synchronous GPU stalls per frame.
@@ -4828,8 +4854,8 @@ impl ApplicationHandler for App {
                 if button == winit::event::MouseButton::Left {
                     if state.is_pressed() {
                         // Move mode: click to move selected plebs to cursor
-                        if self.move_mode {
-                            self.move_mode = false;
+                        if self.combat.move_mode {
+                            self.combat.move_mode = false;
                             let (wx, wy) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             let move_indices: Vec<usize> = if !self.selected_group.is_empty() {
@@ -4841,7 +4867,7 @@ impl ApplicationHandler for App {
                             };
                             let offsets = crate::comms::spread_offsets(
                                 move_indices.len(),
-                                self.flock_spacing.min_spacing(),
+                                self.combat.flock_spacing.min_spacing(),
                             );
                             for (k, &pi) in move_indices.iter().enumerate() {
                                 if let Some(pleb) = self.plebs.get_mut(pi) {
@@ -4867,18 +4893,19 @@ impl ApplicationHandler for App {
                             }
                             self.move_marker = Some((wx.floor() + 0.5, wy.floor() + 0.5, 2.0));
                         // Grenade targeting mode: click to throw at cursor
-                        } else if self.grenade_targeting {
-                            self.grenade_targeting = false;
+                        } else if self.combat.grenade_targeting {
+                            self.combat.grenade_targeting = false;
                             let (wx, wy) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
                                 let dist = ((wx - pleb.x).powi(2) + (wy - pleb.y).powi(2)).sqrt();
                                 let strength = pleb.skills[1].value; // melee skill as strength
-                                let max_range = grenade_max_range(strength, self.grenade_arc);
+                                let max_range =
+                                    grenade_max_range(strength, self.combat.grenade_arc);
                                 if dist <= max_range {
                                     // Scatter within impact spread circle
                                     let base_spread = 0.5 + dist * 0.04;
-                                    let arc_spread = match self.grenade_arc {
+                                    let arc_spread = match self.combat.grenade_arc {
                                         0 => 0.0f32,
                                         2 => 0.4,
                                         _ => 0.15,
@@ -4897,14 +4924,14 @@ impl ApplicationHandler for App {
                                         pleb.y,
                                         tx,
                                         ty,
-                                        self.grenade_arc,
+                                        self.combat.grenade_arc,
                                         strength,
                                     ));
                                 }
                             }
                         // Attack mode: click to target enemy
-                        } else if self.attack_mode {
-                            self.attack_mode = false;
+                        } else if self.combat.attack_mode {
+                            self.combat.attack_mode = false;
                             let (wx, wy) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             // Find nearest enemy to click position

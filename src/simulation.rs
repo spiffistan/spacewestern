@@ -879,18 +879,18 @@ impl App {
         }
 
         // --- Burst fire tick ---
-        if self.burst_queue > 0 {
-            self.burst_delay -= dt;
-            if self.burst_delay <= 0.0 {
+        if self.combat.burst_queue > 0 {
+            self.combat.burst_delay -= dt;
+            if self.combat.burst_delay <= 0.0 {
                 if let Some(pleb) = self.selected_pleb.and_then(|i| self.plebs.get(i)) {
                     let dx = pleb.angle.cos();
                     let dy = pleb.angle.sin();
                     let sx = pleb.x + dx * 0.4;
                     let sy = pleb.y + dy * 0.4;
                     // Small random spread per shot
-                    let spread = if self.burst_mode {
-                        let seed =
-                            (self.burst_queue as f32 * 137.0 + self.time_of_day * 1000.0) as u32;
+                    let spread = if self.combat.burst_mode {
+                        let seed = (self.combat.burst_queue as f32 * 137.0
+                            + self.time_of_day * 1000.0) as u32;
                         ((seed.wrapping_mul(2654435761) & 0xFFFF) as f32 / 65535.0 - 0.5) * 0.06
                     } else {
                         0.0
@@ -920,14 +920,14 @@ impl App {
                     self.fluid_params.splat_radius = 0.3;
                     self.fluid_params.splat_active = 1.0;
                 }
-                self.burst_queue -= 1;
-                self.burst_delay = 0.07; // ~70ms between burst shots (~14 rounds/sec)
+                self.combat.burst_queue -= 1;
+                self.combat.burst_delay = 0.07; // ~70ms between burst shots (~14 rounds/sec)
             }
         }
 
         // --- Grenade charge ---
-        if self.grenade_charging {
-            self.grenade_charge = (self.grenade_charge + dt * 0.8).min(1.0); // ~1.25s to full charge
+        if self.combat.grenade_charging {
+            self.combat.grenade_charge = (self.combat.grenade_charge + dt * 0.8).min(1.0); // ~1.25s to full charge
         }
 
         // --- Enemy random walk AI (with cover-seeking) ---
@@ -1105,7 +1105,7 @@ impl App {
             .map(|p| (p.x, p.y))
             .collect();
         let flock_adjustments =
-            comms::compute_flocking(&self.plebs, &flock_enemy_pos, self.flock_spacing);
+            comms::compute_flocking(&self.plebs, &flock_enemy_pos, self.combat.flock_spacing);
 
         // --- Update all plebs ---
         let move_speed = 8.0f32; // tiles/sec base (NOT scaled by time_speed)
@@ -2623,7 +2623,8 @@ impl App {
                 }
             }
             // Include command shouts from UI (Rally, Advance, FallBack)
-            let cmd_shouts: Vec<comms::Shout> = self.pending_command_shouts.drain(..).collect();
+            let cmd_shouts: Vec<comms::Shout> =
+                self.combat.pending_command_shouts.drain(..).collect();
             for shout in &cmd_shouts {
                 if self.sound_enabled {
                     self.sound_sources.push(SoundSource {
@@ -3759,7 +3760,7 @@ impl App {
                 // Fuse gas emission — only for toxic grenades (gas[0] > 0.1)
                 if let Some(fuse) = &def.fuse {
                     if fuse.gas[0] > 0.1 {
-                        self.grenade_impacts.push((impact.x, impact.y));
+                        self.combat.grenade_impacts.push((impact.x, impact.y));
                     }
                 }
             }
