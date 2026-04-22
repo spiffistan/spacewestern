@@ -1306,6 +1306,17 @@ impl App {
             has_actions = true;
         }
 
+        // Salvage crate: open
+        if sel_pleb.is_some() && bt == BT_SALVAGE_CRATE {
+            menu.title = "Salvage Crate".to_string();
+            menu.actions.push((
+                format!("Open crate ({})", pleb_name),
+                ContextAction::OpenSalvageCrate(bx, by),
+                true,
+            ));
+            has_actions = true;
+        }
+
         // Enemy pleb at this position: fire at target
         if sel_pleb.is_some() {
             for (ei, enemy) in self.plebs.iter().enumerate() {

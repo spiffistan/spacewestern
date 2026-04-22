@@ -489,6 +489,12 @@ pub enum GameEventKind {
         block: String,
     },
 
+    // Salvage
+    OpenedSalvageCrate {
+        pleb: String,
+        items: Vec<String>,
+    },
+
     // Generic (for transitional use)
     Generic(EventCategory, String),
 }
@@ -520,7 +526,8 @@ impl GameEventKind {
             Self::GoingToCraft(_)
             | Self::Crafting { .. }
             | Self::Crafted { .. }
-            | Self::Built { .. } => EventCategory::Build,
+            | Self::Built { .. }
+            | Self::OpenedSalvageCrate { .. } => EventCategory::Build,
             Self::Generic(cat, _) => *cat,
         }
     }
@@ -565,6 +572,9 @@ impl GameEventKind {
             Self::Crafting { pleb, recipe } => format!("{} crafting {}", pleb, recipe),
             Self::Crafted { pleb, recipe } => format!("{} crafted {}", pleb, recipe),
             Self::Built { pleb, block } => format!("{} built {}", pleb, block),
+            Self::OpenedSalvageCrate { pleb, items } => {
+                format!("{} opened a salvage crate: {}", pleb, items.join(", "))
+            }
             Self::Generic(_, msg) => msg.clone(),
         }
     }
@@ -580,6 +590,9 @@ impl GameEventKind {
             }
             Self::Crafted { .. } | Self::Built { .. } => {
                 Some((NotifCategory::Positive, "\u{2705}", "Complete"))
+            }
+            Self::OpenedSalvageCrate { .. } => {
+                Some((NotifCategory::Positive, "\u{1f4e6}", "Salvage"))
             }
             Self::DroughtStarted | Self::Lightning(_, _) => {
                 Some((NotifCategory::Warning, "\u{26a1}", "Weather"))
@@ -668,6 +681,8 @@ pub enum ContextAction {
     Fish(i32, i32),
     /// Mine a rock tile at (grid_x, grid_y) — sub-tile mining
     Mine(i32, i32),
+    /// Open a salvage crate at (grid_x, grid_y)
+    OpenSalvageCrate(i32, i32),
 }
 
 /// A context menu action entry: (label, action, enabled).

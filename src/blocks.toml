@@ -1132,3 +1132,24 @@ icon = "🕳"
 label = "Charcoal"
 click = "simple"
 place_height = 5
+
+[[block]]
+id = 71
+name = "Salvage Crate"
+color = [0.40, 0.30, 0.18]
+render_style = 20.0
+light_transmission = 1.0
+is_furniture = true
+is_removable = true
+is_flammable = true
+ignition_temp = 260.0
+thermal = { heat_capacity = 2.0, conductivity = 0.002, solar_absorption = 0.5 }
+
+[[block]]
+id = 72
+name = "Crater"
+color = [0.30, 0.22, 0.12]
+render_style = 19.0
+light_transmission = 1.0
+walkable = true
+thermal = { heat_capacity = 2.0, conductivity = 0.003, solar_absorption = 0.5 }

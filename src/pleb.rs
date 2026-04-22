@@ -226,6 +226,7 @@ pub enum PlebCommand {
     Butcher(i32, i32),
     Fish(i32, i32),
     Mine(i32, i32),
+    OpenSalvageCrate(i32, i32),
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -577,7 +577,10 @@ impl App {
                 PhysicalKey::Code(KeyCode::Escape) => {
                     // Close whatever is open, in priority order
                     // When nothing is open: toggle pause menu
-                    if self.move_mode {
+                    if self.show_crash_card {
+                        self.show_crash_card = false;
+                        self.time_paused = false;
+                    } else if self.move_mode {
                         self.move_mode = false;
                     } else if self.grenade_targeting {
                         self.grenade_targeting = false;

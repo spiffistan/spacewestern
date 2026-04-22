@@ -387,7 +387,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 70u)];
+    return materials[min(bt, 72u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -2591,7 +2591,7 @@ fn trace_shadow_ray(wx: f32, wy: f32, surface_height: f32, sun_dir: vec2<f32>, s
         // Pipe components (15-20), dug ground (32), crates (33), rocks (34) don't cast shadows
         let is_pipe_block = (bt >= BT_PIPE && bt <= BT_INLET) || bt == BT_RESTRICTOR || bt == BT_LIQUID_PIPE || bt == BT_PIPE_BRIDGE || bt == BT_LIQUID_INTAKE || bt == BT_LIQUID_PUMP || bt == BT_LIQUID_OUTPUT;
         let is_dug_block = bt == BT_DUG_GROUND;
-        let is_crate_block = bt == BT_CRATE; // height = item count, not visual
+        let is_crate_block = bt == BT_CRATE || bt == BT_SALVAGE_CRATE; // height = item count/rotation, not visual
         let is_rock_block = bt == BT_ROCK;
         let is_wire_block = bt == BT_WIRE || bt == BT_WIRE_BRIDGE; // height = connection mask, not visual
         let is_dimmer_block = bt == BT_DIMMER || bt == BT_FIREPLACE; // height = level/intensity, not visual
@@ -4138,6 +4138,88 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         } else {
             color = ground;
+        }
+    } else if btype == BT_SALVAGE_CRATE {
+        // Salvage crate: darker, damaged wood, rotated orientation
+        // bheight = rotation (0-3), bflags bit 0 = smoking
+        let rotation = bheight;
+        // Rotate coordinates based on rotation value
+        var rfx = fx;
+        var rfy = fy;
+        if rotation == 1u {
+            rfx = 1.0 - fy; rfy = fx;
+        } else if rotation == 2u {
+            rfx = 1.0 - fx; rfy = 1.0 - fy;
+        } else if rotation == 3u {
+            rfx = fy; rfy = 1.0 - fx;
+        }
+        let ground = vec3<f32>(0.40, 0.30, 0.16);
+        let sc_min = 0.08;
+        let sc_max = 0.92;
+        let on_crate = rfx > sc_min && rfx < sc_max && rfy > sc_min && rfy < sc_max;
+        if on_crate {
+            // Darker, weathered planks
+            let plank_y = fract(rfy * 4.0);
+            let plank_edge = f32(plank_y < 0.07) * 0.05;
+            let wood = vec3<f32>(0.35, 0.25, 0.13);
+            color = wood - vec3<f32>(plank_edge);
+            // Damage: dark scorch marks
+            let dmg = fract(sin(world_x * 37.1 + world_y * 53.7) * 43758.5);
+            if dmg < 0.15 {
+                color *= 0.6; // burn marks
+            }
+            // Plank variation (more weathered than storage crate)
+            let pid = floor(rfy * 4.0);
+            let pvar = fract(sin(pid * 127.1 + world_x * 17.0) * 43758.5) * 0.08 - 0.04;
+            color += vec3<f32>(pvar);
+            // Dented metal brackets
+            let bk_size = 0.14;
+            let at_corner = (rfx < sc_min + bk_size || rfx > sc_max - bk_size)
+                         && (rfy < sc_min + bk_size || rfy > sc_max - bk_size);
+            if at_corner {
+                color = vec3<f32>(0.20, 0.20, 0.22);
+            }
+            // Bent cross brace
+            let warp = sin(rfx * 12.0) * 0.015;
+            let cross_h = abs(rfx - 0.5) < 0.025;
+            let cross_v = abs(rfy - 0.48 + warp) < 0.025;
+            if cross_h || cross_v {
+                color = vec3<f32>(0.28, 0.22, 0.12);
+            }
+            // Smoking effect: slight orange tint at edges
+            if (bflags & 1u) != 0u {
+                let edge_dist = min(min(rfx - sc_min, sc_max - rfx), min(rfy - sc_min, sc_max - rfy));
+                if edge_dist < 0.08 {
+                    let glow = (0.08 - edge_dist) / 0.08;
+                    color = mix(color, vec3<f32>(0.5, 0.25, 0.05), glow * 0.4);
+                }
+            }
+        } else {
+            color = ground;
+        }
+    } else if btype == BT_CRATER {
+        // Impact crater: darkened depression with scattered debris
+        let cx = fx - 0.5;
+        let cy = fy - 0.5;
+        let dist = length(vec2<f32>(cx, cy));
+        let crater_r = 0.35 + f32(bheight) * 0.05; // size variant from height byte
+        let ground_c = vec3<f32>(0.40, 0.30, 0.16);
+        if dist < crater_r {
+            // Darker center fading to edges
+            let depth = 1.0 - dist / crater_r;
+            let charred = vec3<f32>(0.18, 0.14, 0.08);
+            color = mix(ground_c, charred, depth * 0.7);
+            // Scattered debris flecks
+            let debris = fract(sin(world_x * 73.1 + world_y * 91.7 + dist * 50.0) * 43758.5);
+            if debris < 0.12 && dist > 0.1 {
+                color = vec3<f32>(0.30, 0.28, 0.25); // metal fragment
+            }
+        } else if dist < crater_r + 0.08 {
+            // Raised rim
+            let rim = (dist - crater_r) / 0.08;
+            color = mix(vec3<f32>(0.32, 0.24, 0.14), ground_c, rim);
+        } else {
+            color = ground_c;
         }
     } else if btype == BT_ROCK {
         // Check mining sub-cell texture

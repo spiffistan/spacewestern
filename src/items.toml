@@ -139,7 +139,7 @@ stack_max = 10
 [[item]]
 id = 210
 name = "Charcoal"
-icon = "ite"
+icon = "\u25AA"
 category = "raw"
 stack_max = 10
 

@@ -22,6 +22,12 @@ fn lerp_angle(from: f32, to: f32, t: f32) -> f32 {
 const TURN_SPEED_WALK: f32 = 10.0; // radians/sec — smooth walking turn
 const TURN_SPEED_COMBAT: f32 = 16.0; // radians/sec — faster snap for aiming
 
+// Day/night cycle thresholds (fraction of DAY_DURATION)
+const DUSK_START: f32 = 0.73; // dusk warning triggers
+const DUSK_END: f32 = 0.77; // dusk warning window ends
+const DAWN_START: f32 = 0.16; // dawn (reset dusk flag, count night)
+const DAWN_END: f32 = 0.20; // dawn window ends
+
 /// Find a cover position near `pos` that puts a low wall between the pleb and the threat.
 fn find_cover_position(
     grid: &[u32],
@@ -226,6 +232,27 @@ impl App {
         )
     }
 
+    /// Send a pleb to a target tile: find adjacent walkable, pathfind, set Walking + work_target.
+    /// Returns true if a path was found.
+    pub(crate) fn send_pleb_to_target(&mut self, pleb_idx: usize, tx: i32, ty: i32) -> bool {
+        let pleb = &self.plebs[pleb_idx];
+        let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+        let adj = pleb::adjacent_walkable(&self.grid_data, tx, ty).unwrap_or((tx, ty));
+        let path = self.pathfind(start, adj);
+        if !path.is_empty() {
+            let pleb = &mut self.plebs[pleb_idx];
+            pleb.path = path;
+            pleb.path_idx = 0;
+            pleb.activity = PlebActivity::Walking;
+            pleb.work_target = Some((tx, ty));
+            pleb.harvest_target = None;
+            pleb.haul_target = None;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Update all simulation state. Returns frame delta time.
     pub(crate) fn update_simulation(&mut self) -> f32 {
         let mut events: Vec<GameEventKind> = Vec::with_capacity(16);
@@ -305,7 +332,7 @@ impl App {
         {
             let day_frac = (self.time_of_day / DAY_DURATION).rem_euclid(1.0);
             // Dusk warning at 75% of day
-            if day_frac > 0.73 && day_frac < 0.77 && !self.dusk_warned {
+            if day_frac > DUSK_START && day_frac < DUSK_END && !self.dusk_warned {
                 self.dusk_warned = true;
                 if self.night_count == 0 {
                     self.notify(
@@ -324,7 +351,7 @@ impl App {
                 }
             }
             // Reset dusk warning flag + count night at dawn
-            if day_frac > 0.16 && day_frac < 0.20 && self.dusk_warned {
+            if day_frac > DAWN_START && day_frac < DAWN_END && self.dusk_warned {
                 self.dusk_warned = false;
                 self.night_count += 1;
             }
@@ -973,7 +1000,7 @@ impl App {
                         (fx, fy, d)
                     })
                     .filter(|&(_, _, d)| d < 25.0)
-                    .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+                    .min_by(|a, b| a.2.total_cmp(&b.2));
 
                 // If under threat and has ranged weapon, seek cover
                 // But if already at a cover position, stay put (don't re-pathfind)
@@ -2384,6 +2411,26 @@ impl App {
                                 pleb.haul_target = None;
                             }
                         }
+                        PlebCommand::OpenSalvageCrate(cx, cy) => {
+                            let adj =
+                                adjacent_walkable(&self.grid_data, cx, cy).unwrap_or((cx, cy));
+                            let path = pleb::astar_path_terrain_water_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                &self.water_depth_cpu,
+                                start,
+                                adj,
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.work_target = Some((cx, cy));
+                                pleb.harvest_target = None;
+                                pleb.haul_target = None;
+                            }
+                        }
                     }
                 }
 
@@ -3299,7 +3346,7 @@ impl App {
                             let fd = (fdx * fdx + fdy * fdy).sqrt().max(0.1);
                             (fdx / fd, fdy / fd, fd)
                         })
-                        .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+                        .min_by(|a, b| a.2.total_cmp(&b.2))
                         .map(|(fx, fy, _)| (fx, fy))
                         .unwrap_or((0.0, 1.0));
                     let flee_x = (px + flee_dir.0 * 8.0).clamp(1.0, GRID_W as f32 - 2.0);
@@ -4670,8 +4717,55 @@ impl App {
                                     0
                                 };
 
+                                // Salvage crate: open immediately on arrival
+                                if tbt == BT_SALVAGE_CRATE {
+                                    let crate_key = ty as u32 * GRID_W + tx as u32;
+                                    // Collect contents from crate inventory
+                                    let mut item_names = Vec::new();
+                                    if let Some(inv) = self.crate_contents.remove(&crate_key) {
+                                        let item_reg = item_defs::ItemRegistry::cached();
+                                        for stack in &inv.stacks {
+                                            let name = item_reg.name(stack.item_id);
+                                            if stack.count > 1 {
+                                                item_names
+                                                    .push(format!("{}x {}", stack.count, name));
+                                            } else {
+                                                item_names.push(name.to_string());
+                                            }
+                                            // Drop items on ground around the crate
+                                            let scatter_seed = stack.item_id as f32 * 0.37;
+                                            self.ground_items.push(resources::GroundItem {
+                                                x: tx as f32 + 0.3 + (scatter_seed.sin() * 0.4),
+                                                y: ty as f32 + 0.3 + (scatter_seed.cos() * 0.4),
+                                                stack: stack.clone(),
+                                            });
+                                        }
+                                    }
+                                    // Remove the crate block
+                                    let tidx = (ty as u32 * GRID_W + tx as u32) as usize;
+                                    if tidx < self.grid_data.len() {
+                                        self.grid_data[tidx] = (self.grid_data[tidx] & 0xFF000000)
+                                            | make_block(BT_GROUND as u8, 0, 0);
+                                    }
+                                    self.grid_dirty = true;
+                                    // Remove from smoking crates list if present
+                                    let crate_pos = (tx as f32 + 0.5, ty as f32 + 0.5);
+                                    self.smoking_crates.retain(|p| *p != crate_pos);
+                                    pleb.set_bubble(
+                                        pleb::BubbleKind::Thought(
+                                            "Let's see what survived...".into(),
+                                        ),
+                                        3.0,
+                                    );
+                                    events.push(GameEventKind::OpenedSalvageCrate {
+                                        pleb: pleb.name.clone(),
+                                        items: item_names,
+                                    });
+                                    pleb.work_target = None;
+                                    pleb.activity = PlebActivity::Idle;
+                                    pleb.path.clear();
                                 // Branch gathering: arrived at tree without axe on belt
-                                if tbt == BT_TREE
+                                } else if tbt == BT_TREE
                                     && pleb.harvest_target.is_some()
                                     && !pleb.has_tool("axe")
                                 {
@@ -4680,9 +4774,10 @@ impl App {
                                     pleb.path.clear();
                                     pleb.path_idx = 0;
                                 // Rock: start sub-tile mining
-                                } else if tbt == BT_ROCK && pleb.harvest_target.is_some() {
+                                } else if tbt == BT_ROCK
+                                    && let Some((mx, my)) = pleb.harvest_target
+                                {
                                     // Create mining grid if needed
-                                    let (mx, my) = pleb.harvest_target.unwrap();
                                     if !self.mining_grids.contains_key(&(mx, my)) {
                                         let rt = mining::rock_type_at(mx, my);
                                         self.mining_grids.insert(
@@ -6955,6 +7050,142 @@ impl App {
         self.creatures
             .retain(|c| !c.is_dead || c.corpse_timer > 0.0);
     }
+
+    /// Generate contextual hints based on current game state.
+    pub(crate) fn generate_hints(&mut self) {
+        self.game_hints.clear();
+
+        let _item_reg = item_defs::ItemRegistry::cached();
+
+        // Check blueprints for missing materials
+        for (&(_bx, _by), bp) in &self.blueprints {
+            if bp.resources_met() && !bp.is_roof() && !bp.uses_sticks() {
+                continue;
+            }
+
+            let mut missing = Vec::new();
+            let mut items: Vec<u16> = Vec::new();
+            let mut blocks: Vec<u32> = Vec::new();
+
+            if bp.is_roof() {
+                let has_fiber = self
+                    .ground_items
+                    .iter()
+                    .any(|gi| gi.stack.item_id == ITEM_FIBER)
+                    || self
+                        .plebs
+                        .iter()
+                        .any(|p| p.inventory.count_of(ITEM_FIBER) > 0);
+                if !has_fiber {
+                    missing.push("fiber");
+                    items.push(ITEM_FIBER);
+                    blocks.push(BT_TREE);
+                }
+            } else if bp.uses_sticks() {
+                let sticks_avail: u32 = self
+                    .ground_items
+                    .iter()
+                    .filter(|gi| gi.stack.item_id == ITEM_SCRAP_WOOD)
+                    .map(|gi| gi.stack.count as u32)
+                    .sum::<u32>()
+                    + self
+                        .plebs
+                        .iter()
+                        .map(|p| p.inventory.count_of(ITEM_SCRAP_WOOD))
+                        .sum::<u32>();
+                if sticks_avail < 3 {
+                    missing.push("sticks");
+                    items.push(ITEM_SCRAP_WOOD);
+                    blocks.push(BT_TREE);
+                }
+            } else {
+                if bp.wood_delivered < bp.wood_needed {
+                    let avail: u32 = self
+                        .ground_items
+                        .iter()
+                        .filter(|gi| gi.stack.item_id == ITEM_LOG || gi.stack.item_id == ITEM_WOOD)
+                        .map(|gi| gi.stack.count as u32)
+                        .sum();
+                    if avail == 0 {
+                        missing.push("logs");
+                        items.push(ITEM_LOG);
+                        blocks.push(BT_TREE);
+                    }
+                }
+                if bp.clay_delivered < bp.clay_needed {
+                    let avail: u32 = self
+                        .ground_items
+                        .iter()
+                        .filter(|gi| gi.stack.item_id == ITEM_CLAY)
+                        .map(|gi| gi.stack.count as u32)
+                        .sum();
+                    if avail == 0 {
+                        missing.push("clay");
+                        items.push(ITEM_CLAY);
+                    }
+                }
+                if bp.rock_delivered < bp.rock_needed {
+                    let avail: u32 = self
+                        .ground_items
+                        .iter()
+                        .filter(|gi| gi.stack.item_id == ITEM_ROCK)
+                        .map(|gi| gi.stack.count as u32)
+                        .sum();
+                    if avail == 0 {
+                        missing.push("rock");
+                        items.push(ITEM_ROCK);
+                        blocks.push(BT_ROCK);
+                    }
+                }
+                if bp.plank_delivered < bp.plank_needed {
+                    let avail: u32 = self
+                        .ground_items
+                        .iter()
+                        .filter(|gi| gi.stack.item_id == ITEM_PLANK)
+                        .map(|gi| gi.stack.count as u32)
+                        .sum();
+                    if avail == 0 {
+                        missing.push("planks");
+                        items.push(ITEM_PLANK);
+                    }
+                }
+                if bp.rope_delivered < bp.rope_needed {
+                    let avail: u32 = self
+                        .ground_items
+                        .iter()
+                        .filter(|gi| gi.stack.item_id == ITEM_ROPE)
+                        .map(|gi| gi.stack.count as u32)
+                        .sum();
+                    if avail == 0 {
+                        missing.push("rope");
+                        items.push(ITEM_ROPE);
+                    }
+                }
+            }
+
+            if !missing.is_empty() {
+                let block_name = if bp.is_roof() {
+                    "thatched roof".to_string()
+                } else if bp.uses_sticks() {
+                    "campfire".to_string()
+                } else {
+                    let bt = bp.block_data & 0xFF;
+                    block_defs::BlockRegistry::cached().name(bt).to_string()
+                };
+                let hint = GameHint {
+                    text: format!("Need {} for {}", missing.join(" and "), block_name),
+                    highlight_items: items,
+                    highlight_blocks: blocks,
+                };
+                if !self.game_hints.iter().any(|h| h.text == hint.text) {
+                    self.game_hints.push(hint);
+                }
+            }
+        }
+
+        // Limit to top 3 hints
+        self.game_hints.truncate(3);
+    }
 }
 
 /// Tick a single pleb's activity state machine and auto-behaviors.
@@ -7533,146 +7764,6 @@ fn tick_pleb_activity(
                 }
             }
         }
-    }
-}
-
-impl App {
-    /// Generate contextual hints based on current game state.
-    pub(crate) fn generate_hints(&mut self) {
-        self.game_hints.clear();
-
-        let _item_reg = item_defs::ItemRegistry::cached();
-
-        // Check blueprints for missing materials
-        for (&(_bx, _by), bp) in &self.blueprints {
-            if bp.resources_met() && !bp.is_roof() && !bp.uses_sticks() {
-                continue;
-            }
-
-            let mut missing = Vec::new();
-            let mut items: Vec<u16> = Vec::new();
-            let mut blocks: Vec<u32> = Vec::new();
-
-            if bp.is_roof() {
-                // Check if fiber exists on ground or in inventory
-                let has_fiber = self
-                    .ground_items
-                    .iter()
-                    .any(|gi| gi.stack.item_id == ITEM_FIBER)
-                    || self
-                        .plebs
-                        .iter()
-                        .any(|p| p.inventory.count_of(ITEM_FIBER) > 0);
-                if !has_fiber {
-                    missing.push("fiber");
-                    items.push(ITEM_FIBER);
-                    blocks.push(BT_TREE); // gather branches from trees
-                }
-            } else if bp.uses_sticks() {
-                let sticks_avail: u32 = self
-                    .ground_items
-                    .iter()
-                    .filter(|gi| gi.stack.item_id == ITEM_SCRAP_WOOD)
-                    .map(|gi| gi.stack.count as u32)
-                    .sum::<u32>()
-                    + self
-                        .plebs
-                        .iter()
-                        .map(|p| p.inventory.count_of(ITEM_SCRAP_WOOD))
-                        .sum::<u32>();
-                if sticks_avail < 3 {
-                    missing.push("sticks");
-                    items.push(ITEM_SCRAP_WOOD);
-                    blocks.push(BT_TREE);
-                }
-            } else {
-                if bp.wood_delivered < bp.wood_needed {
-                    let avail: u32 = self
-                        .ground_items
-                        .iter()
-                        .filter(|gi| gi.stack.item_id == ITEM_LOG || gi.stack.item_id == ITEM_WOOD)
-                        .map(|gi| gi.stack.count as u32)
-                        .sum();
-                    if avail == 0 {
-                        missing.push("logs");
-                        items.push(ITEM_LOG);
-                        blocks.push(BT_TREE);
-                    }
-                }
-                if bp.clay_delivered < bp.clay_needed {
-                    let avail: u32 = self
-                        .ground_items
-                        .iter()
-                        .filter(|gi| gi.stack.item_id == ITEM_CLAY)
-                        .map(|gi| gi.stack.count as u32)
-                        .sum();
-                    if avail == 0 {
-                        missing.push("clay");
-                        items.push(ITEM_CLAY);
-                    }
-                }
-                if bp.rock_delivered < bp.rock_needed {
-                    let avail: u32 = self
-                        .ground_items
-                        .iter()
-                        .filter(|gi| gi.stack.item_id == ITEM_ROCK)
-                        .map(|gi| gi.stack.count as u32)
-                        .sum();
-                    if avail == 0 {
-                        missing.push("rock");
-                        items.push(ITEM_ROCK);
-                        blocks.push(BT_ROCK);
-                    }
-                }
-                if bp.plank_delivered < bp.plank_needed {
-                    let avail: u32 = self
-                        .ground_items
-                        .iter()
-                        .filter(|gi| gi.stack.item_id == ITEM_PLANK)
-                        .map(|gi| gi.stack.count as u32)
-                        .sum();
-                    if avail == 0 {
-                        missing.push("planks");
-                        items.push(ITEM_PLANK);
-                    }
-                }
-                if bp.rope_delivered < bp.rope_needed {
-                    let avail: u32 = self
-                        .ground_items
-                        .iter()
-                        .filter(|gi| gi.stack.item_id == ITEM_ROPE)
-                        .map(|gi| gi.stack.count as u32)
-                        .sum();
-                    if avail == 0 {
-                        missing.push("rope");
-                        items.push(ITEM_ROPE);
-                    }
-                }
-            }
-
-            if !missing.is_empty() {
-                let block_name = if bp.is_roof() {
-                    "thatched roof".to_string()
-                } else if bp.uses_sticks() {
-                    "campfire".to_string()
-                } else {
-                    let bt = bp.block_data & 0xFF;
-                    block_defs::BlockRegistry::cached().name(bt).to_string()
-                };
-                let hint = GameHint {
-                    text: format!("Need {} for {}", missing.join(" and "), block_name),
-                    highlight_items: items,
-                    highlight_blocks: blocks,
-                };
-                // Avoid duplicate hints
-                if !self.game_hints.iter().any(|h| h.text == hint.text) {
-                    self.game_hints.push(hint);
-                }
-            }
-        }
-
-        // Limit to top 3 hints
-        self.game_hints.truncate(3);
     }
 }
 

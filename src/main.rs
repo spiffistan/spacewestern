@@ -62,6 +62,10 @@ mod gpu_init;
 mod pipes;
 mod simulation;
 mod ui;
+mod ui_build;
+mod ui_screens;
+mod ui_world;
+mod world_setup;
 use pipes::PipeNetwork;
 
 mod physics;
@@ -492,6 +496,62 @@ impl ManifestCard {
     }
 }
 
+// --- Sub-states extracted from App ---
+
+/// Character generation UI state (used only during CharGen screen).
+pub(crate) struct CharGenState {
+    pub name: String,
+    pub skin: [f32; 3],
+    pub hair: [f32; 3],
+    pub hair_style: u8,
+    pub shirt: [f32; 3],
+    pub pants: [f32; 3],
+    pub backstory: Backstory,
+    pub body_type: BodyType,
+    pub gender: Gender,
+    pub age: u8,
+    pub trait_pick: Option<PlebTrait>,
+    pub preview_angle: f32,
+}
+
+impl Default for CharGenState {
+    fn default() -> Self {
+        Self {
+            name: "Jeff".to_string(),
+            skin: [0.76, 0.60, 0.46],
+            hair: [0.25, 0.15, 0.08],
+            hair_style: 0,
+            shirt: [0.35, 0.25, 0.20],
+            pants: [0.30, 0.28, 0.22],
+            backstory: Backstory::Sheriff,
+            body_type: BodyType::Medium,
+            gender: Gender::Male,
+            age: 32,
+            trait_pick: None,
+            preview_angle: 0.0,
+        }
+    }
+}
+
+/// Manifest (card-based crew recruitment) state.
+pub(crate) struct ManifestState {
+    pub applicants: Vec<ManifestCard>,
+    pub recruited: Vec<ManifestCard>,
+    pub passes: u32,
+    pub seed: u32,
+}
+
+impl Default for ManifestState {
+    fn default() -> Self {
+        Self {
+            applicants: Vec::new(),
+            recruited: Vec::new(),
+            passes: 0,
+            seed: 42,
+        }
+    }
+}
+
 // --- Application state ---
 struct App {
     window: Option<Arc<Window>>,
@@ -500,7 +560,8 @@ struct App {
     camera: CameraUniform,
     render_scale: f32,
     grid_data: Vec<u32>,
-    grid_dirty: bool, // true when grid needs re-upload to GPU
+    grid_dirty: bool,        // true when grid needs re-upload to GPU
+    water_initialized: bool, // true after first water texture upload
     mouse_pressed: bool,
     mouse_dragged: bool, // true if mouse moved while pressed (pan, not click)
     last_mouse_x: f64,
@@ -513,6 +574,8 @@ struct App {
     time_of_day: f32,         // current time in seconds (0..DAY_DURATION)
     time_paused: bool,        // pause auto-advance
     show_pause_menu: bool,    // ESC game menu (quit, settings, etc.)
+    show_crash_card: bool,    // crash landing narrative card (shown once on game start)
+    crash_card_frame: u32,    // frame when crash card was shown (for debounce)
     time_speed: f32,          // playback speed multiplier
     last_frame_time: Instant, // for delta-time calculation
     last_click_frame: u32,
@@ -705,24 +768,8 @@ struct App {
     terrain_params: grid::TerrainParams,
     terrain_params_prev: grid::TerrainParams, // for mapgen auto-preview
     game_state: GameState,
-    // Character generation
-    chargen_name: String,
-    chargen_skin: [f32; 3],
-    chargen_hair: [f32; 3],
-    chargen_hair_style: u8,
-    chargen_shirt: [f32; 3],
-    chargen_pants: [f32; 3],
-    chargen_backstory: Backstory,
-    chargen_body_type: BodyType,
-    chargen_gender: Gender,
-    chargen_age: u8,
-    chargen_trait: Option<PlebTrait>,
-    chargen_preview_angle: f32, // rotating preview angle
-    // Manifest (card-based crew recruitment)
-    manifest_applicants: Vec<ManifestCard>,
-    manifest_recruited: Vec<ManifestCard>,
-    manifest_passes: u32,
-    manifest_seed: u32,
+    chargen: CharGenState,
+    manifest: ManifestState,
     // Diagonal wall drag preview: (x, y, variant) per tile
     diag_preview: Vec<(i32, i32, u8)>,
     // Entryway position for hollow rect drag (shown differently in preview)
@@ -749,6 +796,7 @@ struct App {
     fire_intensity: f32, // sandbox ignite temperature multiplier (0.5 = smolder, 2.0 = inferno)
     // GPU dust simulation
     dust_injections: Vec<dust::DustInjection>,
+    smoking_crates: Vec<(f32, f32)>, // world positions of smoking salvage crates
     dust_storm_active: bool,
 }
 
@@ -953,6 +1001,7 @@ impl App {
             render_scale: DEFAULT_RENDER_SCALE,
             grid_data: Vec::new(),
             grid_dirty: false,
+            water_initialized: false,
             mouse_pressed: false,
             mouse_dragged: false,
             last_mouse_x: 0.0,
@@ -962,6 +1011,8 @@ impl App {
             time_of_day: DAY_DURATION * (CAMERA_START_HOUR / 24.0),
             time_paused: false,
             show_pause_menu: false,
+            show_crash_card: false,
+            crash_card_frame: 0,
             time_speed: 0.1,
             last_frame_time: Instant::now(),
             last_click_frame: 0,
@@ -1232,26 +1283,16 @@ impl App {
             terrain_params: grid::TerrainParams::default(),
             terrain_params_prev: grid::TerrainParams::default(),
             game_state: GameState::MainMenu,
-            chargen_name: "Jeff".to_string(),
-            chargen_skin: [0.76, 0.60, 0.46],
-            chargen_hair: [0.25, 0.15, 0.08],
-            chargen_hair_style: 0,
-            chargen_shirt: [0.35, 0.25, 0.20],
-            chargen_pants: [0.30, 0.28, 0.22],
-            chargen_backstory: Backstory::Sheriff,
-            chargen_body_type: BodyType::Medium,
-            chargen_gender: Gender::Male,
-            chargen_age: 32,
-            chargen_trait: None,
-            chargen_preview_angle: 0.0,
-            manifest_applicants: vec![
-                ManifestCard::generate(1001),
-                ManifestCard::generate(2002),
-                ManifestCard::generate(3003),
-            ],
-            manifest_recruited: Vec::new(),
-            manifest_passes: 0,
-            manifest_seed: 4004,
+            chargen: CharGenState::default(),
+            manifest: ManifestState {
+                applicants: vec![
+                    ManifestCard::generate(1001),
+                    ManifestCard::generate(2002),
+                    ManifestCard::generate(3003),
+                ],
+                seed: 4004,
+                ..Default::default()
+            },
             diag_preview: Vec::new(),
             drag_entryway: None,
             entry_side: 0,
@@ -1270,6 +1311,7 @@ impl App {
             burn_progress: std::collections::HashMap::new(),
             fire_intensity: 1.0,
             dust_injections: Vec::new(),
+            smoking_crates: Vec::new(),
             dust_storm_active: false,
         }
     }
@@ -2416,8 +2458,8 @@ impl App {
             self.generate_hints();
         }
 
-        // WASD camera pan (always active)
-        {
+        // WASD camera pan (blocked during crash card)
+        if !self.show_crash_card {
             let shift = self.pressed_keys.contains(&KeyCode::ShiftLeft)
                 || self.pressed_keys.contains(&KeyCode::ShiftRight);
             let pan_speed =
@@ -2657,8 +2699,11 @@ impl App {
                 0,
                 bytemuck::cast_slice(&self.water_table),
             );
-            // Water textures: initialize with equilibrium depth
-            if self.water_equilibrium.len() == (GRID_W * GRID_H) as usize {
+            // Water textures: initialize with equilibrium depth (only on first upload,
+            // not during gameplay — otherwise removing a block resets all water)
+            if !self.water_initialized && self.water_equilibrium.len() == (GRID_W * GRID_H) as usize
+            {
+                self.water_initialized = true;
                 let water_bytes: &[u8] = bytemuck::cast_slice(&self.water_equilibrium);
                 for i in 0..2 {
                     gfx.queue.write_texture(
@@ -2803,10 +2848,10 @@ impl App {
         }
         // Batch: find bounding rect and write one region
         if !water_dirty_tiles.is_empty() {
-            let min_x = water_dirty_tiles.iter().map(|t| t.0).min().unwrap();
-            let max_x = water_dirty_tiles.iter().map(|t| t.0).max().unwrap();
-            let min_y = water_dirty_tiles.iter().map(|t| t.1).min().unwrap();
-            let max_y = water_dirty_tiles.iter().map(|t| t.1).max().unwrap();
+            let min_x = water_dirty_tiles.iter().map(|t| t.0).min().unwrap_or(0);
+            let max_x = water_dirty_tiles.iter().map(|t| t.0).max().unwrap_or(0);
+            let min_y = water_dirty_tiles.iter().map(|t| t.1).min().unwrap_or(0);
+            let max_y = water_dirty_tiles.iter().map(|t| t.1).max().unwrap_or(0);
             let w = (max_x - min_x + 1) as usize;
             let h = (max_y - min_y + 1) as usize;
             let mut region = vec![0.0f32; w * h];
@@ -3664,6 +3709,17 @@ impl App {
                     };
                     gfx.queue
                         .write_buffer(&gfx.dust_params_buffer, 0, bytemuck::bytes_of(&params));
+                }
+                // Smoking salvage crates: inject small dust puffs every ~8 frames
+                if !self.smoking_crates.is_empty() && self.frame_count % 8 == 0 {
+                    for &(sx, sy) in &self.smoking_crates {
+                        self.dust_injections.push(dust::DustInjection {
+                            x: sx,
+                            y: sy,
+                            radius: 0.4,
+                            density: 0.3,
+                        });
+                    }
                 }
                 // CPU dust injections — write Gaussian blobs to BOTH dust textures
                 for inj in self.dust_injections.drain(..) {
@@ -4675,7 +4731,7 @@ impl ApplicationHandler for App {
     ) {
         // Always track cursor position and handle panning/selection before egui
         if let WindowEvent::CursorMoved { position, .. } = &event {
-            if self.mouse_pressed {
+            if self.mouse_pressed && !self.show_crash_card {
                 let dx = position.x - self.last_mouse_x;
                 let dy = position.y - self.last_mouse_y;
                 if dx.abs() > DRAG_THRESHOLD || dy.abs() > DRAG_THRESHOLD {
@@ -4700,7 +4756,7 @@ impl ApplicationHandler for App {
                 }
             }
             // Middle mouse drag = fast pan (3x speed, no drag threshold)
-            if self.middle_mouse_pressed {
+            if self.middle_mouse_pressed && !self.show_crash_card {
                 let dx = position.x - self.last_mouse_x;
                 let dy = position.y - self.last_mouse_y;
                 let pan_mul = 3.0; // faster than left-click drag
@@ -4733,7 +4789,7 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput { event, .. } => self.handle_keyboard(&event),
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, .. } if !self.show_crash_card => {
                 let scroll = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 50.0,
@@ -4758,6 +4814,17 @@ impl ApplicationHandler for App {
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                // Dismiss crash card on any click
+                if self.show_crash_card
+                    && state.is_pressed()
+                    && self.frame_count > self.crash_card_frame + 3
+                {
+                    self.show_crash_card = false;
+                    self.time_paused = false;
+                    // Consume the click — don't process further
+                    self.window.as_ref().unwrap().request_redraw();
+                    return;
+                }
                 if button == winit::event::MouseButton::Left {
                     if state.is_pressed() {
                         // Move mode: click to move selected plebs to cursor
