@@ -287,6 +287,8 @@ pub const MAX_BELT_SLOTS: usize = 6;
 pub struct PlebEquipment {
     /// Belt item slots (None = empty). Length = belt_capacity (0 if no belt).
     pub belt: [Option<u16>; MAX_BELT_SLOTS],
+    /// Durability per belt slot (remaining uses). 0 = broken.
+    pub belt_durability: [u16; MAX_BELT_SLOTS],
     /// How many belt slots are available (0 = no belt, 3 = fiber belt, 4 = leather, 6 = reinforced)
     pub belt_capacity: u8,
     /// Item ID of the belt itself (0 = no belt)
@@ -299,6 +301,7 @@ impl Default for PlebEquipment {
     fn default() -> Self {
         Self {
             belt: [None; MAX_BELT_SLOTS],
+            belt_durability: [0; MAX_BELT_SLOTS],
             belt_capacity: 0,
             belt_item: 0,
             active_item: None,
@@ -320,9 +323,14 @@ impl PlebEquipment {
 
     /// Try to add an item to the first empty belt slot. Returns true on success.
     pub fn add_to_belt(&mut self, item_id: u16) -> bool {
+        let dur = crate::item_defs::ItemRegistry::cached()
+            .get(item_id)
+            .map(|d| d.max_durability)
+            .unwrap_or(0);
         for i in 0..self.belt_capacity as usize {
             if self.belt[i].is_none() {
                 self.belt[i] = Some(item_id);
+                self.belt_durability[i] = dur;
                 return true;
             }
         }
@@ -334,6 +342,7 @@ impl PlebEquipment {
         for i in 0..self.belt_capacity as usize {
             if self.belt[i] == Some(item_id) {
                 self.belt[i] = None;
+                self.belt_durability[i] = 0;
                 if self.active_item == Some(item_id) {
                     self.active_item = None;
                 }
@@ -370,6 +379,49 @@ impl PlebEquipment {
                         return Some(id);
                     }
                 }
+            }
+        }
+        None
+    }
+
+    /// Wear the currently active tool by `uses` points. Returns Some(item_id) if the tool broke.
+    pub fn wear_active_tool(&mut self, uses: u16) -> Option<u16> {
+        let active = self.active_item?;
+        for i in 0..self.belt_capacity as usize {
+            if self.belt[i] == Some(active) {
+                let max = crate::item_defs::ItemRegistry::cached()
+                    .get(active)
+                    .map(|d| d.max_durability)
+                    .unwrap_or(0);
+                if max == 0 {
+                    return None; // indestructible
+                }
+                self.belt_durability[i] = self.belt_durability[i].saturating_sub(uses);
+                if self.belt_durability[i] == 0 {
+                    // Tool broke — remove from belt
+                    self.belt[i] = None;
+                    self.active_item = None;
+                    return Some(active);
+                }
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Get the durability fraction (0.0–1.0) of the active tool. Returns None if no tool or indestructible.
+    pub fn active_tool_durability(&self) -> Option<f32> {
+        let active = self.active_item?;
+        for i in 0..self.belt_capacity as usize {
+            if self.belt[i] == Some(active) {
+                let max = crate::item_defs::ItemRegistry::cached()
+                    .get(active)
+                    .map(|d| d.max_durability)
+                    .unwrap_or(0);
+                if max == 0 {
+                    return None;
+                }
+                return Some(self.belt_durability[i] as f32 / max as f32);
             }
         }
         None
@@ -1075,6 +1127,15 @@ impl Pleb {
     /// Check if pleb has a specific tool type on their belt.
     pub fn has_tool(&self, tool_type: &str) -> bool {
         self.equipment.has_tool(tool_type)
+    }
+
+    /// Wear the active tool by `uses` points. Returns Some(item_id) if it broke.
+    pub fn wear_tool(&mut self, uses: u16) -> Option<u16> {
+        let broke = self.equipment.wear_active_tool(uses);
+        if broke.is_some() {
+            self.equipped_weapon = None;
+        }
+        broke
     }
 
     /// Draw a specific tool from belt, setting it as active. Returns item_id.

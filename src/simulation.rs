@@ -48,6 +48,24 @@ const WIND_CHANGE_MIN: f32 = 10.0; // seconds between wind shifts
 const WIND_CHANGE_RANGE: f32 = 20.0; // additional random seconds
 const WIND_LERP_RATE: f32 = 0.3; // interpolation rate toward target
 
+/// Handle a tool breaking: set thought bubble, drop item on ground.
+fn handle_tool_break(pleb: &mut Pleb, item_id: u16, ground_items: &mut Vec<resources::GroundItem>) {
+    let reg = item_defs::ItemRegistry::cached();
+    let name = reg.name(item_id);
+    pleb.set_bubble(
+        pleb::BubbleKind::Thought(format!("My {} broke...", name)),
+        3.0,
+    );
+    // Drop broken tool on ground near pleb
+    let mut stack = item_defs::ItemStack::new(item_id, 1);
+    stack.durability = 0; // broken
+    ground_items.push(resources::GroundItem {
+        x: pleb.x,
+        y: pleb.y,
+        stack,
+    });
+}
+
 /// Find a cover position near `pos` that puts a low wall between the pleb and the threat.
 fn find_cover_position(
     grid: &[u32],
@@ -4552,6 +4570,10 @@ impl App {
                                         10.0,
                                         self.time_of_day,
                                     );
+                                    // Wear axe (tree chopping is hard work)
+                                    if let Some(broke_id) = pleb.wear_tool(2) {
+                                        handle_tool_break(pleb, broke_id, &mut self.ground_items);
+                                    }
                                 }
                             }
                             self.active_work.remove(&(tx, ty));
@@ -4603,6 +4625,10 @@ impl App {
                                     // Zero compaction — bits 24-28
                                     self.terrain_data[tidx] &= !0x1F000000;
                                     self.terrain_dirty = true;
+                                }
+                                // Wear shovel (1 use per dig stroke)
+                                if let Some(broke_id) = pleb.wear_tool(1) {
+                                    handle_tool_break(pleb, broke_id, &mut self.ground_items);
                                 }
                                 // Produce dirt resource
                                 let dirt_items = (dirt * terrain::DIRT_PER_VOLUME) as u16;
@@ -5246,6 +5272,10 @@ impl App {
                         }
                     }
                     pleb.gain_xp_logged(pleb::SKILL_CRAFTING, 15.0, self.time_of_day);
+                    // Wear knife
+                    if let Some(broke_id) = pleb.wear_tool(1) {
+                        handle_tool_break(pleb, broke_id, &mut self.ground_items);
+                    }
                     pleb.activity = PlebActivity::Idle;
                     pleb.work_target = None;
                 } else {
@@ -5356,6 +5386,10 @@ impl App {
                         }
 
                         if let Some(mat) = mined_mat {
+                            // Wear pick (1 use per sub-cell)
+                            if let Some(broke_id) = pleb.wear_tool(1) {
+                                handle_tool_break(pleb, broke_id, &mut self.ground_items);
+                            }
                             // Drop appropriate item
                             let drop_item = match mat {
                                 mining::MAT_HOST => Some((ITEM_ROCK, 1u16)),
@@ -7259,6 +7293,12 @@ fn tick_pleb_activity(
                     let hidx = (hy as u32 * GRID_W + hx as u32) as usize;
                     hidx < grid.len() && (grid[hidx] & 0xFF) == BT_TREE
                 });
+                // Wear tool on harvest completion (knife for plants, nothing for branches)
+                if !is_tree_target && pleb.equipment.active_item.is_some() {
+                    if let Some(broke_id) = pleb.wear_tool(1) {
+                        handle_tool_break(pleb, broke_id, ground_items);
+                    }
+                }
                 if is_tree_target {
                     // Gather branches — bulk harvest: 5-10 sticks + 5-10 fiber
                     // Enough for a small roof in one trip

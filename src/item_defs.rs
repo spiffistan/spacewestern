@@ -220,6 +220,18 @@ impl ItemStack {
                 s += " (aging)";
             }
         }
+        // Durability indicator for tools
+        let max_dur = reg.get(self.item_id).map(|d| d.max_durability).unwrap_or(0);
+        if max_dur > 0 {
+            if self.durability == 0 {
+                s += " (broken)";
+            } else {
+                let pct = (self.durability as f32 / max_dur as f32 * 100.0) as u32;
+                if pct < 30 {
+                    s += " (worn)";
+                }
+            }
+        }
         s
     }
 
