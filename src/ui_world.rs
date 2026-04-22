@@ -3422,6 +3422,9 @@ impl App {
                             PlebActivity::Mining(_) => {
                                 (Some("Mining"), egui::Color32::from_rgb(160, 120, 80))
                             }
+                            PlebActivity::Sharpening(_) => {
+                                (Some("Sharpening..."), egui::Color32::from_rgb(180, 160, 80))
+                            }
                             PlebActivity::Staggering(_) => {
                                 (Some("Staggering!"), egui::Color32::from_rgb(255, 140, 40))
                             }

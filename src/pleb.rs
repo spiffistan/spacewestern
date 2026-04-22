@@ -247,6 +247,7 @@ pub enum PlebActivity {
     Cooking(f32),                      // progress 0-1, cooking food at a campfire
     Fishing(f32),                      // progress 0-1, fishing at water's edge (~20s per attempt)
     Mining(f32),                       // progress 0-1, mining a sub-cell of rock
+    Sharpening(f32),                   // real-time seconds remaining (auto-sharpen at 30%)
     Staggering(f32),                   // knockback recovery timer (seconds remaining)
     MentalBreak(MentalBreakKind, f32), // (kind, seconds remaining)
     /// Crisis override — pleb acts autonomously, ignoring player input.
@@ -425,6 +426,27 @@ impl PlebEquipment {
             }
         }
         None
+    }
+
+    /// Restore the active tool's durability to 60% of max. Used after sharpening.
+    pub fn sharpen_active_tool(&mut self) {
+        let Some(active) = self.active_item else {
+            return;
+        };
+        let max = crate::item_defs::ItemRegistry::cached()
+            .get(active)
+            .map(|d| d.max_durability)
+            .unwrap_or(0);
+        if max == 0 {
+            return;
+        }
+        let target = (max as f32 * 0.6) as u16;
+        for i in 0..self.belt_capacity as usize {
+            if self.belt[i] == Some(active) {
+                self.belt_durability[i] = self.belt_durability[i].max(target);
+                return;
+            }
+        }
     }
 
     /// Draw the best ranged weapon from belt.
@@ -724,6 +746,9 @@ pub struct Pleb {
     /// Bits: 0=hunger_low, 1=hunger_crit, 2=thirst_low, 3=thirst_crit,
     ///       4=rest_low, 5=rest_crit, 6=warmth_low, 7=warmth_crit
     pub need_emote_flags: u8,
+    /// Contextual thought flags: each bit = one thought shown (never repeats per pleb).
+    /// 0=crates, 1=fire_needed, 2=no_shelter, 3=berries_nearby, 4=tool_needed
+    pub context_thought_flags: u16,
     /// Per-pleb event log (most recent first, capped)
     pub event_log: Vec<(f32, String)>, // (game_time, message)
 }
@@ -870,6 +895,7 @@ impl Pleb {
             smoke_exposure: 0.0,
             wetness_emote: 0,
             need_emote_flags: 0,
+            context_thought_flags: 0,
             event_log: Vec::new(),
         }
     }

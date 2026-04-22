@@ -2269,6 +2269,7 @@ impl App {
                                 PlebActivity::Mining(pr) => {
                                     format!("Mining {:.0}%", pr * 100.0)
                                 }
+                                PlebActivity::Sharpening(_) => "Sharpening...".to_string(),
                                 PlebActivity::Staggering(_) => "Staggering!".to_string(),
                                 PlebActivity::Crisis(_, _) => "Crisis".to_string(),
                             };
@@ -4549,6 +4550,7 @@ impl App {
                 PlebActivity::Cooking(_) => "Cooking",
                 PlebActivity::Fishing(_) => "Fishing",
                 PlebActivity::Mining(_) => "Mining",
+                PlebActivity::Sharpening(_) => "Sharpening",
                 PlebActivity::Staggering(_) => "Staggering",
                 PlebActivity::Crisis(_, _) => "Crisis",
             }

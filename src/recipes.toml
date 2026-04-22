@@ -2,22 +2,48 @@
 # Item IDs: raw food 0+, cooked 100+, materials 200+, crafted 300+,
 #           containers 400+, tools 500+, weapons 600+, equipment 700+
 
-# ── Hand-crafting (no station needed) ──
+# ── Primitive hand-crafting (Tier 0, no tools needed) ──
+
+[[recipe]]
+id = 14
+name = "Hammerstone"
+station = "hand"
+time = 1.0
+inputs = [{item = 201, count = 1}]
+output = {item = 504, count = 1}
+
+[[recipe]]
+id = 15
+name = "Stone Blade"
+station = "hand"
+time = 3.0
+inputs = [{item = 201, count = 1}]
+output = {item = 505, count = 1}
+
+[[recipe]]
+id = 16
+name = "Digging Stick"
+station = "hand"
+time = 2.0
+inputs = [{item = 204, count = 1}]
+output = {item = 509, count = 1}
+
+# ── Hand-crafting (Tier 1, needs materials) ──
 
 [[recipe]]
 id = 8
 name = "Stone Axe"
 station = "hand"
-time = 4.0
-inputs = [{item = 201, count = 2}, {item = 204, count = 1}]
+time = 6.0
+inputs = [{item = 201, count = 1}, {item = 204, count = 1}, {item = 202, count = 1}]
 output = {item = 500, count = 1}
 
 [[recipe]]
 id = 9
 name = "Stone Pick"
 station = "hand"
-time = 4.0
-inputs = [{item = 201, count = 2}, {item = 204, count = 1}]
+time = 5.0
+inputs = [{item = 201, count = 1}, {item = 204, count = 1}, {item = 202, count = 1}]
 output = {item = 501, count = 1}
 
 [[recipe]]
@@ -25,7 +51,7 @@ id = 10
 name = "Hunting Knife"
 station = "hand"
 time = 5.0
-inputs = [{item = 201, count = 1}, {item = 204, count = 2}]
+inputs = [{item = 201, count = 1}, {item = 204, count = 1}, {item = 202, count = 1}]
 output = {item = 503, count = 1}
 
 [[recipe]]

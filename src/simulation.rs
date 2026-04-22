@@ -48,6 +48,9 @@ const WIND_CHANGE_MIN: f32 = 10.0; // seconds between wind shifts
 const WIND_CHANGE_RANGE: f32 = 20.0; // additional random seconds
 const WIND_LERP_RATE: f32 = 0.3; // interpolation rate toward target
 
+const SHARPEN_THRESHOLD: f32 = 0.30; // trigger auto-sharpen below this fraction
+const SHARPEN_DURATION: f32 = 1.5; // real-time seconds for sharpen pause
+
 /// Handle a tool breaking: set thought bubble, drop item on ground.
 fn handle_tool_break(pleb: &mut Pleb, item_id: u16, ground_items: &mut Vec<resources::GroundItem>) {
     let reg = item_defs::ItemRegistry::cached();
@@ -56,14 +59,34 @@ fn handle_tool_break(pleb: &mut Pleb, item_id: u16, ground_items: &mut Vec<resou
         pleb::BubbleKind::Thought(format!("My {} broke...", name)),
         3.0,
     );
-    // Drop broken tool on ground near pleb
     let mut stack = item_defs::ItemStack::new(item_id, 1);
-    stack.durability = 0; // broken
+    stack.durability = 0;
     ground_items.push(resources::GroundItem {
         x: pleb.x,
         y: pleb.y,
         stack,
     });
+}
+
+/// Wear the active tool and handle break/sharpen. Call after each tool use.
+/// Returns true if the pleb started sharpening (caller should skip further work).
+fn wear_and_maybe_sharpen(
+    pleb: &mut Pleb,
+    uses: u16,
+    ground_items: &mut Vec<resources::GroundItem>,
+) -> bool {
+    if let Some(broke_id) = pleb.wear_tool(uses) {
+        handle_tool_break(pleb, broke_id, ground_items);
+        return false; // tool broke, no sharpen needed
+    }
+    // Check if below sharpen threshold
+    if let Some(frac) = pleb.equipment.active_tool_durability() {
+        if frac < SHARPEN_THRESHOLD && !pleb.activity.is_crisis() {
+            pleb.activity = PlebActivity::Sharpening(SHARPEN_DURATION);
+            return true;
+        }
+    }
+    false
 }
 
 /// Find a cover position near `pos` that puts a low wall between the pleb and the threat.
@@ -1199,12 +1222,16 @@ impl App {
             // Combat stress: suppression builds stress, safe conditions recover it
             morale::tick_suppression_stress(pleb, dt * self.time_speed);
 
-            // Tick down bubble timer
+            // Tick down bubble timer (real-time, not game-time)
             if let Some((_, ref mut timer)) = pleb.bubble {
-                *timer -= dt * self.time_speed;
+                *timer -= dt;
                 if *timer <= 0.0 {
                     pleb.bubble = None;
                 }
+            }
+            // Clear bubbles on death
+            if pleb.is_dead {
+                pleb.bubble = None;
             }
 
             let is_selected = sel == Some(i);
@@ -1563,6 +1590,129 @@ impl App {
                     // Reset when dried off
                     if w < 0.2 {
                         pleb.wetness_emote = 0;
+                    }
+                }
+
+                // --- Contextual thoughts: teach mechanics through pleb observations ---
+                if !pleb.is_enemy && !pleb.is_dead && pleb.activity == PlebActivity::Idle {
+                    let cf = pleb.context_thought_flags;
+                    let px = pleb.x.floor() as i32;
+                    let py = pleb.y.floor() as i32;
+
+                    // Bit 0: Near salvage crate — "Those crates might have supplies..."
+                    if (cf & 1) == 0 {
+                        let near_crate = (-5..=5i32).any(|dy| {
+                            (-5..=5i32).any(|dx| {
+                                let nx = px + dx;
+                                let ny = py + dy;
+                                if nx >= 0 && ny >= 0 && nx < GRID_W as i32 && ny < GRID_H as i32 {
+                                    let idx = (ny as u32 * GRID_W + nx as u32) as usize;
+                                    idx < self.grid_data.len()
+                                        && block_type_rs(self.grid_data[idx]) == BT_SALVAGE_CRATE
+                                } else {
+                                    false
+                                }
+                            })
+                        });
+                        if near_crate {
+                            pleb.context_thought_flags |= 1;
+                            pleb.set_bubble(
+                                pleb::BubbleKind::Thought(
+                                    "Those crates might have supplies...".into(),
+                                ),
+                                4.0,
+                            );
+                        }
+                    }
+
+                    // Bit 1: Dusk approaching, no campfire nearby — "We need a fire..."
+                    if (cf & 2) == 0 {
+                        let day_frac = (self.time_of_day / DAY_DURATION).rem_euclid(1.0);
+                        if day_frac > DUSK_START && day_frac < DUSK_END {
+                            let has_fire = (-8..=8i32).any(|dy| {
+                                (-8..=8i32).any(|dx| {
+                                    let nx = px + dx;
+                                    let ny = py + dy;
+                                    if nx >= 0
+                                        && ny >= 0
+                                        && nx < GRID_W as i32
+                                        && ny < GRID_H as i32
+                                    {
+                                        let idx = (ny as u32 * GRID_W + nx as u32) as usize;
+                                        idx < self.grid_data.len()
+                                            && bt_is!(
+                                                block_type_rs(self.grid_data[idx]),
+                                                BT_CAMPFIRE,
+                                                BT_FIREPLACE
+                                            )
+                                    } else {
+                                        false
+                                    }
+                                })
+                            });
+                            if !has_fire {
+                                pleb.context_thought_flags |= 2;
+                                pleb.set_bubble(
+                                    pleb::BubbleKind::Thought("We need a fire before dark.".into()),
+                                    4.0,
+                                );
+                            }
+                        }
+                    }
+
+                    // Bit 2: Sleeping outdoors (no roof) — "Should find shelter..."
+                    if (cf & 4) == 0 && pleb.activity == PlebActivity::Idle {
+                        let idx = (py as u32 * GRID_W + px as u32) as usize;
+                        let has_roof =
+                            idx < self.grid_data.len() && ((self.grid_data[idx] >> 16) & 2) != 0;
+                        if !has_roof && pleb.needs.rest < 0.3 {
+                            pleb.context_thought_flags |= 4;
+                            pleb.set_bubble(
+                                pleb::BubbleKind::Thought("Nowhere to sleep...".into()),
+                                3.0,
+                            );
+                        }
+                    }
+
+                    // Bit 3: Near berry bush with low hunger — "Are those berries?"
+                    if (cf & 8) == 0 && pleb.needs.hunger < 0.6 {
+                        let near_berries = (-4..=4i32).any(|dy| {
+                            (-4..=4i32).any(|dx| {
+                                let nx = px + dx;
+                                let ny = py + dy;
+                                if nx >= 0 && ny >= 0 && nx < GRID_W as i32 && ny < GRID_H as i32 {
+                                    let idx = (ny as u32 * GRID_W + nx as u32) as usize;
+                                    if idx < self.grid_data.len() {
+                                        let bt = block_type_rs(self.grid_data[idx]);
+                                        bt == BT_BERRY_BUSH && (self.grid_data[idx] >> 8) & 0xFF > 0
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            })
+                        });
+                        if near_berries {
+                            pleb.context_thought_flags |= 8;
+                            pleb.set_bubble(
+                                pleb::BubbleKind::Thought("Are those berries?".into()),
+                                3.0,
+                            );
+                        }
+                    }
+
+                    // Bit 4: No tools at all — "Need to make some tools..."
+                    if (cf & 16) == 0 && pleb.equipment.belt_capacity > 0 {
+                        let has_any_tool = (0..pleb.equipment.belt_capacity as usize)
+                            .any(|i| pleb.equipment.belt[i].is_some());
+                        if !has_any_tool {
+                            pleb.context_thought_flags |= 16;
+                            pleb.set_bubble(
+                                pleb::BubbleKind::Thought("Need to make some tools...".into()),
+                                3.0,
+                            );
+                        }
                     }
                 }
 
@@ -2205,6 +2355,17 @@ impl App {
                         pleb.activity = PlebActivity::Idle;
                     } else {
                         pleb.activity = PlebActivity::Staggering(remaining - dt);
+                    }
+                }
+
+                // Sharpening tick (real-time, not game-time)
+                if let PlebActivity::Sharpening(remaining) = pleb.activity {
+                    if remaining - dt <= 0.0 {
+                        // Sharpen complete — restore to 60%
+                        pleb.equipment.sharpen_active_tool();
+                        pleb.activity = PlebActivity::Idle;
+                    } else {
+                        pleb.activity = PlebActivity::Sharpening(remaining - dt);
                     }
                 }
 
@@ -4571,9 +4732,7 @@ impl App {
                                         self.time_of_day,
                                     );
                                     // Wear axe (tree chopping is hard work)
-                                    if let Some(broke_id) = pleb.wear_tool(2) {
-                                        handle_tool_break(pleb, broke_id, &mut self.ground_items);
-                                    }
+                                    wear_and_maybe_sharpen(pleb, 2, &mut self.ground_items);
                                 }
                             }
                             self.active_work.remove(&(tx, ty));
@@ -4627,9 +4786,7 @@ impl App {
                                     self.terrain_dirty = true;
                                 }
                                 // Wear shovel (1 use per dig stroke)
-                                if let Some(broke_id) = pleb.wear_tool(1) {
-                                    handle_tool_break(pleb, broke_id, &mut self.ground_items);
-                                }
+                                wear_and_maybe_sharpen(pleb, 1, &mut self.ground_items);
                                 // Produce dirt resource
                                 let dirt_items = (dirt * terrain::DIRT_PER_VOLUME) as u16;
                                 if dirt_items > 0 {
@@ -5273,9 +5430,7 @@ impl App {
                     }
                     pleb.gain_xp_logged(pleb::SKILL_CRAFTING, 15.0, self.time_of_day);
                     // Wear knife
-                    if let Some(broke_id) = pleb.wear_tool(1) {
-                        handle_tool_break(pleb, broke_id, &mut self.ground_items);
-                    }
+                    wear_and_maybe_sharpen(pleb, 1, &mut self.ground_items);
                     pleb.activity = PlebActivity::Idle;
                     pleb.work_target = None;
                 } else {
@@ -5387,9 +5542,7 @@ impl App {
 
                         if let Some(mat) = mined_mat {
                             // Wear pick (1 use per sub-cell)
-                            if let Some(broke_id) = pleb.wear_tool(1) {
-                                handle_tool_break(pleb, broke_id, &mut self.ground_items);
-                            }
+                            wear_and_maybe_sharpen(pleb, 1, &mut self.ground_items);
                             // Drop appropriate item
                             let drop_item = match mat {
                                 mining::MAT_HOST => Some((ITEM_ROCK, 1u16)),
@@ -7295,9 +7448,7 @@ fn tick_pleb_activity(
                 });
                 // Wear tool on harvest completion (knife for plants, nothing for branches)
                 if !is_tree_target && pleb.equipment.active_item.is_some() {
-                    if let Some(broke_id) = pleb.wear_tool(1) {
-                        handle_tool_break(pleb, broke_id, ground_items);
-                    }
+                    wear_and_maybe_sharpen(pleb, 1, ground_items);
                 }
                 if is_tree_target {
                     // Gather branches — bulk harvest: 5-10 sticks + 5-10 fiber
