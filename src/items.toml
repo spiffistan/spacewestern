@@ -64,6 +64,33 @@ stack_max = 5
 nutrition = 0.30
 spoil_time = 400.0
 
+[[item]]
+id = 102
+name = "Dried Meat"
+icon = "\U0001F969"
+category = "food"
+stack_max = 10
+nutrition = 0.28
+spoil_time = 1800.0
+
+[[item]]
+id = 103
+name = "Dried Fish"
+icon = "\U0001F41F"
+category = "food"
+stack_max = 10
+nutrition = 0.22
+spoil_time = 1800.0
+
+[[item]]
+id = 104
+name = "Salted Meat"
+icon = "\U0001F356"
+category = "food"
+stack_max = 10
+nutrition = 0.30
+spoil_time = 3600.0
+
 # ── Raw Materials (200–299) ──
 
 [[item]]

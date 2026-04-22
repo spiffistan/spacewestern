@@ -3575,6 +3575,44 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         } else {
             color = ground;
         }
+    } else if btype == BT_CHARCOAL_MOUND {
+        // Charcoal mound: dark earth dome with glowing embers when active
+        let cx = fx - 0.5;
+        let cy = fy - 0.5;
+        let dist = length(vec2<f32>(cx, cy));
+        let mound_r = 0.40;
+        let is_burning = bheight > 0u; // stage > 0 = converting
+        if dist < mound_r {
+            // Dark earth/charcoal surface
+            let depth = 1.0 - dist / mound_r;
+            color = vec3<f32>(0.15, 0.12, 0.08);
+            // Dome shading (darker at edges)
+            color *= 0.7 + depth * 0.3;
+            // Ember glow when active
+            if is_burning {
+                let ember_noise = fract(sin(world_x * 47.3 + world_y * 89.1 + camera.time * 0.5) * 43758.5);
+                let ember2 = fract(sin(world_x * 31.7 + world_y * 67.3 + camera.time * 0.3) * 21357.8);
+                if ember_noise < 0.15 && depth > 0.3 {
+                    // Orange-red ember spots
+                    let glow = ember_noise / 0.15;
+                    color = mix(color, vec3<f32>(0.8, 0.3, 0.05), glow * 0.6);
+                }
+                if ember2 < 0.08 && depth > 0.5 {
+                    // Bright yellow-white hot spots
+                    color = mix(color, vec3<f32>(1.0, 0.7, 0.2), ember2 / 0.08 * 0.4);
+                }
+                // Cracks revealing heat underneath
+                let crack = abs(sin(cx * 15.0 + cy * 8.0)) * abs(sin(cx * 7.0 - cy * 12.0));
+                if crack < 0.04 {
+                    color = mix(color, vec3<f32>(0.7, 0.25, 0.03), 0.5);
+                }
+            }
+        } else if dist < mound_r + 0.06 {
+            // Ring of loose earth around base
+            color = vec3<f32>(0.25, 0.20, 0.12);
+        } else {
+            color = vec3<f32>(0.45, 0.35, 0.20); // ground
+        }
     } else if btype == BT_FLOOR_LAMP {
         // Standing lamp (emissive)
         color = render_standing_lamp(fx, fy, camera.time);

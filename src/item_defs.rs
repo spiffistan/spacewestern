@@ -9,6 +9,9 @@ pub const ITEM_RAW_MEAT: u16 = 1;
 pub const ITEM_RAW_FISH: u16 = 2;
 pub const ITEM_COOKED_MEAT: u16 = 100;
 pub const ITEM_COOKED_FISH: u16 = 101;
+pub const ITEM_DRIED_MEAT: u16 = 102;
+pub const ITEM_DRIED_FISH: u16 = 103;
+pub const ITEM_SALTED_MEAT: u16 = 104;
 // Raw materials 200–299
 pub const ITEM_WOOD: u16 = 200;
 pub const ITEM_ROCK: u16 = 201;

@@ -103,6 +103,7 @@ impl App {
                 self.draw_game_log(ctx);
                 self.draw_minimap(ctx);
                 self.draw_stone_lab(ctx);
+                self.draw_ledger(ctx);
 
                 // Crash landing card (shown once on game start)
                 if self.show_crash_card {
@@ -2872,22 +2873,18 @@ impl App {
                     }
                 }
                 ContextAction::HandCraft(recipe_id) => {
-                    if let Some(sel_idx) = self.selected_pleb {
-                        let pleb = &mut self.plebs[sel_idx];
-                        if !pleb.is_enemy && !pleb.activity.is_crisis() {
-                            let recipe_reg = recipe_defs::RecipeRegistry::cached();
-                            if let Some(recipe) = recipe_reg.get(recipe_id) {
-                                let can = recipe.inputs.iter().all(|ing| {
-                                    pleb.inventory.count_of(ing.item) >= ing.count as u32
-                                });
-                                if can {
-                                    for ing in &recipe.inputs {
-                                        pleb.inventory.remove(ing.item, ing.count);
-                                    }
-                                    pleb.activity = PlebActivity::Crafting(recipe_id, 0.0);
-                                    pleb.path.clear();
-                                    pleb.path_idx = 0;
-                                }
+                    if let Some(sel_idx) = self.selected_pleb
+                        && !self.plebs[sel_idx].is_enemy
+                        && !self.plebs[sel_idx].activity.is_crisis()
+                    {
+                        let recipe_reg = recipe_defs::RecipeRegistry::cached();
+                        if let Some(recipe) = recipe_reg.get(recipe_id) {
+                            if self.can_craft_from_world(sel_idx, recipe) {
+                                self.consume_ingredients(sel_idx, recipe);
+                                self.plebs[sel_idx].activity =
+                                    PlebActivity::Crafting(recipe_id, 0.0);
+                                self.plebs[sel_idx].path.clear();
+                                self.plebs[sel_idx].path_idx = 0;
                             }
                         }
                     }
@@ -5492,6 +5489,216 @@ impl App {
                     }
                 });
             });
+    }
+
+    // --- Colony Ledger: knowledge overview ---
+    pub(crate) fn draw_ledger(&mut self, ctx: &egui::Context) {
+        if !self.show_ledger {
+            return;
+        }
+        use crate::pleb::{KNOWLEDGE_DOMAIN_NAMES, NUM_KNOWLEDGE_DOMAINS};
+        use crate::theme::palette;
+
+        let mut open = true;
+        egui::Window::new("Colony Ledger")
+            .open(&mut open)
+            .default_width(420.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                // --- Colony Knowledge Heatmap ---
+                ui.label(
+                    egui::RichText::new("Knowledge Heatmap")
+                        .size(12.0)
+                        .strong()
+                        .color(palette::PARCHMENT),
+                );
+                ui.add_space(4.0);
+
+                let living_plebs: Vec<&pleb::Pleb> = self
+                    .plebs
+                    .iter()
+                    .filter(|p| !p.is_dead && !p.is_enemy)
+                    .collect();
+
+                if living_plebs.is_empty() {
+                    ui.label("No survivors.");
+                } else {
+                    // Header row: domain names
+                    egui::Grid::new("knowledge_heatmap")
+                        .striped(true)
+                        .min_col_width(48.0)
+                        .spacing([4.0, 2.0])
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("").size(9.0).color(palette::INK_FAINT)); // corner cell
+                            for name in &KNOWLEDGE_DOMAIN_NAMES {
+                                ui.label(
+                                    egui::RichText::new(*name)
+                                        .size(9.0)
+                                        .strong()
+                                        .color(egui::Color32::from_gray(180)),
+                                );
+                            }
+                            ui.end_row();
+
+                            // One row per pleb
+                            for p in &living_plebs {
+                                ui.label(
+                                    egui::RichText::new(&p.name)
+                                        .size(10.0)
+                                        .color(egui::Color32::from_gray(200)),
+                                );
+                                for d in 0..NUM_KNOWLEDGE_DOMAINS {
+                                    let level = p.knowledge[d];
+                                    let frac = (level / 10.0).clamp(0.0, 1.0);
+                                    // Color: dark gray → amber → bright yellow
+                                    let r = (40.0 + frac * 195.0) as u8;
+                                    let g = (40.0 + frac * 150.0) as u8;
+                                    let b = (45.0 + frac * 20.0) as u8;
+                                    let bar_color = egui::Color32::from_rgb(r, g, b);
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::Vec2::new(48.0, 14.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    let painter = ui.painter_at(rect);
+                                    // Background
+                                    painter.rect_filled(
+                                        rect,
+                                        2.0,
+                                        egui::Color32::from_rgb(30, 30, 35),
+                                    );
+                                    // Filled portion
+                                    let filled = egui::Rect::from_min_size(
+                                        rect.min,
+                                        egui::Vec2::new(rect.width() * frac, rect.height()),
+                                    );
+                                    painter.rect_filled(filled, 2.0, bar_color);
+                                    // Level text
+                                    painter.text(
+                                        rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        format!("{:.1}", level),
+                                        egui::FontId::proportional(8.0),
+                                        egui::Color32::from_gray(220),
+                                    );
+                                }
+                                ui.end_row();
+                            }
+
+                            // Colony best row
+                            ui.label(
+                                egui::RichText::new("Colony")
+                                    .size(10.0)
+                                    .strong()
+                                    .color(palette::AMBER),
+                            );
+                            for d in 0..NUM_KNOWLEDGE_DOMAINS {
+                                let best = living_plebs
+                                    .iter()
+                                    .map(|p| p.knowledge[d])
+                                    .fold(0.0f32, f32::max);
+                                let frac = (best / 10.0).clamp(0.0, 1.0);
+                                let r = (40.0 + frac * 195.0) as u8;
+                                let g = (40.0 + frac * 150.0) as u8;
+                                let b = (45.0 + frac * 20.0) as u8;
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::Vec2::new(48.0, 14.0),
+                                    egui::Sense::hover(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 35));
+                                let filled = egui::Rect::from_min_size(
+                                    rect.min,
+                                    egui::Vec2::new(rect.width() * frac, rect.height()),
+                                );
+                                painter.rect_filled(filled, 2.0, egui::Color32::from_rgb(r, g, b));
+                                painter.text(
+                                    rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    format!("{:.1}", best),
+                                    egui::FontId::proportional(8.0),
+                                    palette::AMBER,
+                                );
+                                ui.end_row();
+                            }
+                        });
+
+                    ui.add_space(12.0);
+
+                    // --- Individual pleb detail (selected pleb) ---
+                    if let Some(sel_idx) = self.selected_pleb
+                        && let Some(pleb) = self.plebs.get(sel_idx)
+                        && !pleb.is_dead
+                    {
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(format!("{}'s Knowledge", pleb.name))
+                                .size(12.0)
+                                .strong()
+                                .color(palette::PARCHMENT),
+                        );
+                        ui.add_space(4.0);
+
+                        for d in 0..NUM_KNOWLEDGE_DOMAINS {
+                            let level = pleb.knowledge[d];
+                            let label = match level as u32 {
+                                0 => "Ignorant",
+                                1 => "Aware",
+                                2..=3 => "Familiar",
+                                4..=5 => "Practiced",
+                                6..=7 => "Skilled",
+                                8..=9 => "Expert",
+                                _ => "Master",
+                            };
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(KNOWLEDGE_DOMAIN_NAMES[d])
+                                        .size(10.0)
+                                        .color(egui::Color32::from_gray(180)),
+                                );
+                                let frac = (level / 10.0).clamp(0.0, 1.0);
+                                let r = (40.0 + frac * 195.0) as u8;
+                                let g = (40.0 + frac * 150.0) as u8;
+                                let b = (45.0 + frac * 20.0) as u8;
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::Vec2::new(80.0, 12.0),
+                                    egui::Sense::hover(),
+                                );
+                                let painter = ui.painter_at(rect);
+                                painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 35));
+                                let filled = egui::Rect::from_min_size(
+                                    rect.min,
+                                    egui::Vec2::new(rect.width() * frac, rect.height()),
+                                );
+                                painter.rect_filled(filled, 2.0, egui::Color32::from_rgb(r, g, b));
+                                ui.label(
+                                    egui::RichText::new(format!("{:.1} — {}", level, label))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_gray(160)),
+                                );
+                            });
+                        }
+
+                        // Recent discoveries from event log
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Recent Events")
+                                .size(10.0)
+                                .color(palette::INK_FAINT),
+                        );
+                        for (time, msg) in pleb.event_log.iter().take(5) {
+                            let day = (*time / DAY_DURATION) as u32 + 1;
+                            ui.label(
+                                egui::RichText::new(format!("Day {}: {}", day, msg))
+                                    .size(9.0)
+                                    .color(egui::Color32::from_gray(140)),
+                            );
+                        }
+                    }
+                }
+            });
+        if !open {
+            self.show_ledger = false;
+        }
     }
 
     // --- Stone Lab: procedural stone material iteration tool ---

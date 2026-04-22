@@ -591,6 +591,8 @@ impl App {
                         self.time_paused = false;
                     } else if self.context_menu.is_some() {
                         self.context_menu = None;
+                    } else if self.show_ledger {
+                        self.show_ledger = false;
                     } else if self.show_inventory {
                         self.show_inventory = false;
                     } else if self.show_schedule {
@@ -748,6 +750,9 @@ impl App {
                         self.show_inventory = !self.show_inventory;
                         self.inv_selected_slot = None;
                     }
+                }
+                PhysicalKey::Code(KeyCode::KeyL) => {
+                    self.show_ledger = !self.show_ledger;
                 }
                 PhysicalKey::Code(KeyCode::KeyQ) => {
                     if self.selected_pleb.is_none() {

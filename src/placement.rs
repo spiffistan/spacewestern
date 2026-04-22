@@ -749,6 +749,51 @@ impl App {
             return;
         }
 
+        // --- Drag orders: mark tiles for work ---
+        if self.build_tool == BuildTool::OrderChop {
+            let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
+            for (tx, ty) in tiles {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                let bt = block_type_rs(self.grid_data[idx]);
+                if bt == BT_TREE {
+                    self.chop_designations.insert((tx, ty));
+                }
+            }
+            return;
+        }
+        if self.build_tool == BuildTool::OrderMine {
+            let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
+            for (tx, ty) in tiles {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                let bt = block_type_rs(self.grid_data[idx]);
+                if bt == BT_ROCK {
+                    self.mine_designations.insert((tx, ty));
+                }
+            }
+            return;
+        }
+        if self.build_tool == BuildTool::OrderHarvest {
+            let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
+            let block_reg = block_defs::BlockRegistry::cached();
+            for (tx, ty) in tiles {
+                if tx < 0 || ty < 0 || tx >= GRID_W as i32 || ty >= GRID_H as i32 {
+                    continue;
+                }
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                let bt = block_type_rs(self.grid_data[idx]);
+                if bt == BT_BERRY_BUSH || block_reg.get(bt).is_some_and(|d| d.is_harvestable) {
+                    self.harvest_designations.insert((tx, ty));
+                }
+            }
+            return;
+        }
+
         // Roof tool: special handling — sets flag, doesn't change block type
         if self.build_tool == BuildTool::Roof {
             let tiles = Self::filled_rect_tiles(sx, sy, ex, ey);
@@ -1472,11 +1517,7 @@ impl App {
                 let recipe_reg = recipe_defs::RecipeRegistry::cached();
                 let item_reg = item_defs::ItemRegistry::cached();
                 for recipe in recipe_reg.for_station("hand") {
-                    let has_mats = idle
-                        && recipe
-                            .inputs
-                            .iter()
-                            .all(|ing| pleb.inventory.count_of(ing.item) >= ing.count as u32);
+                    let has_mats = idle && self.can_craft_from_world(pi, recipe);
                     let ing_text: Vec<String> = recipe
                         .inputs
                         .iter()
@@ -2185,7 +2226,13 @@ impl App {
                         }
                     }
                 }
-                BuildTool::None | BuildTool::Destroy | BuildTool::Roof | BuildTool::WaterFill => {}
+                BuildTool::None
+                | BuildTool::Destroy
+                | BuildTool::Roof
+                | BuildTool::WaterFill
+                | BuildTool::OrderChop
+                | BuildTool::OrderMine
+                | BuildTool::OrderHarvest => {}
             }
         }
     }

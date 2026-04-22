@@ -751,7 +751,21 @@ pub struct Pleb {
     pub context_thought_flags: u16,
     /// Per-pleb event log (most recent first, capped)
     pub event_log: Vec<(f32, String)>, // (game_time, message)
+    /// Knowledge level per domain (0.0–10.0). See KnowledgeDomain.
+    pub knowledge: [f32; NUM_KNOWLEDGE_DOMAINS],
 }
+
+/// Knowledge domain indices.
+pub const KNOWLEDGE_STONE: usize = 0;
+pub const KNOWLEDGE_WOOD: usize = 1;
+pub const KNOWLEDGE_FIRE: usize = 2;
+pub const KNOWLEDGE_FOOD: usize = 3;
+pub const KNOWLEDGE_BUILDING: usize = 4;
+pub const KNOWLEDGE_CREATURES: usize = 5;
+pub const NUM_KNOWLEDGE_DOMAINS: usize = 6;
+
+pub const KNOWLEDGE_DOMAIN_NAMES: [&str; NUM_KNOWLEDGE_DOMAINS] =
+    ["Stone", "Wood", "Fire", "Food", "Building", "Creatures"];
 
 /// Per-pleb 24-hour schedule. Each hour is either work (true) or sleep (false).
 #[derive(Clone, Debug)]
@@ -897,6 +911,7 @@ impl Pleb {
             need_emote_flags: 0,
             context_thought_flags: 0,
             event_log: Vec::new(),
+            knowledge: [1.0; NUM_KNOWLEDGE_DOMAINS], // everyone starts with basic awareness
         }
     }
 
@@ -1074,6 +1089,28 @@ impl Pleb {
         for i in 0..NUM_SKILLS {
             let apt = self.skills[i].aptitude; // preserve aptitude
             self.skills[i] = SkillLevel::from_legacy(old[i], apt);
+        }
+    }
+
+    /// Seed knowledge domains from backstory name.
+    pub fn seed_knowledge_from_backstory(&mut self) {
+        // Map backstory to knowledge domain strengths
+        let boosts: &[(usize, f32)] = match self.backstory_name.as_str() {
+            "Prospector" => &[(KNOWLEDGE_STONE, 4.0), (KNOWLEDGE_FIRE, 2.0)],
+            "Ranch Hand" => &[(KNOWLEDGE_FOOD, 3.0), (KNOWLEDGE_CREATURES, 2.0)],
+            "Mechanic" | "Engineer" => &[(KNOWLEDGE_BUILDING, 4.0), (KNOWLEDGE_FIRE, 2.0)],
+            "Frontier Doc" => &[(KNOWLEDGE_FOOD, 3.0), (KNOWLEDGE_CREATURES, 2.0)],
+            "Sheriff" | "Outlaw" => &[(KNOWLEDGE_CREATURES, 2.0), (KNOWLEDGE_STONE, 1.5)],
+            "Preacher" => &[(KNOWLEDGE_FOOD, 2.0), (KNOWLEDGE_WOOD, 2.0)],
+            "Drifter" | "Scout" => &[
+                (KNOWLEDGE_FOOD, 2.0),
+                (KNOWLEDGE_CREATURES, 2.0),
+                (KNOWLEDGE_WOOD, 1.5),
+            ],
+            _ => &[(KNOWLEDGE_STONE, 1.5)],
+        };
+        for &(domain, level) in boosts {
+            self.knowledge[domain] = self.knowledge[domain].max(level);
         }
     }
 

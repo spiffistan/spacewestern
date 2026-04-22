@@ -159,5 +159,14 @@ fn main_lightmap_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
         value = vec4<f32>(color, intensity);
     }
 
+    // Charcoal mound: dim red-orange glow when active (height > 0)
+    if bt == BT_CHARCOAL_MOUND {
+        let stage = (block >> 8u) & 0xFFu;
+        if stage > 0u {
+            let glow = f32(stage) / 5.0 * 0.4; // brighter at higher stages
+            value = vec4<f32>(0.8, 0.3, 0.05, glow);
+        }
+    }
+
     textureStore(lightmap_out, vec2<u32>(gid.x, gid.y), value);
 }

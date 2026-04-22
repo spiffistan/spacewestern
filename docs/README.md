@@ -59,6 +59,7 @@ Numbered technical decisions. Format: `DN-NNN-short-name.md`.
 | `DN-031-crash-salvage.md` | Draft | Ship types, crash landing, salvage crates, artifacts (named unique items), condition randomization, wreck as shelter |
 | `DN-032-tool-components.md` | Draft | Tools as assemblies (head/handle/binding), component-based failure/repair, auto-maintenance, upgrade-by-replacement |
 | `DN-033-work-surfaces.md` | Draft | Surfaces + tools = capability, efficiency penalties for multi-use, visual placement system, migration from station types |
+| `DN-034-knowledge-and-ledger.md` | Draft | Three knowledge states (known/noticed/unknown), colony ledger UI, heatmap, per-pleb knowledge, progressive craft menu |
 
 ## Ideas (`ideas/`)
 
@@ -96,6 +97,7 @@ Early-stage exploration. Not commitments — creative brainstorming.
 | `group-ai-roadmap.md` | Squad roles, morale contagion, surrender, overwatch, radio/horn |
 | `compound-defenses.md` | Palisades, earthworks, platforms, moats, self-sustaining compound design |
 | `sharpening-and-maintenance.md` | Whetstone, grinding wheel, sharpness vs durability split, workbench repair |
+| `emergent-crafting.md` | Per-map material calibration, serendipitous discovery, skill-gated perception, cross-pleb knowledge |
 | `furniture-and-surfaces.md` | Work surfaces by tier, seating speed/comfort, corner pieces, wall-mounted racks, workshop room detection |
 
 ## Naming Convention

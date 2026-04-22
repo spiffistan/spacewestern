@@ -175,10 +175,11 @@ fn main_thermal(@builtin(global_invocation_id) gid: vec3<u32>) {
             let fidx = u32(fy) * gw + u32(fx);
             let fb = grid[fidx];
             let fbt = block_type(fb);
-            if fbt == BT_FIREPLACE || fbt == BT_CAMPFIRE {
+            if fbt == BT_FIREPLACE || fbt == BT_CAMPFIRE || fbt == BT_CHARCOAL_MOUND {
                 let fire_level = f32((fb >> 8u) & 0xFFu) / 10.0;
                 let fire_str = max(fire_level, 0.3);
-                let power = select(1.0, 0.5, fbt == BT_CAMPFIRE); // campfire: half power
+                // Campfire: half power, charcoal mound: low smolder heat
+                let power = select(select(1.0, 0.5, fbt == BT_CAMPFIRE), 0.3, fbt == BT_CHARCOAL_MOUND);
                 let dist_sq = f32(fdx * fdx + fdy * fdy);
                 if dist_sq < 0.5 { continue; } // skip self
                 // Inverse-square radiant intensity

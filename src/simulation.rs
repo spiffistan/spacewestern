@@ -314,6 +314,68 @@ impl App {
         }
     }
 
+    /// Count available items across pleb inventory + all crates + ground items.
+    pub(crate) fn count_available(&self, pleb_idx: usize, item_id: u16) -> u32 {
+        let in_inv = self.plebs[pleb_idx].inventory.count_of(item_id);
+        let in_crates: u32 = self
+            .crate_contents
+            .values()
+            .map(|c| c.count_of(item_id))
+            .sum();
+        let on_ground: u32 = self
+            .ground_items
+            .iter()
+            .filter(|gi| gi.stack.item_id == item_id)
+            .map(|gi| gi.stack.count as u32)
+            .sum();
+        in_inv + in_crates + on_ground
+    }
+
+    /// Check if a recipe can be crafted from pleb inventory + crates + ground items.
+    pub(crate) fn can_craft_from_world(
+        &self,
+        pleb_idx: usize,
+        recipe: &recipe_defs::RecipeDef,
+    ) -> bool {
+        recipe
+            .inputs
+            .iter()
+            .all(|ing| self.count_available(pleb_idx, ing.item) >= ing.count as u32)
+    }
+
+    /// Consume recipe ingredients from pleb inventory first, then crates, then ground items.
+    pub(crate) fn consume_ingredients(&mut self, pleb_idx: usize, recipe: &recipe_defs::RecipeDef) {
+        for ing in &recipe.inputs {
+            let mut need = ing.count;
+            let from_inv = self.plebs[pleb_idx].inventory.remove(ing.item, need);
+            need -= from_inv;
+            if need > 0 {
+                for cinv in self.crate_contents.values_mut() {
+                    if need == 0 {
+                        break;
+                    }
+                    let taken = cinv.remove(ing.item, need);
+                    need -= taken;
+                }
+            }
+            if need > 0 {
+                let mut i = 0;
+                while i < self.ground_items.len() && need > 0 {
+                    if self.ground_items[i].stack.item_id == ing.item {
+                        let take = self.ground_items[i].stack.count.min(need);
+                        self.ground_items[i].stack.count -= take;
+                        need -= take;
+                        if self.ground_items[i].stack.count == 0 {
+                            self.ground_items.remove(i);
+                            continue;
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+    }
+
     /// Update all simulation state. Returns frame delta time.
     pub(crate) fn update_simulation(&mut self) -> f32 {
         let mut events: Vec<GameEventKind> = Vec::with_capacity(16);
@@ -674,12 +736,35 @@ impl App {
                 }
             }
 
+            // --- Charcoal mound: smoke emission while converting ---
+            if self.frame_count % 6 == 0 {
+                let grid_size = (GRID_W * GRID_H) as usize;
+                for idx in 0..grid_size {
+                    if self.grid_data[idx] & 0xFF != BT_CHARCOAL_MOUND {
+                        continue;
+                    }
+                    let stage = (self.grid_data[idx] >> 8) & 0xFF;
+                    if stage == 0 {
+                        continue;
+                    }
+                    let mx = (idx as u32 % GRID_W) as f32 + 0.5;
+                    let my = (idx as u32 / GRID_W) as f32 + 0.5;
+                    // More smoke at higher stages (fresh mound smokes heavily)
+                    let density = 0.2 + (stage as f32) * 0.15;
+                    self.dust_injections.push(dust::DustInjection {
+                        x: mx,
+                        y: my,
+                        radius: 0.6,
+                        density,
+                    });
+                }
+            }
+
             // --- Charcoal mound conversion ---
-            // Height byte: 0=empty/done, 1=loaded (needs lighting), 2=smoldering, 3-5=converting
-            // Smoldering mounds slowly convert: height decreases over time.
+            // Height byte: 0=done, 1-5=converting (placed at 5, counts down).
             // When height reaches 0: replace with BT_GROUND + drop charcoal items.
             if self.frame_count % 240 == 33 {
-                const MOUND_CONVERT_CHANCE: u32 = 15; // ~1 game-minute per stage
+                const MOUND_CONVERT_CHANCE: u32 = 40; // ~3-4 game-minutes per stage (~15-20 min total)
                 let grid_size = (GRID_W * GRID_H) as usize;
                 for idx in 0..grid_size {
                     let bt = self.grid_data[idx] & 0xFF;
@@ -687,14 +772,14 @@ impl App {
                         continue;
                     }
                     let stage = (self.grid_data[idx] >> 8) & 0xFF;
-                    if stage < 2 {
-                        continue; // not lit yet
+                    if stage == 0 {
+                        continue; // already done
                     }
                     let hash = (idx as u32)
                         .wrapping_mul(2654435761)
                         .wrapping_add(self.frame_count as u32);
                     if hash % MOUND_CONVERT_CHANCE == 0 {
-                        if stage <= 2 {
+                        if stage <= 1 {
                             // Done! Drop charcoal and remove mound
                             let mx = (idx as u32 % GRID_W) as f32 + 0.5;
                             let my = (idx as u32 / GRID_W) as f32 + 0.5;
@@ -714,6 +799,61 @@ impl App {
                             self.grid_dirty = true;
                         }
                     }
+                }
+            }
+
+            // --- Drying rack: convert raw/cooked food to dried versions ---
+            // Height byte: number of items currently drying (0-4).
+            // Uses crate_contents to track what's on the rack.
+            // Every ~2 game-minutes, one item finishes drying and drops as ground item.
+            if self.frame_count % 300 == 77 {
+                const DRY_CHANCE: u32 = 10;
+                let grid_size = (GRID_W * GRID_H) as usize;
+                let mut dried_drops: Vec<(f32, f32, u16)> = Vec::new();
+                for idx in 0..grid_size {
+                    let bt = self.grid_data[idx] & 0xFF;
+                    if bt != BT_DRYING_RACK as u32 {
+                        continue;
+                    }
+                    let crate_key = idx as u32;
+                    let has_items = self
+                        .crate_contents
+                        .get(&crate_key)
+                        .is_some_and(|inv| !inv.stacks.is_empty());
+                    if !has_items {
+                        continue;
+                    }
+                    let hash = (idx as u32)
+                        .wrapping_mul(2654435761)
+                        .wrapping_add(self.frame_count as u32);
+                    if hash % DRY_CHANCE != 0 {
+                        continue;
+                    }
+                    // Convert one item
+                    if let Some(inv) = self.crate_contents.get_mut(&crate_key) {
+                        if let Some(stack) = inv.stacks.first_mut() {
+                            let dried_id = match stack.item_id {
+                                ITEM_RAW_MEAT | ITEM_COOKED_MEAT => Some(ITEM_DRIED_MEAT),
+                                ITEM_RAW_FISH | ITEM_COOKED_FISH => Some(ITEM_DRIED_FISH),
+                                _ => None,
+                            };
+                            if let Some(out_id) = dried_id {
+                                stack.count -= 1;
+                                let mx = (idx as u32 % GRID_W) as f32 + 0.5;
+                                let my = (idx as u32 / GRID_W) as f32 + 0.5;
+                                dried_drops.push((mx, my, out_id));
+                            }
+                        }
+                        inv.stacks.retain(|s| s.count > 0);
+                        // Update height byte to reflect item count
+                        let count = inv.total().min(4) as u32;
+                        self.grid_data[idx] = (self.grid_data[idx] & 0xFFFF00FF) | (count << 8);
+                        self.grid_dirty = true;
+                    }
+                }
+                for (mx, my, item_id) in dried_drops {
+                    self.ground_items
+                        .push(resources::GroundItem::new(mx, my, item_id, 1));
                 }
             }
 
@@ -2481,12 +2621,52 @@ impl App {
                         PlebCommand::HandCraft(recipe_id) => {
                             let recipe_reg = recipe_defs::RecipeRegistry::cached();
                             if let Some(recipe) = recipe_reg.get(recipe_id) {
+                                // Check inventory + crates + ground
                                 let can = recipe.inputs.iter().all(|ing| {
-                                    pleb.inventory.count_of(ing.item) >= ing.count as u32
+                                    let in_inv = pleb.inventory.count_of(ing.item);
+                                    let in_crates: u32 = self
+                                        .crate_contents
+                                        .values()
+                                        .map(|c| c.count_of(ing.item))
+                                        .sum();
+                                    let on_ground: u32 = self
+                                        .ground_items
+                                        .iter()
+                                        .filter(|gi| gi.stack.item_id == ing.item)
+                                        .map(|gi| gi.stack.count as u32)
+                                        .sum();
+                                    in_inv + in_crates + on_ground >= ing.count as u32
                                 });
                                 if can {
+                                    // Consume: inventory first, then crates, then ground
                                     for ing in &recipe.inputs {
-                                        pleb.inventory.remove(ing.item, ing.count);
+                                        let mut need = ing.count;
+                                        let from_inv = pleb.inventory.remove(ing.item, need);
+                                        need -= from_inv;
+                                        if need > 0 {
+                                            for cinv in self.crate_contents.values_mut() {
+                                                if need == 0 {
+                                                    break;
+                                                }
+                                                need -= cinv.remove(ing.item, need);
+                                            }
+                                        }
+                                        if need > 0 {
+                                            let mut i = 0;
+                                            while i < self.ground_items.len() && need > 0 {
+                                                if self.ground_items[i].stack.item_id == ing.item {
+                                                    let take =
+                                                        self.ground_items[i].stack.count.min(need);
+                                                    self.ground_items[i].stack.count -= take;
+                                                    need -= take;
+                                                    if self.ground_items[i].stack.count == 0 {
+                                                        self.ground_items.remove(i);
+                                                        continue;
+                                                    }
+                                                }
+                                                i += 1;
+                                            }
+                                        }
                                     }
                                     pleb.activity = PlebActivity::Crafting(recipe_id, 0.0);
                                     pleb.path.clear();
@@ -4314,6 +4494,43 @@ impl App {
                     farm_tasks.push(task);
                 }
             }
+            // Clean up completed designations (block no longer matches)
+            self.chop_designations.retain(|&(tx, ty)| {
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                idx < self.grid_data.len() && block_type_rs(self.grid_data[idx]) == BT_TREE
+            });
+            self.mine_designations.retain(|&(tx, ty)| {
+                let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                idx < self.grid_data.len() && block_type_rs(self.grid_data[idx]) == BT_ROCK
+            });
+            {
+                let block_reg = block_defs::BlockRegistry::cached();
+                self.harvest_designations.retain(|&(tx, ty)| {
+                    let idx = (ty as u32 * GRID_W + tx as u32) as usize;
+                    if idx >= self.grid_data.len() {
+                        return false;
+                    }
+                    let bt = block_type_rs(self.grid_data[idx]);
+                    bt == BT_BERRY_BUSH || block_reg.get(bt).is_some_and(|d| d.is_harvestable)
+                });
+            }
+
+            // Drag order designations → work tasks
+            for &(tx, ty) in &self.chop_designations {
+                if !self.active_work.contains(&(tx, ty)) {
+                    farm_tasks.push(WorkTask::Harvest(tx, ty));
+                }
+            }
+            for &(tx, ty) in &self.mine_designations {
+                if !self.active_work.contains(&(tx, ty)) {
+                    farm_tasks.push(WorkTask::Harvest(tx, ty));
+                }
+            }
+            for &(tx, ty) in &self.harvest_designations {
+                if !self.active_work.contains(&(tx, ty)) {
+                    farm_tasks.push(WorkTask::Harvest(tx, ty));
+                }
+            }
 
             // Collect workbenches/kilns with pending craft orders
             let craft_stations: Vec<(i32, i32, u32)> = self
@@ -5717,6 +5934,112 @@ impl App {
                 }
             }
         } // end campfire throttle
+
+        // --- Auto-place food on drying racks ---
+        if self.frame_count % 45 == 11 {
+            // Find drying racks with space
+            let rack_positions: Vec<(i32, i32, u32)> = (0..(GRID_W * GRID_H) as usize)
+                .filter(|&idx| {
+                    let bt = self.grid_data[idx] & 0xFF;
+                    bt == BT_DRYING_RACK as u32
+                })
+                .filter_map(|idx| {
+                    let count = self
+                        .crate_contents
+                        .get(&(idx as u32))
+                        .map(|inv| inv.total())
+                        .unwrap_or(0);
+                    if count < 4 {
+                        Some((
+                            (idx as u32 % GRID_W) as i32,
+                            (idx as u32 / GRID_W) as i32,
+                            idx as u32,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if !rack_positions.is_empty() {
+                for pleb in self.plebs.iter_mut() {
+                    if pleb.is_dead
+                        || pleb.is_enemy
+                        || pleb.drafted
+                        || !matches!(pleb.activity, PlebActivity::Idle)
+                    {
+                        continue;
+                    }
+                    // Check for dryable food (raw or cooked meat/fish)
+                    let has_dryable = pleb.inventory.count_of(ITEM_RAW_MEAT) > 0
+                        || pleb.inventory.count_of(ITEM_RAW_FISH) > 0
+                        || pleb.inventory.count_of(ITEM_COOKED_MEAT) > 0
+                        || pleb.inventory.count_of(ITEM_COOKED_FISH) > 0;
+                    if !has_dryable {
+                        continue;
+                    }
+                    // Find nearest rack with space
+                    let mut best: Option<((i32, i32, u32), f32)> = None;
+                    for &(rx, ry, key) in &rack_positions {
+                        let d = ((pleb.x - rx as f32 - 0.5).powi(2)
+                            + (pleb.y - ry as f32 - 0.5).powi(2))
+                        .sqrt();
+                        if d < 20.0 && best.as_ref().map_or(true, |(_, bd)| d < *bd) {
+                            best = Some(((rx, ry, key), d));
+                        }
+                    }
+                    if let Some(((rx, ry, key), dist)) = best {
+                        if dist < 1.8 {
+                            // Adjacent: place food on rack
+                            let dryable_items = [
+                                ITEM_RAW_MEAT,
+                                ITEM_RAW_FISH,
+                                ITEM_COOKED_MEAT,
+                                ITEM_COOKED_FISH,
+                            ];
+                            for &item_id in &dryable_items {
+                                if pleb.inventory.count_of(item_id) > 0 {
+                                    pleb.inventory.remove(item_id, 1);
+                                    let inv = self.crate_contents.entry(key).or_default();
+                                    inv.add(item_id, 1);
+                                    // Update height byte
+                                    let idx = key as usize;
+                                    let count = inv.total().min(4) as u32;
+                                    self.grid_data[idx] =
+                                        (self.grid_data[idx] & 0xFFFF00FF) | (count << 8);
+                                    self.grid_dirty = true;
+                                    pleb.set_bubble(
+                                        pleb::BubbleKind::Text("Drying food".into()),
+                                        1.5,
+                                    );
+                                    break;
+                                }
+                            }
+                            pleb.activity = PlebActivity::Idle;
+                        } else {
+                            // Path to rack
+                            let start = (pleb.x.floor() as i32, pleb.y.floor() as i32);
+                            let adj =
+                                adjacent_walkable(&self.grid_data, rx, ry).unwrap_or((rx, ry));
+                            let path = pleb::astar_path_terrain_water_wd(
+                                &self.grid_data,
+                                &self.wall_data,
+                                &self.terrain_data,
+                                &self.water_depth_cpu,
+                                start,
+                                adj,
+                            );
+                            if !path.is_empty() {
+                                pleb.path = path;
+                                pleb.path_idx = 0;
+                                pleb.activity = PlebActivity::Walking;
+                                pleb.work_target = Some((rx, ry));
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // 2. Auto-assign idle plebs to blueprint tasks (haul resources or build)
         if !self.blueprints.is_empty() {

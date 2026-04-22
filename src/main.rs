@@ -492,6 +492,7 @@ impl ManifestCard {
             p.ammo_loaded = 6;
         }
         p.update_equipped_weapon();
+        p.seed_knowledge_from_backstory();
         p
     }
 }
@@ -745,6 +746,7 @@ struct App {
     cannon_angles: std::collections::HashMap<u32, f32>, // grid_idx → angle (radians)
     show_pleb_help: bool,                               // show controls modal
     show_inventory: bool,                               // show pleb inventory window
+    show_ledger: bool,                                  // show colony knowledge ledger
     inv_selected_slot: Option<usize>,                   // selected inventory slot for swap/drop
     charsheet_tab: u8,                                  // 0=gear, 1=log, 2=modifiers
     show_stone_lab: bool,                               // show stone material lab window
@@ -803,6 +805,10 @@ struct App {
     dig_depth: f32, // target depth for new dig zones (adjustable via UI)
     berm_zones: Vec<zones::BermZone>,
     work_priority: zones::WorkPriority,
+    // Drag order designations: tiles marked for specific work
+    chop_designations: std::collections::HashSet<(i32, i32)>,
+    mine_designations: std::collections::HashSet<(i32, i32)>,
+    harvest_designations: std::collections::HashSet<(i32, i32)>,
     crop_timers: std::collections::HashMap<u32, f32>,
     water_phase: usize,
     water_frame: u32,
@@ -1243,6 +1249,7 @@ impl App {
             cannon_angles: std::collections::HashMap::new(),
             show_pleb_help: false,
             show_inventory: false,
+            show_ledger: false,
             inv_selected_slot: None,
             charsheet_tab: 0,
             show_stone_lab: false,
@@ -1299,6 +1306,9 @@ impl App {
             dig_depth: 0.8,
             berm_zones: Vec::new(),
             work_priority: zones::WorkPriority::PlantFirst,
+            chop_designations: std::collections::HashSet::new(),
+            mine_designations: std::collections::HashSet::new(),
+            harvest_designations: std::collections::HashSet::new(),
             crop_timers: std::collections::HashMap::new(),
             water_phase: 0,
             water_frame: 0,
@@ -4985,7 +4995,10 @@ impl ApplicationHandler for App {
                                 | BuildTool::GrowingZone
                                 | BuildTool::StorageZone
                                 | BuildTool::DigZone
-                                | BuildTool::BermZone => true,
+                                | BuildTool::BermZone
+                                | BuildTool::OrderChop
+                                | BuildTool::OrderMine
+                                | BuildTool::OrderHarvest => true,
                                 BuildTool::Place(id) => {
                                     let reg = block_defs::BlockRegistry::cached();
                                     reg.get(id)
@@ -5009,6 +5022,9 @@ impl ApplicationHandler for App {
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);
                             let (ex, ey) = (wx.floor() as i32, wy.floor() as i32);
                             self.apply_drag_shape(sx, sy, ex, ey);
+                        } else if let Some((sx, sy)) = self.drag_start {
+                            // Single click with an order tool = designate one tile
+                            self.apply_drag_shape(sx, sy, sx, sy);
                         } else if let Some((sx, sy)) = self.select_drag_start {
                             let (ex, ey) =
                                 self.screen_to_world(self.last_mouse_x, self.last_mouse_y);

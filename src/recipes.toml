@@ -78,6 +78,16 @@ time = 3.0
 inputs = [{item = 202, count = 3}]
 output = {item = 700, count = 1}
 
+# ── Salt preservation (hand, near salt supply) ──
+
+[[recipe]]
+id = 17
+name = "Salted Meat"
+station = "hand"
+time = 4.0
+inputs = [{item = 1, count = 1}, {item = 208, count = 1}]
+output = {item = 104, count = 1}
+
 # ── Workbench recipes ──
 
 [[recipe]]

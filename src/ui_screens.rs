@@ -931,6 +931,7 @@ impl App {
             pleb.backstory_name = self.chargen.backstory.name().to_string();
             pleb.trait_name = self.chargen.trait_pick.map(|t| t.name().to_string());
             pleb.set_skills_from_legacy(self.chargen.backstory.skills());
+            pleb.seed_knowledge_from_backstory();
 
             // Randomize other crew members with backstories and traits
             let backstories = types::Backstory::ALL;
@@ -941,6 +942,7 @@ impl App {
                 let bs = backstories[bs_idx];
                 self.plebs[ci].backstory_name = bs.name().to_string();
                 self.plebs[ci].set_skills_from_legacy(bs.skills());
+                self.plebs[ci].seed_knowledge_from_backstory();
                 // 70% chance to have a trait
                 let trait_roll = ((seed >> 8) & 0xFF) as f32 / 255.0;
                 if trait_roll < 0.7 {

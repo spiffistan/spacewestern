@@ -649,6 +649,49 @@ impl App {
                                 };
                                 self.build_category = None;
                             }
+                            // Order buttons
+                            if tool_btn(
+                                ui,
+                                BuildTool::OrderChop,
+                                "\u{1fa93}",
+                                "Chop",
+                                &self.build_tool,
+                            ) {
+                                self.build_tool = if self.build_tool == BuildTool::OrderChop {
+                                    BuildTool::None
+                                } else {
+                                    BuildTool::OrderChop
+                                };
+                                self.build_category = None;
+                            }
+                            if tool_btn(
+                                ui,
+                                BuildTool::OrderMine,
+                                "\u{26cf}",
+                                "Mine",
+                                &self.build_tool,
+                            ) {
+                                self.build_tool = if self.build_tool == BuildTool::OrderMine {
+                                    BuildTool::None
+                                } else {
+                                    BuildTool::OrderMine
+                                };
+                                self.build_category = None;
+                            }
+                            if tool_btn(
+                                ui,
+                                BuildTool::OrderHarvest,
+                                "\u{1f33f}",
+                                "Harvest",
+                                &self.build_tool,
+                            ) {
+                                self.build_tool = if self.build_tool == BuildTool::OrderHarvest {
+                                    BuildTool::None
+                                } else {
+                                    BuildTool::OrderHarvest
+                                };
+                                self.build_category = None;
+                            }
                         });
 
                         ui.add_space(4.0);

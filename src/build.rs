@@ -18,6 +18,10 @@ pub enum BuildTool {
     DigZone,       // paint dig zone — plebs will dig terrain to target depth
     BermZone,      // paint berm zone — plebs dump dirt to raise terrain
     WaterFill,     // sandbox: continuously inject water while mouse held
+    // --- Drag orders: mark tiles for work ---
+    OrderChop,    // mark trees for chopping
+    OrderMine,    // mark rocks for mining
+    OrderHarvest, // mark plants for harvesting
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
