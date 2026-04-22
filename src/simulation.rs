@@ -28,6 +28,26 @@ const DUSK_END: f32 = 0.77; // dusk warning window ends
 const DAWN_START: f32 = 0.16; // dawn (reset dusk flag, count night)
 const DAWN_END: f32 = 0.20; // dawn window ends
 
+// Sun arc parameters (fraction of DAY_DURATION)
+const SUN_DAWN: f32 = 0.15; // sun rises
+const SUN_DUSK: f32 = 0.85; // sun sets
+
+// Ambient light colors
+const AMBIENT_NIGHT: [f32; 3] = [0.008, 0.008, 0.02];
+const AMBIENT_DAY: [f32; 3] = [0.10, 0.10, 0.13];
+const SUN_COLOR_DAWN: [f32; 3] = [1.0, 0.55, 0.25];
+const SUN_COLOR_NOON: [f32; 3] = [1.0, 0.97, 0.90];
+
+// Lightning
+const LIGHTNING_FLASH_DECAY: f32 = 2.0; // flash decay rate per second
+
+// Wind variation
+const WIND_MAG_MIN: f32 = 3.0;
+const WIND_MAG_MAX: f32 = 18.0;
+const WIND_CHANGE_MIN: f32 = 10.0; // seconds between wind shifts
+const WIND_CHANGE_RANGE: f32 = 20.0; // additional random seconds
+const WIND_LERP_RATE: f32 = 0.3; // interpolation rate toward target
+
 /// Find a cover position near `pos` that puts a low wall between the pleb and the threat.
 fn find_cover_position(
     grid: &[u32],
@@ -400,8 +420,8 @@ impl App {
         // Precompute sun on CPU (avoids trig per pixel in shader)
         {
             let t = (self.time_of_day / DAY_DURATION).rem_euclid(1.0);
-            let dawn = 0.15f32;
-            let dusk = 0.85f32;
+            let dawn = SUN_DAWN;
+            let dusk = SUN_DUSK;
             let day_t = ((t - dawn) / (dusk - dawn)).clamp(0.0, 1.0);
             let angle = day_t * std::f32::consts::PI;
             self.camera.sun_dir_x = -angle.cos();
@@ -418,14 +438,14 @@ impl App {
             const SHADOW_DAWN_DUSK: f32 = 0.9;
             const SHADOW_NOON_REDUCTION: f32 = 0.4;
             self.camera.shadow_intensity = SHADOW_DAWN_DUSK - SHADOW_NOON_REDUCTION * noon;
-            let dawn_col = [1.0f32, 0.55, 0.25];
-            let noon_col = [1.0f32, 0.97, 0.90];
+            let dawn_col = SUN_COLOR_DAWN;
+            let noon_col = SUN_COLOR_NOON;
             let s = smoothstep_f32(0.0, 0.6, noon);
             self.camera.sun_color_r = (dawn_col[0] + (noon_col[0] - dawn_col[0]) * s) * intensity;
             self.camera.sun_color_g = (dawn_col[1] + (noon_col[1] - dawn_col[1]) * s) * intensity;
             self.camera.sun_color_b = (dawn_col[2] + (noon_col[2] - dawn_col[2]) * s) * intensity;
-            let night_amb = [0.008f32, 0.008, 0.02];
-            let day_amb = [0.10f32, 0.10, 0.13];
+            let night_amb = AMBIENT_NIGHT;
+            let day_amb = AMBIENT_DAY;
             self.camera.ambient_r = night_amb[0] + (day_amb[0] - night_amb[0]) * intensity;
             self.camera.ambient_g = night_amb[1] + (day_amb[1] - night_amb[1]) * intensity;
             self.camera.ambient_b = night_amb[2] + (day_amb[2] - night_amb[2]) * intensity;
@@ -446,7 +466,7 @@ impl App {
                 self.weather = new_weather;
             }
             // --- Lightning during heavy rain ---
-            self.lightning_flash = (self.lightning_flash - dt * 2.0).max(0.0); // slower decay for visible bolt
+            self.lightning_flash = (self.lightning_flash - dt * LIGHTNING_FLASH_DECAY).max(0.0);
             if self.lightning_flash < 0.01 {
                 self.lightning_strike = None;
             }
@@ -531,13 +551,13 @@ impl App {
                 // Shift angle by ±45° (gentle drift)
                 self.wind_target_angle += (hash(0) - 0.5) * std::f32::consts::FRAC_PI_2;
                 // Vary magnitude ±30% around 8-12 range
-                self.wind_target_mag =
-                    (self.wind_target_mag + (hash(1) - 0.5) * 6.0).clamp(3.0, 18.0);
+                self.wind_target_mag = (self.wind_target_mag + (hash(1) - 0.5) * 6.0)
+                    .clamp(WIND_MAG_MIN, WIND_MAG_MAX);
                 // Next change in 10-30 seconds game time
-                self.wind_change_timer = 10.0 + hash(2) * 20.0;
+                self.wind_change_timer = WIND_CHANGE_MIN + hash(2) * WIND_CHANGE_RANGE;
             }
             // Smoothly interpolate current wind toward target
-            let lerp_rate = 0.3 * dt * self.time_speed;
+            let lerp_rate = WIND_LERP_RATE * dt * self.time_speed;
             let cur_angle = self.fluid_params.wind_y.atan2(self.fluid_params.wind_x);
             let cur_mag = (self.fluid_params.wind_x.powi(2) + self.fluid_params.wind_y.powi(2))
                 .sqrt()
