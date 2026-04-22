@@ -56,6 +56,8 @@ Numbered technical decisions. Format: `DN-NNN-short-name.md`.
 | `DN-028-wall-conduits.md` | Draft | Wire/gas/liquid pipes inside walls, thickness-gated capacity, wall outlets/vents/taps, overlay X-ray view |
 | `DN-029-wall-types-and-progression.md` | Draft | 14 wall types from brush fence to resonite, biome-driven building, thermal/structural/conduit trade-offs, palisade defense system |
 | `DN-030-terrain-types.md` | Draft | New terrain types: mineral-stained soil (mining clues), leaf litter (forest floor), sand (glass-making), volcanic (future) |
+| `DN-031-crash-salvage.md` | Draft | Ship types, crash landing, salvage crates, artifacts (named unique items), condition randomization, wreck as shelter |
+| `DN-032-tool-components.md` | Draft | Tools as assemblies (head/handle/binding), component-based failure/repair, auto-maintenance, upgrade-by-replacement |
 
 ## Ideas (`ideas/`)
 
@@ -68,6 +70,7 @@ Early-stage exploration. Not commitments — creative brainstorming.
 | `artstyle.md` | Six art direction options (Dust & Iron, Moebius, Dime Novel, etc.) |
 | `sprites.md` | Practical sprite design: what needs sprites, production approaches |
 | `exploration-directions.md` | Future directions: fire infrastructure, seasons, night ecology, trade, underground, relationships |
+| `early-game-flow.md` | WIP: how the first 30 days unfold — crash, tools, shelter, food, exploration, building progression |
 | `walls-and-ground.md` | Wall and ground rendering assessment — procedural vs sprites |
 | `multi-level.md` | Underground levels: depth as difficulty, fluid coupling, UX |
 | `character-visuals.md` | Character visuals: wear, emotes, relationships, scars, paper doll |
