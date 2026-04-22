@@ -58,6 +58,7 @@ Numbered technical decisions. Format: `DN-NNN-short-name.md`.
 | `DN-030-terrain-types.md` | Draft | New terrain types: mineral-stained soil (mining clues), leaf litter (forest floor), sand (glass-making), volcanic (future) |
 | `DN-031-crash-salvage.md` | Draft | Ship types, crash landing, salvage crates, artifacts (named unique items), condition randomization, wreck as shelter |
 | `DN-032-tool-components.md` | Draft | Tools as assemblies (head/handle/binding), component-based failure/repair, auto-maintenance, upgrade-by-replacement |
+| `DN-033-work-surfaces.md` | Draft | Surfaces + tools = capability, efficiency penalties for multi-use, visual placement system, migration from station types |
 
 ## Ideas (`ideas/`)
 
@@ -94,6 +95,8 @@ Early-stage exploration. Not commitments — creative brainstorming.
 | `subgrid-features.md` | Sub-grid feature ideas |
 | `group-ai-roadmap.md` | Squad roles, morale contagion, surrender, overwatch, radio/horn |
 | `compound-defenses.md` | Palisades, earthworks, platforms, moats, self-sustaining compound design |
+| `sharpening-and-maintenance.md` | Whetstone, grinding wheel, sharpness vs durability split, workbench repair |
+| `furniture-and-surfaces.md` | Work surfaces by tier, seating speed/comfort, corner pieces, wall-mounted racks, workshop room detection |
 
 ## Naming Convention
 

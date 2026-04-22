@@ -387,7 +387,7 @@ struct GpuMaterial {
 };
 
 fn get_material(bt: u32) -> GpuMaterial {
-    return materials[min(bt, 72u)];
+    return materials[min(bt, 75u)];
 }
 
 // --- Diagonal wall helpers ---
@@ -3460,8 +3460,121 @@ fn main_raytrace(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Electric light: ceiling fixture rendering
         color = render_electric_light(world_x, world_y, fx, fy, camera.time);
     } else if btype == BT_BENCH {
-        // Bench
+        // Bench (sitting)
         color = render_bench(fx, fy, bflags);
+    } else if btype == BT_ROUGH_TABLE {
+        // Rough table: rectangular wooden surface with 4 leg posts
+        let ground = vec3<f32>(0.45, 0.35, 0.20);
+        let wood = vec3<f32>(0.50, 0.36, 0.18);
+        let leg = vec3<f32>(0.32, 0.22, 0.10);
+        let table_min = 0.10;
+        let table_max = 0.90;
+        let on_table = fx > table_min && fx < table_max && fy > table_min && fy < table_max;
+        if on_table {
+            // Rough plank grain running horizontally
+            let grain = fract(fy * 5.0);
+            let grain_line = f32(grain < 0.07) * 0.05;
+            color = wood - vec3<f32>(grain_line);
+            // Plank variation
+            let pid = floor(fy * 5.0);
+            let pvar = fract(sin(pid * 91.3 + fx * 13.0) * 43758.5) * 0.08 - 0.04;
+            color += vec3<f32>(pvar);
+            // Knot holes (darker circles)
+            let knot1 = length(vec2<f32>(fx - 0.35, fy - 0.4));
+            let knot2 = length(vec2<f32>(fx - 0.72, fy - 0.65));
+            if knot1 < 0.04 || knot2 < 0.035 {
+                color = vec3<f32>(0.28, 0.18, 0.08);
+            }
+            // Corner legs (dark circles)
+            let leg_r = 0.06;
+            let corners = array<vec2<f32>, 4>(
+                vec2<f32>(table_min + 0.05, table_min + 0.05),
+                vec2<f32>(table_max - 0.05, table_min + 0.05),
+                vec2<f32>(table_min + 0.05, table_max - 0.05),
+                vec2<f32>(table_max - 0.05, table_max - 0.05),
+            );
+            for (var i = 0u; i < 4u; i++) {
+                if length(vec2<f32>(fx - corners[i].x, fy - corners[i].y)) < leg_r {
+                    color = leg;
+                }
+            }
+        } else {
+            color = ground;
+        }
+    } else if btype == BT_STOOL {
+        // Stool: small circular seat with 3 legs
+        let ground = vec3<f32>(0.45, 0.35, 0.20);
+        let wood = vec3<f32>(0.48, 0.34, 0.17);
+        let leg = vec3<f32>(0.30, 0.20, 0.09);
+        let cx = fx - 0.5;
+        let cy = fy - 0.5;
+        let dist = length(vec2<f32>(cx, cy));
+        let seat_r = 0.25;
+        if dist < seat_r {
+            // Circular seat with wood grain
+            let grain = sin(cx * 20.0 + cy * 3.0) * 0.03;
+            color = wood + vec3<f32>(grain);
+            // Ring detail near edge
+            if dist > seat_r - 0.04 {
+                color *= 0.85;
+            }
+        } else {
+            // Three legs visible below seat
+            let leg_r = 0.04;
+            var on_leg = false;
+            for (var i = 0u; i < 3u; i++) {
+                let angle = f32(i) * 2.094 + 0.5; // 120 degrees apart
+                let lx = 0.5 + cos(angle) * 0.18;
+                let ly = 0.5 + sin(angle) * 0.18;
+                if length(vec2<f32>(fx - lx, fy - ly)) < leg_r {
+                    on_leg = true;
+                }
+            }
+            if on_leg {
+                color = leg;
+            } else {
+                color = ground;
+            }
+        }
+    } else if btype == BT_DRYING_RACK {
+        // Drying rack: tall frame with horizontal slats (top-down view shows cross-beams)
+        let ground = vec3<f32>(0.45, 0.35, 0.20);
+        let wood = vec3<f32>(0.42, 0.30, 0.15);
+        let post = vec3<f32>(0.35, 0.24, 0.10);
+        // Four corner posts
+        let post_r = 0.05;
+        let p_min = 0.15;
+        let p_max = 0.85;
+        let posts = array<vec2<f32>, 4>(
+            vec2<f32>(p_min, p_min),
+            vec2<f32>(p_max, p_min),
+            vec2<f32>(p_min, p_max),
+            vec2<f32>(p_max, p_max),
+        );
+        var on_post = false;
+        for (var i = 0u; i < 4u; i++) {
+            if length(vec2<f32>(fx - posts[i].x, fy - posts[i].y)) < post_r {
+                on_post = true;
+            }
+        }
+        // Horizontal slats between posts
+        let on_slat_h = (fx > p_min && fx < p_max) &&
+            (abs(fy - 0.3) < 0.025 || abs(fy - 0.5) < 0.025 || abs(fy - 0.7) < 0.025);
+        // Top cross beams (connecting posts)
+        let on_beam = (fy > p_min - 0.02 && fy < p_min + 0.02 && fx > p_min && fx < p_max) ||
+                      (fy > p_max - 0.02 && fy < p_max + 0.02 && fx > p_min && fx < p_max);
+
+        if on_post {
+            color = post;
+        } else if on_slat_h {
+            // Slats are thinner, lighter wood
+            let slat_grain = fract(fx * 12.0) * 0.04;
+            color = wood + vec3<f32>(0.06 - slat_grain, 0.04 - slat_grain, 0.0);
+        } else if on_beam {
+            color = post * 1.1;
+        } else {
+            color = ground;
+        }
     } else if btype == BT_FLOOR_LAMP {
         // Standing lamp (emissive)
         color = render_standing_lamp(fx, fy, camera.time);

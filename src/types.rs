@@ -830,6 +830,9 @@ impl Blueprint {
             BT_BENCH => (2.0, 0, 0, 2, 0, 0),
             BT_BED => (3.0, 0, 0, 3, 0, 1), // rope for lacing
             BT_CRATE => (2.0, 0, 0, 2, 0, 0),
+            BT_ROUGH_TABLE => (1.5, 3, 0, 0, 0, 0), // 3 sticks
+            BT_STOOL => (1.0, 2, 0, 0, 0, 0),       // 2 sticks
+            BT_DRYING_RACK => (2.0, 4, 0, 0, 0, 0), // 4 sticks
             // --- Crafting stations ---
             BT_WORKBENCH => (3.0, 0, 0, 4, 0, 0),
             BT_SAW_HORSE => (2.0, 2, 0, 0, 0, 0),

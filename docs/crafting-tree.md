@@ -1,105 +1,191 @@
 # Crafting & Building Dependency Tree
 
+## Primitive Tool Chain (Day 1)
+
+```mermaid
+graph LR
+    ROCK["Rock (ground)"] -->|"pick up"| HAMMERSTONE["Hammerstone"]
+    ROCK -->|"1 rock, 3s"| BLADE["Stone Blade"]
+    STICK["Sticks (gather)"] -->|"1 stick, 2s"| DIGSTICK["Digging Stick"]
+
+    ROCK2["1 Rock"] --> AXE["Stone Axe"]
+    STICK2["1 Stick"] --> AXE
+    FIBER["1 Fiber"] --> AXE
+
+    ROCK3["1 Rock"] --> PICK["Stone Pick"]
+    STICK3["1 Stick"] --> PICK
+    FIBER2["1 Fiber"] --> PICK
+
+    ROCK4["1 Rock"] --> KNIFE["Hunting Knife"]
+    STICK4["1 Stick"] --> KNIFE
+    FIBER3["1 Fiber"] --> KNIFE
+
+    FIBER4["3 Fiber"] --> BELT["Fiber Belt"]
+
+    classDef raw fill:#4a7c59,stroke:#2d5a3a,color:#fff
+    classDef tool fill:#7a5c3a,stroke:#5a3d1e,color:#fff
+    classDef equip fill:#3b6b8c,stroke:#2a4f6a,color:#fff
+    class ROCK,ROCK2,ROCK3,ROCK4,STICK,STICK2,STICK3,STICK4,FIBER,FIBER2,FIBER3,FIBER4 raw
+    class HAMMERSTONE,BLADE,DIGSTICK,AXE,PICK,KNIFE tool
+    class BELT equip
+```
+
 ## Resource Gathering
 
 ```mermaid
 graph LR
-    TREE["Tree (chop, axe req.)"] -->|"4"| WOOD["Wood (logs)"]
-    TREE -->|"3"| SCRAP["Scrap Wood"]
+    TREE["Tree (chop)"] -->|"axe req."| LOG["Log"]
+    TREE -->|"3"| STICKS["Sticks"]
     TREE -->|"2"| FIBER["Fiber"]
-    BUSH["Berry Bush"] -->|"3"| BERRIES["Berries"]
-    CROP["Crop (harvest)"] -->|"2"| BERRIES
-    CROP -->|"2"| FIBER
-    DIG_CLAY["Clay Terrain (dig)"] -->|"4-6"| CLAY["Clay"]
-    DIG_DIRT["Any Terrain (dig)"] -->|"1-2"| CLAY
-    DEBRIS["Rock Debris"] -->|"1 / 4 w/ pick"| ROCK["Rock"]
-    SHOVEL["Wooden Shovel"] -.->|"+2 yield"| DIG_CLAY
-    SHOVEL -.->|"+2 yield"| DIG_DIRT
-    PICK["Stone Pick"] -.->|"4x yield"| DEBRIS
-    SPAWN["Spawn Area"] -.->|"scattered"| SCRAP
-    SPAWN -.->|"scattered"| ROCK
+    TREE -->|"no axe"| STICKS2["5-10 Sticks + Fiber"]
+    BUSH["Berry Bush"] -->|"harvest"| BERRIES["Berries"]
+    DUSTW["Dustwhisker"] -->|"harvest"| FIBER2["Fiber"]
+    SALT["Saltbrush"] -->|"harvest"| SALT2["Salt"]
+    REED["Hollow Reed"] -->|"harvest"| REED2["Reed Stalk"]
+    THORN["Thornbrake"] -->|"harvest"| THORN2["Thorns"]
+    DUSK["Duskbloom"] -->|"harvest"| NECTAR["Nectar"]
+    DUSK -->|"harvest"| PETALS["Dried Petals"]
+    ROCK_TILE["Rock (mine)"] -->|"pick speeds"| ROCK["Rock"]
+    CLAY_TILE["Clay Terrain"] -->|"dig, shovel helps"| CLAY["Clay"]
+    CRATE["Salvage Crate"] -->|"open"| SUPPLIES["Mixed supplies"]
 
     classDef src fill:#555,stroke:#333,color:#fff
     classDef res fill:#4a7c59,stroke:#2d5a3a,color:#fff
-    classDef tool fill:#7a5c3a,stroke:#5a3d1e,color:#fff
-    classDef spawn fill:#8b5cf6,stroke:#6d28d9,color:#fff
-    class TREE,BUSH,CROP,DIG_CLAY,DIG_DIRT,DEBRIS src
-    class WOOD,SCRAP,FIBER,BERRIES,CLAY,ROCK res
-    class SHOVEL,PICK tool
-    class SPAWN spawn
+    classDef special fill:#8b5cf6,stroke:#6d28d9,color:#fff
+    class TREE,BUSH,DUSTW,SALT,REED,THORN,DUSK,ROCK_TILE,CLAY_TILE src
+    class LOG,STICKS,STICKS2,FIBER,FIBER2,BERRIES,SALT2,REED2,THORN2,NECTAR,PETALS,ROCK,CLAY res
+    class CRATE,SUPPLIES special
 ```
 
-## Crafting Recipes
+## Crafting Stations Progression
+
+```mermaid
+graph TD
+    HANDS["Bare Hands"] -->|"day 1"| BENCH["Rough Bench<br/>3 sticks + 1 fiber"]
+    BENCH -->|"+ hammerstone"| KNAPPING["knapping capability"]
+    BENCH -->|"+ knife"| CUTTING["cutting capability"]
+
+    AXE["Stone Axe"] -->|"chop trees"| LOGS["Logs"]
+    LOGS --> SAWHORSE["Saw Horse<br/>2 logs"]
+    SAWHORSE -->|"1 log"| PLANKS["Planks x2"]
+
+    PLANKS --> TABLE["Plank Table<br/>2 planks + 2 sticks<br/>3 tool slots"]
+    PLANKS --> STOOL["Stool<br/>2 sticks + 1 fiber"]
+    TABLE -->|"+ multiple tools"| WORKSHOP["Workshop"]
+
+    PLANKS --> WORKTABLE["Work Table<br/>3 planks + 1 rope<br/>3 tool slots"]
+    PLANKS --> LONGTABLE["Long Table<br/>5 planks + 2 rope<br/>5 tool slots"]
+    PLANKS --> CORNER["Corner Table<br/>4 planks + 1 rope<br/>L-shaped, 3 slots"]
+
+    CLAY -->|"10 clay + 4 rock"| KILN["Kiln"]
+
+    classDef tier0 fill:#6b7280,stroke:#4b5563,color:#fff
+    classDef tier1 fill:#7a5c3a,stroke:#5a3d1e,color:#fff
+    classDef tier2 fill:#3b82f6,stroke:#1d4ed8,color:#fff
+    classDef tier3 fill:#8b5cf6,stroke:#6d28d9,color:#fff
+    class HANDS,KNAPPING,CUTTING tier0
+    class BENCH,AXE,LOGS,SAWHORSE,PLANKS,STOOL tier1
+    class TABLE,WORKTABLE,LONGTABLE,CORNER,WORKSHOP tier2
+    class KILN tier3
+```
+
+## Surface + Tool = Capability
 
 ```mermaid
 graph LR
-    subgraph "Hand (no station)"
-        R1["2 Rock + 1 Scrap"] --> AXE["Stone Axe"]
-        R2["2 Rock + 1 Scrap"] --> PICK["Stone Pick"]
-    end
-    subgraph "Saw Horse"
-        W1["1 Wood"] --> PLANKS["Planks x2"]
-    end
-    subgraph "Workbench"
-        F1["4 Fiber"] --> ROPE["Rope"]
-        S1["3 Scrap"] --> BUCKET["Wooden Bucket"]
-        C1["2 Clay"] --> UNFIRED["Unfired Jug"]
-        S2["2 Scrap + 1 Wood"] --> SHOVEL["Wooden Shovel"]
-    end
-    subgraph "Kiln"
-        UNFIRED2["1 Unfired Jug"] --> JUG["Clay Jug"]
+    subgraph "Tools (placed on surface)"
+        HAMMER["Hammerstone"]
+        WHET["Whetstone"]
+        KNIFE["Knife/Blade"]
+        MORTAR["Mortar & Pestle"]
+        SPINDLE["Drop Spindle"]
+        NEEDLE["Needle & Awl"]
     end
 
-    classDef input fill:#4a7c59,stroke:#2d5a3a,color:#fff
-    classDef output fill:#7a5c3a,stroke:#5a3d1e,color:#fff
-    class R1,R2,W1,F1,S1,C1,S2,UNFIRED2 input
-    class AXE,PICK,PLANKS,ROPE,BUCKET,UNFIRED,SHOVEL,JUG output
+    subgraph "Capabilities"
+        HAMMER -->|"100%"| KNAP["knapping"]
+        HAMMER -->|"60%"| SHARP["sharpening"]
+        WHET -->|"100%"| SHARP
+        KNIFE -->|"100%"| CUT["cutting"]
+        KNIFE -->|"100%"| CARVE["carving"]
+        MORTAR -->|"100%"| GRIND["grinding"]
+        SPINDLE -->|"100%"| SPIN["spinning"]
+        NEEDLE -->|"100%"| SEW["sewing"]
+    end
+
+    classDef tool fill:#7a5c3a,stroke:#5a3d1e,color:#fff
+    classDef cap fill:#4a7c59,stroke:#2d5a3a,color:#fff
+    class HAMMER,WHET,KNIFE,MORTAR,SPINDLE,NEEDLE tool
+    class KNAP,SHARP,CUT,CARVE,GRIND,SPIN,SEW cap
 ```
 
-## First Night Survival (8-10 min)
+## Furniture Progression
 
 ```mermaid
 graph TD
-    A["Pick up sticks + rocks"] --> B["Hand-craft Stone Axe"]
-    B --> C["Chop 2-3 trees"]
-    C -->|"wood, scrap, fiber"| D["Dig earth nearby -> clay"]
-    D --> E["Mud Walls 3x3 hut (2 clay each)"]
-    C -->|"fiber"| F["Roof forms (1 fiber/tile)"]
-    C -->|"1 wood"| G["Campfire inside (warmth + light)"]
-    E --> H["Leave doorway gap"]
-    F --> N1["Night 1: warm, safe, eat berries"]
+    subgraph "Tier 0: Natural"
+        FLATROCK["Flat Rock<br/>1 slot, 0.7x"]
+        STUMP["Log Stump<br/>1 slot, 0.7x"]
+        WRECK["Wreck Panel<br/>2 slots, 0.8x"]
+    end
 
-    classDef phase0 fill:#6b7280,stroke:#4b5563,color:#fff
-    classDef phase1 fill:#4a7c59,stroke:#2d5a3a,color:#fff
-    classDef phase2 fill:#d97706,stroke:#92400e,color:#fff
-    class A phase0
-    class B,C,D phase1
-    class E,F,G,H,N1 phase2
+    subgraph "Tier 1: Primitive"
+        RBENCH["Rough Bench<br/>2 slots, 0.85x"]
+        RSTOOL["Rough Stool<br/>+5% craft speed"]
+        DRYrack["Drying Rack"]
+    end
+
+    subgraph "Tier 2: Constructed"
+        PTABLE["Plank Table<br/>3 slots, 1.0x"]
+        CHAIR["Chair<br/>+10% craft speed"]
+        LTABLE["Long Table<br/>5 slots, 1.0x"]
+        CTABLE["Corner Table<br/>3 slots, L-shape"]
+        SHELF["Wall Shelf<br/>2 storage"]
+        RACK["Tool Rack<br/>4 display"]
+    end
+
+    subgraph "Tier 3: Heavy"
+        STONE["Stone Bench<br/>4 slots, 1.1x"]
+        METAL["Metal Bench<br/>4 slots, 1.2x"]
+    end
+
+    FLATROCK -.-> RBENCH
+    RBENCH -.-> PTABLE
+    PTABLE -.-> LTABLE
+    PTABLE -.-> STONE
+    STUMP -.-> RSTOOL
+    RSTOOL -.-> CHAIR
+
+    classDef t0 fill:#6b7280,stroke:#4b5563,color:#fff
+    classDef t1 fill:#7a5c3a,stroke:#5a3d1e,color:#fff
+    classDef t2 fill:#3b82f6,stroke:#1d4ed8,color:#fff
+    classDef t3 fill:#8b5cf6,stroke:#6d28d9,color:#fff
+    class FLATROCK,STUMP,WRECK t0
+    class RBENCH,RSTOOL,DRYrack t1
+    class PTABLE,CHAIR,LTABLE,CTABLE,SHELF,RACK t2
+    class STONE,METAL t3
 ```
 
-## Day 2+ Expansion
+## First 30 Days Overview
 
 ```mermaid
 graph TD
-    A["Hand-craft Stone Pick"] --> A2["Quarry rock (4x yield)"]
-    B["Build Saw Horse (2 wood)"] --> C["Make Planks (1 wood -> 3)"]
-    C --> D["Build Workbench (4 planks)"]
-    D --> E["Craft Rope"]
-    D --> F["Craft Shovel -> better digging"]
-    E --> G["Build Bed (3 planks + 1 rope)"]
-    E --> H["Build Wooden Door (future)"]
-    E --> I["Build Well (4 wood + 2 rock + 1 rope)"]
-    C --> J["Upgrade to Wood Walls (3 planks)"]
-    A2 --> K["Stone Walls (3 rock)"]
-    F --> L["Dig clay terrain -> Kiln (10 clay)"]
+    D1["Day 1: Crash"] -->|"open crates<br/>pick up rocks"| D1b["Hammerstone + Stone Blade"]
+    D1b -->|"gather sticks + fiber"| D2["Day 2-3: Stone Axe + Pick"]
+    D2 -->|"chop trees"| D3["Logs → Saw Horse → Planks"]
+    D3 -->|"build bench<br/>place hammerstone"| D5["Day 3-5: First Workshop"]
+    D5 -->|"craft rope, tools"| D7["Day 5-7: Charcoal + Fire Economy"]
+    D7 -->|"find flint at forest edge"| D10["Day 10: Flint Tools (2-3x durability)"]
+    D10 -->|"clay + kiln"| D15["Day 15: Kiln → Brick → Better Buildings"]
+    D15 -->|"explore deep forest"| D20["Day 20: Iron Discovery"]
+    D20 -->|"smelt + forge"| D30["Day 30: Metal Tools + Forge"]
 
-    classDef phase2 fill:#3b82f6,stroke:#1d4ed8,color:#fff
-    classDef phase3 fill:#8b5cf6,stroke:#6d28d9,color:#fff
-    class A,A2,B,C,D phase2
-    class E,F,G,H,I,J,K,L phase3
-    class B,B2,C,C2,D phase1
-    class E,F,G,H phase2
-    class I,J,K,L phase3
+    classDef early fill:#d97706,stroke:#92400e,color:#fff
+    classDef mid fill:#3b82f6,stroke:#1d4ed8,color:#fff
+    classDef late fill:#8b5cf6,stroke:#6d28d9,color:#fff
+    class D1,D1b,D2 early
+    class D3,D5,D7,D10 mid
+    class D15,D20,D30 late
 ```
 
 ## Building: Structure
@@ -107,18 +193,17 @@ graph TD
 ```mermaid
 graph TD
     subgraph FLOORS
-        RF["Rough Floor — 1 wood"]
+        RF["Rough Floor — 1 stick"]
         WF["Wood Floor — 2 planks"]
         SF["Stone Floor — 2 rock"]
     end
-    subgraph WALLS["Walls (thin by default)"]
-        MW["Mud Wall — 2 clay (cheapest!)"]
-        WW["Wood Wall — 2 wood (logs)"]
+    subgraph WALLS["Walls (thin, edge-based)"]
+        WA["Wattle — 3 sticks + 1 fiber"]
+        LW["Low Wall — 2 sticks + 1 fiber"]
+        WW["Wood Wall — 2 logs"]
         SW["Stone Wall — 3 rock"]
         GW["Glass — 2 rock"]
         IW["Insulated — 2 clay + 2 planks"]
-        STW["Steel Wall — 4 rock"]
-        DW["Diagonal — 2 rock"]
     end
     subgraph FURNITURE
         BN["Bench — 2 planks"]
@@ -131,64 +216,27 @@ graph TD
 
     classDef item fill:#3b82f6,stroke:#1d4ed8,color:#fff
     classDef cheap fill:#4a7c59,stroke:#2d5a3a,color:#fff
-    class RF,WF,SF,WW,SW,GW,IW,STW,DW,BN,BD,CR item
-    class MW,TH cheap
+    class RF,WF,SF,WW,SW,GW,IW,BN,BD,CR item
+    class WA,LW,TH cheap
 ```
 
-## Building: Utilities & Lighting
+## Building: Survival & Light
 
 ```mermaid
 graph TD
-    subgraph UTILITIES
+    subgraph SURVIVAL
+        CF["Campfire — 3 sticks + 1 fiber"]
+        CM["Charcoal Mound — 3 logs"]
+        SN["Snare — 3 sticks + 1 fiber"]
+        CO["Compost — 1 wood"]
         WL["Well — 3 wood + 2 rock + 1 rope"]
-        FP["Campfire — 1 wood"]
-        CP["Compost — 1 wood"]
-        CN["Cannon — 6 rock"]
     end
     subgraph LIGHTING
-        WT["Wall Torch — 1 wood"]
+        WT["Wall Torch — 1 stick"]
         FL["Floor Lamp — 1 plank"]
-        CL["Ceiling Light — 1 plank"]
-        WL2["Wall Lamp — 1 plank"]
-        FD["Floodlight — 2 rock"]
-        TL["Table Lamp — free"]
+        FP["Fireplace — 3 rock"]
     end
 
     classDef item fill:#3b82f6,stroke:#1d4ed8,color:#fff
-    classDef free fill:#6b7280,stroke:#4b5563,color:#fff
-    class WL,FP,CP,CN,WT,FL,CL,WL2,FD item
-    class TL free
-```
-
-## Building: Power & Piping
-
-```mermaid
-graph TD
-    subgraph POWER
-        SO["Solar — 2 planks + 1 rock"]
-        BS["Battery S — 1 plank + 1 rock"]
-        BM["Battery M — 2 planks + 2 rock"]
-        BL["Battery L — 3 planks + 3 rock"]
-        WT["Wind Turbine — 2 wood + 2 planks + 1 rope"]
-    end
-    subgraph GAS["Gas Piping"]
-        GP["Pump — 1 plank + 1 rock"]
-        TK["Tank — 2 planks + 1 rock"]
-        FN["Fan — 1 plank + 1 rock"]
-        PB["Pipe / Valve / Outlet — free"]
-    end
-    subgraph LIQ["Liquid Piping"]
-        LP["Liquid Pipe — 1 clay"]
-        LI["Intake / Output — 1 clay"]
-        LM["Liquid Pump — 1 plank + 1 rock"]
-    end
-    subgraph FREE_ELEC["Free (time only)"]
-        WR["Wire / Bridge"]
-        SW["Switch / Dimmer / Breaker"]
-    end
-
-    classDef item fill:#3b82f6,stroke:#1d4ed8,color:#fff
-    classDef free fill:#6b7280,stroke:#4b5563,color:#fff
-    class SO,BS,BM,BL,WT,GP,TK,FN,LP,LI,LM item
-    class PB,WR,SW free
+    class CF,CM,SN,CO,WL,WT,FL,FP item
 ```

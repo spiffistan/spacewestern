@@ -48,7 +48,7 @@ fn has_roof(b: u32) -> bool { return ((b >> 16u) & 2u) != 0u; }
 fn is_door(b: u32) -> bool { return ((b >> 16u) & 1u) != 0u; }
 fn is_open(b: u32) -> bool { return ((b >> 16u) & 4u) != 0u; }
 
-fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 72u)]; }
+fn get_material(bt: u32) -> GpuMaterial { return materials[min(bt, 75u)]; }
 
 // Structural wall types that form the building envelope (not equipment/furniture)
 fn matches_wall_type(bt: u32) -> bool {

@@ -1153,3 +1153,57 @@ render_style = 19.0
 light_transmission = 1.0
 walkable = true
 thermal = { heat_capacity = 2.0, conductivity = 0.003, solar_absorption = 0.5 }
+
+[[block]]
+id = 73
+name = "Rough Table"
+color = [0.48, 0.36, 0.20]
+render_style = 20.0
+light_transmission = 1.0
+is_furniture = true
+is_removable = true
+is_flammable = true
+ignition_temp = 220.0
+thermal = { heat_capacity = 1.5, conductivity = 0.002, solar_absorption = 0.4 }
+[block.placement]
+category = "Craft"
+icon = "\U0001FA91"
+label = "Table"
+click = "simple"
+place_height = 2
+
+[[block]]
+id = 74
+name = "Stool"
+color = [0.45, 0.34, 0.19]
+render_style = 20.0
+light_transmission = 1.0
+is_furniture = true
+is_removable = true
+is_flammable = true
+ignition_temp = 220.0
+thermal = { heat_capacity = 1.0, conductivity = 0.002, solar_absorption = 0.3 }
+[block.placement]
+category = "Shelter"
+icon = "\U0001FA91"
+label = "Stool"
+click = "simple"
+place_height = 1
+
+[[block]]
+id = 75
+name = "Drying Rack"
+color = [0.42, 0.32, 0.18]
+render_style = 20.0
+light_transmission = 0.9
+is_furniture = true
+is_removable = true
+is_flammable = true
+ignition_temp = 200.0
+thermal = { heat_capacity = 1.0, conductivity = 0.001, solar_absorption = 0.3 }
+[block.placement]
+category = "Food"
+icon = "\U0001F4CF"
+label = "Dry Rack"
+click = "simple"
+place_height = 3

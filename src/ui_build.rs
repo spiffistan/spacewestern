@@ -736,10 +736,10 @@ impl App {
 
                             let item_count: usize = match cat {
                                 "Survival" => 8,
-                                "Shelter" => 11,
+                                "Shelter" => 12,
                                 "Light" => 6,
-                                "Food" => 4,
-                                "Craft" => 5,
+                                "Food" => 5,
+                                "Craft" => 6,
                                 "Power" => 10,
                                 "Pipes" => 12,
                                 "Zones" => 4,
@@ -947,6 +947,12 @@ impl App {
                                             icon_btn(ui, BuildTool::Roof, "\u{1f3e0}", "Roof");
                                             icon_btn(ui, BuildTool::Place(30), "\u{1f6cf}", "Bed");
                                             icon_btn(ui, BuildTool::Place(9), "\u{1fa91}", "Bench");
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(74),
+                                                "\u{1fa91}",
+                                                "Stool",
+                                            );
                                         }
                                         "Light" => {
                                             icon_btn(
@@ -990,6 +996,12 @@ impl App {
                                             icon_btn(ui, BuildTool::Place(59), "\u{1fa63}", "Well");
                                             icon_btn(
                                                 ui,
+                                                BuildTool::Place(75),
+                                                "\u{1f4cf}",
+                                                "Dry Rack",
+                                            );
+                                            icon_btn(
+                                                ui,
                                                 BuildTool::Place(33),
                                                 "\u{1f4e6}",
                                                 "Crate",
@@ -1008,6 +1020,12 @@ impl App {
                                             );
                                         }
                                         "Craft" => {
+                                            icon_btn(
+                                                ui,
+                                                BuildTool::Place(73),
+                                                "\u{1fa91}",
+                                                "Table",
+                                            );
                                             icon_btn(
                                                 ui,
                                                 BuildTool::Place(57),

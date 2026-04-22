@@ -77,6 +77,9 @@ pub const BT_DUSKBLOOM: u32 = 69;
 pub const BT_CHARCOAL_MOUND: u32 = 70;
 pub const BT_SALVAGE_CRATE: u32 = 71;
 pub const BT_CRATER: u32 = 72;
+pub const BT_ROUGH_TABLE: u32 = 73;
+pub const BT_STOOL: u32 = 74;
+pub const BT_DRYING_RACK: u32 = 75;
 
 /// Generate WGSL `const BT_*: u32 = N;` lines for all block type constants.
 /// Prepend this to shader source so WGSL can use the same names as Rust.
@@ -156,6 +159,9 @@ pub fn wgsl_block_constants() -> String {
         ("BT_CHARCOAL_MOUND", BT_CHARCOAL_MOUND),
         ("BT_SALVAGE_CRATE", BT_SALVAGE_CRATE),
         ("BT_CRATER", BT_CRATER),
+        ("BT_ROUGH_TABLE", BT_ROUGH_TABLE),
+        ("BT_STOOL", BT_STOOL),
+        ("BT_DRYING_RACK", BT_DRYING_RACK),
     ];
     for &(name, val) in consts {
         s.push_str(&format!("const {}: u32 = {}u;\n", name, val));
